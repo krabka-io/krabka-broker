@@ -7,7 +7,11 @@ use {
         CleanedTransactionMetadata, CleaningRound, ProducerLastRecord, RewriteOutput,
         RewriteRetention, build_offset_map, rewrite_segments,
     },
-    crate::{io::FileIo, segment::Segment, test_support::KeyValue},
+    crate::{
+        io::FileIo,
+        segment::{SealedInput, Segment},
+        test_support::KeyValue,
+    },
     bytes::Bytes,
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::{Attributes, Record, RecordBatch},
@@ -22,6 +26,14 @@ pub(super) const INDEX_INTERVAL: ByteSize = krabka_units::kibibytes(4);
 
 /// The `delete.retention.ms` the rewrite tests share.
 pub(super) const RETENTION: Time = krabka_units::secs(1);
+
+/// The pass inputs of `segments`, in order.
+pub(super) fn inputs(segments: &[&Segment]) -> Vec<SealedInput> {
+    segments
+        .iter()
+        .map(|segment| segment.sealed_input())
+        .collect()
+}
 
 pub(super) fn make_record(offset_delta: i32, key: Option<&[u8]>, value: Option<&[u8]>) -> Record {
     Record {
@@ -155,7 +167,7 @@ pub(super) fn rewrite_with_map(
     retention: RewriteRetention,
     round: CleaningRound<'_>,
 ) -> RewriteOutput {
-    rewrite_segments(&FileIo, dir, segments, map, txn, retention, round).unwrap()
+    rewrite_segments(&FileIo, dir, &inputs(segments), map, txn, retention, round).unwrap()
 }
 
 /// Build the map and rewrite every supplied segment as one complete round.
@@ -166,7 +178,7 @@ pub(super) fn rewrite_all(
     retention: RewriteRetention,
     active: &HashMap<ProducerId, ProducerLastRecord>,
 ) -> RewriteOutput {
-    let map = build_offset_map(segments, vec![], None).unwrap();
+    let map = build_offset_map(&inputs(segments), vec![], None).unwrap();
     rewrite_with_map(
         dir,
         segments,

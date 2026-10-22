@@ -27,6 +27,15 @@ pub(super) fn offset_dc(sm: &AcquisitionState, off: Offset) -> Option<i16> {
         .map(|b| b.delivery_count)
 }
 
+/// What a new leader reads back after `sm` is written: the
+/// `WriteShareGroupState` batches of `sm`, loaded into a fresh machine.
+pub(super) fn written(sm: &AcquisitionState) -> AcquisitionState {
+    let (start, _, batches) = sm.to_persist_batches();
+    let mut fresh = AcquisitionState::new(start);
+    fresh.load_from(start, sm.state_epoch, sm.leader_epoch, &batches);
+    fresh
+}
+
 /// Every offset in the window that the schedule currently holds back.
 pub(super) fn deferred_offsets(sm: &AcquisitionState) -> Vec<Offset> {
     sm.batches

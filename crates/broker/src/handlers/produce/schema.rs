@@ -286,6 +286,7 @@ mod tests {
             keyless_records: Vec::new(),
             invalid_timestamp_records: Vec::new(),
             source: PreparedSource::Verbatim(bytes),
+            encoded: None,
         };
         // No request reaches the registry: the record fails to decode before
         // any field is checked, so the address is never dialled.

@@ -469,6 +469,7 @@ mod tests {
             keyless_records: Vec::new(),
             invalid_timestamp_records: Vec::new(),
             source: PreparedSource::Owned(RecordBatch::default()),
+            encoded: None,
         }
     }
 

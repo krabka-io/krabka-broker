@@ -1,8 +1,8 @@
 //! `CodSpeed` microbenchmarks for `krabka-log`.
 //!
 //! These benchmarks cover the public `Log` surface: single and bulk appends,
-//! reads at various offsets, open and recover with many segments, truncate,
-//! and time-based rolls. They deliberately exercise both the active-segment
+//! reads at various offsets, tail reads across many retained segments, open
+//! and recover with many segments, truncate, and time-based rolls. They deliberately exercise both the active-segment
 //! hot path and the sealed-segment scan path.
 
 #[cfg(unix)]
@@ -16,7 +16,7 @@ use {
     krabka_ids::{LeaderEpoch, Offset, ProducerId},
     krabka_log::{Log, LogConfig, SegmentAllocation, VerbatimBatch},
     krabka_protocol::records::RecordBatch,
-    krabka_units::prelude::{ByteSize, gibibytes, kibibytes, mebibytes},
+    krabka_units::prelude::{ByteSize, bytes, gibibytes, kibibytes, mebibytes},
     std::{
         sync::{Arc, Mutex},
         time::Instant,
@@ -441,6 +441,117 @@ fn bench_read(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Tail reads — varied retained segment counts
+// ---------------------------------------------------------------------------
+
+/// The retained segment counts the tail-read benchmark compares.
+const TAIL_SEGMENT_COUNTS: [usize; 4] = [1, 100, 1_000, 10_000];
+
+/// The payload of every batch in the tail-read logs, and so of the tail the
+/// benchmark reads.
+const TAIL_PAYLOAD: usize = 1024;
+
+/// A log of `segments` segments that each hold one one-record batch of
+/// [`TAIL_PAYLOAD`] bytes.
+///
+/// A one-byte `segment_size` rolls the active segment on every append after
+/// the first, so the log ends with `segments - 1` sealed segments and an
+/// active one that holds the last batch.
+fn tail_log(segments: usize) -> TempLog {
+    populated_log(
+        LogConfig {
+            segment_size: bytes(1),
+            ..LogConfig::default()
+        },
+        segments,
+        1,
+        TAIL_PAYLOAD,
+    )
+}
+
+/// The open files a log of `segments` segments holds, with room to spare: each
+/// segment keeps about three open, and appending briefly holds a fourth.
+fn files_for(segments: usize) -> u64 {
+    u64::try_from(segments)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(4)
+        .saturating_add(256)
+}
+
+/// Whether this process may open the files a log of `segments` segments holds.
+///
+/// GitHub's hosted runners allow 65,536, enough for every count here. A
+/// container with a lower hard limit cannot hold the largest log, and the
+/// benchmark skips that count rather than fail on `EMFILE` halfway through it.
+#[cfg(target_os = "linux")]
+fn open_files_allow(segments: usize) -> bool {
+    rustix::process::getrlimit(rustix::process::Resource::Nofile)
+        .current
+        .is_none_or(|limit| limit >= files_for(segments))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_files_allow(_segments: usize) -> bool { true }
+
+/// A fetch of the last batch of a log, which is what a consumer or follower
+/// at the tail asks for, as the number of retained segments grows.
+///
+/// The read finds its first segment by a binary search over the sealed
+/// segments, so the time should not grow with the count. The second read
+/// starts in the last sealed segment and crosses into the active one.
+fn bench_read_tail(c: &mut Criterion) {
+    let mut group = c.benchmark_group("log/read_tail");
+
+    for segments in TAIL_SEGMENT_COUNTS {
+        if !open_files_allow(segments) {
+            eprintln!(
+                "log/read_tail: skipping {segments} segments, which need about {} open files",
+                files_for(segments)
+            );
+            continue;
+        }
+        let TempLog { dir: _dir, log } = tail_log(segments);
+        let end = log.log_end_offset();
+        let last = end - 1;
+        let crossing = (end - 2).max(Offset(0));
+
+        group.bench_function(format!("decoded_last_batch_{segments}_segments"), |b| {
+            b.iter(|| black_box(log.read(black_box(last), mebibytes(1)).unwrap()));
+        });
+        group.bench_function(format!("raw_last_batch_{segments}_segments"), |b| {
+            b.iter(|| black_box(log.read_raw(black_box(last), end, mebibytes(1)).unwrap()));
+        });
+        group.bench_function(format!("raw_last_two_batches_{segments}_segments"), |b| {
+            b.iter(|| {
+                black_box(
+                    log.read_raw(black_box(crossing), end, mebibytes(1))
+                        .unwrap(),
+                )
+            });
+        });
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "tvos",
+            target_os = "watchos",
+            target_os = "freebsd",
+            target_os = "dragonfly",
+        ))]
+        group.bench_function(format!("descriptor_last_batch_{segments}_segments"), |b| {
+            b.iter(|| {
+                black_box(
+                    log.read_raw_desc(black_box(last), end, mebibytes(1))
+                        .unwrap(),
+                )
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // Open / recovery — varied segment counts
 // ---------------------------------------------------------------------------
 
@@ -535,6 +646,7 @@ criterion_group!(
     bench_append_handoff,
     bench_file_write_shapes,
     bench_read,
+    bench_read_tail,
     bench_open,
     bench_truncate,
     bench_accessors,

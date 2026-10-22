@@ -5,16 +5,19 @@
 //! the one-lock-per-group discipline, so they stay together in one module.
 
 use {
-    super::storage::{lock_log, storage_failure_error},
+    super::storage::storage_failure_error,
     crate::{
-        blocking::run_blocking_catching,
+        blocking::run_page_cache_io,
         error::BrokerError,
         partition::{AppendedBatch, ProduceData, ProducerAppendCheck},
+        time_util::now_ms,
     },
-    krabka_compression::CompressionType,
     krabka_log::{Log, Offset},
     krabka_protocol::records::RecordBatch,
-    krabka_units::prelude::{ByteSizeExt as _, mebibytes},
+    krabka_units::{
+        ByteSize,
+        prelude::{ByteSizeExt as _, mebibytes},
+    },
     std::sync::{Arc, Mutex},
 };
 
@@ -25,20 +28,23 @@ type AppendOutcome = (
     Vec<krabka_log::ProducerSnapshotEntry>,
 );
 
-/// The group's held log lock and the topic's configured compression codec.
-struct LockedLog<'a> {
-    guard: std::sync::MutexGuard<'a, Log>,
-    target: Option<CompressionType>,
-}
-
-/// Hold the group's log lock after releasing any replicated transactions.
-fn prepare_log(log: &Mutex<Log>, high_watermark: Option<Offset>) -> LockedLog<'_> {
-    let mut guard = lock_log(log);
+/// Release any replicated transactions the high watermark passed, and settle
+/// every job's append shape against the log's config, under the group's one
+/// lock: the topic's compression target, and whether bytes the produce size
+/// gates encoded are still what that target and its level write.
+fn prepare_log(
+    log: &mut Log,
+    high_watermark: Option<Offset>,
+    datas: Vec<ProduceData>,
+) -> Vec<ProduceData> {
     if let Some(high_watermark) = high_watermark {
-        guard.release_replicated_transactions(high_watermark);
+        log.release_replicated_transactions(high_watermark);
     }
-    let target = guard.config_snapshot().compression_type;
-    LockedLog { guard, target }
+    let config = log.config_snapshot();
+    datas
+        .into_iter()
+        .map(|data| data.resolve_for_append(&config))
+        .collect()
 }
 
 /// Append owned bytes at an assigned offset, or let the leader stamp them.
@@ -53,14 +59,12 @@ fn append_owned(
     }
 }
 
-/// Dispatch one accepted job without changing control-batch compression or stamps.
+/// Dispatch one accepted job that [`prepare_log`] already settled.
 fn append_data(
     log: &mut Log,
-    mut data: ProduceData,
-    target: Option<CompressionType>,
+    data: ProduceData,
     base: Option<Offset>,
 ) -> Result<AppendedBatch, BrokerError> {
-    data.apply_target_compression(target);
     let result = match data {
         ProduceData::Verbatim(batch) => match base {
             Some(base) => log.append_verbatim_at(&batch, base).map(at_offset),
@@ -68,9 +72,9 @@ fn append_data(
                 .append_verbatim(&batch)
                 .map(|(base, stamp)| appended(base, stamp)),
         },
-        ProduceData::Owned(mut batch) | ProduceData::OwnedControl(mut batch) => {
-            append_owned(log, &mut batch, base)
-        }
+        ProduceData::Owned(mut batch)
+        | ProduceData::OwnedEncoded { mut batch, .. }
+        | ProduceData::OwnedControl(mut batch) => append_owned(log, &mut batch, base),
         ProduceData::OwnedCommitMarker {
             mut batch,
             commit_stamp,
@@ -164,24 +168,24 @@ fn refuse_transactional_append(
 /// control batch that arrived uncompressed. Sequential appends stamp
 /// sequential base offsets, so the function keeps the order across the group.
 fn append_produce_batch(
-    log: &Mutex<Log>,
+    guard: &mut Log,
     high_watermark: Option<Offset>,
     (datas, checks): CheckedBatches,
 ) -> AppendOutcome {
-    let LockedLog { mut guard, target } = prepare_log(log, high_watermark);
-    if let Some(results) = try_append_direct_group(&mut guard, &datas, &checks) {
+    let datas = prepare_log(guard, high_watermark, datas);
+    if let Some(results) = try_append_direct_group(guard, &datas, &checks) {
         return (results, guard.log_end_offset(), Vec::new());
     }
     let mut results = Vec::with_capacity(datas.len());
     let mut control_entries = Vec::new();
     for (index, data) in datas.into_iter().enumerate() {
         let control_producer = data.control_producer_id();
-        if let Some(refused) = refuse_transactional_append(&guard, checks.get(index)) {
+        if let Some(refused) = refuse_transactional_append(guard, checks.get(index)) {
             results.push(Err(refused));
             continue;
         }
-        let r = append_data(&mut guard, data, target, None);
-        capture_control_entry(&guard, r.is_ok(), control_producer, &mut control_entries);
+        let r = append_data(guard, data, None);
+        capture_control_entry(guard, r.is_ok(), control_producer, &mut control_entries);
         results.push(r);
     }
     // Read the post-append LEO once under the same lock so the HW recompute
@@ -270,25 +274,25 @@ fn direct_group_results(
 }
 
 fn append_produce_batch_at(
-    log: &Mutex<Log>,
+    guard: &mut Log,
     base: Offset,
     high_watermark: Option<Offset>,
     (datas, checks): CheckedBatches,
 ) -> AppendOutcome {
-    let LockedLog { mut guard, target } = prepare_log(log, high_watermark);
+    let datas = prepare_log(guard, high_watermark, datas);
     let mut next = base;
     let mut results = Vec::with_capacity(datas.len());
     let mut control_entries = Vec::new();
     for (index, data) in datas.into_iter().enumerate() {
         let count = i64::from(data.record_count());
         let control_producer = data.control_producer_id();
-        let result = if let Some(refused) = refuse_transactional_append(&guard, checks.get(index)) {
+        let result = if let Some(refused) = refuse_transactional_append(guard, checks.get(index)) {
             Err(refused)
         } else {
-            append_data(&mut guard, data, target, Some(next))
+            append_data(guard, data, Some(next))
         };
         capture_control_entry(
-            &guard,
+            guard,
             result.is_ok(),
             control_producer,
             &mut control_entries,
@@ -301,42 +305,83 @@ fn append_produce_batch_at(
     (results, leo, control_entries)
 }
 
-/// Run [`append_produce_batch`] away from normal async polling.
-///
-/// On the broker's multi-thread runtime, `block_in_place` avoids the per-batch
-/// `spawn_blocking` scheduling hop. Tokio can still hand the worker's other
-/// tasks to a replacement thread. Current-thread test runtimes keep the
-/// `spawn_blocking` fallback because `block_in_place` is illegal there, and
-/// `wasm32-wasip1` appends inline; [`crate::blocking`] makes that choice. The
-/// writer loop is still the single serializer for this partition, so the append
-/// order does not change.
+/// Run [`append_produce_batch`] under `log`'s lock: on the calling task when
+/// the group only writes into the page cache, and away from async polling
+/// when its append may fsync or roll the segment, or the lock is held; see
+/// [`run_page_cache_io`].
 pub(crate) async fn run_produce_append_batch(
-    log: Arc<Mutex<Log>>,
+    log: &Arc<Mutex<Log>>,
     high_watermark: Option<Offset>,
     datas: CheckedBatches,
 ) -> Result<AppendOutcome, BrokerError> {
-    run_blocking_catching(move || append_produce_batch(&log, high_watermark, datas))
-        .await
-        .map_err(|error| storage_failure_error("append task panicked", error))
+    run_group_append(log, datas, move |log, datas| {
+        append_produce_batch(log, high_watermark, datas)
+    })
+    .await
 }
 
 pub(crate) async fn run_produce_append_batch_at(
-    log: Arc<Mutex<Log>>,
+    log: &Arc<Mutex<Log>>,
     base: Offset,
     high_watermark: Option<Offset>,
     datas: CheckedBatches,
 ) -> Result<AppendOutcome, BrokerError> {
-    run_blocking_catching(move || append_produce_batch_at(&log, base, high_watermark, datas))
-        .await
-        .map_err(|error| storage_failure_error("append task panicked", error))
+    run_group_append(log, datas, move |log, datas| {
+        append_produce_batch_at(log, base, high_watermark, datas)
+    })
+    .await
+}
+
+/// The body of both produce-group appends: `append` runs under `log`'s lock,
+/// inline when the group's footprint stays in the page cache.
+async fn run_group_append(
+    log: &Arc<Mutex<Log>>,
+    datas: CheckedBatches,
+    append: impl FnOnce(&mut Log, CheckedBatches) -> AppendOutcome + Send + 'static,
+) -> Result<AppendOutcome, BrokerError> {
+    let footprint = group_footprint(&datas.0);
+    run_page_cache_io(
+        log,
+        |log| !append_may_block(log, footprint),
+        move |log| append(log, datas),
+    )
+    .await
+    .map_err(|error| storage_failure_error("append task panicked", error))
+}
+
+/// The bytes a group appends and the newest timestamp it carries.
+fn group_footprint(datas: &[ProduceData]) -> (usize, i64) {
+    datas
+        .iter()
+        .map(ProduceData::append_footprint)
+        .fold((0, i64::MIN), |(size, newest), (bytes, timestamp)| {
+            (size + bytes, newest.max(timestamp))
+        })
+}
+
+/// Whether appending a group of `footprint` may wait on more than the page
+/// cache. A `LogAppendTime` partition stamps the broker clock, so the newest
+/// timestamp is at least now.
+pub(super) fn append_may_block(log: &mut Log, (bytes, newest): (usize, i64)) -> bool {
+    let newest = newest.max(now_ms());
+    log.append_may_block(
+        ByteSize::from_bytes_i64(i64::try_from(bytes).unwrap_or(i64::MAX)),
+        newest,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use {
         super::*,
-        crate::{error::BrokerError, partition_writer::test_support::sample_batch},
+        crate::{
+            error::BrokerError,
+            partition::EncodedBatch,
+            partition_writer::{storage::lock_log, test_support::sample_batch},
+            test_support::default_value_records_batch,
+        },
         assert2::{assert, check},
+        krabka_compression::CompressionType,
         krabka_log::{LogConfig, LogIo},
         tempfile::tempdir,
     };
@@ -480,8 +525,11 @@ mod tests {
                 fail_at: usize::MAX,
             });
             let (_dir, log) = preallocated_log(seeded, append_time, &disk);
-            let (results, leo, controls) =
-                append_produce_batch(&log, None, (verbatim_jobs(jobs, payload), Vec::new()));
+            let (results, leo, controls) = append_produce_batch(
+                &mut lock_log(&log),
+                None,
+                (verbatim_jobs(jobs, payload), Vec::new()),
+            );
             assert!(controls.is_empty());
             assert!(results.iter().all(Result::is_ok));
             let base = i64::from(seeded);
@@ -516,13 +564,17 @@ mod tests {
             fail_at: 1,
         });
         let (_dir, log) = preallocated_log(true, false, &disk);
-        let (first, leo, _) =
-            append_produce_batch(&log, None, (verbatim_jobs(64, 2_048), Vec::new()));
+        let (first, leo, _) = append_produce_batch(
+            &mut lock_log(&log),
+            None,
+            (verbatim_jobs(64, 2_048), Vec::new()),
+        );
         assert!(first.iter().all(Result::is_ok));
         assert!(leo == Offset(65));
         assert!(lock_log(&log).sync().is_err());
 
-        let (next, _, _) = append_produce_batch(&log, None, (verbatim_jobs(8, 0), Vec::new()));
+        let (next, _, _) =
+            append_produce_batch(&mut lock_log(&log), None, (verbatim_jobs(8, 0), Vec::new()));
         assert!(next.iter().all(|result| matches!(result,
             Err(crate::error::BrokerError::Log(krabka_log::LogError::Io(error)))
             if error.kind() == std::io::ErrorKind::StorageFull)));
@@ -533,8 +585,11 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let log = failing_log(dir.path());
 
-        let (results, leo, _) =
-            append_produce_batch(&log, None, (two_single_record_batches(), Vec::new()));
+        let (results, leo, _) = append_produce_batch(
+            &mut lock_log(&log),
+            None,
+            (two_single_record_batches(), Vec::new()),
+        );
 
         assert_partial_append(&results, leo);
         assert!(log.lock().unwrap().log_end_offset() == Offset(1));
@@ -546,7 +601,7 @@ mod tests {
         let log = failing_log(dir.path());
 
         let (results, leo, _) = append_produce_batch_at(
-            &log,
+            &mut lock_log(&log),
             Offset(0),
             None,
             (two_single_record_batches(), Vec::new()),
@@ -555,7 +610,7 @@ mod tests {
         assert_partial_append(&results, leo);
 
         let (results, leo, _) = append_produce_batch_at(
-            &log,
+            &mut lock_log(&log),
             Offset(2),
             None,
             (vec![ProduceData::Owned(sample_batch().call())], Vec::new()),
@@ -573,8 +628,11 @@ mod tests {
         let original = sample_batch().count(2).call();
         assert!(original.attributes.compression() == CompressionType::None);
 
-        let (results, leo, _) =
-            append_produce_batch(&log, None, (vec![ProduceData::Owned(original)], Vec::new()));
+        let (results, leo, _) = append_produce_batch(
+            &mut lock_log(&log),
+            None,
+            (vec![ProduceData::Owned(original)], Vec::new()),
+        );
         assert!(results.len() == 1);
         let assigned = results.into_iter().next().unwrap().expect("append ok");
         assert!(assigned.base_offset == 0);
@@ -583,6 +641,218 @@ mod tests {
         let batch = one_appended_batch(&log);
         check!(batch.attributes.compression() == CompressionType::Lz4);
         check!(batch.records.len() == 2);
+    }
+
+    /// A transactional client batch of `values`, decoded and not yet stamped,
+    /// as the produce size gates see it: producer 9 at epoch 0, from
+    /// `base_sequence`, with the producer's own create times.
+    fn gate_batch(values: &[&'static [u8]], base_sequence: i32) -> RecordBatch {
+        let mut batch = default_value_records_batch(values);
+        batch.attributes = batch.attributes.with_transactional(true);
+        batch.producer_id = 9;
+        batch.producer_epoch = 0;
+        batch.base_sequence = base_sequence;
+        batch.partition_leader_epoch = -1;
+        batch
+    }
+
+    /// The two jobs both logs below append: two batches, so the second one's
+    /// base offset is not the zero an unpatched header carries.
+    fn gate_batches() -> [RecordBatch; 2] {
+        const VALUE: &[u8] = b"a value that every codec shrinks, a value that every codec shrinks";
+        [
+            gate_batch(&[VALUE, VALUE], 0),
+            gate_batch(&[VALUE, VALUE, VALUE], 2),
+        ]
+    }
+
+    /// The bytes a size gate encodes `batch` into, under `codec` at `level`.
+    fn gate_encoded(
+        batch: &RecordBatch,
+        codec: CompressionType,
+        level: Option<i32>,
+    ) -> EncodedBatch {
+        let mut target = batch.clone();
+        target.attributes = target.attributes.with_compression(codec);
+        EncodedBatch::encode(&target, level).expect("encode")
+    }
+
+    /// Everything one log stored for the two batches: the raw bytes, the
+    /// decoded batches, the producer's entry and the first unstable offset.
+    struct Stored {
+        raw: bytes::Bytes,
+        batches: Vec<RecordBatch>,
+        producer: Option<krabka_log::ProducerSnapshotEntry>,
+        lso: Offset,
+    }
+
+    fn append_and_read(config: &LogConfig, datas: Vec<ProduceData>) -> Stored {
+        let dir = tempdir().expect("tempdir");
+        let log = Mutex::new(Log::open(dir.path(), config.clone()).expect("open log"));
+        let (results, leo, _) =
+            append_produce_batch(&mut lock_log(&log), None, (datas, Vec::new()));
+        for result in &results {
+            assert!(result.is_ok(), "{result:?}");
+        }
+        assert!(leo == Offset(5));
+        let guard = lock_log(&log);
+        Stored {
+            raw: guard
+                .read_raw(Offset(0), Offset(5), krabka_units::mebibytes(10))
+                .expect("read raw")
+                .bytes,
+            batches: guard
+                .read(Offset(0), krabka_units::mebibytes(10))
+                .expect("read")
+                .batches,
+            producer: guard.producer_state_entry(krabka_log::ProducerId(9)),
+            lso: guard.lso(),
+        }
+    }
+
+    /// Bytes the produce size gates encoded ride to the writer, which appends
+    /// them when the codec and level in force under its lock are the ones
+    /// they were encoded under, and encodes the batch afresh otherwise.
+    ///
+    /// Either way the log must hold what the owned append stores, which is the
+    /// reference each case is held to: the same bytes, with the base offset,
+    /// the leader epoch stamped after the gates, and the log-append time of a
+    /// `LogAppendTime` partition all where the owned append puts them, and the
+    /// same producer state and first unstable offset for the transaction.
+    #[test]
+    fn gate_encoded_bytes_land_as_the_owned_append_stores_the_batch() {
+        struct Case {
+            name: &'static str,
+            log: LogConfig,
+            gate_codec: CompressionType,
+            gate_level: Option<i32>,
+            reused: bool,
+        }
+        let gzip = LogConfig {
+            compression_type: Some(CompressionType::Gzip),
+            ..LogConfig::default()
+        };
+        let cases = [
+            Case {
+                name: "gzip at the log's level",
+                gate_codec: CompressionType::Gzip,
+                gate_level: gzip.compression_level(CompressionType::Gzip),
+                reused: true,
+                log: gzip.clone(),
+            },
+            Case {
+                name: "zstd on a LogAppendTime partition",
+                log: LogConfig {
+                    compression_type: Some(CompressionType::Zstd),
+                    message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
+                    ..LogConfig::default()
+                },
+                gate_codec: CompressionType::Zstd,
+                gate_level: LogConfig::default().compression_level(CompressionType::Zstd),
+                reused: true,
+            },
+            Case {
+                name: "the producer's codec kept",
+                log: LogConfig::default(),
+                gate_codec: CompressionType::None,
+                gate_level: None,
+                reused: true,
+            },
+            Case {
+                name: "gzip level changed after the gates",
+                log: LogConfig {
+                    compression_gzip_level: 9,
+                    ..gzip.clone()
+                },
+                gate_codec: CompressionType::Gzip,
+                gate_level: Some(1),
+                reused: false,
+            },
+            Case {
+                name: "compression.type changed after the gates",
+                log: LogConfig {
+                    compression_type: Some(CompressionType::Lz4),
+                    ..LogConfig::default()
+                },
+                gate_codec: CompressionType::Zstd,
+                gate_level: LogConfig::default().compression_level(CompressionType::Zstd),
+                reused: false,
+            },
+        ];
+        for case in cases {
+            let name = case.name;
+            let stamped = |mut batch: RecordBatch| {
+                batch.partition_leader_epoch = 7;
+                batch
+            };
+            let encoded = gate_batches().map(|batch| {
+                let encoded = gate_encoded(&batch, case.gate_codec, case.gate_level);
+                ProduceData::OwnedEncoded {
+                    batch: stamped(batch),
+                    encoded: Box::new(encoded),
+                }
+            });
+            for data in &encoded {
+                let ProduceData::OwnedEncoded { batch, encoded } = data else {
+                    unreachable!("built above");
+                };
+                let resolved = ProduceData::OwnedEncoded {
+                    batch: batch.clone(),
+                    encoded: encoded.clone(),
+                }
+                .resolve_for_append(&case.log);
+                check!(
+                    matches!(resolved, ProduceData::Verbatim(_)) == case.reused,
+                    "{name}: {resolved:?}"
+                );
+            }
+
+            let reference = append_and_read(
+                &case.log,
+                gate_batches()
+                    .map(|batch| ProduceData::Owned(stamped(batch)))
+                    .into(),
+            );
+            let candidate = append_and_read(&case.log, encoded.into());
+
+            check!(candidate.lso == reference.lso, "{name}");
+            check!(candidate.batches.len() == 2, "{name}");
+            for batch in &candidate.batches {
+                check!(batch.partition_leader_epoch == 7, "{name}");
+                check!(
+                    batch.attributes.compression()
+                        == case.log.compression_type.unwrap_or(CompressionType::None),
+                    "{name}"
+                );
+            }
+            if case.log.message_timestamp_type
+                == krabka_protocol::records::TimestampType::CreateTime
+            {
+                check!(candidate.raw == reference.raw, "{name}");
+                check!(candidate.producer == reference.producer, "{name}");
+            } else {
+                // The two logs stamped two clock readings; everything else in
+                // the batches, and the producer's entry, is the same.
+                let unstamped = |stored: Stored| {
+                    let batches = stored
+                        .batches
+                        .into_iter()
+                        .map(|batch| RecordBatch {
+                            max_timestamp: 0,
+                            ..batch
+                        })
+                        .collect::<Vec<_>>();
+                    let producer = stored
+                        .producer
+                        .map(|entry| krabka_log::ProducerSnapshotEntry {
+                            timestamp: 0,
+                            ..entry
+                        });
+                    (batches, producer)
+                };
+                check!(unstamped(candidate) == unstamped(reference), "{name}");
+            }
+        }
     }
 
     /// A control batch that arrives uncompressed stays uncompressed, whatever
@@ -640,7 +910,7 @@ mod tests {
         assert!(marker.attributes.compression() == CompressionType::None);
 
         let (results, _, control_entries) = append_produce_batch(
-            &log,
+            &mut lock_log(&log),
             None,
             (vec![ProduceData::OwnedControl(marker)], Vec::new()),
         );
@@ -693,9 +963,18 @@ mod tests {
                 let append = |high_watermark, datas: Vec<ProduceData>| {
                     let base = lock_log(&log).log_end_offset();
                     let (results, _, _) = if at_offset {
-                        append_produce_batch_at(&log, base, high_watermark, (datas, Vec::new()))
+                        append_produce_batch_at(
+                            &mut lock_log(&log),
+                            base,
+                            high_watermark,
+                            (datas, Vec::new()),
+                        )
                     } else {
-                        append_produce_batch(&log, high_watermark, (datas, Vec::new()))
+                        append_produce_batch(
+                            &mut lock_log(&log),
+                            high_watermark,
+                            (datas, Vec::new()),
+                        )
                     };
                     assert!(results.iter().all(Result::is_ok), "{name}");
                 };
@@ -722,7 +1001,7 @@ mod tests {
         let marker = commit_marker_batch();
 
         let (results, _, control_entries) = append_produce_batch_at(
-            &log,
+            &mut lock_log(&log),
             Offset(0),
             None,
             (vec![ProduceData::OwnedControl(marker)], Vec::new()),

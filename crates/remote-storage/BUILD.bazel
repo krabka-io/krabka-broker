@@ -1,4 +1,4 @@
-load("//bazel:defs.bzl", "crate_binary", "crate_library", "crate_tests")
+load("//bazel:defs.bzl", "crate_bench", "crate_binary", "crate_library", "crate_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -6,6 +6,10 @@ package(default_visibility = ["//visibility:public"])
 exports_files(["Cargo.toml"])
 
 crate_library(name = "remote-storage")
+
+# `benches/remote_epoch_index.rs`, run on demand with `cargo bench`. This
+# target compiles and lints it in `bazel build //...`.
+crate_bench(lib = "remote-storage")
 
 # `krabka-worm-verify verify` — audits a WORM archive with read-only credentials.
 crate_binary(

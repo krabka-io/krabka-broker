@@ -32,6 +32,10 @@ pub(super) const SEGMENT_BYTES: &str = "segment.bytes";
 /// re-encode a batch whose codec differs before it stores it.
 pub(super) const COMPRESSION_TYPE: &str = "compression.type";
 
+/// Kafka's `compression.lz4.level`, the level a broker-side lz4 re-encode
+/// runs at.
+pub(super) const COMPRESSION_LZ4_LEVEL: &str = "compression.lz4.level";
+
 /// Kafka's default for both keys: 1 MiB of records plus the 12-byte
 /// `Records.LOG_OVERHEAD`. Read out of `apache/kafka:4.1.0` as the
 /// `DEFAULT_CONFIG` synonym of an unset `max.message.bytes`.

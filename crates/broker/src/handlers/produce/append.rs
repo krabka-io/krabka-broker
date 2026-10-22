@@ -19,11 +19,13 @@ use {
     crate::{
         codes,
         error::BrokerError,
+        log_dir_status::LogDirRegistry,
         metrics::RequestPhases,
         partition::{
             AppendedBatch, Partition, ProduceData, ProduceJob, ProducerAppendCheck,
             ReplicationTarget, WriterMessage,
         },
+        partition_writer::produce_inline,
         producer_state::ProducerState,
     },
     krabka_log::{Offset, VerbatimBatch},
@@ -41,6 +43,8 @@ pub(super) type ProduceTransition = tokio::sync::OwnedRwLockReadGuard<Replicatio
 pub(super) struct AppendContext<'a> {
     pub(super) partition: &'a Arc<Partition>,
     pub(super) producer_state: &'a Arc<ProducerState>,
+    /// The broker's log-directory health, which a failed inline append flags.
+    pub(super) log_dir_status: &'a LogDirRegistry,
     pub(super) partition_index: i32,
     pub(super) acks: i16,
     pub(super) leader_epoch: i32,
@@ -242,17 +246,34 @@ pub(super) async fn dispatch_prepared(
     };
     let data = build_produce_data(prepared, context.leader_epoch);
     let (ack_tx, ack_rx) = oneshot::channel();
-    let job = WriterMessage::Produce(ProduceJob {
+    let job = ProduceJob {
         data,
         ack: ack_tx,
         producer_check: context.producer_check,
-    });
+    };
     // The local phase opens here and closes when the writer answers: the
     // enqueue plus the append is the work this broker's own log does for this
     // partition. A send failure is charged too, so the phase covers every exit.
-    let local_started = std::time::Instant::now();
-    if context.partition.writer_tx.send(job).await.is_err() {
-        context.phases.add_local(local_started.elapsed());
+    let local = context.phases.open_local();
+    // An idle writer means the append can run right here, with no hop to
+    // the writer task and back; see `WriterGate`.
+    let queued = produce_inline(
+        context.partition,
+        job,
+        context.log_dir_status,
+        context.producer_state,
+    )
+    .await
+    .err();
+    if let Some(job) = queued
+        && context
+            .partition
+            .writer_tx
+            .send(WriterMessage::Produce(job))
+            .await
+            .is_err()
+    {
+        drop(local);
         response.error_code = codes::NOT_LEADER_OR_FOLLOWER;
         return Ok(AppendOutcome::Answered(response));
     }
@@ -264,7 +285,7 @@ pub(super) async fn dispatch_prepared(
     // and a producer that retried it wrote it twice. It closed the connection
     // of an `acks=0` producer too, which Kafka never does over a timeout.
     let acked = ack_rx.await;
-    context.phases.add_local(local_started.elapsed());
+    drop(local);
     match acked {
         Ok(Ok(appended)) => return Ok(finalize_ack(response, context, appended, commit).await),
         Ok(Err(error)) => {
@@ -460,8 +481,8 @@ async fn finalize_ack(
 /// leader epoch.
 ///
 /// Verbatim batches carry the producer's exact bytes. Owned batches carry the
-/// decoded `RecordBatch`, whose `partition_leader_epoch` the caller has
-/// already stamped.
+/// decoded `RecordBatch`, whose `partition_leader_epoch` this stamps, and the
+/// bytes the size gates encoded it into, when they did.
 pub(super) fn build_produce_data(prepared: PreparedBatch, leader_epoch: i32) -> ProduceData {
     let is_transactional = prepared.attributes.is_transactional();
     match prepared.source {
@@ -481,7 +502,16 @@ pub(super) fn build_produce_data(prepared: PreparedBatch, leader_epoch: i32) -> 
             // The writer stamps the verbatim path's epoch in-place at append;
             // the owned batch carries it as a struct field instead.
             batch.partition_leader_epoch = leader_epoch;
-            ProduceData::Owned(batch)
+            // Bytes a size gate encoded travel with the batch, and the writer
+            // appends them when its config still matches what encoded them.
+            // The epoch above sits outside the CRC; the log patches it in.
+            match prepared.encoded {
+                Some(encoded) => ProduceData::OwnedEncoded {
+                    batch,
+                    encoded: Box::new(encoded),
+                },
+                None => ProduceData::Owned(batch),
+            }
         }
     }
 }
@@ -494,6 +524,7 @@ mod tests {
             codes,
             error::BrokerError,
             log_dir::partition_dir,
+            log_dir_status::LogDirRegistry,
             metrics::{BrokerMetrics, RequestPhases},
             partition::{AppendedBatch, test_support::test_partition},
             partition_writer::storage_failure_error,
@@ -804,7 +835,7 @@ mod tests {
                     prepare::{DecodeEnv, prepare_batch},
                     test_support::encode_batch,
                 },
-                partition::{Partition, WriterMessage},
+                partition::{Partition, WriterGate, WriterMessage},
             },
             bytes::Bytes,
             krabka_compression::RecordDecompressionPolicy,
@@ -815,6 +846,7 @@ mod tests {
         let (writer_tx, mut writer_rx) = tokio::sync::mpsc::channel(1);
         let partition = Arc::new(Partition {
             writer_tx,
+            writer_gate: WriterGate::shared(false),
             ..partition
         });
         tokio::spawn(async move {
@@ -849,6 +881,7 @@ mod tests {
             super::AppendContext {
                 partition: &partition,
                 producer_state: &Arc::new(ProducerState::new()),
+                log_dir_status: &LogDirRegistry::default(),
                 partition_index: 0,
                 acks: 1,
                 leader_epoch: 0,

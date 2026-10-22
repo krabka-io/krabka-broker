@@ -1,6 +1,6 @@
 """Tests of complete-source inventory and jscpd enforcement."""
 
-load("./check_cpd.axl", "MINIMUM_TOKENS", "detector_args", "prepare_detector", "repository_report", "rust_paths", "snapshot_sources")
+load("./check_cpd.axl", "MINIMUM_TOKENS", "detector_args", "prepare_detector", "repository_report", "rust_paths", "snapshot_sources", "source_kind", "tracked_symlinks")
 load("./testing.axl", "check", "check_eq", "suite", "suite_task", "temp_tree")
 
 def _test_inventory_preserves_hidden_and_unusual_paths(_ctx):
@@ -48,6 +48,45 @@ def _test_real_git_snapshots_include_moves_deletions_and_new_files(ctx):
     check_eq("moved bytes", ctx.std.fs.read_to_string(head + "/moved.rs"), "fn old() {}\n")
     check_eq("untracked hidden source", ctx.std.fs.read_to_string(head + "/.hidden/new.rs"), "fn added() {}\n")
 
+def _symlink(ctx, root, target, name):
+    result = ctx.std.process.command("ln").args(["-s", target, name]).current_dir(root).stderr("piped").spawn().wait_with_output()
+    check_eq("ln -s %s %s: %s" % (target, name, result.stderr), result.status.code, 0)
+
+def _test_symlinked_sources_are_rejected_in_process(ctx):
+    root = temp_tree(ctx, {"real.rs": "fn real() {}\n", "dir.rs/inner.rs": "fn inner() {}\n"})
+    _symlink(ctx, root, "real.rs", "file-link.rs")
+    _symlink(ctx, root, "dir.rs", "dir-link.rs")
+    _symlink(ctx, root, "absent.rs", "broken-link.rs")
+    _git(ctx, root, ["init", "--quiet"])
+    _git(ctx, root, ["add", "real.rs", "dir.rs"])
+    _git(ctx, root, ["-c", "user.name=CPD Test", "-c", "user.email=cpd@example.invalid", "commit", "--quiet", "-m", "base"])
+
+    # A tracked file replaced by a broken link is a type change, not a deletion.
+    ctx.std.fs.remove_file(root + "/dir.rs/inner.rs")
+    _symlink(ctx, root + "/dir.rs", "gone.rs", "inner.rs")
+    untracked = rust_paths(_git(ctx, root, ["ls-files", "--others", "--exclude-standard", "-z", "--", "*.rs"]) + "\x00")
+    check_eq("untracked links reach the check", untracked, ["broken-link.rs", "dir-link.rs", "file-link.rs"])
+    deleted = rust_paths(_git(ctx, root, ["diff", "--name-only", "--diff-filter=D", "-z", "HEAD", "--", "*.rs"]) + "\x00")
+    check_eq("type change is not a deletion", deleted, [])
+    kinds = {path: source_kind(ctx.std.fs, root + "/" + path) for path in ["real.rs", "file-link.rs", "dir-link.rs", "broken-link.rs", "dir.rs", "dir.rs/inner.rs"]}
+    check_eq("kinds", kinds, {
+        "real.rs": "regular",
+        "file-link.rs": "unsupported",
+        "dir-link.rs": "unsupported",
+        "broken-link.rs": "missing",
+        "dir.rs": "unsupported",
+        "dir.rs/inner.rs": "missing",
+    })
+
+def _test_tracked_symlinks_come_from_git_modes(ctx):
+    root = temp_tree(ctx, {"real.rs": "fn real() {}\n", "space name.rs": "fn space() {}\n"})
+    _symlink(ctx, root, "real.rs", "link\tname.rs")
+    _git(ctx, root, ["init", "--quiet"])
+    _git(ctx, root, ["add", "."])
+    staged = _git(ctx, root, ["ls-files", "--stage", "-z", "--", "*.rs"])
+    check_eq("tracked link", tracked_symlinks(staged), ["link\tname.rs"])
+    check_eq("no links", tracked_symlinks("100644 0123 0\treal.rs\x00"), [])
+
 def _test_real_detector_finds_commented_hidden_copies_and_rejects_empty(ctx):
     work = temp_tree(ctx, {})
     detector, config = prepare_detector(ctx, work, ctx.std.env.bazel_root_dir())
@@ -77,6 +116,8 @@ check_cpd_tests = suite("check-cpd", [
     _test_detector_enforces_zero_without_local_overrides,
     _test_report_paths_survive_snapshot_cleanup,
     _test_real_git_snapshots_include_moves_deletions_and_new_files,
+    _test_symlinked_sources_are_rejected_in_process,
+    _test_tracked_symlinks_come_from_git_modes,
     _test_real_detector_finds_commented_hidden_copies_and_rejects_empty,
 ])
 check_cpd_test = suite_task(check_cpd_tests)

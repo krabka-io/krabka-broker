@@ -118,7 +118,7 @@ mod typed_timestamp;
 use typed_timestamp::typed_timestamp_records_preserve_visibility;
 
 mod tiered_timestamp;
-use tiered_timestamp::tiered_timestamp_lookup_preserves_first;
+use tiered_timestamp::tiered_timestamp_lookup_answers_first_candidate;
 
 mod token_description;
 use token_description::token_description_preserves_authentication_and_acl_isolation;

@@ -20,7 +20,7 @@
 use {
     super::{
         Engine,
-        checkpoint::{BOOTSTRAP_SNAPSHOT_ID, load_checkpoint_by_id},
+        checkpoint::{BOOTSTRAP_SNAPSHOT_ID, CheckpointChunk, open_checkpoint},
     },
     crate::{
         kraft::{
@@ -28,7 +28,6 @@ use {
             transport::wire,
             types::{Epoch, NodeId, ReplicaKey},
         },
-        snapshot::SnapshotReader,
         voter_requests::ListenerAddress,
     },
     bytes::Bytes,
@@ -477,26 +476,27 @@ impl Engine {
             partition.snapshot_id.epoch,
         );
         let checkpoint = (snapshot_id != BOOTSTRAP_SNAPSHOT_ID)
-            .then(|| load_checkpoint_by_id(&self.data_dir, snapshot_id.0, snapshot_id.1))
+            .then(|| open_checkpoint(&self.data_dir, snapshot_id.0, snapshot_id.1))
             .flatten();
-        let Some(bytes) = checkpoint else {
+        let Some(mut checkpoint) = checkpoint else {
             return partition_error(self, SNAPSHOT_NOT_FOUND);
         };
-        let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
-        if partition.position < 0 || partition.position >= size {
-            return partition_error(self, POSITION_OUT_OF_RANGE);
-        }
+        let size = i64::try_from(checkpoint.len()).unwrap_or(i64::MAX);
+        // Only the requested chunk is read: reading the whole checkpoint for
+        // every chunk made a transfer cost size x chunk count bytes (#1610).
+        // A read that fails after the open answers as a checkpoint that is
+        // gone, as a failed open does.
+        let chunk = match checkpoint.read_chunk(partition.position, request.max_bytes) {
+            Ok(CheckpointChunk::Bytes(chunk)) => chunk,
+            Ok(CheckpointChunk::OutOfRange) => return partition_error(self, POSITION_OUT_OF_RANGE),
+            Err(_) => return partition_error(self, SNAPSHOT_NOT_FOUND),
+        };
         // A voter catching up through KIP-630 is in contact with the leader even
         // though it sends no Fetch, so score it for check-quorum. Kafka does
         // this once the request passed its checks.
         if let Ok(from) = u64::try_from(request.replica_id) {
             self.on_event(Event::ReceiveFetchSnapshot { from: NodeId(from) });
         }
-        // Both fields are slice indices off the wire. The position is inside
-        // the checkpoint, and a negative `MaxBytes` reads nothing.
-        let max = usize::try_from(request.max_bytes.max(0)).unwrap_or(0);
-        let position = usize::try_from(partition.position).unwrap_or(0);
-        let chunk = SnapshotReader::byte_range(&bytes, position, max);
         Some(wire::encode_fetch_snapshot_answer(
             0,
             Some(wire::FetchSnapshotPartition {
@@ -508,7 +508,7 @@ impl Engine {
                     snapshot_id,
                     size,
                     position: partition.position,
-                    bytes: Bytes::copy_from_slice(chunk),
+                    bytes: Bytes::from(chunk),
                 }),
             }),
             &self.quorum_leader(),
