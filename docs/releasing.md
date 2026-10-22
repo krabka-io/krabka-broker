@@ -98,11 +98,17 @@ merge it. The tag names that merge commit.
 
 ## 3. Tag the release
 
-Take the merge commit of that pull request, and tag it. Use an annotated tag,
-`git tag -a`. An annotated tag is an object of its own: it records who cut the
-release and when, and a person can read that with `git show v0.5.2`. Push the
-tag to `origin`, because `release.yml` calls `gh release create --verify-tag`,
-which fails when the remote does not hold the tag.
+Take the merge commit of that pull request. Before you tag it, make sure a
+full CI run passed on it: the nightly `schedule` run of `ci.yml`, or one you
+start with `gh workflow run ci.yml --ref main` while `main` is still at that
+commit. Pull requests skip the lanes that only this run covers, so `release`
+refuses a commit without one. The full run includes the four-hour soak.
+
+Then tag the commit. Use an annotated tag, `git tag -a`. An annotated tag is an
+object of its own: it records who cut the release and when, and a person can
+read that with `git show v0.5.2`. Push the tag to `origin`, because
+`release.yml` calls `gh release create --verify-tag`, which fails when the
+remote does not hold the tag.
 
 ```sh
 git checkout main
@@ -117,7 +123,7 @@ attestations point at it. Release a new patch version instead.
 ## 4. Check the result
 
 Watch the `release` workflow. Its `verify` job runs before anything is built or
-signed, and it refuses the release unless all three of these hold:
+signed, and it refuses the release unless all four of these hold:
 
 - The tagged commit is an ancestor of `origin/main`. A tag pushed from a
   feature branch is not a release.
@@ -128,9 +134,16 @@ signed, and it refuses the release unless all three of these hold:
   gates a merge, so a green run of it is what says the commit was tested. A
   `pull_request` run does not count: it tested the merge of the pull request,
   not this commit.
+- `ci.yml` has a completed `schedule` or `workflow_dispatch` run for that commit
+  in which every job passed or was skipped. Only `external links`, the
+  criterion benches and the nightly report may be red. This run is what covers
+  the lanes that pull requests skip or scope by path: the kind smoke test, the
+  Creusot proofs, the full container matrix, the upgrade smoke, GSSAPI, netem
+  and the soak. If the release stopped here, start a full run on that commit
+  and re-dispatch `release.yml` with the tag.
 
 A cosign signature says who built an image, never that the image was tested.
-Those three checks are what stands behind it.
+Those four checks are what stands behind it.
 
 The `release` job then signs the image `delivery` already pushed for that
 commit -- `ghcr.io/krabka-io/krabka-broker:<commit sha>` -- rather than
