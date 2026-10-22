@@ -86,22 +86,24 @@ design requires.
 
 Each run's directory holds the job's artifact exactly as GitHub Actions stored
 it, `artifact.zip`, and byte-identical copies of the report, the verdict and
-the record from inside it:
+the record from inside it. From the repository root:
 
 ```sh
-cd docs/operations/performance-budget-runs/2026-10-22-before-after-run-39840381315
-sha256sum --check SHA256SUMS
-unzip -l artifact.zip
+run=docs/operations/performance-budget-runs/2026-10-22-before-after-run-39840381315
+(cd "$run" && sha256sum --check SHA256SUMS)
+unzip -l "$run/artifact.zip"
 ```
 
 The SHA-256 of each `artifact.zip` is the digest GitHub recorded for that
 artifact: `6155ebf7…ec8ae58` for run 39756166298, and `086ef8ae…8f75194` for run
 39840381315. The archive holds every raw trial's workload log, resource
 snapshots and order, the cluster manifests, and the host files. To judge a
-record again:
+record again, also from the repository root, into a scratch directory:
 
 ```sh
-cargo run -p krabka-parse-benches -- evaluate performance-record.json \
+mkdir -p rejudged
+cargo run -p krabka-parse-benches -- evaluate "$run/performance-record.json" \
   --contract packaging/performance/regression-contract.json \
-  --output verdict.json --markdown performance-budget.md
+  --output rejudged/verdict.json --markdown rejudged/performance-budget.md
+cmp rejudged/verdict.json "$run/verdict.json"
 ```
