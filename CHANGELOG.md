@@ -76,6 +76,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
     building the eight candidate entity keys.
   - The log-directory health check every produce and fetch makes answers
     without hashing the directory's path while every directory is online.
+- A controller serving a KIP-630 `FetchSnapshot` reads only the requested
+  chunk of the checkpoint. It used to read the whole file for every chunk, so
+  a transfer of a snapshot of size S in chunks of C read about
+  `S × ceil(S/C)` bytes on the controller engine, which other controller
+  requests wait behind. A checkpoint that retention deletes while it is
+  being served is still read through its open file.
 
 ### Fixed
 
