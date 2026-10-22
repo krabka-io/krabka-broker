@@ -6,7 +6,7 @@
 use {
     super::{
         BatchMeta, CleanedTransactionMetadata, RecordMeta, RetainDecision, TxnDataState,
-        batch_reader::read_all_batches, retain_decision,
+        batch_reader::group_batches, retain_decision,
     },
     crate::{
         error::LogError,
@@ -228,14 +228,12 @@ pub fn rewrite_segments(
         .truncate(true)
         .open(&timeindex_swap)?;
 
-    let mut all_batches: Vec<RecordBatch> = Vec::new();
-    for seg in segments {
-        all_batches.extend(read_all_batches(seg)?);
-    }
-
+    // The walk decodes, filters and writes one batch at a time, so the group
+    // never sits in memory decoded: a compressed group can expand to many
+    // times the `segment.bytes` it is bounded by on disk.
     let mut last_kept_offset = new_base - 1;
-
-    for batch in &all_batches {
+    for batch in group_batches(segments) {
+        let batch = &batch?;
         let is_control = batch.attributes.is_control_batch();
         let producer_id = ProducerId(batch.producer_id);
         // The pass reads the batch before it filters its records, as Kafka's

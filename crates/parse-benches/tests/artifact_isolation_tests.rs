@@ -1,0 +1,237 @@
+//! Two revisions that differ only in source, built and measured the way the
+//! nightly criterion lane does it (#1608).
+//!
+//! Drives a real `cargo`, because the defect is Cargo's own freshness
+//! decision. Under Cargo that is the `cargo` running the suite. Under Bazel the
+//! BUILD file hands the suite the Rust toolchain's own `cargo`, `rustc` and
+//! standard library as runfiles; see [`toolchain_cargo`]. It needs no network:
+//! the fixture has no dependencies.
+
+use {
+    assert2::assert,
+    krabka_parse_benches::{
+        BenchmarkMetric, BenchmarkSummary, ParseBenchesError, compare_summaries,
+        executables::{
+            BenchExecutable, ExecutableManifest, manifest_from_cargo_messages, verify_pass,
+        },
+    },
+    std::{
+        collections::BTreeMap,
+        ffi::OsString,
+        fs,
+        path::{Path, PathBuf},
+        process::{Command, Output},
+    },
+    tempfile::tempdir,
+};
+
+const MANIFEST: &str = r#"[package]
+name = "isolation-review"
+version = "0.1.0"
+edition = "2024"
+
+[[bench]]
+name = "latency"
+harness = false
+"#;
+
+const BENCH: &str = r#"fn main() { println!("measured={}", isolation_review::revision()); }"#;
+
+/// Write one revision of the fixture, which returns `side` from its library.
+fn revision(dir: &Path, side: &str) {
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::create_dir_all(dir.join("benches")).unwrap();
+    fs::write(dir.join("Cargo.toml"), MANIFEST).unwrap();
+    fs::write(dir.join("benches/latency.rs"), BENCH).unwrap();
+    fs::write(
+        dir.join("src/lib.rs"),
+        format!("pub fn revision() -> &'static str {{ \"{side}\" }}\n"),
+    )
+    .unwrap();
+}
+
+/// The runfiles-relative paths Bazel passes in, resolved against the test's
+/// working directory, which is the runfiles root.
+fn runfile(relative: &str) -> PathBuf { std::env::current_dir().unwrap().join(relative) }
+
+/// The sysroot that holds the standard library among `stdlib`, Bazel's
+/// space-separated runfiles paths of its files. It is the directory above
+/// `lib/rustlib/`. `rules_rs` fetches `std` into a repository of its own, not
+/// beside `rustc`, so `rustc`'s default sysroot has no `std` to link.
+fn stdlib_sysroot(stdlib: &str) -> PathBuf {
+    let file = stdlib
+        .split_whitespace()
+        .find(|path| path.contains("/lib/rustlib/"))
+        .expect("the standard library runfiles include a file under lib/rustlib/");
+    let (sysroot, _) = file.split_once("/lib/rustlib/").unwrap();
+    runfile(sysroot)
+}
+
+/// Under Bazel, a `cargo` command that uses the toolchain's own `rustc` and
+/// standard library from the runfiles, with a scratch `CARGO_HOME`, because a
+/// test has no writable home. `None` outside Bazel.
+fn toolchain_cargo() -> Option<Command> {
+    let cargo = std::env::var("KRABKA_TEST_CARGO").ok()?;
+    let rustc = std::env::var("KRABKA_TEST_RUSTC").unwrap();
+    let stdlib = std::env::var("KRABKA_TEST_RUST_STDLIB").unwrap();
+    let mut command = Command::new(runfile(&cargo));
+    command
+        .env("RUSTC", runfile(&rustc))
+        .env(
+            "RUSTFLAGS",
+            format!("--sysroot={}", stdlib_sysroot(&stdlib).display()),
+        )
+        .env("CARGO_HOME", std::env::temp_dir().join("cargo-home"));
+    Some(command)
+}
+
+fn cargo(source: &Path, target: &Path, extra: &[&str]) -> Output {
+    let output = toolchain_cargo()
+        .unwrap_or_else(|| {
+            Command::new(std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
+        })
+        .current_dir(source)
+        .env("CARGO_TARGET_DIR", target)
+        .args(["bench", "--offline", "--bench", "latency"])
+        .args(extra)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+/// The lane's prebuild: build without running, and record what was built.
+fn prebuild(source: &Path, target: &Path, commit: &str) -> ExecutableManifest {
+    let output = cargo(source, target, &["--no-run", "--message-format=json"]);
+    manifest_from_cargo_messages(&String::from_utf8(output.stdout).unwrap(), commit).unwrap()
+}
+
+/// One measurement pass: what the bench printed, and the executables the
+/// pass is verified to have run.
+fn measure(
+    source: &Path,
+    target: &Path,
+    manifest: &ExecutableManifest,
+    commit: &str,
+) -> (String, Result<Vec<BenchExecutable>, ParseBenchesError>) {
+    let output = cargo(source, target, &[]);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    (
+        String::from_utf8(output.stdout).unwrap(),
+        verify_pass(manifest, &stderr, source, commit),
+    )
+}
+
+fn summary(commit: &str, executables: Vec<BenchExecutable>) -> BenchmarkSummary {
+    BenchmarkSummary {
+        suite: "isolation-review".to_string(),
+        commit: commit.to_string(),
+        timestamp: "2026-10-22T00:00:00Z".to_string(),
+        benchmarks: BTreeMap::from([("latency".to_string(), BenchmarkMetric {
+            ns_per_iter: 100.0,
+            variance_ns: 1.0,
+        })]),
+        executables,
+    }
+}
+
+/// Both revisions under `work`, written in the issue's order: the candidate
+/// tree exists first.
+fn revisions(work: &Path) -> (PathBuf, PathBuf) {
+    let (reference, candidate) = (work.join("reference"), work.join("candidate"));
+    revision(&candidate, "candidate");
+    revision(&reference, "reference");
+    (reference, candidate)
+}
+
+#[test]
+fn separate_target_directories_measure_each_revision_on_every_pass() {
+    let work = tempdir().unwrap();
+    let (reference, candidate) = revisions(work.path());
+    let reference_target = work.path().join("target-reference");
+    let candidate_target = work.path().join("target-candidate");
+    let reference_manifest = prebuild(&reference, &reference_target, "reference");
+    let candidate_manifest = prebuild(&candidate, &candidate_target, "candidate");
+
+    let mut summaries = BTreeMap::<&str, Vec<BenchmarkSummary>>::new();
+    for pass in 1..=3 {
+        let sides = if pass % 2 == 0 {
+            [
+                (
+                    "candidate",
+                    &candidate,
+                    &candidate_target,
+                    &candidate_manifest,
+                ),
+                (
+                    "reference",
+                    &reference,
+                    &reference_target,
+                    &reference_manifest,
+                ),
+            ]
+        } else {
+            [
+                (
+                    "reference",
+                    &reference,
+                    &reference_target,
+                    &reference_manifest,
+                ),
+                (
+                    "candidate",
+                    &candidate,
+                    &candidate_target,
+                    &candidate_manifest,
+                ),
+            ]
+        };
+        for (side, source, target, manifest) in sides {
+            let (printed, ran) = measure(source, target, manifest, side);
+            assert!(printed == format!("measured={side}\n"), "pass {pass}");
+            let ran = ran.unwrap();
+            assert!(ran == manifest.executables, "pass {pass}");
+            summaries.entry(side).or_default().push(summary(side, ran));
+        }
+    }
+
+    let verdict = compare_summaries(&summaries["reference"], &summaries["candidate"], 0.1).unwrap();
+    assert!(verdict.reference_executables == reference_manifest.executables);
+    assert!(verdict.candidate_executables == candidate_manifest.executables);
+    assert!(verdict.reference_executables[0].sha256 != verdict.candidate_executables[0].sha256);
+}
+
+#[test]
+fn a_shared_target_directory_never_yields_a_mislabelled_verdict() {
+    let work = tempdir().unwrap();
+    let (reference, candidate) = revisions(work.path());
+    let shared = work.path().join("target");
+    let reference_manifest = prebuild(&reference, &shared, "reference");
+    let candidate_manifest = prebuild(&candidate, &shared, "candidate");
+
+    let (_, reference_ran) = measure(&reference, &shared, &reference_manifest, "reference");
+    let (printed, candidate_ran) = measure(&candidate, &shared, &candidate_manifest, "candidate");
+    let (Ok(reference_ran), Ok(candidate_ran)) = (reference_ran, candidate_ran) else {
+        // The reference pass rebuilt the shared executable under the
+        // candidate's manifest, or the other way round: refused per pass.
+        return;
+    };
+    let verdict = compare_summaries(
+        &vec![summary("reference", reference_ran); 3],
+        &vec![summary("candidate", candidate_ran); 3],
+        0.1,
+    );
+
+    // Either the candidate pass really measured the candidate, or the
+    // comparison is refused: a reference measurement never passes as the
+    // candidate's.
+    assert!(
+        printed == "measured=candidate\n"
+            || matches!(verdict, Err(ParseBenchesError::SharedExecutable(_))),
+        "printed {printed:?}, verdict {verdict:?}"
+    );
+}

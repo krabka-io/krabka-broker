@@ -64,6 +64,16 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   lock are still the ones they were encoded with. A config change in between
   encodes again under the new settings, as before. The stored bytes are
   unchanged.
+- Log compaction holds one record batch at a time. The offset-map and rewrite
+  passes used to read and decode each sealed segment whole, the rewrite held
+  every decoded batch of its group at once, and the offset map kept each
+  batch's decompressed body alive through the keys it stored. A rewrite group
+  is bounded by `segment.bytes` on disk, so a compressed group could need many
+  times that in memory. The passes now stream each segment batch by batch, and
+  the map copies each distinct key once. In the measurements on #1613, a pass
+  over 256 MiB of gzip-expanded records raised the peak resident set by 1.4
+  MiB instead of 521 MiB. Damaged segments fail the pass with the same errors
+  as before. The pass still runs under the log lock (#1613).
 - A produce append runs on the request's own task when it only writes to the
   page cache. The partition writer task used to take every produce, so each
   one paid two cross-thread wakes before its write. The request task now takes
@@ -85,6 +95,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   index floor, header scan and readahead hint under the log lock. It now
   reads the regions the first walk found. Followers and consumers at the tail
   of a log make this fetch on every round trip.
+- A wide fetch counts its bytes in linear time. Before each partition read the
+  read loop asks whether the response is still empty, and it used to answer by
+  summing every partition's bytes, so a fetch over `P` partitions did `P²`
+  additions. It now keeps a running total. On a 4-vCPU host, the read loop
+  over 10,000 entries took 21-23 ms instead of 32-34 ms (#1609).
 - Less work per request on the produce and fetch paths:
   - Dispatch reads a Produce request's `acks` from its leading fields to
     decide whether a response is owed, instead of decoding the request a
@@ -98,9 +113,29 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
     building the eight candidate entity keys.
   - The log-directory health check every produce and fetch makes answers
     without hashing the directory's path while every directory is online.
+- The partitions of one Produce request append at once, up to 16 at a time,
+  instead of one after another. An append that waits for a busy writer, a
+  segment roll or a diskless WAL no longer holds back the other partitions of
+  the request. Two entries for the same partition still append in request
+  order, and the response keeps the request's order (#1618).
+- A remote segment's lifecycle transition updates only that segment's entries
+  in the tiered-storage metadata manager's epoch index. Each finish, hide and
+  delete used to rebuild and sort the partition's whole index under the
+  manager-wide lock that offset lookups take, so the cost of one transition,
+  and the time a lookup could wait behind it, grew with the partition's
+  retained remote history. With 100,000 retained segments one lifecycle went
+  from about 36 ms to under 1 µs in the `remote_epoch_index` benchmark (#1616).
 
 ### Fixed
 
+- The nightly criterion lane builds the reference and the candidate into
+  separate Cargo target directories, both before either is measured. With one
+  shared directory, Cargo could judge a candidate that changed only source as
+  fresh and run the reference's executable again under the candidate's
+  commit. `krabka-parse-benches executables` records each side's bench
+  executables by path and SHA-256. Every summary names the executables its pass
+  ran, checked against Cargo's `Running` lines and the recorded digests. The
+  verdict refuses a comparison whose sides share an executable path (#1608).
 - Store a produced `CreateTime` batch with its largest record timestamp as
   `max_timestamp`, as Kafka's `LogValidator` does, on the verbatim and the
   owned path. The producer's header value was kept, so an LZ4 batch with

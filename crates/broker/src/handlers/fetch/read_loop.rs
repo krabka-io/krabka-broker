@@ -72,7 +72,7 @@ struct LongPollState {
     /// Bytes the latest read of each pending entry produced, indexed like
     /// `pending`. A re-read replaces its entry rather than adding to it,
     /// because the re-read replaces the records too.
-    bytes: Vec<usize>,
+    bytes: PartitionBytes,
     /// `true` where the cold tier, and not the local log, answered the entry.
     cold_served: Vec<bool>,
     /// What is left of the whole response's byte budget: `min(request
@@ -96,6 +96,49 @@ struct LongPollState {
     remote_wait: RemoteFetchWait,
 }
 
+/// Bytes per pending entry, with their sum kept alongside.
+///
+/// The read loop asks for the sum before every partition read, to decide
+/// whether the response is still empty, and after every long-poll wake.
+/// Summing the entries each time made a fetch over `P` partitions do `P²`
+/// additions; the running total makes each question O(1) and each update O(1).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct PartitionBytes {
+    entries: Vec<usize>,
+    total: usize,
+}
+
+impl PartitionBytes {
+    fn new(len: usize) -> Self {
+        Self {
+            entries: vec![0; len],
+            total: 0,
+        }
+    }
+
+    fn total(&self) -> usize { self.total }
+
+    fn get(&self, index: usize) -> usize { self.entries[index] }
+
+    /// Replaces entry `index` with `bytes` and moves the total by the
+    /// difference.
+    fn set(&mut self, index: usize, bytes: usize) {
+        let entry = &mut self.entries[index];
+        // Every entry is part of the total, so the total never falls below
+        // the entry it gives back.
+        self.total = self.total - *entry + bytes;
+        *entry = bytes;
+    }
+}
+
+#[cfg(test)]
+impl From<Vec<usize>> for PartitionBytes {
+    fn from(entries: Vec<usize>) -> Self {
+        let total = entries.iter().sum();
+        Self { entries, total }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ReadAccounting {
     local_bytes: usize,
@@ -108,7 +151,7 @@ struct ReadAccounting {
 }
 
 impl LongPollState {
-    fn total(&self) -> usize { self.bytes.iter().sum() }
+    fn total(&self) -> usize { self.bytes.total() }
 
     /// The `max_bytes` to give this partition's read: whatever
     /// `partition_max_bytes` asked for, capped at what the response has left.
@@ -127,19 +170,21 @@ impl LongPollState {
 
     fn record_read(&mut self, index: usize, read: &mut PendingRead, result: ReadAccounting) {
         self.cold_served[index] = result.cold_bytes > 0;
-        self.bytes[index] = result.local_bytes + result.cold_bytes;
+        let served = result.local_bytes + result.cold_bytes;
         // A withheld read is Kafka's `MemoryRecords.EMPTY` row: it adds
         // nothing toward `min_bytes`, so a fetch with nothing else to send
         // parks for its `max_wait_ms` rather than answering at once.
         if result.withheld
             || (!result.allow_first_batch_overrun
-                && self.bytes[index] > usize::try_from(result.budget.max(0)).unwrap_or(0))
+                && served > usize::try_from(result.budget.max(0)).unwrap_or(0))
         {
             discard_to_metadata_only(read);
-            self.bytes[index] = 0;
+            self.bytes.set(index, 0);
             self.cold_served[index] = false;
+        } else {
+            self.bytes.set(index, served);
+            self.charge(served);
         }
-        self.charge(self.bytes[index]);
     }
 }
 
@@ -272,7 +317,7 @@ pub(super) async fn execute_pending_reads(
             .min(response_max_bytes),
         max_wait_ms,
         sendfile_capable,
-        bytes: vec![0; pending.len()],
+        bytes: PartitionBytes::new(pending.len()),
         cold_served: vec![false; pending.len()],
         remaining_response_bytes: response_max_bytes,
         response_max_bytes,
@@ -575,7 +620,7 @@ async fn reread_woken(
     // its old contribution is first given back to the response budget: the
     // budget tracks what the response currently holds, not a cumulative
     // total of every read this partition has ever produced.
-    state.bytes[index] = 0;
+    state.bytes.set(index, 0);
     state.remaining_response_bytes = state.response_max_bytes.saturating_sub(state.total());
     let requested_max_bytes = read.max_bytes;
     let read_budget = state.partition_read_budget(requested_max_bytes);
@@ -635,7 +680,7 @@ async fn reread_withheld(
         let throttled = pending[index]
             .follower_position
             .is_some_and(|position| position.leader_throttled);
-        if throttled && state.bytes[index] == 0 {
+        if throttled && state.bytes.get(index) == 0 {
             reread_woken(broker, pending, index, state, phases).await;
         }
     }
@@ -902,7 +947,7 @@ mod tests {
                 min_bytes: 0,
                 max_wait_ms: 0,
                 sendfile_capable: false,
-                bytes: Vec::new(),
+                bytes: super::PartitionBytes::default(),
                 cold_served: Vec::new(),
                 remaining_response_bytes: case.response_budget,
                 response_max_bytes: case.response_budget,
@@ -1095,7 +1140,7 @@ mod tests {
             min_bytes: 150,
             max_wait_ms: 0,
             sendfile_capable: false,
-            bytes: vec![first_bytes, 0],
+            bytes: super::PartitionBytes::from(vec![first_bytes, 0]),
             cold_served: vec![false; 2],
             remaining_response_bytes: 150 - first_bytes,
             response_max_bytes: 150,
@@ -1105,6 +1150,123 @@ mod tests {
         assert!(pending[1].out.records.is_none());
         assert!(state.total() == first_bytes);
         assert!(state.remaining_response_bytes == 150 - first_bytes);
+        broker_handle.shutdown().await;
+    }
+
+    /// The running total equals the sum of the entries after every
+    /// replacement: growing, shrinking and zeroing an entry, the way a first
+    /// read, a long-poll re-read and a metadata-only discard each set one.
+    #[test]
+    fn partition_bytes_total_follows_every_replacement() {
+        struct Case {
+            name: &'static str,
+            len: usize,
+            sets: Vec<(usize, usize)>,
+            want: Vec<usize>,
+        }
+        let cases = [
+            Case {
+                name: "nothing read yet",
+                len: 3,
+                sets: vec![],
+                want: vec![0, 0, 0],
+            },
+            Case {
+                name: "every entry read once",
+                len: 3,
+                sets: vec![(0, 10), (1, 20), (2, 30)],
+                want: vec![10, 20, 30],
+            },
+            Case {
+                name: "a re-read replaces its entry and does not add to it",
+                len: 2,
+                sets: vec![(0, 10), (1, 20), (1, 5), (1, 50)],
+                want: vec![10, 50],
+            },
+            Case {
+                name: "a discarded read gives its bytes back",
+                len: 2,
+                sets: vec![(0, 10), (1, 20), (0, 0)],
+                want: vec![0, 20],
+            },
+        ];
+        for case in cases {
+            let mut bytes = super::PartitionBytes::new(case.len);
+            for (index, served) in case.sets {
+                bytes.set(index, served);
+            }
+            // `From` sums the entries itself, so it is the oracle for the
+            // running total.
+            assert!(
+                bytes == super::PartitionBytes::from(case.want),
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    /// A fetch over many entries runs the response budget down across all of
+    /// them: the entries read while the budget lasts carry their batch, and
+    /// every entry after it, read at a zero budget, is metadata-only, because
+    /// the response is no longer empty and the oversized-batch exception is
+    /// spent. This is the running total answering "is the response still
+    /// empty?" once per entry over a wide fetch.
+    #[tokio::test]
+    async fn a_wide_fetch_runs_the_response_budget_down_across_every_entry() {
+        const TOPIC: &str = "budget-wide";
+        const ENTRIES: usize = 64;
+        const FITTING: usize = 5;
+
+        krabka_macros::broker_test_setup! {
+            bind(broker_handle, dir, broker);
+            boot [handler_fixture_support::start_broker()];
+        };
+        let part = nonempty_local_partition()
+            .broker(&broker)
+            .dir(dir.path())
+            .topic(TOPIC)
+            .payload(&[b'w'; 64])
+            .call()
+            .await;
+        let request = wide_partition_fetch_request();
+        let pending = |count: usize| -> Vec<super::PendingRead> {
+            (0..count)
+                .map(|_| planned_follower(TOPIC, &part, &request, NONE))
+                .collect()
+        };
+        let phases = RequestPhases::default();
+        let GroupedResponses { responses, .. } =
+            super::execute_pending_reads(&broker, pending(1), 0, usize::MAX, 0, false, &phases)
+                .await;
+        let batch_bytes = responses[0].partitions[0]
+            .records
+            .as_ref()
+            .expect("one entry with the whole budget carries its batch")
+            .payload_len();
+
+        let GroupedResponses { responses, .. } = super::execute_pending_reads(
+            &broker,
+            pending(ENTRIES),
+            0,
+            FITTING * batch_bytes,
+            0,
+            false,
+            &phases,
+        )
+        .await;
+        let carried: Vec<bool> = responses[0]
+            .partitions
+            .iter()
+            .map(|row| row.records.is_some())
+            .collect();
+        let want: Vec<bool> = (0..ENTRIES).map(|index| index < FITTING).collect();
+        assert!(carried == want);
+        assert!(
+            responses[0]
+                .partitions
+                .iter()
+                .all(|row| row.error_code == NONE && row.high_watermark == 1)
+        );
         broker_handle.shutdown().await;
     }
 
@@ -1862,7 +2024,7 @@ mod tests {
             min_bytes: setup.minimum.0,
             max_wait_ms: setup.wait.0,
             sendfile_capable: false,
-            bytes: vec![0; pending.len()],
+            bytes: super::PartitionBytes::new(pending.len()),
             cold_served: vec![false; pending.len()],
             remaining_response_bytes: usize::MAX,
             response_max_bytes: usize::MAX,
