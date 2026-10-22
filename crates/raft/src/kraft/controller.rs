@@ -302,6 +302,11 @@ struct Engine {
     /// enough new records flow in — the same restart tradeoff
     /// `last_snapshot_at_ms` already makes for the time-based cap.
     bytes_since_snapshot: u64,
+    /// The sole regular snapshot serializer/checkpoint writer. Its captured
+    /// image and boundary are immutable while the engine continues polling.
+    snapshot_job: Option<tokio::task::JoinHandle<snapshotting::SnapshotJobCompletion>>,
+    #[cfg(test)]
+    snapshot_write_delay: Duration,
     /// The first committed metadata-version downgrade whose mandatory exact
     /// checkpoint, reload, and prune has not completed locally yet. Capturing
     /// the image and post-record boundary prevents later committed records from

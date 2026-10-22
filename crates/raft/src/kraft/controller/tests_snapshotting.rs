@@ -29,11 +29,21 @@ use {
 };
 
 async fn assert_checkpoint_pruned(ctrl: &KraftController, dir: &std::path::Path) {
+    let quorum = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let quorum = ctrl.quorum_state().await.unwrap();
+            if quorum.log_start_offset > 0 {
+                break quorum;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("snapshot completion");
     let checkpoint = load_latest_checkpoint(dir)
         .expect("scan checkpoints")
         .expect("a checkpoint exists");
     assert2::assert!(!checkpoint.is_empty());
-    let quorum = ctrl.quorum_state().await.unwrap();
     assert2::assert!(quorum.log_start_offset > 0);
 }
 
@@ -64,6 +74,54 @@ fn snapshot_pruning_stays_at_or_below_the_committed_frontier() {
     assert2::assert!(krabka_verified::snapshot_prune_admission(9, 10));
     assert2::assert!(!krabka_verified::snapshot_prune_admission(11, 10));
     assert2::assert!(!krabka_verified::snapshot_prune_admission(-1, 10));
+}
+
+/// A deliberately slow durable checkpoint must not occupy the owning engine
+/// task. The second command is handled while the sole worker is still asleep.
+#[tokio::test]
+async fn delayed_regular_checkpoint_keeps_engine_commands_moving() {
+    let (mut engine, dir) = build_engine_only().ids(&[NodeId(1)]).call();
+    elect_single_voter_engine(&mut engine);
+    let mut committed =
+        super::test_support::submit_on_engine(&mut engine, &topic_record("snapshot-boundary"));
+    assert2::assert!(matches!(committed.try_recv(), Ok(Ok(_))));
+    engine.snapshot_interval_records = 1;
+    engine.snapshot_write_delay = Duration::from_millis(300);
+
+    let (tx, rx) = CommandSender::channel(4);
+    engine.cmd_tx = tx.clone();
+    let task = tokio::spawn(engine.run(rx));
+
+    // This first query completes its turn and starts the regular worker.
+    let (reply, answer) = tokio::sync::oneshot::channel();
+    tx.send(Command::QuorumStateSnapshot { reply })
+        .await
+        .unwrap();
+    answer.await.expect("first query");
+
+    let (reply, answer) = tokio::sync::oneshot::channel();
+    tx.send(Command::QuorumStateSnapshot { reply })
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_millis(100), answer)
+        .await
+        .expect("engine was blocked by checkpoint")
+        .expect("second query");
+    assert2::assert!(latest_checkpoint_id(dir.path()).is_none());
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while latest_checkpoint_id(dir.path()).is_none() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("worker checkpoint");
+    let bytes = load_latest_checkpoint(dir.path()).unwrap().unwrap();
+    let contents = crate::snapshot::SnapshotReader::read(&bytes).unwrap();
+    let image = MetadataImage::from_records(uuid::Uuid::nil(), &contents.metadata_records);
+    assert2::assert!(image.topic("snapshot-boundary").is_some());
+    tx.send(Command::Halt).await.unwrap();
+    task.await.unwrap();
 }
 
 #[yare::parameterized(
