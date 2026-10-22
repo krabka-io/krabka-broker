@@ -47,6 +47,7 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- Remote timestamp seeks refine sparse indexes with bounded byte ranges instead of downloading the complete segment tail (#1662).
 - The broker writes the log start offset that local retention moves to a
   partition's `log-start-offset-checkpoint` on a timer, instead of on every
   retention pass. The `[runtime]` key
