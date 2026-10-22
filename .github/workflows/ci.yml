@@ -897,14 +897,19 @@ jobs:
       # as shell. It is a space-joined list, which `set(...)` takes verbatim.
       CONTAINER_SCRIPT: |
         set -euo pipefail
-        # The host side of a suite that falls back to this machine reaches the
-        # broker through its advertised name. Containers resolve it through
-        # `--add-host=host.docker.internal:host-gateway`.
-        if ! grep -q host.docker.internal /etc/hosts; then
-          echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts >/dev/null \
-            || echo "127.0.0.1 host.docker.internal" >>/etc/hosts \
-            || echo "::warning::could not map host.docker.internal on this runner"
+        # The suites that run here -- the broker-image ones are `no-remote-exec`
+        # -- reach the brokers through their advertised name from the host
+        # side. Containers resolve it through
+        # `--add-host=host.docker.internal:host-gateway`; this machine needs it
+        # to be loopback. The BuildBuddy runner's /etc/hosts already names it,
+        # as `ff02::2`, which failed `soak_contract` and `jbod_enospc` on run
+        # 39740994910, so the loopback line goes first rather than last.
+        if ! getent ahosts host.docker.internal | grep -q '^127\.0\.0\.1 '; then
+          hosts="$(printf '127.0.0.1 host.docker.internal\n'; cat /etc/hosts)"
+          printf '%s\n' "${hosts}" | sudo tee /etc/hosts >/dev/null 2>&1 \
+            || printf '%s\n' "${hosts}" >/etc/hosts
         fi
+        getent ahosts host.docker.internal
         # Assigned before the loop reads it: a command substitution in a
         # here-string word is not a simple command, so `set -e` would not
         # abort on a failed query there and the job would pass having run
