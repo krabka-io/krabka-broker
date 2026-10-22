@@ -9,9 +9,10 @@ use {
         kraft::{
             controller::{
                 checkpoint::{
-                    checkpoint_id_is_newer, latest_checkpoint_id, load_checkpoint_by_id,
-                    load_latest_checkpoint, parse_checkpoint_name, retain_latest_checkpoint,
-                    retain_recent_checkpoints, write_checkpoint,
+                    CheckpointChunk, CheckpointFile, checkpoint_id_is_newer, latest_checkpoint_id,
+                    load_checkpoint_by_id, load_latest_checkpoint, open_checkpoint,
+                    parse_checkpoint_name, retain_latest_checkpoint, retain_recent_checkpoints,
+                    write_checkpoint,
                 },
                 records::decode_control_record,
                 test_support::{
@@ -459,4 +460,108 @@ async fn a_submitted_change_stamps_its_checkpoint_with_the_append_wall_clock() {
     let stamped = snapshot_header_timestamp(&bytes);
     assert2::assert!(before <= stamped && stamped <= after, "{stamped}");
     ctrl.shutdown().await;
+}
+
+/// A reader that counts the bytes it hands out, to show what a chunk read
+/// costs.
+struct CountingReader {
+    inner: std::io::Cursor<Vec<u8>>,
+    read: u64,
+}
+
+impl std::io::Read for CountingReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read += u64::try_from(n).expect("a read fits in u64");
+        Ok(n)
+    }
+}
+
+impl std::io::Seek for CountingReader {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> { self.inner.seek(pos) }
+}
+
+/// A chunk read validates the position against the length, clamps the chunk
+/// to the end, and reads only the bytes it returns (#1610). The earlier serve
+/// path read the whole checkpoint for every chunk.
+#[yare::parameterized(
+    first_chunk = { 0, 4, Some(b"0123".as_slice()) },
+    middle_chunk = { 4, 3, Some(b"456".as_slice()) },
+    clamped_to_the_end = { 7, 100, Some(b"789".as_slice()) },
+    last_byte = { 9, 4, Some(b"9".as_slice()) },
+    zero_max_bytes = { 3, 0, Some(b"".as_slice()) },
+    negative_max_bytes = { 3, -1, Some(b"".as_slice()) },
+    whole_file = { 0, i32::MAX, Some(b"0123456789".as_slice()) },
+    position_at_the_end = { 10, 4, None },
+    position_past_the_end = { 11, 4, None },
+    negative_position = { -1, 4, None },
+)]
+fn checkpoint_chunk_reads_only_the_requested_range(
+    position: i64,
+    max_bytes: i32,
+    expected: Option<&'static [u8]>,
+) {
+    let mut file = CheckpointFile::new(
+        CountingReader {
+            inner: std::io::Cursor::new(b"0123456789".to_vec()),
+            read: 0,
+        },
+        10,
+    );
+
+    let chunk = file.read_chunk(position, max_bytes).expect("read");
+
+    let expected_read = expected.map_or(0, |bytes| u64::try_from(bytes.len()).expect("fits"));
+    assert2::assert!(
+        (chunk, file.len(), file.reader().read)
+            == (
+                expected.map_or(CheckpointChunk::OutOfRange, |bytes| CheckpointChunk::Bytes(
+                    bytes.to_vec()
+                )),
+                10,
+                expected_read,
+            )
+    );
+}
+
+/// A checkpoint that retention deletes while a `FetchSnapshot` holds it open
+/// still serves every chunk from the open handle, at its open length. One
+/// deleted before the open is not found.
+#[test]
+fn an_open_checkpoint_survives_its_deletion() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_checkpoint(dir.path(), 6, 1, b"0123456789").expect("write");
+    let mut open = open_checkpoint(dir.path(), 6, 1).expect("open");
+
+    // Retention keeps the two newest ids, so two newer ones delete (6, 1).
+    write_checkpoint(dir.path(), 7, 1, b"newer").expect("write newer");
+    write_checkpoint(dir.path(), 8, 1, b"newest").expect("write newest");
+    retain_recent_checkpoints(dir.path());
+    assert!(open_checkpoint(dir.path(), 6, 1).is_none());
+
+    let chunks = [
+        open.read_chunk(0, 6).expect("first chunk"),
+        open.read_chunk(6, 6).expect("second chunk"),
+    ];
+    assert!(
+        (open.len(), chunks)
+            == (10, [
+                CheckpointChunk::Bytes(b"012345".to_vec()),
+                CheckpointChunk::Bytes(b"6789".to_vec()),
+            ])
+    );
+}
+
+#[test]
+fn open_checkpoint_misses_an_absent_id() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_checkpoint(dir.path(), 6, 1, b"present").expect("write");
+
+    assert!(
+        (
+            open_checkpoint(dir.path(), 6, 1).map(|file| file.len()),
+            open_checkpoint(dir.path(), 6, 2).is_none(),
+            open_checkpoint(&dir.path().join("absent"), 6, 1).is_none(),
+        ) == (Some(7), true, true)
+    );
 }

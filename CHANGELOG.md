@@ -72,6 +72,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   compiles the broker once and starts every selected suite together, and
   the matrix's runners are free for other jobs. `aspect container-suites`
   now writes one `targets` list instead of grouped matrix entries.
+- A produce batch the broker re-encodes (a topic whose `compression.type`
+  forces another codec, or a legacy `MessageSet` it up-converts) is encoded
+  once instead of three times. The `max.message.bytes` gate keeps the bytes
+  it measured, the `segment.bytes` gate measures those, and the writer
+  appends them when the codec and compression level in force under the log
+  lock are still the ones they were encoded with. A config change in between
+  encodes again under the new settings, as before. The stored bytes are
+  unchanged.
 - Log compaction holds one record batch at a time. The offset-map and rewrite
   passes used to read and decode each sealed segment whole, the rewrite held
   every decoded batch of its group at once, and the offset map kept each
@@ -146,6 +154,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   and the time a lookup could wait behind it, grew with the partition's
   retained remote history. With 100,000 retained segments one lifecycle went
   from about 36 ms to under 1 µs in the `remote_epoch_index` benchmark (#1616).
+- A controller serving a KIP-630 `FetchSnapshot` reads only the requested
+  chunk of the checkpoint. It used to read the whole file for every chunk, so
+  a transfer of a snapshot of size S in chunks of C read about
+  `S × ceil(S/C)` bytes on the controller engine, which other controller
+  requests wait behind. A checkpoint that retention deletes while it is
+  being served is still read through its open file.
 
 ### Fixed
 

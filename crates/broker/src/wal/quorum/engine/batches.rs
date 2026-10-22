@@ -8,10 +8,10 @@
 
 use {
     super::BatchBytes,
-    crate::{error::BrokerError, wal::quorum::log_view::ShardLog},
+    crate::{error::BrokerError, partition::verbatim_of, wal::quorum::log_view::ShardLog},
     bytes::Bytes,
-    krabka_ids::{LeaderEpoch, Offset, ProducerId},
-    krabka_log::{Log, VerbatimBatch},
+    krabka_ids::Offset,
+    krabka_log::Log,
     krabka_protocol::records::RecordBatch,
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
 };
@@ -114,16 +114,7 @@ pub(in crate::wal::quorum) fn split_batches(bytes: &Bytes) -> Result<Vec<BatchBy
         out.push(BatchBytes {
             base_offset,
             last_offset,
-            verbatim: VerbatimBatch {
-                bytes: bytes.slice(offset..end),
-                last_offset_delta: batch.last_offset_delta,
-                max_timestamp: batch.max_timestamp,
-                leader_epoch: LeaderEpoch(batch.partition_leader_epoch),
-                producer_id: ProducerId(batch.producer_id),
-                producer_epoch: batch.producer_epoch,
-                base_sequence: batch.base_sequence,
-                is_transactional: batch.attributes.is_transactional(),
-            },
+            verbatim: verbatim_of(&batch, bytes.slice(offset..end)),
         });
         offset = end;
     }
