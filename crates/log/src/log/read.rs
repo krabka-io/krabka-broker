@@ -1,11 +1,13 @@
 //! The read paths: decoded batches, verbatim wire bytes, and file-region
 //! descriptors for the zero-copy `sendfile` fetch.
 //!
-//! All three walk the sealed segments and then the active one, so a read
-//! can span a segment boundary, and all three ask each segment for at
-//! least one whole batch header to satisfy Kafka's anti-stall rule. A read
-//! goes on into the next segment only after it reads the segment before it
-//! to the end. Only the first batch of a read can be larger than its budget.
+//! All three find the first segment that can hold the fetch offset by a
+//! binary search over the sealed segments, then walk on from it through the
+//! later sealed segments and the active one, so a read can span a segment
+//! boundary. All three ask each segment for at least one whole batch header
+//! to satisfy Kafka's anti-stall rule. A read goes on into the next segment
+//! only after it reads the segment before it to the end. Only the first batch
+//! of a read can be larger than its budget.
 
 use {
     super::Log,
@@ -182,6 +184,33 @@ impl RawReadDesc {
 }
 
 impl Log {
+    /// The index in `self.segments` of the first sealed segment that can hold
+    /// `offset`, or `self.segments.len()` when none can and a read starts in
+    /// the active segment.
+    ///
+    /// That is the first sealed segment whose last offset is at or past
+    /// `offset`: the segment a walk from the oldest one would stop skipping
+    /// at. The search is a binary search, so a tail fetch does not cost a
+    /// step for every retained segment.
+    ///
+    /// It is exact because sealed last offsets never decrease. Bases strictly
+    /// increase, and a segment's last offset lies between its own base less
+    /// one, for an empty segment, and the next base less one. A compacted gap
+    /// lowers a last offset only within that range, and a reopened segment
+    /// takes the next base less one.
+    fn first_sealed_from(&self, offset: Offset) -> usize {
+        self.segments
+            .partition_point(|segment| segment.last_offset() < offset)
+    }
+
+    /// The segments a read from `offset` walks, in offset order: the sealed
+    /// ones from [`Self::first_sealed_from`] on, then the active one.
+    fn segments_from(&self, offset: Offset) -> impl Iterator<Item = &Segment> {
+        self.segments[self.first_sealed_from(offset)..]
+            .iter()
+            .chain(self.active.as_ref())
+    }
+
     #[krabka_macros::sendfile_cfg]
     /// Descriptor variant of [`Log::read_raw`] for the zero-copy `sendfile`
     /// fetch path.
@@ -316,7 +345,7 @@ impl Log {
         let mut current_offset = offset;
         let mut remaining = max_size;
 
-        for seg in self.segments.iter().chain(self.active.as_ref()) {
+        for seg in self.segments_from(offset) {
             if seg.last_offset() < current_offset {
                 continue;
             }
@@ -351,7 +380,7 @@ impl Log {
     ) -> Result<RawChunks<T>, LogError> {
         let mut cursor = RawReadCursor::new(fetch_offset, budget);
         let mut chunks = Vec::new();
-        for segment in self.segments.iter().chain(self.active.as_ref()) {
+        for segment in self.segments_from(fetch_offset) {
             if segment.last_offset() < cursor.next {
                 continue;
             }
