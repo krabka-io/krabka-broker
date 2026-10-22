@@ -9,7 +9,7 @@ use {
     crate::{
         compact::{
             build_offset_map,
-            test_support::{RETENTION, control_batch, write_sealed_batches},
+            test_support::{RETENTION, control_batch, inputs, write_sealed_batches},
         },
         error::LogError,
         io::FileIo,
@@ -128,19 +128,19 @@ fn the_passes_refuse_a_compressed_record_above_the_limit(
     let seg = write_sealed_batches(dir.path(), &[keyed_batch().compression(codec).call()]);
     let segments = [&seg];
 
-    let map = build_offset_map(&segments, vec![], limit);
+    let map = build_offset_map(&inputs(&segments), vec![], limit);
     assert2::check!(
         refused(map) == matches!(refuses, ExpectedLimit::RefusesRecord),
         "{name}: offset map"
     );
 
-    let unchecked = build_offset_map(&segments, vec![], None).unwrap();
+    let unchecked = build_offset_map(&inputs(&segments), vec![], None).unwrap();
     let mut txn = CleanedTransactionMetadata::default();
     let active = HashMap::new();
     let rewritten = rewrite_segments(
         &FileIo,
         dir.path(),
-        &segments,
+        &inputs(&segments),
         &unchecked,
         &mut txn,
         RewriteRetention {
@@ -209,7 +209,7 @@ fn an_aborted_batch_is_read_only_when_the_pass_keeps_it_empty(
         last_stable_offset: Offset(2),
     };
     // The offset-map build skips the aborted batch whatever it holds.
-    let map = build_offset_map(&segments, vec![aborted], Some(LIMIT)).unwrap();
+    let map = build_offset_map(&inputs(&segments), vec![aborted], Some(LIMIT)).unwrap();
 
     let mut txn = CleanedTransactionMetadata::default();
     txn.add_aborted_transactions([aborted]);
@@ -220,7 +220,7 @@ fn an_aborted_batch_is_read_only_when_the_pass_keeps_it_empty(
     let rewritten = rewrite_segments(
         &FileIo,
         dir.path(),
-        &segments,
+        &inputs(&segments),
         &map,
         &mut txn,
         RewriteRetention {
@@ -245,5 +245,9 @@ fn an_aborted_batch_is_read_only_when_the_pass_keeps_it_empty(
 fn a_control_batch_is_never_held_to_the_limit() {
     let dir = tempfile::tempdir().unwrap();
     let seg = write_sealed_batches(dir.path(), &[control_batch(0, 1000, 1)]);
-    assert2::check!(!refused(build_offset_map(&[&seg], vec![], Some(bytes(1)))));
+    assert2::check!(!refused(build_offset_map(
+        &inputs(&[&seg]),
+        vec![],
+        Some(bytes(1))
+    )));
 }

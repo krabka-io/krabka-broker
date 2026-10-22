@@ -191,12 +191,37 @@ pub(super) async fn maintain_log(
     + Send
     + 'static,
 ) {
+    maintain_shared_log(
+        storage,
+        replica_state,
+        ack,
+        panic_context,
+        move |log, now, high_watermark| operation(&mut lock_log(log), now, high_watermark),
+    )
+    .await;
+}
+
+/// [`maintain_log`] for a pass that takes the log's lock itself, so it can
+/// do part of its work without it.
+pub(super) async fn maintain_shared_log(
+    storage: LogStorage<'_>,
+    replica_state: &tokio::sync::Mutex<ReplicaState>,
+    ack: MaintenanceAck,
+    panic_context: &'static str,
+    operation: impl FnOnce(
+        &Mutex<Log>,
+        std::time::SystemTime,
+        krabka_log::Offset,
+    ) -> Result<(), krabka_log::LogError>
+    + Send
+    + 'static,
+) {
     let (log, log_dir, log_dir_status) = storage;
     let high_watermark = replica_state.lock().await.hw;
     let now = std::time::SystemTime::now();
     let log = Arc::clone(log);
     let result = run_log_mutation(
-        move || operation(&mut lock_log(&log), now, high_watermark).map_err(BrokerError::from),
+        move || operation(&log, now, high_watermark).map_err(BrokerError::from),
         panic_context,
         StorageStatus {
             log_dir,

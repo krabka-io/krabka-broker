@@ -379,14 +379,23 @@ impl Log {
         Ok(())
     }
 
-    /// Refuses every append from now on with [`LogError::Fenced`].
+    /// Refuses every append from now on with [`LogError::Fenced`], and stops
+    /// any compaction job.
     ///
     /// The broker fences a partition's log, under the log's mutex, before it
     /// removes the partition's directory. An append that holds the mutex
     /// first finishes before the directory goes; any later one, from whatever
     /// task, is refused rather than written into a log that is about to be
     /// deleted. Reads are unaffected.
-    pub fn fence(&mut self) { self.fenced = true; }
+    ///
+    /// A compaction job builds without the mutex, writing `.cleaned` files
+    /// into the directory. The fence stops it at its next batch and returns
+    /// only once it writes nothing more, so the directory can go as soon as
+    /// the fence returns. [`Log::finish_compaction`] then installs nothing.
+    pub fn fence(&mut self) {
+        self.fenced = true;
+        self.compaction_gate.fence();
+    }
 
     pub(super) fn ensure_unfenced(&self) -> Result<(), LogError> {
         if self.fenced {
