@@ -486,7 +486,7 @@ pub(super) async fn admit_partition(
     // the records, exactly as before. A null /
     // undecodable field returns INVALID_REQUEST / INVALID_RECORD, preserving
     // the prior error-code ordering (before the leadership gate).
-    let prepared = match prepare_batch(
+    let mut prepared = match prepare_batch(
         part_data.payload,
         topic_compression,
         timestamps,
@@ -532,7 +532,9 @@ pub(super) async fn admit_partition(
     // expands a batch that arrived well under the cap into one the cap exists
     // to keep out, and a legacy `MessageSet` changes size in the v2
     // up-conversion. `stored_len` is `None` on the verbatim path, so this
-    // second measurement costs the hot path nothing.
+    // second measurement costs the hot path nothing. The owned path keeps the
+    // bytes it encodes here, so the `segment.bytes` gate and the writer reuse
+    // them while the codec and level stay what they were.
     //
     // Kafka runs the same second check for the same reason:
     // `UnifiedLog.append` re-walks the validated batches and throws
@@ -664,8 +666,10 @@ pub(super) async fn admit_partition(
 ///
 /// The limit is read off the partition's own log config, which is what the log
 /// rolls segments by, so it is the topic's effective `segment.bytes`
-/// whether the topic set it or inherited the broker's.
-fn exceeds_segment_size(prepared: &PreparedBatch, part: &Partition) -> bool {
+/// whether the topic set it or inherited the broker's. An owned batch the
+/// `max.message.bytes` gate already encoded under the same codec and level is
+/// measured from those bytes rather than encoded again.
+fn exceeds_segment_size(prepared: &mut PreparedBatch, part: &Partition) -> bool {
     let Ok(log) = part.log.lock() else {
         return false;
     };
@@ -685,7 +689,7 @@ pub(super) async fn complete_partition(
     services: PartitionServices<'_>,
 ) -> Result<PartitionOutcome, BrokerError> {
     let AdmittedBatch {
-        prepared,
+        mut prepared,
         part,
         shared_topic,
         delivery,
@@ -744,7 +748,7 @@ pub(super) async fn complete_partition(
     // `segment.bytes` does not lift it. The log measures the whole record set
     // it appends, and `out` already carries the -1 `base_offset` of a row that
     // appended nothing.
-    if exceeds_segment_size(&prepared, &part) {
+    if exceeds_segment_size(&mut prepared, &part) {
         out.error_code = codes::RECORD_LIST_TOO_LARGE;
         return Ok(PartitionOutcome::Done(out));
     }

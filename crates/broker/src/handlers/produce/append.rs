@@ -481,8 +481,8 @@ async fn finalize_ack(
 /// leader epoch.
 ///
 /// Verbatim batches carry the producer's exact bytes. Owned batches carry the
-/// decoded `RecordBatch`, whose `partition_leader_epoch` the caller has
-/// already stamped.
+/// decoded `RecordBatch`, whose `partition_leader_epoch` this stamps, and the
+/// bytes the size gates encoded it into, when they did.
 pub(super) fn build_produce_data(prepared: PreparedBatch, leader_epoch: i32) -> ProduceData {
     let is_transactional = prepared.attributes.is_transactional();
     match prepared.source {
@@ -502,7 +502,16 @@ pub(super) fn build_produce_data(prepared: PreparedBatch, leader_epoch: i32) -> 
             // The writer stamps the verbatim path's epoch in-place at append;
             // the owned batch carries it as a struct field instead.
             batch.partition_leader_epoch = leader_epoch;
-            ProduceData::Owned(batch)
+            // Bytes a size gate encoded travel with the batch, and the writer
+            // appends them when its config still matches what encoded them.
+            // The epoch above sits outside the CRC; the log patches it in.
+            match prepared.encoded {
+                Some(encoded) => ProduceData::OwnedEncoded {
+                    batch,
+                    encoded: Box::new(encoded),
+                },
+                None => ProduceData::Owned(batch),
+            }
         }
     }
 }

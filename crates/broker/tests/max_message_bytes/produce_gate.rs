@@ -5,12 +5,13 @@ use {
     crate::{
         support,
         wire::{
-            COMPRESSION_TYPE, KAFKA_DEFAULT, MAX_MESSAGE_BYTES, SEGMENT_BYTES, accepted,
-            create_topic, gzip_batch, orders_fixture, produce_batch, produce_batch_of_wire_len,
-            record_list_too_large, too_large, wire_len,
+            COMPRESSION_LZ4_LEVEL, COMPRESSION_TYPE, KAFKA_DEFAULT, MAX_MESSAGE_BYTES,
+            SEGMENT_BYTES, accepted, create_topic, gzip_batch, orders_fixture, produce_batch,
+            produce_batch_of_wire_len, record_list_too_large, too_large, wire_len,
         },
     },
     assert2::check,
+    krabka_compression::CompressionType,
 };
 
 /// A per-topic cap of 2048 bytes, the value the boundary was settled at
@@ -47,6 +48,58 @@ async fn a_batch_at_the_cap_appends_and_one_byte_over_it_is_refused() {
     let (p, topic) = orders_fixture(&[(MAX_MESSAGE_BYTES, &CAP.to_string())]).await;
 
     check_exact_limit(&p, topic, CAP, too_large()).await;
+
+    p.broker.shutdown().await;
+}
+
+/// A topic that forces a codec the producer did not use holds the batch to
+/// `max.message.bytes` at its stored size, to the byte.
+///
+/// The producer sends gzip and the topic stores lz4, which shrinks repeated
+/// bytes far less, so the stored batch is the larger of the two and the gate
+/// on the stored form is the one that binds. The broker encodes the stored
+/// form once and measures it against the cap, then against `segment.bytes`,
+/// then appends it: a batch of exactly the cap appends and a cap one byte
+/// smaller refuses it, so whatever the gates measured is what the writer
+/// would store.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recompressed_batch_is_held_to_the_cap_at_its_stored_size_exactly() {
+    /// lz4's level, set on the topic so the length below is the one the
+    /// broker computes.
+    const LZ4_LEVEL: i32 = 9;
+
+    let batch = gzip_batch(20_000);
+    let mut stored = batch.clone();
+    stored.attributes = stored.attributes.with_compression(CompressionType::Lz4);
+    let mut buf = bytes::BytesMut::new();
+    stored
+        .encode_with_compression_level(&mut buf, Some(LZ4_LEVEL))
+        .expect("encode lz4");
+    let stored_len = buf.len();
+    check!(wire_len(&batch) < stored_len - 1);
+
+    let p = support::start().await;
+    let level = LZ4_LEVEL.to_string();
+    // One topic whose cap is the stored size, and one a byte below it.
+    for (name, cap, answer, log_end) in [
+        ("under", stored_len - 1, too_large(), 0),
+        ("at", stored_len, accepted(0, 0), 1),
+    ] {
+        let topic = create_topic(&p.broker, &p.client, name, &[
+            (MAX_MESSAGE_BYTES, &cap.to_string()),
+            (COMPRESSION_TYPE, "lz4"),
+            (COMPRESSION_LZ4_LEVEL, &level),
+        ])
+        .await;
+        check!(
+            produce_batch(&p.client, name, topic, batch.clone()).await == answer,
+            "{name}"
+        );
+        check!(
+            p.broker.local_log_end_offset(name, 0) == Some(log_end),
+            "{name}"
+        );
+    }
 
     p.broker.shutdown().await;
 }
