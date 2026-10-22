@@ -37,7 +37,7 @@ use {
         topics::creatable_topic,
     },
     assert2::assert,
-    krabka_broker::BrokerHandle,
+    krabka_broker::{BrokerHandle, NodeId},
     krabka_client_core::Client,
     krabka_protocol::{
         owned::{create_topics_request::CreateTopicsRequest, produce_response::NodeEndpoint},
@@ -319,10 +319,14 @@ async fn produce_to_non_leader_is_rejected() {
         .unwrap();
     let leader3_client =
         connect_client(cluster[rf3_leader_idx].1.listen_addr.to_string(), None).await;
-    // Gate on the leader broker's own replica/image catch-up before producing,
-    // so the success Produce can't race the image apply (UNKNOWN_TOPIC_ID 100 /
-    // transient NOT_LEADER 6) — and so the `leo_before` read below is non-None.
-    wait_for_local_replica(&cluster[rf3_leader_idx].0, "gate-rf3", 0).await;
+    // Gate on the leader broker installing its own leadership (leader, epoch
+    // and ISR) before producing, so the success Produce can't race the image
+    // apply (UNKNOWN_TOPIC_ID 100 / transient NOT_LEADER 6) — and so the
+    // `leo_before` read below is non-None.
+    cluster[rf3_leader_idx]
+        .0
+        .wait_until_local_partition_leader("gate-rf3", 0, NodeId(rf3_leader))
+        .await;
     let leader3_leo_before = cluster[rf3_leader_idx]
         .0
         .local_log_end_offset("gate-rf3", 0)
@@ -355,7 +359,12 @@ async fn produce_to_non_leader_is_rejected() {
     // topic_id resolution misses and returns UNKNOWN_TOPIC_ID (100) instead of
     // the required success. The rf=1 partition has no replica elsewhere, so
     // nothing else forces this broker's image/replica to be warm by now.
-    wait_for_local_replica(&cluster[rf1_leader_idx].0, "gate-rf1", off_node_part).await;
+    // Waiting only for the local log is not enough: the partition must also
+    // have installed this broker as leader, or the Produce gets NOT_LEADER (6).
+    cluster[rf1_leader_idx]
+        .0
+        .wait_until_local_partition_leader("gate-rf1", off_node_part, NodeId(rf1_leader))
+        .await;
     let ProduceAnswer {
         error_code: code, ..
     } = produce_one(
