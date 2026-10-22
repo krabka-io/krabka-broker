@@ -22,6 +22,7 @@ load("./check_metrics_contract_test.axl", "check_metrics_contract_tests")
 load("./check_mutants_config_test.axl", "check_mutants_config_tests")
 load("./check_mutants_skip_test.axl", "check_mutants_skip_tests")
 load("./check_qualification_test.axl", "check_qualification_tests")
+load("./check_rustsec_2023_0071_test.axl", "check_rustsec_2023_0071_tests")
 load("./check_scripts_test.axl", "check_scripts_tests")
 load("./check_support_matrix_test.axl", "check_support_matrix_tests")
 load("./check_version_pins_test.axl", "check_version_pins_tests")
@@ -49,6 +50,7 @@ SUITES = [
     check_qualification_tests,
     check_mutants_config_tests,
     check_mutants_skip_tests,
+    check_rustsec_2023_0071_tests,
     check_scripts_tests,
     check_support_matrix_tests,
     check_version_pins_tests,

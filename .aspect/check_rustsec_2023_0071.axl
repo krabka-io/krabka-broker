@@ -1,0 +1,130 @@
+"""The reviewed RUSTSEC-2023-0071 exception still describes the dependency graph.
+
+`deny.toml` and the `security` workflow's `cargo audit` both ignore
+RUSTSEC-2023-0071, the RSA "Marvin" timing side channel. The ignore rests on a
+review of one exact graph, which
+`docs/operations/security/rustsec-2023-0071.md` records: `rsa` is reached only
+through `krabka-sspi` and `picky`, `picky` only through `krabka-sspi`, and
+`krabka-sspi` only through `krabka-security`, all at the reviewed versions.
+
+This check pins that graph. A version bump, a second copy of any of the three
+packages, or a new normal-dependency parent fails it and asks for a fresh
+review. So does the removal of any of them, so the exception is taken out
+rather than left behind once it no longer applies.
+
+    aspect check-rustsec-2023-0071
+"""
+
+ADVISORY = "RUSTSEC-2023-0071"
+
+# The reviewed version of each package at the vulnerable boundary. The review
+# rests on how `krabka-security` drives SSPI as much as on the RSA path itself,
+# so its version is pinned too.
+REVIEWED_VERSIONS = {
+    "rsa": "0.10.0-rc.18",
+    "krabka-sspi": "0.23.0",
+    "picky": "7.0.0-rc.26",
+    "krabka-security": "0.7.0",
+}
+
+# The complete set of normal-dependency parents each of them may have.
+REVIEWED_PARENTS = {
+    "rsa": ["krabka-sspi", "picky"],
+    "picky": ["krabka-sspi"],
+    "krabka-sspi": ["krabka-security"],
+}
+
+def _is_normal(dependency):
+    """Whether a resolve edge is a normal (not dev or build) dependency.
+
+    Cargo reports a normal dependency with a `null` kind; older versions also
+    spell it `"normal"`.
+    """
+    for kind in dependency["dep_kinds"]:
+        if kind["kind"] == None or kind["kind"] == "normal":
+            return True
+    return False
+
+def normal_parents(metadata):
+    """`{package id: sorted parent names}` over the normal dependency edges."""
+    names = {package["id"]: package["name"] for package in metadata["packages"]}
+    parents = {identifier: {} for identifier in names}
+    for node in metadata["resolve"]["nodes"]:
+        for dependency in node["deps"]:
+            if _is_normal(dependency):
+                parents[dependency["pkg"]][names[node["id"]]] = True
+    return {identifier: sorted(found.keys()) for identifier, found in parents.items()}
+
+def problems(metadata):
+    """Every way a decoded `cargo metadata` document departs from the review."""
+    found = []
+    located = {}
+    for package in metadata["packages"]:
+        name = package["name"]
+        if name not in REVIEWED_VERSIONS:
+            continue
+        if name in located:
+            found.append("multiple %s packages require a fresh %s review" % (name, ADVISORY))
+            continue
+        located[name] = package["id"]
+        if package["version"] != REVIEWED_VERSIONS[name]:
+            found.append(
+                "%s changed from reviewed %s to %s; review %s reachability" %
+                (name, REVIEWED_VERSIONS[name], package["version"], ADVISORY),
+            )
+
+    missing = sorted([name for name in REVIEWED_VERSIONS if name not in located])
+    if missing:
+        found.append(
+            "review and remove the %s exception; absent packages: %s" %
+            (ADVISORY, ", ".join(missing)),
+        )
+
+    parents = normal_parents(metadata)
+    for name in sorted(REVIEWED_PARENTS.keys()):
+        if name not in located:
+            continue
+        got = parents[located[name]]
+        want = sorted(REVIEWED_PARENTS[name])
+        if got != want:
+            found.append(
+                "%s parent set changed from reviewed [%s] to [%s]; review %s reachability" %
+                (name, ", ".join(want), ", ".join(got), ADVISORY),
+            )
+    return found
+
+def _metadata(ctx, root):
+    """The workspace's full `cargo metadata` document, decoded.
+
+    Resolved with every feature on, so an RSA path behind a non-default feature
+    is in the graph this checks.
+    """
+    result = (
+        ctx.std.process.command("cargo")
+            .args(["metadata", "--format-version=1", "--locked", "--all-features"])
+            .current_dir(root)
+            .stdout("piped")
+            .stderr("piped")
+            .spawn()
+            .wait_with_output()
+    )
+    if result.status.code != 0:
+        fail("cargo metadata failed:\n" + result.stderr.strip())
+    return json.decode(result.stdout)
+
+def _impl(ctx: TaskContext) -> int:
+    found = problems(_metadata(ctx, ctx.std.env.bazel_root_dir()))
+    for problem in found:
+        ctx.std.io.stderr.write(problem + "\n")
+    if found:
+        return 1
+    ctx.std.io.stdout.write(
+        "check-rustsec-2023-0071: the reviewed RSA dependency boundary is unchanged\n",
+    )
+    return 0
+
+check_rustsec_2023_0071 = task(
+    summary = "Check that the reviewed RUSTSEC-2023-0071 exception still matches the graph",
+    implementation = _impl,
+    args = {},
+)
