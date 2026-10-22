@@ -989,15 +989,8 @@ mod tests {
             },
             Case {
                 name: "interleaved partitions",
-                entries: vec![
-                    range(7, 0, 0, 1),
-                    range(7, 1, 0, 0),
-                    range(7, 0, 2, 3),
-                    range(7, 2, 0, 4),
-                    range(7, 0, 4, 4),
-                    range(7, 2, 5, 6),
-                ],
-                waves: vec![vec![0, 1, 3], vec![2, 5], vec![4]],
+                entries: mixed_flush().entries,
+                waves: vec![vec![0, 1, 3], vec![2, 4], vec![5]],
             },
         ];
         for Case {

@@ -20,7 +20,10 @@ use {
         kafka_log::{KafkaMetadataEventLog, KafkaMetadataLogConfig},
         log::{KeyedEvent, MetadataEventLog, PartitionStart},
     },
-    std::time::{Duration, Instant},
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
     tempfile::TempDir,
 };
 
@@ -74,19 +77,27 @@ async fn start_bare_broker() -> BareBroker {
     BareBroker { broker, log_dir }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
-    let BareBroker {
-        broker,
-        log_dir: _log_dir,
-    } = start_bare_broker().await;
-    let bootstrap = format!("127.0.0.1:{}", broker.listen_addr().port());
-
+/// A bare broker and a three-partition metadata event log on it.
+async fn start_three_partition_log() -> (BareBroker, Arc<KafkaMetadataEventLog>) {
+    let bare = start_bare_broker().await;
+    let bootstrap = format!("127.0.0.1:{}", bare.broker.listen_addr().port());
     let mut cfg = KafkaMetadataLogConfig::new(bootstrap);
     cfg.num_partitions = 3;
     cfg.replication = 1;
     cfg.min_isr = Some(1);
     let log = KafkaMetadataEventLog::start(cfg).await.expect("log start");
+    (bare, log)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
+    let (
+        BareBroker {
+            broker,
+            log_dir: _log_dir,
+        },
+        log,
+    ) = start_three_partition_log().await;
     let pc = log.partition_count();
     assert!(pc >= 3);
 
@@ -165,17 +176,13 @@ async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
 /// and every key, value and tombstone lands as given.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn keyed_group_lands_each_partition_in_order() {
-    let BareBroker {
-        broker,
-        log_dir: _log_dir,
-    } = start_bare_broker().await;
-    let bootstrap = format!("127.0.0.1:{}", broker.listen_addr().port());
-
-    let mut cfg = KafkaMetadataLogConfig::new(bootstrap);
-    cfg.num_partitions = 3;
-    cfg.replication = 1;
-    cfg.min_isr = Some(1);
-    let log = KafkaMetadataEventLog::start(cfg).await.expect("log start");
+    let (
+        BareBroker {
+            broker,
+            log_dir: _log_dir,
+        },
+        log,
+    ) = start_three_partition_log().await;
     assert!(log.partition_count() >= 3);
 
     assert!(log.publish_keyed_group(Vec::new()).await.unwrap() == Vec::<i64>::new());
