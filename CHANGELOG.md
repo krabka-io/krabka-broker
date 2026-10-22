@@ -56,6 +56,16 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   its own last run, so the GitHub runner no longer compiles the closure or
   downloads test binaries. A run without a key, such as a fork's pull
   request, runs the same script on the GitHub runner.
+- Log compaction holds one record batch at a time. The offset-map and rewrite
+  passes used to read and decode each sealed segment whole, the rewrite held
+  every decoded batch of its group at once, and the offset map kept each
+  batch's decompressed body alive through the keys it stored. A rewrite group
+  is bounded by `segment.bytes` on disk, so a compressed group could need many
+  times that in memory. The passes now stream each segment batch by batch, and
+  the map copies each distinct key once. In the measurements on #1613, a pass
+  over 256 MiB of gzip-expanded records raised the peak resident set by 1.4
+  MiB instead of 521 MiB. Damaged segments fail the pass with the same errors
+  as before. The pass still runs under the log lock (#1613).
 - A produce append runs on the request's own task when it only writes to the
   page cache. The partition writer task used to take every produce, so each
   one paid two cross-thread wakes before its write. The request task now takes
