@@ -814,62 +814,66 @@ async fn check_empty_active_partition(
     check!(coordinator.read_summary("g", topic_id, 0).await == Ok(None));
 }
 
-/// A broker that the image names as leader, but whose state partition log is
-/// not open yet, answers `COORDINATOR_LOAD_IN_PROGRESS`. The refresh after the
-/// log opens loads the partition.
-#[tokio::test]
-async fn led_partition_without_a_local_log_loads_once_the_log_opens() {
-    let dir = tempdir().unwrap();
-    let registry = Arc::new(PartitionRegistry::new());
-    let topic_id = uuid::Uuid::from_bytes([46; 16]);
-    let CoordinatorForTopic {
-        coordinator,
-        state_partition,
-    } = coordinator_for_topic(&registry, topic_id);
-    let image = state_partition_image(state_partition.get(), 1, 0);
-
-    refresh_and_wait(&coordinator, &image).await;
-    check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Pending));
-    check!(
-        coordinator.read_summary("g", topic_id, 0).await
-            == Err(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
-    );
-
-    open_state_partition(&registry, dir.path(), state_partition.get());
-    check_empty_active_partition(&coordinator, &image, state_partition, topic_id).await;
+/// What brings the state partition log level with the image.
+#[derive(Debug, Clone, Copy)]
+enum CatchUp {
+    /// The log is not open yet: it opens.
+    OpenLog,
+    /// The log is open and leads at epoch 0, while the image already names
+    /// epoch 1: the metadata reconcile installs epoch 1 on it.
+    InstallImageEpoch,
 }
 
-/// The image can name a new leader epoch before the state partition log
-/// installs it. The partition then stays pending and answers
-/// `COORDINATOR_LOAD_IN_PROGRESS`, rather than serving a term that its log
-/// does not lead and failing every commit wait with `NOT_COORDINATOR`. The
-/// refresh after the log installs the epoch loads it.
+/// A broker that the image names as leader, but whose state partition log
+/// cannot serve that term yet, keeps the partition pending and answers
+/// `COORDINATOR_LOAD_IN_PROGRESS`. It does not serve a term that its log does
+/// not lead, which would fail every append and commit wait with
+/// `NOT_COORDINATOR`. The refresh after the log catches up loads the
+/// partition.
 #[tokio::test]
-async fn led_partition_loads_once_its_log_installs_the_image_epoch() {
-    let dir = tempdir().unwrap();
-    let registry = Arc::new(PartitionRegistry::new());
-    let topic_id = uuid::Uuid::from_bytes([48; 16]);
-    let CoordinatorForTopic {
-        coordinator,
-        state_partition,
-    } = coordinator_for_topic(&registry, topic_id);
-    // The log leads at epoch 0, and the image already names epoch 1.
-    open_state_partition(&registry, dir.path(), state_partition.get());
-    let image = state_partition_image(state_partition.get(), 1, 1);
+async fn led_partition_stays_pending_until_its_log_serves_the_image_term() {
+    for catch_up in [CatchUp::OpenLog, CatchUp::InstallImageEpoch] {
+        let dir = tempdir().unwrap();
+        let registry = Arc::new(PartitionRegistry::new());
+        let topic_id = uuid::Uuid::from_bytes([46; 16]);
+        let CoordinatorForTopic {
+            coordinator,
+            state_partition,
+        } = coordinator_for_topic(&registry, topic_id);
+        let image_epoch = match catch_up {
+            CatchUp::OpenLog => 0,
+            CatchUp::InstallImageEpoch => {
+                open_state_partition(&registry, dir.path(), state_partition.get());
+                1
+            }
+        };
+        let image = state_partition_image(state_partition.get(), 1, image_epoch);
 
-    refresh_and_wait(&coordinator, &image).await;
-    check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Pending));
-    check!(
-        coordinator.read_summary("g", topic_id, 0).await
-            == Err(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
-    );
+        refresh_and_wait(&coordinator, &image).await;
+        check!(
+            coordinator.load_status(state_partition).await == Some(super::LoadStatus::Pending),
+            "{catch_up:?}"
+        );
+        check!(
+            coordinator.read_summary("g", topic_id, 0).await
+                == Err(crate::codes::COORDINATOR_LOAD_IN_PROGRESS),
+            "{catch_up:?}"
+        );
 
-    registry
-        .get(bootstrap::TOPIC, state_partition)
-        .expect("open state partition")
-        .install_leader_change(1, 1)
-        .await;
-    check_empty_active_partition(&coordinator, &image, state_partition, topic_id).await;
+        match catch_up {
+            CatchUp::OpenLog => {
+                open_state_partition(&registry, dir.path(), state_partition.get());
+            }
+            CatchUp::InstallImageEpoch => {
+                registry
+                    .get(bootstrap::TOPIC, state_partition)
+                    .expect("open state partition")
+                    .install_leader_change(1, image_epoch)
+                    .await;
+            }
+        }
+        check_empty_active_partition(&coordinator, &image, state_partition, topic_id).await;
+    }
 }
 
 /// A failed replay installs no partial state: the partition answers
