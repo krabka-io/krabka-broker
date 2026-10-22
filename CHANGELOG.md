@@ -56,6 +56,16 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   its own last run, so the GitHub runner no longer compiles the closure or
   downloads test binaries. A run without a key, such as a fork's pull
   request, runs the same script on the GitHub runner.
+- Log compaction holds one record batch at a time. The offset-map and rewrite
+  passes used to read and decode each sealed segment whole, the rewrite held
+  every decoded batch of its group at once, and the offset map kept each
+  batch's decompressed body alive through the keys it stored. A rewrite group
+  is bounded by `segment.bytes` on disk, so a compressed group could need many
+  times that in memory. The passes now stream each segment batch by batch, and
+  the map copies each distinct key once. In the measurements on #1613, a pass
+  over 256 MiB of gzip-expanded records raised the peak resident set by 1.4
+  MiB instead of 521 MiB. Damaged segments fail the pass with the same errors
+  as before. The pass still runs under the log lock (#1613).
 - A produce append runs on the request's own task when it only writes to the
   page cache. The partition writer task used to take every produce, so each
   one paid two cross-thread wakes before its write. The request task now takes
@@ -90,6 +100,13 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
     building the eight candidate entity keys.
   - The log-directory health check every produce and fetch makes answers
     without hashing the directory's path while every directory is online.
+- A remote segment's lifecycle transition updates only that segment's entries
+  in the tiered-storage metadata manager's epoch index. Each finish, hide and
+  delete used to rebuild and sort the partition's whole index under the
+  manager-wide lock that offset lookups take, so the cost of one transition,
+  and the time a lookup could wait behind it, grew with the partition's
+  retained remote history. With 100,000 retained segments one lifecycle went
+  from about 36 ms to under 1 µs in the `remote_epoch_index` benchmark (#1616).
 - The diskless flusher publishes a flush's `__diskless_wal_index` records in
   groups instead of waiting for each record's acknowledgment before it sends
   the next. A group holds one range of each partition in the object, up to
@@ -104,6 +121,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- The nightly criterion lane builds the reference and the candidate into
+  separate Cargo target directories, both before either is measured. With one
+  shared directory, Cargo could judge a candidate that changed only source as
+  fresh and run the reference's executable again under the candidate's
+  commit. `krabka-parse-benches executables` records each side's bench
+  executables by path and SHA-256. Every summary names the executables its pass
+  ran, checked against Cargo's `Running` lines and the recorded digests. The
+  verdict refuses a comparison whose sides share an executable path (#1608).
 - Store a produced `CreateTime` batch with its largest record timestamp as
   `max_timestamp`, as Kafka's `LogValidator` does, on the verbatim and the
   owned path. The producer's header value was kept, so an LZ4 batch with

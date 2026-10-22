@@ -34,10 +34,11 @@ async fn single_reader_broker() -> TieredBroker {
     tiered_broker_with(|config| config.remote_reader_threads = 1).await
 }
 
-/// Sets `remote.fetch.max.wait.ms` on this broker through
-/// `IncrementalAlterConfigs`, and waits for the image to carry it.
-async fn alter_remote_fetch_max_wait(broker: &Broker, ms: u64) {
-    let node = broker.config.node_id;
+/// Sets the broker key `name` to `value` on this broker through
+/// `IncrementalAlterConfigs`. The alter commits on the controller and reaches
+/// the broker's image asynchronously, so the caller waits for the effect it
+/// needs.
+pub(super) async fn alter_broker_config(broker: &Broker, name: &str, value: &str) {
     let principal = principal("admin");
     let peer = peer();
     let response: IncrementalAlterConfigsResponse = dispatch_wire(
@@ -47,11 +48,11 @@ async fn alter_remote_fetch_max_wait(broker: &Broker, ms: u64) {
         &IncrementalAlterConfigsRequest {
             resources: vec![AlterConfigsResource {
                 resource_type: 4,
-                resource_name: node.0.to_string(),
+                resource_name: broker.config.node_id.0.to_string(),
                 configs: vec![AlterableConfig {
-                    name: "remote.fetch.max.wait.ms".into(),
+                    name: name.into(),
                     config_operation: 0,
-                    value: Some(ms.to_string()),
+                    value: Some(value.into()),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -62,11 +63,23 @@ async fn alter_remote_fetch_max_wait(broker: &Broker, ms: u64) {
     )
     .await;
     check!(response.responses[0].error_code == codes::NONE);
+}
+
+/// Sets `remote.fetch.max.wait.ms` on this broker through
+/// `IncrementalAlterConfigs`, and waits for the image to carry it.
+async fn alter_remote_fetch_max_wait(broker: &Broker, ms: u64) {
+    let node = broker.config.node_id;
+    alter_broker_config(broker, "remote.fetch.max.wait.ms", &ms.to_string()).await;
     let want = Duration::from_millis(ms);
+    eventually(|| remote_fetch_max_wait(&broker.controller.current_image(), node) == want).await;
+}
+
+/// Waits up to ten seconds for `done`, which reads state an alter changes.
+pub(super) async fn eventually(mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     // intentional: the alter commits on the controller and reaches this
     // broker's image asynchronously; the image has no awaitable per-key signal.
-    while remote_fetch_max_wait(&broker.controller.current_image(), node) != want {
+    while !done() {
         assert2::assert!(
             Instant::now() <= deadline,
             "the alter never reached the image"
