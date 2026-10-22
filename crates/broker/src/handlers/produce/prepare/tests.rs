@@ -96,3 +96,10 @@ mod max_timestamp;
 // Kafka's `LogValidator.validateKey` runs before the timestamp check of the
 // same record, on both append shapes.
 mod keyless_records;
+
+// ── the owned batch's encode, reused by the second gate and the writer ────
+//
+// Kafka measures a re-encoded batch after `LogValidator` builds it, once. The
+// owned path measures it twice and stores it once, and the three share one
+// encode while the topic's codec and level hold.
+mod encoded_reuse;

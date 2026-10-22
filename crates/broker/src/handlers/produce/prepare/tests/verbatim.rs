@@ -144,7 +144,7 @@ fn passthrough_when_all_conditions_hold() {
             check!(v.max_timestamp == 42);
             check!(v.last_offset_delta == 0);
         }
-        ProduceData::Owned(_) => panic!("expected Verbatim"),
+        ProduceData::Owned(_) | ProduceData::OwnedEncoded { .. } => panic!("expected Verbatim"),
         ProduceData::OwnedCommitMarker { .. } | ProduceData::OwnedControl(_) => {
             panic!("expected producer data")
         }
@@ -433,7 +433,9 @@ fn transactional_batch_can_pass_through() {
             assert!(v.is_transactional);
             assert!(v.producer_id == krabka_log::ProducerId(100));
         }
-        ProduceData::Owned(_) => panic!("transactional data batch should pass through"),
+        ProduceData::Owned(_) | ProduceData::OwnedEncoded { .. } => {
+            panic!("transactional data batch should pass through")
+        }
         ProduceData::OwnedCommitMarker { .. } | ProduceData::OwnedControl(_) => {
             panic!("expected producer data")
         }
@@ -488,7 +490,7 @@ fn lz4_batch_passes_through_without_reencoding() {
             check!(v.last_offset_delta == 0);
             check!(v.leader_epoch == 3);
         }
-        ProduceData::Owned(_) => {
+        ProduceData::Owned(_) | ProduceData::OwnedEncoded { .. } => {
             panic!("lz4 producer batch must pass through verbatim")
         }
         ProduceData::OwnedCommitMarker { .. } | ProduceData::OwnedControl(_) => {

@@ -56,6 +56,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   its own last run, so the GitHub runner no longer compiles the closure or
   downloads test binaries. A run without a key, such as a fork's pull
   request, runs the same script on the GitHub runner.
+- A produce batch the broker re-encodes (a topic whose `compression.type`
+  forces another codec, or a legacy `MessageSet` it up-converts) is encoded
+  once instead of three times. The `max.message.bytes` gate keeps the bytes
+  it measured, the `segment.bytes` gate measures those, and the writer
+  appends them when the codec and compression level in force under the log
+  lock are still the ones they were encoded with. A config change in between
+  encodes again under the new settings, as before. The stored bytes are
+  unchanged.
 - A produce append runs on the request's own task when it only writes to the
   page cache. The partition writer task used to take every produce, so each
   one paid two cross-thread wakes before its write. The request task now takes

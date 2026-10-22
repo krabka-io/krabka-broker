@@ -30,6 +30,11 @@
 //! partition was appended, where Kafka registers one `DelayedProduce` over the
 //! whole request. The difference against the `acks=1` arm at the same
 //! partition count is what that gate costs now.
+//!
+//! `bench_produce_conversion` measures the owned path end to end: one Produce
+//! to a topic that forces gzip or zstd on an uncompressed batch, and one that
+//! up-converts a legacy v1 `MessageSet`, each through the handler's
+//! `max.message.bytes` and `segment.bytes` gates as well as the append.
 
 use {
     assert2::assert,
@@ -47,7 +52,7 @@ use {
     krabka_log::{Log, LogConfig},
     krabka_protocol::{
         owned::{
-            create_topics_request::{CreatableTopic, CreateTopicsRequest},
+            create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
             metadata_request::{MetadataRequest, MetadataRequestTopic},
             produce_request::PartitionProduceData,
         },
@@ -389,6 +394,33 @@ struct BenchBroker {
 /// high watermark is already at the log end when the gate reads it, so what
 /// the `acks=-1` arm times is the gate machinery itself.
 async fn boot_bench_broker() -> BenchBroker {
+    let widest = *ACKS_ALL_PARTITIONS
+        .iter()
+        .max()
+        .expect("the partition counts are not empty");
+    let (mut fixture, topic_ids) = boot_with_topics(&[BenchTopic {
+        name: ACKS_ALL_TOPIC,
+        partitions: widest,
+        configs: &[],
+    }])
+    .await;
+    fixture.topic_id = topic_ids[0];
+    fixture
+}
+
+/// One single-replica topic a bench broker boots with.
+struct BenchTopic<'a> {
+    name: &'a str,
+    partitions: i32,
+    /// `(key, value)` topic configs.
+    configs: &'a [(&'a str, &'a str)],
+}
+
+/// Boot a broker and create each of `topics`, returning the topic ids in the
+/// same order.
+///
+/// The fixture's own `topic_id` is the first topic's.
+async fn boot_with_topics(topics: &[BenchTopic<'_>]) -> (BenchBroker, Vec<WireUuid>) {
     let dir = TempDir::new().expect("temp dir for the broker log directory");
     let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
         .await
@@ -399,52 +431,75 @@ async fn boot_bench_broker() -> BenchBroker {
         .build()
         .await
         .expect("connect to the broker");
-    let widest = *ACKS_ALL_PARTITIONS
-        .iter()
-        .max()
-        .expect("the partition counts are not empty");
     let created = client
         .send(CreateTopicsRequest {
-            topics: vec![CreatableTopic {
-                name: ACKS_ALL_TOPIC.into(),
-                num_partitions: widest,
-                replication_factor: 1,
-                ..Default::default()
-            }],
+            topics: topics
+                .iter()
+                .map(|topic| CreatableTopic {
+                    name: topic.name.into(),
+                    num_partitions: topic.partitions,
+                    replication_factor: 1,
+                    configs: topic
+                        .configs
+                        .iter()
+                        .map(|(key, value)| CreatableTopicConfig {
+                            name: (*key).into(),
+                            value: Some((*value).into()),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                })
+                .collect(),
             timeout_ms: 5_000,
             ..Default::default()
         })
         .await
         .expect("CreateTopics");
-    assert!(created.topics[0].error_code == 0);
-    for index in 0..widest {
-        broker
-            .wait_until_partition_present(ACKS_ALL_TOPIC, index)
-            .await;
+    for topic in &created.topics {
+        assert!(topic.error_code == 0, "{topic:?}");
     }
-    // Produce v13 carries only the topic id, so resolve it once.
+    for topic in topics {
+        for index in 0..topic.partitions {
+            broker.wait_until_partition_present(topic.name, index).await;
+        }
+    }
+    // Produce v13 carries only the topic id, so resolve each once.
     let metadata = client
         .send(MetadataRequest {
-            topics: Some(vec![MetadataRequestTopic {
-                name: Some(ACKS_ALL_TOPIC.into()),
-                ..Default::default()
-            }]),
+            topics: Some(
+                topics
+                    .iter()
+                    .map(|topic| MetadataRequestTopic {
+                        name: Some(topic.name.into()),
+                        ..Default::default()
+                    })
+                    .collect(),
+            ),
             ..Default::default()
         })
         .await
-        .expect("Metadata for the topic id");
-    let topic_id = metadata
-        .topics
+        .expect("Metadata for the topic ids");
+    let topic_ids: Vec<WireUuid> = topics
         .iter()
-        .find(|topic| topic.name.as_deref() == Some(ACKS_ALL_TOPIC))
-        .map(|topic| topic.topic_id)
-        .expect("the created topic is in the metadata");
-    BenchBroker {
-        broker,
-        client,
-        topic_id,
-        _dir: dir,
-    }
+        .map(|wanted| {
+            metadata
+                .topics
+                .iter()
+                .find(|topic| topic.name.as_deref() == Some(wanted.name))
+                .map(|topic| topic.topic_id)
+                .expect("the created topic is in the metadata")
+        })
+        .collect();
+    (
+        BenchBroker {
+            broker,
+            client,
+            topic_id: topic_ids[0],
+            _dir: dir,
+        },
+        topic_ids,
+    )
 }
 
 /// Send one Produce covering `partitions` partitions and check every row.
@@ -515,10 +570,118 @@ fn bench_produce_acks_all(c: &mut Criterion) {
     runtime.block_on(fixture.broker.shutdown());
 }
 
+/// One converting topic the full-handler arm produces to: its name, the
+/// `compression.type` it forces, and what its producer sends.
+struct ConversionCase {
+    label: &'static str,
+    topic: &'static str,
+    compression_type: &'static str,
+    wire: fn(i32, usize) -> Bytes,
+}
+
+/// The produce shapes that reach the owned path through the handler: a topic
+/// whose `compression.type` forces gzip or zstd on a producer that sent the
+/// batch uncompressed, and a legacy v1 `MessageSet` up-converted on a
+/// producer-pass-through topic.
+const CONVERSION_CASES: [ConversionCase; 3] = [
+    ConversionCase {
+        label: "forced_gzip",
+        topic: "bench-forced-gzip",
+        compression_type: "gzip",
+        wire: v2_records,
+    },
+    ConversionCase {
+        label: "forced_zstd",
+        topic: "bench-forced-zstd",
+        compression_type: "zstd",
+        wire: v2_records,
+    },
+    ConversionCase {
+        label: "legacy_v1",
+        topic: "bench-legacy-v1",
+        compression_type: "producer",
+        wire: legacy_v1_records,
+    },
+];
+
+/// Send one single-partition Produce and check its row.
+async fn produce_one(fixture: &BenchBroker, topic: &str, topic_id: WireUuid, wire: &Bytes) {
+    let response = fixture
+        .client
+        .send(
+            krabka_broker::testing::produce_partitions_request()
+                .acks(1)
+                .timeout_ms(5_000)
+                .topic(topic.into())
+                .topic_id(topic_id)
+                .partitions(vec![PartitionProduceData {
+                    index: 0,
+                    records: Some(krabka_protocol::records::RecordsPayload::Raw(wire.clone())),
+                    ..Default::default()
+                }])
+                .call(),
+        )
+        .await
+        .expect("Produce");
+    let row = &response.responses[0].partition_responses[0];
+    assert!(row.error_code == 0, "{row:?}");
+}
+
+/// The owned produce path end to end, through the handler and its size gates.
+///
+/// `bench_produce_hot_path` stops at `prepare_batch` and the append. A batch
+/// the broker has to re-encode also crosses the `max.message.bytes` and
+/// `segment.bytes` gates in between, each of which measures the stored form,
+/// and only an encode can measure a compressed one. This arm times one
+/// single-partition `acks=1` Produce per iteration against a booted broker, so
+/// what it reports includes every encode the request pays for.
+fn bench_produce_conversion(c: &mut Criterion) {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("build a multi-threaded runtime");
+    let configs: Vec<[(&str, &str); 1]> = CONVERSION_CASES
+        .iter()
+        .map(|case| [("compression.type", case.compression_type)])
+        .collect();
+    let topics: Vec<BenchTopic<'_>> = CONVERSION_CASES
+        .iter()
+        .zip(&configs)
+        .map(|(case, configs)| BenchTopic {
+            name: case.topic,
+            partitions: 1,
+            configs: configs.as_slice(),
+        })
+        .collect();
+    let (fixture, topic_ids) = runtime.block_on(boot_with_topics(&topics));
+
+    let mut group = c.benchmark_group("broker/produce_conversion");
+    for BatchShape {
+        label: shape,
+        records,
+        payload,
+    } in SHAPES
+    {
+        for (case, topic_id) in CONVERSION_CASES.iter().zip(&topic_ids) {
+            let wire = (case.wire)(records, payload);
+            group.throughput(Throughput::Bytes(wire.len() as u64));
+            group.bench_function(format!("{shape}/{}", case.label), |b| {
+                b.iter(|| {
+                    runtime.block_on(produce_one(&fixture, case.topic, *topic_id, &wire));
+                });
+            });
+        }
+    }
+    group.finish();
+
+    runtime.block_on(fixture.broker.shutdown());
+}
+
 criterion_group!(
     benches,
     bench_produce_hot_path,
     bench_produce_acks_all,
+    bench_produce_conversion,
     bench_ratio
 );
 criterion_main!(benches);
