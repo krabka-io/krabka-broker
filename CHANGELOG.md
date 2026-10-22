@@ -66,6 +66,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   its own last run, so the GitHub runner no longer compiles the closure or
   downloads test binaries. A run without a key, such as a fork's pull
   request, runs the same script on the GitHub runner.
+- The container suites run as one `container suites` job on a BuildBuddy
+  remote runner, instead of a matrix of up to twelve GitHub runners. Each
+  suite still runs on a Firecracker microVM of its own, so one `bazel test`
+  compiles the broker once and starts every selected suite together, and
+  the matrix's runners are free for other jobs. `aspect container-suites`
+  now writes one `targets` list instead of grouped matrix entries.
 - Log compaction holds one record batch at a time. The offset-map and rewrite
   passes used to read and decode each sealed segment whole, the rewrite held
   every decoded batch of its group at once, and the offset map kept each

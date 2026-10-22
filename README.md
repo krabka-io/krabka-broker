@@ -273,11 +273,14 @@ the job went 852s to 1059s: these suites saturate a runner, so Bazel got about
 and broker-boot cost eight times instead of once. Target granularity was never
 the limit -- the box was.
 
-The shard is therefore across runners, not within one. `docker-select` computes
-the suite set once and emits a matrix, and each suite gets its own job, so the
-wall clock is the slowest suite rather than the sum: 1179s to 355s end to end,
-for about 2.7x the runner-minutes. Within a single binary the tests still share
-that process's ports and run one at a time; per-test ports would lift that too.
+The shard is therefore across machines, not within one. CI first ran each
+suite in a job of its own, so the wall clock was the slowest suite rather than
+the sum: 1179s to 355s end to end, for about 2.7x the runner-minutes. Now every
+suite runs on a BuildBuddy Firecracker microVM with its own Docker daemon
+(`--config=docker-rbe`), so one `bazel test` on one remote runner starts them
+all at once and compiles the broker once. Within a single binary the tests
+still share that process's ports and run one at a time; per-test ports would
+lift that too.
 
 ### Docker Desktop hosts
 
