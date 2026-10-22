@@ -162,11 +162,10 @@ async fn expired_queued_reads_give_their_queue_slots_back() {
     })
     .await;
     let broker = owners.handle.broker_arc_for_test();
+    alter_remote_fetch_max_wait(&broker, 100).await;
     let part = committed_tiered_partition(&broker, owners.dir.path()).await;
     let reader = broker.remote_reader.clone().expect("remote reader");
-
-    alter_remote_fetch_max_wait(&broker, 100).await;
-    let held = reader.pool.acquire().await.expect("the only reader slot");
+    let held = reader.pool.acquire().await.expect("a reader slot");
     for _ in 0..3 {
         let mut expired = out_of_range_at(&part, 0);
         let served = try_remote_read(

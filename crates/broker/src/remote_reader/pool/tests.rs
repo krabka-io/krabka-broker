@@ -2,7 +2,7 @@
 //! and a read that arrives with the pending queue already full is refused
 //! rather than queued behind the running ones.
 
-use {super::*, assert2::check};
+use {super::*, assert2::check, std::pin::Pin};
 
 /// The idle percentage is a ratio of two small integers, so every value these
 /// tests expect is exactly representable. `check!` on `f64` equality is a
@@ -85,6 +85,19 @@ async fn a_zero_thread_pool_still_serves_one_read_at_a_time() {
     drop(permit);
 }
 
+/// A read now waiting in the pending queue: `acquire` polled once, which
+/// takes the queue slot and parks it behind the held permits.
+async fn waiting_read(
+    pool: &ReaderPool,
+) -> Pin<Box<impl Future<Output = Result<ReaderPermit<'_>, ReaderPoolRejected>> + '_>> {
+    let mut read = Box::pin(pool.acquire());
+    check!(
+        futures_util::poll!(read.as_mut()).is_pending(),
+        "the read must wait for a slot"
+    );
+    read
+}
+
 /// A Fetch whose remote wait runs out drops its queued `acquire`. That waiter
 /// must give its queue slot back, or every cancelled read shrinks the queue
 /// for good and the pool ends up refusing reads while all its readers are idle.
@@ -93,18 +106,13 @@ async fn a_cancelled_waiter_gives_its_queue_slot_back() {
     let pool = ReaderPool::new(1, 1);
     let held = pool.acquire().await.expect("the one slot");
 
-    {
-        let cancelled = pool.acquire();
-        tokio::pin!(cancelled);
-        check!(futures_util::poll!(cancelled.as_mut()).is_pending());
-        check!(pool.queue_size() == 1);
-    }
+    let cancelled = waiting_read(&pool).await;
+    check!(pool.queue_size() == 1);
+    drop(cancelled);
     check!(pool.queue_size() == 0);
 
     // The freed slot takes a new waiter instead of refusing it.
-    let queued = pool.acquire();
-    tokio::pin!(queued);
-    check!(futures_util::poll!(queued.as_mut()).is_pending());
+    let queued = waiting_read(&pool).await;
     check!(pool.queue_size() == 1);
     check!(pool.rejected() == 0);
 
@@ -123,9 +131,7 @@ async fn repeated_cancellations_never_exhaust_the_queue() {
     let pool = ReaderPool::new(1, 100);
     let held = pool.acquire().await.expect("the one slot");
     for _ in 0..1_000 {
-        let cancelled = pool.acquire();
-        tokio::pin!(cancelled);
-        check!(futures_util::poll!(cancelled.as_mut()).is_pending());
+        drop(waiting_read(&pool).await);
     }
     check!(pool.queue_size() == 0);
     check!(pool.rejected() == 0);
@@ -146,12 +152,9 @@ async fn repeated_cancellations_never_exhaust_the_queue() {
 async fn a_waiter_cancelled_after_its_permit_was_assigned_releases_both_once() {
     let pool = ReaderPool::new(1, 1);
     let held = pool.acquire().await.expect("the one slot");
-    {
-        let woken = pool.acquire();
-        tokio::pin!(woken);
-        check!(futures_util::poll!(woken.as_mut()).is_pending());
-        drop(held);
-    }
+    let woken = waiting_read(&pool).await;
+    drop(held);
+    drop(woken);
     check!(pool.queue_size() == 0);
     check!(is_percent(pool.idle_percent(), 100.0));
 
@@ -167,9 +170,7 @@ async fn a_waiter_cancelled_after_its_permit_was_assigned_releases_both_once() {
 async fn a_refused_read_leaves_the_queue_count_alone() {
     let pool = ReaderPool::new(1, 1);
     let held = pool.acquire().await.expect("the one slot");
-    let queued = pool.acquire();
-    tokio::pin!(queued);
-    check!(futures_util::poll!(queued.as_mut()).is_pending());
+    let queued = waiting_read(&pool).await;
 
     for _ in 0..3 {
         check!(pool.acquire().await.is_err());
