@@ -140,6 +140,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   and the time a lookup could wait behind it, grew with the partition's
   retained remote history. With 100,000 retained segments one lifecycle went
   from about 36 ms to under 1 µs in the `remote_epoch_index` benchmark (#1616).
+- A controller serving a KIP-630 `FetchSnapshot` reads only the requested
+  chunk of the checkpoint. It used to read the whole file for every chunk, so
+  a transfer of a snapshot of size S in chunks of C read about
+  `S × ceil(S/C)` bytes on the controller engine, which other controller
+  requests wait behind. A checkpoint that retention deletes while it is
+  being served is still read through its open file.
 
 ### Fixed
 
