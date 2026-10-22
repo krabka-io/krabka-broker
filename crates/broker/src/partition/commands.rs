@@ -405,7 +405,10 @@ impl Partition {
 mod tests {
     use {
         super::*,
-        crate::partition::test_support::{test_partition, test_partition_with_writer},
+        crate::{
+            partition::test_support::{test_partition, test_partition_with_writer},
+            test_support::default_records_batch,
+        },
         assert2::assert,
     };
 
@@ -425,8 +428,7 @@ mod tests {
                 ..krabka_log::LogConfig::default()
             });
             for _ in 0..3 {
-                log.append(&mut crate::test_support::default_records_batch().call())
-                    .unwrap();
+                log.append(&mut default_records_batch().call()).unwrap();
             }
             log.set_log_start_offset(Offset(1)).unwrap();
             log.tick(std::time::SystemTime::now(), Offset(2)).unwrap();
