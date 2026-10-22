@@ -18,4 +18,8 @@ crate_tests(
     # `budget_tests` validates the checked-in contract with `include_str!`.
     compile_data = ["//packaging:performance/regression-contract.json"],
     lib = "parse-benches",
+    # `artifact_isolation_tests` builds and runs two fixture crates with a real
+    # `cargo`, which a Bazel test sandbox does not have. It runs under
+    # `cargo nextest run --workspace`, the `cargo` job in ci.yml.
+    manual = ["artifact_isolation_tests"],
 )

@@ -1201,9 +1201,10 @@ jobs:
   #
   # Each side runs four times, alternating on the same host. The verdict uses
   # medians and three times the larger median absolute deviation, with a 10%
-  # floor. Missing or invalid samples fail. Raw output, exact commits and host
-  # resources travel with the verdict artifact. Pull requests only compile the
-  # benches; this eight-pass lane is nightly and manually dispatchable.
+  # floor. Missing or invalid samples fail. Raw output, exact commits, the
+  # SHA-256 of every bench executable each pass ran, and host resources travel
+  # with the verdict artifact. Pull requests only compile the benches; this
+  # eight-pass lane is nightly and manually dispatchable.
   bench:
     name: variance-calibrated criterion benches
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -1259,12 +1260,25 @@ jobs:
         run: |
           set -euo pipefail
           candidate_sha="$(git rev-parse HEAD)"
+          reference_sha='${{ steps.reference.outputs.sha }}'
           reference_dir="${RUNNER_TEMP}/krabka-benchmark-reference"
-          git worktree add --detach "${reference_dir}" '${{ steps.reference.outputs.sha }}'
+          git worktree add --detach "${reference_dir}" "${reference_sha}"
+          declare -A source_dirs=([reference]="${reference_dir}" [candidate]="${GITHUB_WORKSPACE}")
+          declare -A commits=([reference]="${reference_sha}" [candidate]="${candidate_sha}")
+          # One target directory per revision (#1608). Cargo judges freshness
+          # per directory, so in a shared one a candidate that changes only
+          # source can be judged fresh and the reference's executable runs
+          # again under the candidate's name. The candidate keeps `target/`,
+          # which rust-cache restores.
+          declare -A target_dirs=(
+            [reference]="${RUNNER_TEMP}/krabka-benchmark-reference-target"
+            [candidate]="${GITHUB_WORKSPACE}/target"
+          )
+          bench_args=(-p krabka-broker -p krabka-log --features tracing/log --bench '*')
           mkdir -p benchmark-artifacts/{reference,candidate}/summaries
           {
             echo "candidate=${candidate_sha}"
-            echo "reference=${{ steps.reference.outputs.sha }}"
+            echo "reference=${reference_sha}"
             rustc -Vv
             uname -a
             lscpu
@@ -1280,6 +1294,18 @@ jobs:
               --features tracing/log -e features -i tracing) \
               > "benchmark-artifacts/${side}/tracing-features.txt"
           done
+          # Build both revisions before measuring either, and record each
+          # side's bench executables by path and SHA-256. Every pass below
+          # must run exactly those, unchanged.
+          for side in reference candidate; do
+            (cd "${source_dirs[${side}]}" && CARGO_TARGET_DIR="${target_dirs[${side}]}" \
+              cargo bench "${bench_args[@]}" --no-run --message-format=json) \
+              > "benchmark-artifacts/${side}/cargo-build.json"
+            cargo run -p krabka-parse-benches -- executables \
+              "benchmark-artifacts/${side}/cargo-build.json" \
+              --commit "${commits[${side}]}" \
+              --output "benchmark-artifacts/${side}/executables.json"
+          done
           for run in 1 2 3 4; do
             sides=(reference candidate)
             if ((run % 2 == 0)); then
@@ -1288,24 +1314,23 @@ jobs:
             for side in "${sides[@]}"; do
               run_dir="benchmark-artifacts/${side}/run-${run}"
               mkdir -p "${run_dir}"
-              if [ "${side}" = reference ]; then
-                source_dir="${reference_dir}"
-                commit='${{ steps.reference.outputs.sha }}'
-              else
-                source_dir="${GITHUB_WORKSPACE}"
-                commit="${candidate_sha}"
-              fi
-              (
-                cd "${source_dir}"
-                CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target" cargo bench \
-                  -p krabka-broker -p krabka-log --features tracing/log --bench '*' -- \
+              # Cargo's standard error names each executable it runs.
+              if ! (
+                cd "${source_dirs[${side}]}"
+                CARGO_TARGET_DIR="${target_dirs[${side}]}" cargo bench "${bench_args[@]}" -- \
                   --output-format bencher --noplot --sample-size 20 --measurement-time 2
-              ) | tee "${run_dir}/raw.txt"
+              ) 2> "${run_dir}/cargo-stderr.log" | tee "${run_dir}/raw.txt"; then
+                cat "${run_dir}/cargo-stderr.log" >&2
+                exit 1
+              fi
               cargo run -p krabka-parse-benches -- \
                 --results-dir "${run_dir}" \
                 --output "benchmark-artifacts/${side}/summaries/run-${run}.json" \
                 --suite krabka-broker \
-                --commit "${commit}"
+                --commit "${commits[${side}]}" \
+                --executables "benchmark-artifacts/${side}/executables.json" \
+                --cargo-log "${run_dir}/cargo-stderr.log" \
+                --source-dir "${source_dirs[${side}]}"
             done
           done
 
@@ -1327,7 +1352,7 @@ jobs:
             echo
             echo '```'
             if [ -f benchmark-artifacts/verdict.json ]; then
-              jq -r '"passed=\(.passed)\nbenchmarks=\(.benchmarks | length)\nreference=\(.reference_commits[0])\ncandidate=\(.candidate_commits[0])"' benchmark-artifacts/verdict.json
+              jq -r '"passed=\(.passed)\nbenchmarks=\(.benchmarks | length)\nreference=\(.reference_commits[0])\ncandidate=\(.candidate_commits[0])\nexecutables=\(.reference_executables | length) reference, \(.candidate_executables | length) candidate"' benchmark-artifacts/verdict.json
             else
               echo 'No verdict: measurement or validation failed.'
             fi
