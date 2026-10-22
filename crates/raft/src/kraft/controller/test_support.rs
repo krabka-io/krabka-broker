@@ -311,7 +311,7 @@ pub fn build_engine_only(
         TEST_TIMEOUTS,
     );
     let image = MetadataImage::new(uuid::Uuid::nil());
-    let (image_tx, _image_rx) = watch::channel(Arc::new(image.clone()));
+    let (image, _image_rx) = AppliedImage::new(image);
     let (leader_tx, _leader_rx) = watch::channel(core.quorum_state().leader_id);
     let log_hwm_at_open = log.hwm().0;
     let initial_snapshot = super::queries::initial_quorum_snapshot(&core, &log, log_hwm_at_open, 0);
@@ -328,7 +328,6 @@ pub fn build_engine_only(
             log,
             image,
             peers: Arc::new(NullPeerSender),
-            image_tx,
             features_epoch: -1,
             features_epoch_tx: watch::channel(-1).0,
             leader_tx,

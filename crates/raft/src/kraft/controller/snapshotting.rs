@@ -169,7 +169,7 @@ impl Engine {
         }));
 
         self.prune_to_snapshot(pending.end_offset)?;
-        self.image = reloaded;
+        self.image.replace(reloaded);
         self.downgrade_snapshot_pending = next_pending;
         if self.downgrade_snapshot_pending.is_none() {
             self.publish_image();
