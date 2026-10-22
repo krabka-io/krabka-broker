@@ -75,9 +75,26 @@ pub(crate) fn add_loss_state(generation: u64, count: u64, added: u64) -> (u64, u
 struct ScannedSpool {
     /// The records that decoded, in order.
     records: Vec<AuditRecord>,
+    /// Encoded frame lengths corresponding one-for-one with `records`.
+    frame_lengths: Vec<u64>,
     /// The byte length of the file after the last complete frame.
     valid_bytes: SpoolBytes,
 }
+
+/// One record read from the durable replay cursor.
+///
+/// Keeping the on-disk frame length alongside the decoded record means a
+/// successful replay can advance the cursor without serializing the record a
+/// second time.
+pub(crate) struct ReplayRecord {
+    pub(crate) record: AuditRecord,
+    pub(crate) frame_len: u64,
+}
+
+/// Replay is deliberately record-bounded. A healthy sink can consume several
+/// batches in one pass, while a failing sink makes us retain at most this many
+/// decoded records between retries.
+pub(crate) const REPLAY_BATCH_RECORDS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReplayRecovery {
@@ -403,6 +420,7 @@ impl Spool {
         };
         let ScannedSpool {
             records,
+            frame_lengths,
             valid_bytes,
         } = s.scan()?;
         let physical = s.file.metadata().map_err(io)?.len();
@@ -419,8 +437,8 @@ impl Spool {
             );
         }
         s.bytes = valid_bytes;
-        let unread = s.unread_records(&records, valid_bytes)?;
-        s.count = RecordCount(u64::try_from(unread.len()).unwrap_or(u64::MAX));
+        let unread = s.unread_record_count(&frame_lengths, valid_bytes)?;
+        s.count = RecordCount(u64::try_from(unread).unwrap_or(u64::MAX));
         s.reconcile_replay_poison()?;
         s.pending_losses.reconcile(&records);
         if s.count.0 == 0 && s.replay_offset > 0 {
@@ -485,8 +503,7 @@ impl Spool {
         persist_with_header(&path, REPLAY_POISON_TMP, &poison)
     }
 
-    pub(crate) fn commit_replay(&mut self, record: &AuditRecord) -> Result<(), AuditError> {
-        let frame_len = u64::try_from(encode_frame(record).len()).unwrap_or(u64::MAX);
+    pub(crate) fn commit_replay_frame(&mut self, frame_len: u64) -> Result<(), AuditError> {
         let replay_offset = self
             .replay_offset
             .checked_add(frame_len)
@@ -499,6 +516,11 @@ impl Spool {
         self.replay_offset = replay_offset;
         self.count.0 = self.count.0.saturating_sub(1);
         self.clear_replay_poison()
+    }
+
+    #[cfg(test)]
+    fn commit_replay(&mut self, record: &AuditRecord) -> Result<(), AuditError> {
+        self.commit_replay_frame(u64::try_from(encode_frame(record).len()).unwrap_or(u64::MAX))
     }
 
     pub(crate) fn abort_replay(&self) -> Result<(), AuditError> { self.clear_replay_poison() }
@@ -613,6 +635,7 @@ impl Spool {
             f.read_to_end(&mut buf).map_err(io)?;
         }
         let mut out = Vec::new();
+        let mut frame_lengths = Vec::new();
         let mut cur: &[u8] = strip_file_header(SPOOL_FILE, &buf)?;
         let mut valid_bytes = SpoolBytes(0);
         while cur.len() >= 4 {
@@ -624,7 +647,9 @@ impl Spool {
             match decode_record(&cur[4..4 + len]) {
                 Some(rec) => {
                     out.push(rec);
-                    valid_bytes += SpoolBytes(u64::try_from(4 + len).unwrap_or(0));
+                    let frame_len = u64::try_from(4 + len).unwrap_or(0);
+                    frame_lengths.push(frame_len);
+                    valid_bytes += SpoolBytes(frame_len);
                 }
                 None => break, // corrupt frame: stop (visible)
             }
@@ -635,18 +660,19 @@ impl Spool {
         span.record("valid_bytes", valid_bytes.0);
         Ok(ScannedSpool {
             records: out,
+            frame_lengths,
             valid_bytes,
         })
     }
 
-    fn unread_records(
+    fn unread_record_count(
         &self,
-        records: &[AuditRecord],
+        frame_lengths: &[u64],
         valid_bytes: SpoolBytes,
-    ) -> Result<Vec<AuditRecord>, AuditError> {
+    ) -> Result<usize, AuditError> {
         if self.replay_offset > valid_bytes.0 {
             if valid_bytes.0 == 0 {
-                return Ok(Vec::new());
+                return Ok(0);
             }
             return Err(AuditError::Io(format!(
                 "audit replay offset {} exceeds spool length {}",
@@ -654,17 +680,16 @@ impl Spool {
             )));
         }
         let mut offset = 0_u64;
-        let mut unread = Vec::new();
+        let mut unread = 0_usize;
         let mut at_boundary = self.replay_offset == 0;
-        for record in records {
+        for frame_len in frame_lengths {
             if offset == self.replay_offset {
                 at_boundary = true;
             }
             if at_boundary {
-                unread.push(record.clone());
+                unread = unread.saturating_add(1);
             }
-            offset = offset
-                .saturating_add(u64::try_from(encode_frame(record).len()).unwrap_or(u64::MAX));
+            offset = offset.saturating_add(*frame_len);
         }
         if offset == self.replay_offset {
             at_boundary = true;
@@ -678,15 +703,56 @@ impl Spool {
         Ok(unread)
     }
 
+    /// Read at most one replay batch, starting exactly at the cursor validated
+    /// by `open`. The committed physical prefix is neither read nor decoded.
+    pub(crate) fn read_replay_batch(&self) -> Result<Vec<ReplayRecord>, AuditError> {
+        let mut file = File::open(&self.path).map_err(io)?;
+        file.seek(SeekFrom::Start(
+            header_len_u64()
+                .checked_add(self.replay_offset)
+                .ok_or_else(|| AuditError::Io("audit replay seek overflow".into()))?,
+        ))
+        .map_err(io)?;
+
+        let mut records = Vec::with_capacity(
+            usize::try_from(self.count.0)
+                .unwrap_or(usize::MAX)
+                .min(REPLAY_BATCH_RECORDS),
+        );
+        for _ in 0..REPLAY_BATCH_RECORDS {
+            let mut prefix = [0_u8; 4];
+            match file.read(&mut prefix) {
+                Ok(0) => break,
+                Ok(read) => {
+                    file.read_exact(&mut prefix[read..]).map_err(io)?;
+                }
+                Err(error) => return Err(io(error)),
+            }
+            let len = usize::try_from(u32::from_be_bytes(prefix)).unwrap_or(0);
+            let mut body = vec![0_u8; len];
+            file.read_exact(&mut body).map_err(io)?;
+            let record = decode_record(&body)
+                .ok_or_else(|| AuditError::Io("corrupt audit spool frame during replay".into()))?;
+            records.push(ReplayRecord {
+                record,
+                frame_len: u64::try_from(4 + len).unwrap_or(u64::MAX),
+            });
+        }
+        Ok(records)
+    }
+
     /// Read every record from the start of the spool, in order.
     /// # Errors
     /// Returns an error if the spool file cannot be opened or read.
     pub fn read_all(&self) -> Result<Vec<AuditRecord>, AuditError> {
         let ScannedSpool {
             records,
+            frame_lengths,
             valid_bytes,
         } = self.scan()?;
-        self.unread_records(&records, valid_bytes)
+        let unread = self.unread_record_count(&frame_lengths, valid_bytes)?;
+        let first_unread = records.len().saturating_sub(unread);
+        Ok(records.into_iter().skip(first_unread).collect())
     }
 
     /// Clear the spool.
@@ -884,6 +950,109 @@ mod tests {
         check!((s.count().0, s.read_all().unwrap()) == (2, vec![r1, r2]));
         s.truncate().unwrap();
         check!((s.is_empty(), s.read_all().unwrap().is_empty()) == (true, true));
+    }
+
+    #[test]
+    fn replay_batches_are_bounded_and_seek_past_the_committed_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
+        for sequence in 0..(REPLAY_BATCH_RECORDS + 3) {
+            check!(
+                spool
+                    .append(&chained_record(
+                        u64::try_from(sequence).unwrap(),
+                        &GENESIS_HEAD,
+                        &[u8::try_from(sequence).unwrap()],
+                    ))
+                    .unwrap()
+            );
+        }
+
+        let first = spool.read_replay_batch().unwrap();
+        check!(first.len() == REPLAY_BATCH_RECORDS);
+        for replay in first {
+            spool.commit_replay_frame(replay.frame_len).unwrap();
+        }
+        check!(spool.count().0 == 3);
+
+        // Damage a byte in the already committed prefix. A replay reader that
+        // rescans from the file header would now fail; the cursor reader seeks
+        // directly to the previously validated frame boundary.
+        let mut file = OpenOptions::new()
+            .write(true)
+            .open(dir.path().join(SPOOL_FILE))
+            .unwrap();
+        file.seek(SeekFrom::Start(header_len_u64() + 4)).unwrap();
+        file.write_all(&[0xff]).unwrap();
+
+        let remaining = spool.read_replay_batch().unwrap();
+        check!(remaining.len() == 3);
+        check!(remaining[0].record.value == vec![u8::try_from(REPLAY_BATCH_RECORDS).unwrap()]);
+    }
+
+    /// Reproducible large-backlog probe used for the replay-read performance
+    /// evidence. It is ignored because it writes about 75 MiB and measures
+    /// wall-clock time rather than asserting a machine-dependent threshold.
+    #[test]
+    #[ignore = "manual audit spool performance probe"]
+    fn measure_replay_batch_across_large_backlogs() {
+        use std::{io::BufWriter, time::Instant};
+
+        for backlog in [1_024_usize, 8_192] {
+            let dir = tempfile::tempdir().unwrap();
+            drop(Spool::open(
+                dir.path(),
+                ByteSize::from_bytes(u64::MAX),
+            ).unwrap());
+            let record = chained_record(0, &GENESIS_HEAD, &vec![b'x'; 8 * 1_024]);
+            let frame = encode_frame(&record);
+            let committed = backlog - REPLAY_BATCH_RECORDS;
+            let replay_offset = u64::try_from(committed * frame.len()).unwrap();
+
+            let file = File::create(dir.path().join(SPOOL_FILE)).unwrap();
+            let mut writer = BufWriter::new(file);
+            writer.write_all(&file_header()).unwrap();
+            for _ in 0..backlog {
+                writer.write_all(&frame).unwrap();
+            }
+            writer.into_inner().unwrap().sync_all().unwrap();
+            persist_u64(
+                &dir.path().join(REPLAY_OFFSET_FILE),
+                REPLAY_OFFSET_TMP,
+                replay_offset,
+            )
+            .unwrap();
+
+            let started = Instant::now();
+            let spool = Spool::open(dir.path(), ByteSize::from_bytes(u64::MAX)).unwrap();
+            let recovery = started.elapsed();
+            let started = Instant::now();
+            let batch = spool.read_replay_batch().unwrap();
+            let replay = started.elapsed();
+            let replay_bytes: u64 = batch.iter().map(|record| record.frame_len).sum();
+            let peak_kib = std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|status| {
+                    status.lines().find_map(|line| {
+                        line.strip_prefix("VmHWM:")?
+                            .split_whitespace()
+                            .next()?
+                            .parse::<u64>()
+                            .ok()
+                    })
+                });
+            let recovery_mib_per_second = u128::from(spool.size().bytes_u64())
+                .saturating_mul(1_000_000_000)
+                / recovery.as_nanos().max(1)
+                / (1_u128 << 20);
+            eprintln!(
+                "backlog={backlog} spool_bytes={} recovery_us={} recovery_mib_per_second={recovery_mib_per_second} replay_records={} replay_bytes={replay_bytes} replay_us={} process_peak_kib={peak_kib:?}",
+                spool.size().bytes_u64(),
+                recovery.as_micros(),
+                batch.len(),
+                replay.as_micros(),
+            );
+        }
     }
 
     #[test]
