@@ -90,6 +90,13 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
     building the eight candidate entity keys.
   - The log-directory health check every produce and fetch makes answers
     without hashing the directory's path while every directory is online.
+- A remote segment's lifecycle transition updates only that segment's entries
+  in the tiered-storage metadata manager's epoch index. Each finish, hide and
+  delete used to rebuild and sort the partition's whole index under the
+  manager-wide lock that offset lookups take, so the cost of one transition,
+  and the time a lookup could wait behind it, grew with the partition's
+  retained remote history. With 100,000 retained segments one lifecycle went
+  from about 36 ms to under 1 µs in the `remote_epoch_index` benchmark (#1616).
 
 ### Fixed
 
