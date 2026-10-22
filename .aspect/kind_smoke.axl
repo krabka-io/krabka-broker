@@ -107,7 +107,7 @@ def statefulset_for_kind(source, image = _LOCAL_IMAGE):
     )
 
 def broker_extension(ordinal):
-    return "subjectAltName=DNS:krabka,DNS:krabka-%d.krabka\nextendedKeyUsage=serverAuth,clientAuth\n" % ordinal
+    return "subjectAltName=DNS:krabka,DNS:krabka-bootstrap,DNS:krabka-%d.krabka\nextendedKeyUsage=serverAuth,clientAuth\n" % ordinal
 
 def _run(ctx, argv, root):
     return ctx.std.process.command(argv[0]).args(argv[1:]).current_dir(root).spawn().wait().code

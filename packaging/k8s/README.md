@@ -9,7 +9,8 @@ cannot start until cluster-specific identities are supplied.
 
 1. Issue one CA and three broker certificates. Each certificate must be usable
    for both TLS server and client authentication, have subject `CN=broker-N`,
-   and contain DNS SANs `krabka` and `krabka-N.krabka` for its ordinal.
+   and contain DNS SANs `krabka`, `krabka-bootstrap` (the Service clients
+   bootstrap through) and `krabka-N.krabka` for its ordinal.
 2. Issue an administrator client certificate with subject `CN=admin` from the
    same CA. The manifest makes this bootstrap identity a super user; use it to
    create least-privilege ACLs, then remove it from `super_users` if desired.
