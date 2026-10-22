@@ -80,13 +80,9 @@ jobs:
     timeout-minutes: 90
     env:
       # Run as one bash script, on a BuildBuddy remote runner or on this runner
-      # (see the steps below). `UPLOAD` is `true` only in trusted contexts, as
-      # for `.github/actions/remote-cache`.
+      # (see `.github/actions/buildbuddy-run`).
       CI_BAZEL_SCRIPT: |
         set -euo pipefail
-        if [ "${UPLOAD:-false}" != "true" ]; then
-          echo "build --noremote_upload_local_results" >>user.bazelrc
-        fi
 
         # One invocation builds `//...` and runs every test that needs no
         # Docker daemon and asserts on no wall clock, so test execution overlaps
@@ -132,23 +128,6 @@ jobs:
           # Change detection needs the merge base, not just the tip.
           fetch-depth: 0
 
-      - id: buildbuddy
-        name: is there a BuildBuddy key on this run
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
-        run: |
-          if [ -n "${BUILDBUDDY_API_KEY}" ]; then
-            echo "remote=true" >>"${GITHUB_OUTPUT}"
-          else
-            echo "No BuildBuddy key on this run: the Bazel steps run here."
-            echo "remote=false" >>"${GITHUB_OUTPUT}"
-          fi
-
-      # Only the local fallback compiles and links here. With a key, this
-      # runner does format and lint alone, which fit the stock disk.
-      - uses: ./.github/actions/reclaim-disk
-        if: steps.buildbuddy.outputs.remote != 'true'
-
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
         with:
           bazelisk-cache: true
@@ -182,56 +161,20 @@ jobs:
       - name: lint
         run: aspect lint --bazel-flag=--config=rbe
 
-      # The Bazel half of this job -- build, the daemon-free and
-      # timing-sensitive tests, rustdoc and the Stateright models -- runs on a
-      # BuildBuddy remote runner when this run holds an API key. That moves the
-      # job's long pole off this four-core runner: rustc codegen cannot use
-      # remote execution yet (see the `build:rbe` block in .bazelrc), so on a
-      # `Cargo.lock` bump this runner compiled the closure itself, and on a warm
-      # cache it still downloaded every test binary it ran. The remote runner is
-      # a 16-core Firecracker VM restored from a snapshot of the last run, so
-      # its Bazel server, output tree and analysis cache are already warm and
-      # nothing comes back here but the log.
-      #
-      # `format` and `lint` stay above: they are short, `lint` already executes
+      # The Bazel half of this job runs on a BuildBuddy remote runner when this
+      # run holds a key; see `.github/actions/buildbuddy-run` for why. `format`
+      # and `lint` stay here: they are short, `lint` already executes
       # remotely, and `aspect lint` annotates the pull request from here.
-      #
-      # A run without the key -- a fork's pull request -- runs the same script
-      # on this runner instead, so the steps are written once, in `env`.
-      - name: install the BuildBuddy CLI
-        if: steps.buildbuddy.outputs.remote == 'true'
-        run: curl -fsSL --retry 5 --retry-all-errors https://install.buildbuddy.io | bash
-
-      # Snapshots key on the branch and fall back to the pull request's base,
-      # then the default branch. Pushes to `main` always save one, which is
-      # what keeps every pull request warm; a pull request saves one only when
-      # none exists for its branch.
-      - name: build, test and docgen on a BuildBuddy remote runner
-        if: steps.buildbuddy.outputs.remote == 'true'
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
-          SNAPSHOT_SAVE: ${{ github.event_name == 'pull_request' && 'none-available' || 'always' }}
-          UPLOAD: ${{ github.event_name != 'pull_request' }}
-        run: |
-          set -euo pipefail
-          bb remote \
-            --run_from_commit="${GITHUB_SHA}" \
-            --timeout=80m \
-            --env=UPLOAD="${UPLOAD}" \
-            --runner_exec_properties=EstimatedCPU=16 \
-            --runner_exec_properties=EstimatedMemory=64GB \
-            --runner_exec_properties=EstimatedFreeDiskBytes=80GB \
-            --runner_exec_properties=snapshot-read-policy=local-first \
-            --remote_run_header=x-buildbuddy-platform.remote-snapshot-save-policy="${SNAPSHOT_SAVE}" \
-            --script="${CI_BAZEL_SCRIPT}"
-
-      - name: build, test and docgen on this runner
-        if: steps.buildbuddy.outputs.remote != 'true'
-        env:
-          UPLOAD: ${{ github.event_name != 'pull_request' }}
-        run: bash -c "${CI_BAZEL_SCRIPT}"
+      - id: bazel
+        name: build, test and docgen
+        uses: ./.github/actions/buildbuddy-run
+        with:
+          lane: ci
+          script: ${{ env.CI_BAZEL_SCRIPT }}
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          upload: ${{ github.event_name != 'pull_request' }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.buildbuddy.outputs.remote != 'true'
+        if: steps.bazel.outputs.remote != 'true'
         with:
           name: rustdoc
           path: bazel-bin/crates/**/*.rustdoc
@@ -291,8 +234,6 @@ jobs:
       # covers every target under //crates/..., not the impacted ones.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: ./.github/actions/reclaim-disk
-
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
         with:
           bazelisk-cache: true
@@ -312,16 +253,26 @@ jobs:
           # read only.
           upload: ${{ github.event_name != 'pull_request' }}
 
-      - name: coverage
+      # The instrumented build and run happen on a BuildBuddy remote runner
+      # when this run holds a key (see `.github/actions/buildbuddy-run`), which
+      # writes every result to the remote cache. `bb remote` has no documented
+      # way to hand a file back, so the step after it runs the same command
+      # here: every action is then a cache hit, and this runner downloads only
+      # the per-test coverage files and merges them into the report Codecov
+      # reads. Without a key the first step runs here and the second is a
+      # no-op.
+      - id: bazel
+        name: coverage
+        uses: ./.github/actions/buildbuddy-run
+        with:
+          lane: coverage
+          script: bazel coverage //crates/...
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          upload: ${{ github.event_name != 'pull_request' }}
+      - name: collect the coverage report from the remote cache
+        if: steps.bazel.outputs.remote == 'true'
         run: bazel coverage //crates/...
 
-      # `if: always()`, and the three directories by name: when this job does
-      # run the disk out, the failure arrives as a linker `Bus error` or a bare
-      # `No space left on device` that names no consumer. This says which of the
-      # output tree, the repository cache and the disk cache took the space --
-      # together they are the job's whole footprint. `bazel-disk` stays on the
-      # list although this job no longer configures one, because a line
-      # reappearing there is the signal that it has come back.
       - name: disk usage after coverage
         if: always()
         run: |
@@ -399,57 +350,48 @@ jobs:
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: ./.github/actions/reclaim-disk
-
-      # `rust-toolchain.toml` is the single pin, so read the channel out of it
-      # rather than restating it here: a bump there must not leave this job
-      # installing the previous compiler and downloading the new one anyway on
-      # the first `cargo` invocation.
-      - id: toolchain
-        run: |
-          set -euo pipefail
-          channel="$(sed -ne 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
-          test -n "${channel}"
-          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
-
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: ${{ steps.toolchain.outputs.channel }}
-          components: clippy
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      # The tarball rather than a fourth pinned action: `get.nexte.st` is the
-      # install path the nextest book documents for CI, and it lands one
-      # prebuilt binary next to `cargo` with no compilation.
-      - name: install cargo-nextest
-        if: github.event_name != 'pull_request'
-        run: |
-          set -euo pipefail
-          curl -LsSf --retry 5 --retry-all-errors \
-            --output "${RUNNER_TEMP}/cargo-nextest.tar.gz" \
-            https://get.nexte.st/latest/linux
-          tar zxf "${RUNNER_TEMP}/cargo-nextest.tar.gz" \
-            -C "${CARGO_HOME:-${HOME}/.cargo}/bin"
-
-      # `--all-targets` is also what keeps the criterion benches compiling.
-      # It includes `--benches`, so every `[[bench]]` target in
-      # `crates/broker` and `crates/log` is type-checked on every pull request
-      # and a bench that stops building fails here. The `bench` job below runs
-      # them on a schedule or dispatch. Bazel's `crate_bench` also compiles and
-      # lints them; a `cargo bench --no-run` step beside this would repeat the
-      # Cargo compilation check.
-      - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
+      # Clippy and nextest run on a BuildBuddy remote runner when this run
+      # holds a key (see `.github/actions/buildbuddy-run`), whose snapshot keeps
+      # the toolchain and the target directory warm between runs. Without one
+      # they run here, where rustup installs the `rust-toolchain.toml` pin.
+      #
+      # `--all-targets` is also what keeps the criterion benches compiling: it
+      # includes `--benches`, so every `[[bench]]` target in `crates/broker`
+      # and `crates/log` is type-checked and a bench that stops building fails
+      # here.
+      #
       # `--profile ci` is what excludes the two suites `//crates/broker`'s
       # `manual` list excludes for the same reasons -- see the `default-filter`
       # in `.config/nextest.toml`. The container-backed cases are `#[ignore]`d
       # and nextest does not run those unless asked.
-      - name: nextest
-        if: github.event_name != 'pull_request'
-        run: cargo nextest run --workspace --profile ci
+      - name: clippy and nextest
+        uses: ./.github/actions/buildbuddy-run
+        with:
+          lane: cargo
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          upload: ${{ github.event_name != 'pull_request' }}
+          env: |
+            CARGO_PROFILE_DEV_DEBUG=line-tables-only
+            RUN_NEXTEST=${{ github.event_name != 'pull_request' }}
+          script: |
+            set -euo pipefail
+            if ! command -v rustup >/dev/null; then
+              curl --proto '=https' --tlsv1.2 -sSf --retry 5 https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal --default-toolchain none
+            fi
+            export PATH="${CARGO_HOME:-${HOME}/.cargo}/bin:${PATH}"
+            # Installs the channel and components `rust-toolchain.toml` names.
+            rustup toolchain install
 
+            cargo clippy --workspace --all-targets -- -D warnings
+
+            if [ "${RUN_NEXTEST}" = "true" ]; then
+              if ! command -v cargo-nextest >/dev/null; then
+                curl -LsSf --retry 5 --retry-all-errors https://get.nexte.st/latest/linux \
+                  | tar zxf - -C "${CARGO_HOME:-${HOME}/.cargo}/bin"
+              fi
+              cargo nextest run --workspace --profile ci
+            fi
   # The broker library for wasm32-wasip1, the target that the Cluster Lab
   # runs a real broker on in a browser. Neither Bazel nor the job above builds
   # it, so this is what keeps the platform gates honest: a native-only
