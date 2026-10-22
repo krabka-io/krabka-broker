@@ -141,7 +141,22 @@ jobs:
           # Change detection needs the merge base, not just the tip.
           fetch-depth: 0
 
+      - id: buildbuddy
+        name: is there a BuildBuddy key on this run
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          if [ -n "${BUILDBUDDY_API_KEY}" ]; then
+            echo "remote=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "No BuildBuddy key on this run: the Bazel steps run here."
+            echo "remote=false" >>"${GITHUB_OUTPUT}"
+          fi
+
+      # Only the local fallback compiles and links here. With a key, this
+      # runner does format and lint alone, which fit the stock disk.
       - uses: ./.github/actions/reclaim-disk
+        if: steps.buildbuddy.outputs.remote != 'true'
 
       - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87 # v2026.38.3
         with:
@@ -192,17 +207,6 @@ jobs:
       #
       # A run without the key -- a fork's pull request -- runs the same script
       # on this runner instead, so the steps are written once, in `env`.
-      - id: buildbuddy
-        name: is there a BuildBuddy key on this run
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
-        run: |
-          if [ -n "${BUILDBUDDY_API_KEY}" ]; then
-            echo "remote=true" >>"${GITHUB_OUTPUT}"
-          else
-            echo "No BuildBuddy key on this run: the Bazel steps run here."
-            echo "remote=false" >>"${GITHUB_OUTPUT}"
-          fi
       - name: install the BuildBuddy CLI
         if: steps.buildbuddy.outputs.remote == 'true'
         run: curl -fsSL --retry 5 --retry-all-errors https://install.buildbuddy.io | bash
