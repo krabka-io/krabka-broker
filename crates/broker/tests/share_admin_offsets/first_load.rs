@@ -20,6 +20,7 @@ use {
     },
     assert2::assert,
     krabka_client_core::Client,
+    krabka_metadata::LeaderEpoch,
     krabka_protocol::owned::{
         describe_share_group_offsets_response::{
             DescribeShareGroupOffsetsResponseGroup, DescribeShareGroupOffsetsResponsePartition,
@@ -27,6 +28,7 @@ use {
         },
         share_fetch_response::AcquiredRecords,
     },
+    krabka_raft::NodeId,
 };
 
 const GROUP: &str = "g1";
@@ -152,6 +154,12 @@ async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
 
     // The restart keeps the group's `share.auto.offset.reset=latest`.
     let (broker, client) = restart_broker(log_dir).await;
+    // The rejoined broker leads the partition at epoch 0 until the controller
+    // re-elects it at epoch 1. Loading or acknowledging before then reads or
+    // writes the share state at the old epoch.
+    broker
+        .wait_until_local_partition_target("t", 0, NodeId(broker.node_id()), LeaderEpoch(1))
+        .await;
     let member = join_and_load(&broker, &client, tid).await;
     assert!(persisted_start(&broker, tid).await.0 == UNINITIALIZED_START_OFFSET);
     produce_n()
