@@ -99,9 +99,23 @@ runs:
     - if: steps.mode.outputs.remote != 'true'
       uses: ./.github/actions/reclaim-disk
 
+    # The `bb` CLI, pinned. install.buildbuddy.io finds the latest release
+    # through an unauthenticated api.github.com call, which GitHub limits per
+    # IP; runners share IPs, and the call answered 403 on run 39741856418. A
+    # release download from github.com is not that API, and the checksum
+    # pins what it serves.
     - if: steps.mode.outputs.remote == 'true'
       shell: bash
-      run: curl -fsSL --retry 5 --retry-all-errors https://install.buildbuddy.io | bash
+      env:
+        BB_VERSION: 5.0.496
+        BB_SHA256: 4dba5a0c377339b9e4b4053e812fe33da8fe917d22eee533b642ffdf210f2d10
+      run: |
+        set -euo pipefail
+        bb="${RUNNER_TEMP}/bb"
+        curl -fsSL --retry 5 -o "${bb}" \
+          "https://github.com/buildbuddy-io/bazel/releases/download/${BB_VERSION}/bazel-${BB_VERSION}-linux-x86_64"
+        echo "${BB_SHA256}  ${bb}" | sha256sum -c -
+        sudo install -m 0755 "${bb}" /usr/local/bin/bb
 
     - if: steps.mode.outputs.remote == 'true'
       shell: bash
