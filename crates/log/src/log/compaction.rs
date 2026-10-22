@@ -409,8 +409,13 @@ impl Log {
         &mut self,
         ctx: &CompactionContext,
     ) -> Result<Option<CompactionJob>, LogError> {
+        // A fenced log is being removed: an error a flush recorded earlier is
+        // no reason to refuse a pass that does nothing anyway.
+        if self.fenced {
+            return Ok(None);
+        }
         self.rollover_flusher.check()?;
-        if self.segments.is_empty() || self.fenced {
+        if self.segments.is_empty() {
             return Ok(None);
         }
 
@@ -490,6 +495,7 @@ impl Log {
             },
             index_interval,
             slot,
+            output_unclaimed: false,
         }))
     }
 
@@ -513,16 +519,18 @@ impl Log {
         &mut self,
         built: BuiltCompaction,
     ) -> Result<CompactionOutcome, LogError> {
-        let BuiltCompaction { job, rewrites } = built;
+        let BuiltCompaction { mut job, rewrites } = built;
         if self.fenced || !self.still_holds_inputs_of(&job) {
-            job.discard_output();
+            // Dropping the job deletes its files.
             return Ok(CompactionOutcome::Stale);
         }
         let rewrites = rewrites?;
         let consumed = job.inputs.len();
         let index_interval = job.index_interval;
-        // The job's inputs share the consumed segments' file handles, which
-        // must close before the swap below, as the segments' own do.
+        // The swap below claims the job's files. The job's inputs share the
+        // consumed segments' file handles, which must close before it, as the
+        // segments' own do.
+        job.output_unclaimed = false;
         drop(job);
 
         // Compaction rewrites sealed segments, so any record the last

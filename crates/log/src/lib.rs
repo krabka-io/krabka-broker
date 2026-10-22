@@ -65,6 +65,8 @@
 #![doc(html_root_url = "https://docs.rs/krabka-log/1.0.8")]
 
 mod compact;
+#[cfg(any(test, feature = "test-helpers"))]
+mod compaction_pause;
 mod config;
 mod delivery;
 mod error;
@@ -90,6 +92,8 @@ mod test_support;
 pub mod topic_name;
 mod txn_index;
 
+#[cfg(any(test, feature = "test-helpers"))]
+pub use compaction_pause::{CompactionPause, CompactionPauseControl, compaction_pause};
 #[cfg(any(test, feature = "test-helpers"))]
 pub use io::{DirectFile, IoTarget, LogIo};
 #[krabka_macros::sendfile_cfg]

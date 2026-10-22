@@ -22,7 +22,7 @@ use {
         },
         error::LogError,
         io::LogIo,
-        recovery::swap::cleaned_path,
+        recovery::swap::{cleaned_path, remove_if_present},
         segment::SealedInput,
         txn_index::AbortedTxn,
     },
@@ -158,6 +158,10 @@ pub struct CompactionJob {
     pub(in crate::log) retention: RewriteRetention,
     pub(in crate::log) index_interval: ByteSize,
     pub(in crate::log) slot: JobSlot,
+    /// Whether the build may have written `.cleaned` files that no install
+    /// has taken. Dropping the job deletes them then, so a pass that is
+    /// abandoned, finished as stale, or failed leaves nothing behind.
+    pub(in crate::log) output_unclaimed: bool,
 }
 
 impl CompactionJob {
@@ -171,6 +175,7 @@ impl CompactionJob {
     /// [`Log::finish_compaction`]: super::Log::finish_compaction
     #[must_use]
     pub fn build(mut self) -> BuiltCompaction {
+        self.output_unclaimed = true;
         let rewrites = self.rewrite();
         BuiltCompaction {
             job: self,
@@ -224,15 +229,13 @@ impl CompactionJob {
 
     /// Delete the `.cleaned` files the build may have written, as far as the
     /// directory allows. Recovery deletes any it leaves.
-    pub(in crate::log) fn discard_output(&self) {
+    fn discard_output(&self) {
         let mut start = 0;
         for group in &self.groups {
             let base = self.inputs[start].base_offset();
             for extension in CLEANED_EXTENSIONS {
                 let path = cleaned_path(&self.dir, base.0, extension);
-                if let Err(error) = std::fs::remove_file(&path)
-                    && error.kind() != std::io::ErrorKind::NotFound
-                {
+                if let Err(error) = remove_if_present(&*self.io, &path) {
                     tracing::warn!(path = %path.display(), %error,
                         "deleting an abandoned compaction output failed");
                 }
@@ -242,7 +245,16 @@ impl CompactionJob {
     }
 }
 
+impl Drop for CompactionJob {
+    fn drop(&mut self) {
+        if self.output_unclaimed {
+            self.discard_output();
+        }
+    }
+}
+
 /// A built [`CompactionJob`], for [`Log::finish_compaction`] to install.
+/// Dropping it instead deletes the files the build wrote.
 ///
 /// [`Log::finish_compaction`]: super::Log::finish_compaction
 #[derive(Debug)]
@@ -259,8 +271,8 @@ pub struct BuiltCompaction {
 pub enum CompactionOutcome {
     /// The pass replaced the segments it read.
     Installed,
-    /// The log dropped or replaced a segment the pass read, or was fenced,
-    /// while the pass was built. The pass changed nothing, and its files are
-    /// gone. The next pass starts from the log as it is.
+    /// The log dropped or replaced a segment the pass read, or was fenced or
+    /// closed, while the pass was built. The pass changed nothing, and its
+    /// files are gone. The next pass starts from the log as it is.
     Stale,
 }

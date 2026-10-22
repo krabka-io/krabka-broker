@@ -72,13 +72,15 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   MiB instead of 521 MiB. Damaged segments fail the pass with the same errors
   as before (#1613).
 - Log compaction reads and rewrites a partition's sealed segments without
-  holding the partition's log mutex, as Kafka's cleaner does. The broker
-  takes the mutex only to start the pass and to install its output, so
-  produce, replica appends and fetches of the partition no longer wait for
-  the whole pass. A pass whose input a truncation, retention or reset took
+  holding the partition's log mutex or its writer task, as Kafka's cleaner
+  does. The writer takes the mutex only to start the pass and to install its
+  output, and handles other messages while the pass builds, so produce,
+  replica appends and fetches of the partition no longer wait for the whole
+  pass. A pass whose input a truncation, retention or reset took
   away meanwhile installs nothing and is not reported as a storage failure.
-  `Log::fence` now stops a running pass and returns once it writes no more
-  files, so a retired partition's directory can be deleted as before. In the
+  `Log::fence` and `Log::close` now stop a running pass and return once it
+  writes no more files, so a retired or moved partition's directory can be
+  deleted as before. A built pass that is never installed deletes its files. In the
   measurements on #1639, the lock was held for 50 ms instead of 1.5 s during
   a pass over 45 MiB of gzip records, and for 150 ms instead of 0.8 s over
   256 compressed segments (#1639).

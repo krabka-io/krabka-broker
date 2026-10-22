@@ -5,8 +5,8 @@
 use {
     super::{CompactionOutcome, Log},
     crate::{
+        compaction_pause::compaction_pause,
         error::LogError,
-        io::{IoTarget, LogIo},
         log::test_support::{TempLog, append_keyed_samples, compact_test_log, compaction_ctx},
         name,
     },
@@ -15,10 +15,8 @@ use {
     krabka_ids::Offset,
     krabka_units::prelude::mebibytes,
     std::{
-        fs::File,
         io::Write as _,
         path::Path,
-        sync::{Arc, Mutex, mpsc},
         time::{Duration, SystemTime},
     },
 };
@@ -93,32 +91,58 @@ fn appends_while_the_pass_builds_survive_it() {
     assert!(records(&log) == keyed(&[(3, "k1"), (4, "k0"), (5, "k1"), (6, "k0"), (7, "k1")]));
 }
 
-/// A pass whose input a truncation took away installs nothing, and leaves
-/// no file behind.
-#[test]
-fn a_truncation_into_the_input_makes_the_pass_stale() {
+/// Truncate the log into the input of [`log_with_job`]'s pass.
+fn truncate_into_the_input(log: &mut Log) { log.truncate_to(Offset(3)).unwrap(); }
+
+/// `DeleteRecords` and the retention behind it drop the oldest input
+/// segments of [`log_with_job`]'s pass.
+fn delete_the_oldest_input(log: &mut Log) {
+    log.set_log_start_offset(Offset(2)).unwrap();
+    log.tick(SystemTime::now(), Offset(i64::MAX)).unwrap();
+}
+
+/// A pass whose input the log dropped while it built installs nothing, and
+/// leaves no file behind.
+#[yare::parameterized(
+    truncation = { truncate_into_the_input, &[(0, "k0"), (1, "k1"), (2, "k0")] },
+    retention = { delete_the_oldest_input, &[(2, "k0"), (3, "k1"), (4, "k0"), (5, "k1")] },
+)]
+fn a_pass_whose_input_is_gone_is_stale(meanwhile: fn(&mut Log), left: &[(i64, &'static str)]) {
     let (TempLog { dir, mut log }, job) = log_with_job();
-    log.truncate_to(Offset(3)).unwrap();
+    meanwhile(&mut log);
 
     let outcome = log.finish_compaction(job.build()).unwrap();
 
     check!(outcome == CompactionOutcome::Stale);
-    check!(records(&log) == keyed(&[(0, "k0"), (1, "k1"), (2, "k0")]));
+    check!(records(&log) == keyed(left));
     check!(cleaned_files(dir.path()).is_empty());
 }
 
-/// Retention behind a `DeleteRecords` drops the oldest input segments, so the
-/// pass installs nothing.
+/// A built pass that is dropped instead of finished, as when the task that
+/// would finish it goes away, deletes its files and frees the log for the
+/// next job.
 #[test]
-fn retention_that_drops_an_input_segment_makes_the_pass_stale() {
+fn dropping_a_built_pass_deletes_its_files() {
     let (TempLog { dir, mut log }, job) = log_with_job();
-    log.set_log_start_offset(Offset(2)).unwrap();
-    log.tick(SystemTime::now(), Offset(i64::MAX)).unwrap();
+    let built = job.build();
+    check!(!cleaned_files(dir.path()).is_empty());
 
-    let outcome = log.finish_compaction(job.build()).unwrap();
+    drop(built);
 
-    check!(outcome == CompactionOutcome::Stale);
-    check!(records(&log) == keyed(&[(2, "k0"), (3, "k1"), (4, "k0"), (5, "k1")]));
+    check!(cleaned_files(dir.path()).is_empty());
+    check!(log.prepare_compaction(&compaction_ctx()).unwrap().is_some());
+}
+
+/// Closing the log stops a job as the fence does, so a caller can move or
+/// delete the directory once the close returns.
+#[test]
+fn closing_the_log_stops_the_pass() {
+    let (TempLog { dir, log }, job) = log_with_job();
+    log.close();
+
+    let built = job.build();
+
+    check!(matches!(built.rewrites, Err(LogError::Fenced)));
     check!(cleaned_files(dir.path()).is_empty());
 }
 
@@ -143,7 +167,7 @@ fn a_failed_build_is_an_error_only_while_its_input_stands() {
             .unwrap()
             .unwrap();
         if truncate_first {
-            fixture.log.truncate_to(Offset(3)).unwrap();
+            truncate_into_the_input(&mut fixture.log);
         }
 
         let finished = fixture.log.finish_compaction(job.build());
@@ -181,38 +205,14 @@ fn a_fence_before_the_build_stops_the_pass() {
     check!(log.prepare_compaction(&compaction_ctx()).unwrap().is_none());
 }
 
-/// A [`LogIo`] that holds the first compaction write until the test lets it
-/// go, so a fence can arrive while the build is writing.
-#[derive(Debug)]
-struct PausedRewrite {
-    entered: Mutex<Option<mpsc::Sender<()>>>,
-    release: Mutex<mpsc::Receiver<()>>,
-}
-
-impl LogIo for PausedRewrite {
-    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> std::io::Result<usize> {
-        if target == IoTarget::CompactionSwap
-            && let Some(entered) = self.entered.lock().unwrap().take()
-        {
-            entered.send(()).unwrap();
-            self.release.lock().unwrap().recv().unwrap();
-        }
-        (&*file).write(buf)
-    }
-}
-
 /// A fence during the build returns only once the build writes nothing more,
 /// so the broker can delete the partition's directory as soon as it returns.
 #[test]
 fn a_fence_during_the_build_waits_for_it_to_stop_writing() {
-    let (entered, build_entered) = mpsc::channel();
-    let (let_go, release) = mpsc::channel();
+    let (pause, control) = compaction_pause();
     let mut fixture = compact_test_log();
     alternating_keys(&mut fixture.log, 6);
-    fixture.log.test_set_io(Arc::new(PausedRewrite {
-        entered: Mutex::new(Some(entered)),
-        release: Mutex::new(release),
-    }));
+    fixture.log.test_set_io(pause);
     let job = fixture
         .log
         .prepare_compaction(&compaction_ctx())
@@ -222,13 +222,13 @@ fn a_fence_during_the_build_waits_for_it_to_stop_writing() {
 
     let built = std::thread::scope(|scope| {
         let builder = scope.spawn(|| job.build());
-        build_entered.recv().unwrap();
+        control.wait_until_paused();
         let fencer = scope.spawn(|| log.fence());
         // The build is held inside a write, so the fence has to wait for it.
         std::thread::sleep(Duration::from_millis(100));
         check!(!fencer.is_finished());
 
-        let_go.send(()).unwrap();
+        control.resume();
         fencer.join().unwrap();
         let after_fence = cleaned_files(dir.path());
         let built = builder.join().unwrap();

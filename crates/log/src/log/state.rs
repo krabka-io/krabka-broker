@@ -571,7 +571,14 @@ impl Log {
     /// Close all segments, first taking a producer-state snapshot at the log
     /// end as Kafka's `UnifiedLog.close` does. A snapshot that cannot be
     /// written is not an error: the next open replays the log instead.
+    ///
+    /// A running compaction build stops first, as on [`Log::fence`], and the
+    /// call returns once it writes nothing more.
     pub fn close(mut self) {
+        // A compaction build writes into the directory without the log; stop
+        // it, as the fence does, before the caller moves or deletes the
+        // directory.
+        self.compaction_gate.fence();
         if let Err(error) = self.take_producer_snapshot() {
             tracing::warn!(
                 dir = %self.dir.display(),
