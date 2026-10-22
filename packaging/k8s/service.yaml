@@ -1,4 +1,5 @@
 # Two Services, because a Kafka client needs two different things from DNS.
+# Only Kafka is published; controller, metrics, and health remain pod-internal.
 #
 # `krabka` is headless: it exists so `krabka-0.krabka.<ns>.svc.cluster.local`
 # resolves to one pod. That is the name each broker advertises, and the name
@@ -39,15 +40,6 @@ spec:
     - name: kafka
       port: 9092
       targetPort: kafka
-    - name: controller
-      port: 9093
-      targetPort: controller
-    - name: metrics
-      port: 9404
-      targetPort: metrics
-    - name: health
-      port: 9405
-      targetPort: health
 ---
 # `krabka-bootstrap` is what a client's `bootstrap.servers` points at. It load
 # balances the first Metadata request across whichever brokers are ready, and

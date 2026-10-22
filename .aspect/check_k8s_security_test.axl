@@ -1,0 +1,121 @@
+"""Unit tests for `check_k8s_security.axl`."""
+
+load("./check_k8s_security.axl", "security_problems")
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+_IMAGE = "ghcr.io/krabka-io/krabka-broker@sha256:" + ("0123456789abcdef" * 4)
+
+def _stateful(image = _IMAGE):
+    return """
+image: %s
+image: %s
+- --config-file=/etc/krabka/config/broker-$(KRABKA_POD_INDEX).toml
+secretName: krabka-tls
+mountPath: /etc/krabka/config
+mountPath: /etc/krabka/tls
+""" % (image, image)
+
+def _broker(ordinal):
+    return """  broker-%d.toml: |
+    controller_listener_protocol = "Ssl"
+    [tls_config]
+    trust_roots_path = "/etc/krabka/tls/ca.crt"
+    client_auth = "Required"
+    [inter_broker_principal_node_ids]
+    "CN=broker-0" = 0
+    "CN=broker-1" = 1
+    "CN=broker-2" = 2
+    advertised = "krabka-%d.krabka:9092"
+    protocol = "Ssl"
+    [listeners.tls_config]
+    client_auth = "Required"
+    [authorization]
+    type = "simple"
+    super_users = ["CN=admin", "CN=broker-0", "CN=broker-1", "CN=broker-2"]
+    allow_everyone_if_no_acl_found = false
+    [runtime]
+    inter_broker_server_name = "krabka"
+""" % (ordinal, ordinal)
+
+def _configmap():
+    return "data:\n" + "".join([_broker(ordinal) for ordinal in range(3)])
+
+_SERVICES = """
+ports:
+  - name: kafka
+    port: 9092
+---
+ports:
+  - name: kafka
+    port: 9092
+"""
+
+_POLICY = """
+app.kubernetes.io/name: krabka
+krabka.io/client: "true"
+krabka.io/monitor: "true"
+port: 9093
+"""
+
+def _problems(stateful = None, services = _SERVICES, policy = _POLICY, configmap = None):
+    return security_problems(
+        _stateful() if stateful == None else stateful,
+        services,
+        policy,
+        _configmap() if configmap == None else configmap,
+    )
+
+def _test_secure_manifests_pass(_ctx):
+    check_eq("secure", _problems(), [])
+
+def _test_mutable_or_mismatched_images_fail(_ctx):
+    mutable = _stateful("docker.io/krabka-io/krabka-broker:dev")
+    check_eq("mutable", _problems(stateful = mutable), [
+        "StatefulSet must not use a mutable development image",
+        "broker image must be pinned to a ghcr.io sha256 digest",
+    ])
+    mismatch = _stateful().replace(_IMAGE, _IMAGE.replace("0", "1", 1), 1)
+    check_eq("mismatch", _problems(stateful = mismatch), ["formatter and broker images must match"])
+
+def _test_plaintext_and_anonymous_configs_fail(_ctx):
+    changed = _configmap().replace('controller_listener_protocol = "Ssl"', 'controller_listener_protocol = "Plaintext"', 1)
+    changed = changed.replace("super_users = [", 'super_users = ["ANONYMOUS", ', 1)
+    check_eq("unsafe config", _problems(configmap = changed), [
+        "broker-0.toml lacks controller_listener_protocol = \"Ssl\"",
+        "broker-0.toml lacks super_users = [\"CN=admin\", \"CN=broker-0\", \"CN=broker-1\", \"CN=broker-2\"]",
+        "broker-0.toml must not privilege ANONYMOUS",
+    ])
+
+def _test_missing_binding_and_mtls_fail(_ctx):
+    changed = _configmap().replace('    "CN=broker-2" = 2\n', "", 1)
+    changed = changed.replace('    client_auth = "Required"\n', "", 1)
+    check_eq("identity", _problems(configmap = changed), [
+        "broker-0.toml lacks \"CN=broker-2\" = 2",
+        "broker-0.toml must require client certificates on both listeners",
+    ])
+
+def _test_default_inter_broker_server_name_fails(_ctx):
+    changed = _configmap().replace('    inter_broker_server_name = "krabka"\n', "", 1)
+    check_eq("server name", _problems(configmap = changed), [
+        "broker-0.toml lacks inter_broker_server_name = \"krabka\"",
+    ])
+
+def _test_service_and_policy_exposure_fail(_ctx):
+    services = _SERVICES + "    port: 9093\n"
+    policy = _POLICY.replace("port: 9093\n", "").replace('krabka.io/monitor: "true"\n', "")
+    check_eq("network", _problems(services = services, policy = policy), [
+        "NetworkPolicy must restrict the controller port",
+        "Services must expose only Kafka port 9092",
+        "metrics access must require the monitor label",
+    ])
+
+check_k8s_security_tests = suite("check-k8s-security", [
+    _test_secure_manifests_pass,
+    _test_mutable_or_mismatched_images_fail,
+    _test_plaintext_and_anonymous_configs_fail,
+    _test_missing_binding_and_mtls_fail,
+    _test_default_inter_broker_server_name_fails,
+    _test_service_and_policy_exposure_fail,
+])
+
+test_check_k8s_security = suite_task(check_k8s_security_tests)

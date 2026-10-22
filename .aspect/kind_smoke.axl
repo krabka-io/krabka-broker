@@ -1,0 +1,219 @@
+"""Run the secured reference deployment on an existing three-worker Kind cluster.
+
+The task builds and loads the local broker image, creates short-lived mTLS
+identities, applies the reference manifests, and proves an RF3 record survives
+a rolling restart.
+
+    aspect kind-smoke
+    aspect kind-smoke --cluster krabka
+"""
+
+_REFERENCE_IMAGE = "ghcr.io/krabka-io/krabka-broker@sha256:ad5195370c6e55fbb9bb5c31a2dd244c62e5b407f9f6f6e89c01a45aee2e4222"
+_LOCAL_IMAGE = "docker.io/krabka-io/krabka-broker:dev"
+
+_PERSISTENT_VOLUMES = """apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata: {name: krabka-kind}
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata: {name: krabka-kind-1}
+spec:
+  capacity: {storage: 100Gi}
+  accessModes: [ReadWriteOnce]
+  storageClassName: krabka-kind
+  local: {path: /var/local/krabka}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - {key: kubernetes.io/hostname, operator: In, values: [krabka-worker]}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata: {name: krabka-kind-2}
+spec:
+  capacity: {storage: 100Gi}
+  accessModes: [ReadWriteOnce]
+  storageClassName: krabka-kind
+  local: {path: /var/local/krabka}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - {key: kubernetes.io/hostname, operator: In, values: [krabka-worker2]}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata: {name: krabka-kind-3}
+spec:
+  capacity: {storage: 100Gi}
+  accessModes: [ReadWriteOnce]
+  storageClassName: krabka-kind
+  local: {path: /var/local/krabka}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - {key: kubernetes.io/hostname, operator: In, values: [krabka-worker3]}
+"""
+
+_CLIENT_CONFIG = """apiVersion: v1
+kind: ConfigMap
+metadata: {name: kafka-client-config}
+data:
+  client.properties: |
+    security.protocol=SSL
+    ssl.keystore.type=PKCS12
+    ssl.keystore.location=/etc/krabka/tls/admin.p12
+    ssl.keystore.password=changeit
+    ssl.truststore.type=PEM
+    ssl.truststore.location=/etc/krabka/tls/ca.crt
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kafka-tools
+  labels:
+    krabka.io/client: "true"
+spec:
+  restartPolicy: Never
+  containers:
+    - name: kafka-tools
+      image: apache/kafka:4.0.0
+      command: ["sleep", "3600"]
+      volumeMounts:
+        - {name: tls, mountPath: /etc/krabka/tls, readOnly: true}
+        - {name: config, mountPath: /etc/krabka/client, readOnly: true}
+  volumes:
+    - name: tls
+      secret: {secretName: krabka-tls}
+    - name: config
+      configMap: {name: kafka-client-config}
+"""
+
+def statefulset_for_kind(source, image = _LOCAL_IMAGE):
+    """The production StatefulSet adapted only for local image and storage."""
+    if source.count(_REFERENCE_IMAGE) != 2:
+        fail("reference StatefulSet must carry the pinned image exactly twice")
+    access_modes = '        accessModes: ["ReadWriteOnce"]'
+    if source.count(access_modes) != 1:
+        fail("reference StatefulSet must carry one volume claim accessModes line")
+    return source.replace(_REFERENCE_IMAGE, image).replace(
+        access_modes,
+        access_modes + "\n        storageClassName: krabka-kind",
+    )
+
+def broker_extension(ordinal):
+    return "subjectAltName=DNS:krabka,DNS:krabka-bootstrap,DNS:krabka-%d.krabka\nextendedKeyUsage=serverAuth,clientAuth\n" % ordinal
+
+def _run(ctx, argv, root):
+    return ctx.std.process.command(argv[0]).args(argv[1:]).current_dir(root).spawn().wait().code
+
+def _must(ctx, argv, root):
+    code = _run(ctx, argv, root)
+    if code != 0:
+        fail("%s exited with %d" % (" ".join(argv), code))
+
+def _capture(ctx, argv, root):
+    result = ctx.std.process.command(argv[0]).args(argv[1:]).current_dir(root).stdout("piped").stderr("piped").spawn().wait_with_output()
+    if result.status.code != 0:
+        fail("%s failed:\n%s" % (" ".join(argv), result.stderr))
+    return result.stdout
+
+def _write(ctx, root, name, contents):
+    path = root + "/" + name
+    ctx.std.fs.write(path, contents)
+    return path
+
+def _certificate(ctx, work, name, subject, extension):
+    key = work + "/" + name + ".key"
+    request = work + "/" + name + ".csr"
+    certificate = work + "/" + name + ".crt"
+    extension_path = _write(ctx, work, name + ".ext", extension)
+    _must(ctx, ["openssl", "req", "-newkey", "rsa:2048", "-nodes", "-subj", subject, "-keyout", key, "-out", request], work)
+    _must(ctx, ["openssl", "x509", "-req", "-days", "1", "-in", request, "-CA", work + "/ca.crt", "-CAkey", work + "/ca.key", "-CAcreateserial", "-extfile", extension_path, "-out", certificate], work)
+
+def _kubectl_exec(ctx, root, argv):
+    _must(ctx, ["kubectl", "exec", "kafka-tools", "--"] + argv, root)
+
+def _consume(ctx, root):
+    return _capture(ctx, [
+        "kubectl",
+        "exec",
+        "kafka-tools",
+        "--",
+        "/opt/kafka/bin/kafka-console-consumer.sh",
+        "--bootstrap-server",
+        "krabka-bootstrap:9092",
+        "--topic",
+        "kind-smoke",
+        "--consumer.config",
+        "/etc/krabka/client/client.properties",
+        "--from-beginning",
+        "--max-messages",
+        "1",
+        "--timeout-ms",
+        "30000",
+    ], root).strip()
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    cluster = ctx.args.cluster or ctx.std.env.var("KIND_CLUSTER_NAME") or "krabka"
+    k8s = root + "/packaging/k8s"
+    work = ctx.std.fs.mkdtemp(prefix = "krabka-kind-smoke-")
+    ctx.defer(ctx.std.fs.remove_dir_all, work)
+
+    _must(ctx, ["bazel", "run", "-c", "opt", "//packaging:image_load"], root)
+    _must(ctx, ["kind", "load", "docker-image", "--name", cluster, _LOCAL_IMAGE], root)
+    for worker in ["worker", "worker2", "worker3"]:
+        _must(ctx, ["docker", "exec", "%s-%s" % (cluster, worker), "mkdir", "-p", "/var/local/krabka"], root)
+
+    pv = _write(ctx, work, "volumes.yaml", _PERSISTENT_VOLUMES)
+    _must(ctx, ["kubectl", "apply", "-f", pv], root)
+
+    _must(ctx, ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=krabka-smoke-ca", "-keyout", work + "/ca.key", "-out", work + "/ca.crt"], work)
+    for ordinal in range(3):
+        _certificate(ctx, work, "broker-%d" % ordinal, "/CN=broker-%d" % ordinal, broker_extension(ordinal))
+    _certificate(ctx, work, "admin", "/CN=admin", "extendedKeyUsage=clientAuth\n")
+    _must(ctx, ["openssl", "pkcs12", "-export", "-passout", "pass:changeit", "-name", "admin", "-inkey", work + "/admin.key", "-in", work + "/admin.crt", "-certfile", work + "/ca.crt", "-out", work + "/admin.p12"], work)
+
+    secret_args = ["kubectl", "create", "secret", "generic", "krabka-tls", "--dry-run=client", "-o", "yaml"]
+    for name in ["ca.crt", "broker-0.crt", "broker-0.key", "broker-1.crt", "broker-1.key", "broker-2.crt", "broker-2.key", "admin.p12"]:
+        secret_args.append("--from-file=" + work + "/" + name)
+    secret = _write(ctx, work, "secret.yaml", _capture(ctx, secret_args, root))
+    _must(ctx, ["kubectl", "apply", "-f", secret], root)
+
+    stateful = _write(ctx, work, "statefulset.yaml", statefulset_for_kind(ctx.std.fs.read_to_string(k8s + "/statefulset.yaml")))
+    for manifest in ["configmap.yaml", "service.yaml", "networkpolicy.yaml", "poddisruptionbudget.yaml"]:
+        _must(ctx, ["kubectl", "apply", "-f", k8s + "/" + manifest], root)
+    _must(ctx, ["kubectl", "apply", "-f", stateful], root)
+    _must(ctx, ["kubectl", "rollout", "status", "statefulset/krabka", "--timeout=5m"], root)
+
+    nodes = _capture(ctx, ["kubectl", "get", "pods", "-l", "app.kubernetes.io/name=krabka", "-o", 'jsonpath={range .items[*]}{.spec.nodeName}{"\\n"}{end}'], root).splitlines()
+    if len({node: True for node in nodes if node}) != 3:
+        fail("the three brokers were not spread over three nodes: %r" % nodes)
+
+    client = _write(ctx, work, "client.yaml", _CLIENT_CONFIG)
+    _must(ctx, ["kubectl", "apply", "-f", client], root)
+    _must(ctx, ["kubectl", "wait", "--for=condition=Ready", "pod/kafka-tools", "--timeout=2m"], root)
+    _kubectl_exec(ctx, root, ["/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "krabka-bootstrap:9092", "--command-config", "/etc/krabka/client/client.properties", "--create", "--topic", "kind-smoke", "--partitions", "1", "--replication-factor", "3"])
+    _kubectl_exec(ctx, root, ["/bin/bash", "-ceu", "printf 'survives-restart\\n' | /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server krabka-bootstrap:9092 --topic kind-smoke --producer.config /etc/krabka/client/client.properties"])
+    if _consume(ctx, root) != "survives-restart":
+        fail("the secured client did not read the produced record")
+
+    _must(ctx, ["kubectl", "rollout", "restart", "statefulset/krabka"], root)
+    _must(ctx, ["kubectl", "rollout", "status", "statefulset/krabka", "--timeout=5m"], root)
+    if _consume(ctx, root) != "survives-restart":
+        fail("the secured record did not survive the rolling restart")
+    return 0
+
+kind_smoke = task(
+    summary = "Run the secured reference deployment on Kind",
+    implementation = _impl,
+    args = {
+        "cluster": args.string(default = "", description = "Kind cluster name; defaults to KIND_CLUSTER_NAME or krabka."),
+    },
+)

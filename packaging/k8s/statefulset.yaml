@@ -35,6 +35,21 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: config
+          configMap:
+            name: krabka-config
+        - name: tls
+          secret:
+            secretName: krabka-tls
+            defaultMode: 0400
+            items:
+              - {key: ca.crt, path: ca.crt}
+              - {key: broker-0.crt, path: broker-0.crt}
+              - {key: broker-0.key, path: broker-0.key}
+              - {key: broker-1.crt, path: broker-1.crt}
+              - {key: broker-1.key, path: broker-1.key}
+              - {key: broker-2.crt, path: broker-2.crt}
+              - {key: broker-2.key, path: broker-2.key}
       # A three-voter quorum on one node is still one failure domain. Refuse
       # that placement instead of letting a node loss take the majority.
       topologySpreadConstraints:
@@ -44,12 +59,8 @@ spec:
           labelSelector:
             matchLabels:
               app.kubernetes.io/name: krabka
-      # The default image (the local :dev build) and every per-commit delivery
-      # tag are linux/amd64 only, so a pod scheduled elsewhere cannot exec the
-      # entrypoint. Release tags and `latest` are amd64 and arm64 indexes:
-      # remove or widen this selector when the image above names one of them.
-      nodeSelector:
-        kubernetes.io/arch: amd64
+      # This digest is the signed, qualified v1.0.6 multi-platform index;
+      # Kubernetes selects the image matching the node architecture.
       # The controlled-shutdown drain hands this node's partition leadership
       # to its in-sync replicas before the process stops, and defaults to a
       # 20s budget. The grace period has to outlast that, or SIGKILL lands
@@ -97,7 +108,7 @@ spec:
         # safe: on the first boot it seeds the directory, and on every boot
         # after it exits 0 without touching the identity already there.
         - name: format
-          image: docker.io/krabka-io/krabka-broker:dev
+          image: ghcr.io/krabka-io/krabka-broker@sha256:ad5195370c6e55fbb9bb5c31a2dd244c62e5b407f9f6f6e89c01a45aee2e4222
           command: ["/usr/bin/krabka-format"]
           args:
             - --log-dir=/var/lib/krabka
@@ -153,11 +164,10 @@ spec:
               mountPath: /tmp
       containers:
         - name: broker
-          image: docker.io/krabka-io/krabka-broker:dev
+          image: ghcr.io/krabka-io/krabka-broker@sha256:ad5195370c6e55fbb9bb5c31a2dd244c62e5b407f9f6f6e89c01a45aee2e4222
           args:
-            - --log-dir=/var/lib/krabka
+            - --config-file=/etc/krabka/config/broker-$(KRABKA_POD_INDEX).toml
             - --broker-id=$(KRABKA_POD_INDEX)
-            - --listen-addr=0.0.0.0:9092
           ports:
             - name: kafka
               containerPort: 9092
@@ -168,35 +178,13 @@ spec:
             - name: health
               containerPort: 9405
           env:
-            - name: POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-            - name: POD_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
             - name: KRABKA_POD_INDEX
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
-            # Clients reach a specific broker, never the bootstrap Service, so
-            # what this node advertises has to be its own pod's stable DNS
-            # name. The headless Service below is what makes that name resolve.
-            - name: KRABKA_ADVERTISED_LISTENER
-              value: "$(POD_NAME).krabka.$(POD_NAMESPACE).svc.cluster.local:9092"
-            # The same id the init container formatted the volume with, so the
-            # metadata image this node serves `DescribeCluster` from names the
-            # cluster rather than the nil UUID the broker falls back to.
+            # Match the cluster id written by the formatter.
             - name: KRABKA_CLUSTER_ID
               value: "b3c1e2d4-7f6a-4c58-9b21-0e5d8a4f3c10"
-            # Seed voters do not need discovery, but a node formatted with
-            # `--no-initial-controllers` does. The headless Service stays
-            # unresolved until each reconnect, so a restarted voter may move.
-            - name: KRABKA_CONTROLLER_BOOTSTRAP_SERVERS
-              value: "krabka.$(POD_NAMESPACE).svc.cluster.local:9093"
-            - name: KRABKA_CONTROLLER_QUORUM_VOTERS
-              value: "0@krabka-0.krabka.$(POD_NAMESPACE).svc.cluster.local:9093,1@krabka-1.krabka.$(POD_NAMESPACE).svc.cluster.local:9093,2@krabka-2.krabka.$(POD_NAMESPACE).svc.cluster.local:9093"
             - name: KRABKA_METRICS_LISTEN_ADDR
               value: 0.0.0.0:9404
             - name: KRABKA_HEALTH_LISTEN_ADDR
@@ -244,6 +232,12 @@ spec:
               mountPath: /var/lib/krabka
             - name: tmp
               mountPath: /tmp
+            - name: config
+              mountPath: /etc/krabka/config
+              readOnly: true
+            - name: tls
+              mountPath: /etc/krabka/tls
+              readOnly: true
   volumeClaimTemplates:
     - metadata:
         name: data

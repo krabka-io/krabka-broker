@@ -1017,7 +1017,7 @@ jobs:
         with:
           cluster_name: krabka
           config: .github/kind.yaml
-      - run: bash packaging/k8s/kind-smoke.sh
+      - run: aspect kind-smoke
 
   upgrade:
     name: upgrade · previous release

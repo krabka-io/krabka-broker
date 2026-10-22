@@ -17,6 +17,7 @@ load("./check_creusot_skip_test.axl", "check_creusot_skip_tests")
 load("./check_delivery_image_test.axl", "check_delivery_image_tests")
 load("./check_design_docs_test.axl", "check_design_docs_tests")
 load("./check_images_test.axl", "check_images_tests")
+load("./check_k8s_security_test.axl", "check_k8s_security_tests")
 load("./check_kfcs_test.axl", "check_kfcs_tests")
 load("./check_metrics_contract_test.axl", "check_metrics_contract_tests")
 load("./check_mutants_config_test.axl", "check_mutants_config_tests")
@@ -31,6 +32,7 @@ load("./freeze_candidate_test.axl", "freeze_candidate_tests")
 load("./generate_config_reference_test.axl", "generate_config_reference_tests")
 load("./generate_kip_matrix_test.axl", "generate_kip_matrix_tests")
 load("./kafka_system_tests_test.axl", "kafka_system_tests_tests")
+load("./kind_smoke_test.axl", "kind_smoke_tests")
 load("./mutants_shard_test.axl", "mutants_shard_tests")
 load("./testing.axl", "run_suites")
 load("./verify_release_test.axl", "verify_release_tests")
@@ -46,6 +48,7 @@ SUITES = [
     check_design_docs_tests,
     check_images_tests,
     check_kfcs_tests,
+    check_k8s_security_tests,
     check_metrics_contract_tests,
     check_qualification_tests,
     check_mutants_config_tests,
@@ -59,6 +62,7 @@ SUITES = [
     generate_config_reference_tests,
     generate_kip_matrix_tests,
     kafka_system_tests_tests,
+    kind_smoke_tests,
     mutants_shard_tests,
     verify_release_tests,
 ]
