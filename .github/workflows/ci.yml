@@ -575,6 +575,12 @@ jobs:
       # is exactly the change that scope would not see.
       - name: the proofs job covers every Creusot package
         run: aspect check-creusot-packages
+      # `deny.toml` ignores RUSTSEC-2023-0071 on the strength of a review of
+      # one exact RSA dependency path. This fails when that path changes, so
+      # the ignore cannot outlive the review behind it. The `security` workflow
+      # runs it too, beside `cargo audit` and on a nightly schedule.
+      - name: the reviewed RUSTSEC-2023-0071 boundary still holds
+        run: aspect check-rustsec-2023-0071
 
       # Documentation source checks do not use Bazel, so they stay off the
       # critical path while the `ci` job renders and uploads rustdoc from its

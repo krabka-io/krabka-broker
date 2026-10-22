@@ -17,11 +17,14 @@ rather than left behind once it no longer applies.
 
 ADVISORY = "RUSTSEC-2023-0071"
 
-# The reviewed version of each package at the vulnerable boundary.
+# The reviewed version of each package at the vulnerable boundary. The review
+# rests on how `krabka-security` drives SSPI as much as on the RSA path itself,
+# so its version is pinned too.
 REVIEWED_VERSIONS = {
     "rsa": "0.10.0-rc.18",
     "krabka-sspi": "0.23.0",
     "picky": "7.0.0-rc.26",
+    "krabka-security": "0.7.0",
 }
 
 # The complete set of normal-dependency parents each of them may have.
@@ -91,10 +94,14 @@ def problems(metadata):
     return found
 
 def _metadata(ctx, root):
-    """The workspace's full `cargo metadata` document, decoded."""
+    """The workspace's full `cargo metadata` document, decoded.
+
+    Resolved with every feature on, so an RSA path behind a non-default feature
+    is in the graph this checks.
+    """
     result = (
         ctx.std.process.command("cargo")
-            .args(["metadata", "--format-version=1", "--locked"])
+            .args(["metadata", "--format-version=1", "--locked", "--all-features"])
             .current_dir(root)
             .stdout("piped")
             .stderr("piped")
