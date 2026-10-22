@@ -96,10 +96,19 @@ jobs:
         # last-wins: `-timing-sensitive` alone would drop the `-docker` that
         # `.bazelrc` sets for `test`. The remote cache holds test results, so a
         # change that leaves a target's inputs alone does not run it again.
+        #
+        # `--local_test_jobs=4` keeps the four-at-a-time test concurrency these
+        # suites had on a four-core GitHub runner. The 16-core remote runner
+        # otherwise runs 16 at once beside the compile, and broker suites that
+        # wait on heartbeats then miss them: on #1622 two attempts failed six
+        # unrelated suites, `CreateTopics` among them answering 38 ("All
+        # brokers are currently fenced"), all of which pass alone. Compilation
+        # keeps the rest of the cores.
         echo "::group::build and daemon-free tests"
         bazel test \
           --build_tag_filters=-docker \
           --test_tag_filters=-docker,-timing-sensitive \
+          --local_test_jobs=4 \
           //...
         echo "::endgroup::"
 
