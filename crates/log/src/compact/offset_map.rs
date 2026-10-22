@@ -4,7 +4,8 @@
 use {
     super::{CleanedTransactionMetadata, batch_reader::group_batches, should_index_key},
     crate::{
-        error::LogError, record_limit::check_records_read, segment::Segment, txn_index::AbortedTxn,
+        error::LogError, record_limit::check_records_read, segment::SealedInput,
+        txn_index::AbortedTxn,
     },
     bytes::Bytes,
     krabka_ids::Offset,
@@ -38,7 +39,7 @@ use {
     err,
 )]
 pub fn build_offset_map(
-    segments: &[&Segment],
+    segments: &[SealedInput],
     aborted: Vec<AbortedTxn>,
     limit: Option<ByteSize>,
 ) -> Result<HashMap<Bytes, Offset>, LogError> {
@@ -95,9 +96,10 @@ mod tests {
         super::*,
         crate::{
             compact::test_support::{
-                control_batch, make_record, superseded_records, transactional_record,
+                control_batch, inputs, make_record, superseded_records, transactional_record,
                 write_sealed_batches, write_sealed_segment,
             },
+            segment::Segment,
             test_support::KeyValue,
         },
         bytes::Bytes,
@@ -107,7 +109,7 @@ mod tests {
     };
 
     fn offset_map_for(segments: &[&Segment], aborted: Vec<AbortedTxn>) -> HashMap<Bytes, Offset> {
-        build_offset_map(segments, aborted, None).unwrap()
+        build_offset_map(&inputs(segments), aborted, None).unwrap()
     }
 
     fn offset_map_of(records: Vec<krabka_protocol::records::Record>) -> HashMap<Bytes, Offset> {

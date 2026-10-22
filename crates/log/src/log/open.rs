@@ -194,6 +194,7 @@ impl Log {
             active: Some(active),
             dir_sync_needed,
             rollover_flusher: super::rollover_flush::Flusher::default(),
+            compaction_gate: std::sync::Arc::default(),
             fenced: false,
             opened_end: Offset(0),
             unflushed_messages: 0,

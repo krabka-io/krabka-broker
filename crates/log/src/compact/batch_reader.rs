@@ -6,15 +6,16 @@
 //! whole segment: a compressed segment can expand to many times its size on
 //! disk, so a reader that decoded it whole held that expansion for every
 //! batch at once.
+//!
+//! The reader works on [`SealedInput`]s, the open files of the sealed segments,
+//! not on the segments themselves, so a pass can read them without holding the
+//! log.
 
 use {
-    crate::{error::LogError, name, segment::Segment},
+    crate::{error::LogError, segment::SealedInput},
     krabka_protocol::records::{RecordBatch, header::HEADER_LEN},
     krabka_verified::compaction::{CompactionDecodeStep, compaction_decode_step},
-    std::{
-        fs::File,
-        io::{BufReader, Read},
-    },
+    std::io::{BufReader, Read},
 };
 
 /// Byte offset of `batch_length` in the v2 batch header, after `base_offset`.
@@ -28,6 +29,30 @@ const LENGTH_PREFIX: usize = 12;
 /// takes, its header and its body, over small batches.
 const READ_BUFFER: usize = 64 * 1024;
 
+/// Every `RecordBatch` of `inputs`, oldest segment first.
+///
+/// A walk whose log is fenced ends with [`LogError::Fenced`] at the next
+/// batch, so a pass stops reading, and stops writing, soon after the fence.
+pub(super) fn group_batches(
+    inputs: &[SealedInput],
+) -> impl Iterator<Item = Result<RecordBatch, LogError>> + '_ {
+    inputs.iter().flat_map(SegmentBatches::new)
+}
+
+/// Sequential reads over a [`SealedInput`], from its first byte.
+struct InputReader<'a> {
+    input: &'a SealedInput,
+    position: u64,
+}
+
+impl Read for InputReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.input.read_at(self.position, buf)?;
+        self.position += u64::try_from(read).expect("usize fits in u64");
+        Ok(read)
+    }
+}
+
 /// Iterator over the `RecordBatch`es of one sealed segment, in file order.
 ///
 /// It reads each batch's frame from the `.log` file into one reused buffer
@@ -36,57 +61,51 @@ const READ_BUFFER: usize = 64 * 1024;
 /// the whole-file decoder returned for the same bytes: the frame it decodes
 /// holds every byte of the batch that the file holds.
 ///
-/// It avoids `Segment::read`, because that path returns early when the
-/// segment's in-memory `last_offset` is stale. A sealed segment loaded from
-/// disk through `Segment::open_unscanned` has `last_offset = base_offset - 1`
-/// until a tail scan fills it in, so `Segment::read(base_offset, ..)` would
-/// short-circuit to an empty result.
-pub(super) struct SegmentBatches {
-    reader: BufReader<File>,
+/// It reads the file through the handle the segment shares, to the file's
+/// end. It avoids `Segment::read`, because that
+/// path returns early when the segment's in-memory `last_offset` is stale. A
+/// sealed segment loaded from disk through `Segment::open_unscanned` has
+/// `last_offset = base_offset - 1` until a tail scan fills it in, so
+/// `Segment::read(base_offset, ..)` would short-circuit to an empty result.
+struct SegmentBatches<'a> {
+    input: &'a SealedInput,
+    reader: BufReader<InputReader<'a>>,
     /// Bytes of the file not yet read into a frame.
     remaining: usize,
+    /// Why the file's length could not be read, yielded as the first item.
+    unreadable: Option<LogError>,
     /// The current batch's frame, reused from batch to batch.
     frame: Vec<u8>,
-    /// Set once the file is exhausted or a batch failed.
+    /// Set once the input is exhausted or a batch failed.
     finished: bool,
 }
 
-/// Every `RecordBatch` of `segments`, oldest segment first. Each segment's
-/// file is opened when the walk reaches it, so a group of many segments holds
-/// one file open at a time.
-pub(super) fn group_batches<'a>(
-    segments: &'a [&'a Segment],
-) -> impl Iterator<Item = Result<RecordBatch, LogError>> + 'a {
-    segments.iter().flat_map(|seg| {
-        let (opened, failed) = match segment_batches(seg) {
-            Ok(batches) => (Some(batches), None),
-            Err(error) => (None, Some(Err(error))),
+impl<'a> SegmentBatches<'a> {
+    /// Walk `input` to the end of its file. A byte past the segment's own
+    /// length is damage the walk has to report, as the whole-file decoder did.
+    fn new(input: &'a SealedInput) -> Self {
+        let (remaining, unreadable) = match input.file_len().map(usize::try_from) {
+            Ok(Ok(len)) => (len, None),
+            Ok(Err(_)) => (
+                0,
+                Some(LogError::Corrupt(
+                    "segment file is too large to address".into(),
+                )),
+            ),
+            Err(error) => (0, Some(LogError::Io(error))),
         };
-        opened.into_iter().flatten().chain(failed)
-    })
-}
+        Self {
+            input,
+            reader: BufReader::with_capacity(READ_BUFFER, InputReader { input, position: 0 }),
+            remaining,
+            unreadable,
+            frame: Vec::new(),
+            finished: false,
+        }
+    }
 
-/// Open the `.log` file of a sealed segment for [`SegmentBatches`].
-fn segment_batches(seg: &Segment) -> Result<SegmentBatches, LogError> {
-    let path = name::log_path(seg.dir(), seg.base_offset().0);
-    let file = File::open(&path)?;
-    let remaining = usize::try_from(file.metadata()?.len()).map_err(|_| {
-        LogError::Corrupt(format!(
-            "segment file {} is too large to address",
-            path.display()
-        ))
-    })?;
-    Ok(SegmentBatches {
-        reader: BufReader::with_capacity(READ_BUFFER, file),
-        remaining,
-        frame: Vec::new(),
-        finished: false,
-    })
-}
-
-impl SegmentBatches {
-    /// Append up to `wanted` more bytes of the file to the frame. Fewer arrive
-    /// only when the file ends first.
+    /// Append up to `wanted` more bytes of the input to the frame. Fewer
+    /// arrive only when the input ends first.
     fn read_into_frame(&mut self, wanted: usize) -> Result<(), LogError> {
         let wanted = wanted.min(self.remaining);
         self.frame.reserve_exact(wanted);
@@ -98,15 +117,18 @@ impl SegmentBatches {
         Ok(())
     }
 
-    /// Read and decode the next batch. `remaining_before` is the file's
+    /// Read and decode the next batch. `remaining_before` is the input's
     /// unread length when the batch starts, which the verified decode kernel
     /// checks the decoder's progress against.
     fn next_batch(&mut self, remaining_before: usize) -> Result<RecordBatch, LogError> {
+        if self.input.is_fenced() {
+            return Err(LogError::Fenced);
+        }
         self.frame.clear();
         self.read_into_frame(HEADER_LEN)?;
         // A short header, a bad magic byte or a negative length fails the
         // decoder on the header alone. Any other header gives the decoder the
-        // body it declares, or as much of it as the file holds.
+        // body it declares, or as much of it as the input holds.
         if self.frame.len() == HEADER_LEN {
             let length_bytes: [u8; 4] = self.frame[BATCH_LENGTH_AT..LENGTH_PREFIX]
                 .try_into()
@@ -135,12 +157,16 @@ impl SegmentBatches {
     }
 }
 
-impl Iterator for SegmentBatches {
+impl Iterator for SegmentBatches<'_> {
     type Item = Result<RecordBatch, LogError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.finished {
             return None;
+        }
+        if let Some(error) = self.unreadable.take() {
+            self.finished = true;
+            return Some(Err(error));
         }
         let remaining_before = self.remaining;
         if compaction_decode_step(remaining_before, false, remaining_before)
@@ -159,10 +185,19 @@ impl Iterator for SegmentBatches {
 mod tests {
     use {
         super::*,
-        crate::compact::test_support::{make_record, write_sealed_batches},
+        crate::{
+            compact::test_support::{make_record, write_sealed_batches},
+            name,
+            segment::Segment,
+        },
         bytes::BytesMut,
         krabka_compression::CompressionType,
+        krabka_ids::Offset,
         krabka_protocol::records::Attributes,
+        std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
         tempfile::tempdir,
     };
 
@@ -208,12 +243,14 @@ mod tests {
         Ok(out)
     }
 
-    /// What the streaming reader yields for a `.log` file holding `bytes`.
+    /// What the streaming reader yields for a sealed segment whose `.log`
+    /// file holds `bytes`.
     fn stream(bytes: &[u8]) -> Result<Vec<RecordBatch>, LogError> {
         let dir = tempdir().unwrap();
-        let segment = write_sealed_batches(dir.path(), &[plain_batch(0)]);
-        std::fs::write(name::log_path(segment.dir(), 0), bytes).unwrap();
-        group_batches(&[&segment]).collect()
+        std::fs::write(name::log_path(dir.path(), 0), bytes).unwrap();
+        let mut segment = Segment::open_unscanned(dir.path(), Offset(0)).unwrap();
+        segment.seal().unwrap();
+        group_batches(&[segment.sealed_input()]).collect()
     }
 
     /// A batch's outcome, comparable across the two readers.
@@ -254,23 +291,39 @@ mod tests {
         assert2::assert!(outcome(stream(&[])) == Ok(vec![]));
     }
 
-    /// A group walks its segments oldest first and opens each when it gets
-    /// there, so a missing later segment fails only after the earlier
-    /// segment's batches.
+    /// A group walks its segments oldest first.
     #[test]
     fn a_group_yields_each_segment_in_order() {
         let dir = tempdir().unwrap();
         let first = write_sealed_batches(dir.path(), &[compressed_batch(0)]);
         let second = write_sealed_batches(dir.path(), &[plain_batch(3), plain_batch(4)]);
-        std::fs::remove_file(name::log_path(dir.path(), 3)).unwrap();
 
-        let group = [&first, &second];
-        let mut walk = group_batches(&group);
-        let decoded = walk.next().map(outcome_of_one);
-        let missing = walk.next().map(|batch| batch.is_err());
+        let walked: Result<Vec<RecordBatch>, LogError> =
+            group_batches(&[first.sealed_input(), second.sealed_input()]).collect();
 
-        assert2::assert!(decoded == Some(Ok(decoded_form(&compressed_batch(0)))));
-        assert2::assert!(missing == Some(true));
+        let expected: Vec<RecordBatch> = [compressed_batch(0), plain_batch(3), plain_batch(4)]
+            .iter()
+            .map(decoded_form)
+            .collect();
+        assert2::assert!(outcome(walked) == Ok(expected));
+    }
+
+    /// A walk whose log is fenced ends at the next batch with
+    /// [`LogError::Fenced`], and yields nothing after it.
+    #[test]
+    fn a_fenced_walk_stops_at_the_next_batch() {
+        let dir = tempdir().unwrap();
+        let segment = write_sealed_batches(dir.path(), &[plain_batch(0), plain_batch(1)]);
+        let fenced = Arc::new(AtomicBool::new(false));
+        let inputs = [segment.sealed_input().watched_by(Arc::clone(&fenced))];
+
+        let mut walk = group_batches(&inputs);
+        let first = walk.next().map(outcome_of_one);
+        fenced.store(true, Ordering::Release);
+        let second = walk.next().map(outcome_of_one);
+
+        assert2::assert!(first == Some(Ok(decoded_form(&plain_batch(0)))));
+        assert2::assert!(second == Some(Err(format!("{:?}", LogError::Fenced))));
         assert2::assert!(walk.next().is_none());
     }
 
