@@ -662,10 +662,16 @@ fn a_fetch_past_a_segment_never_blocks_on_it() {
     let (_dir, log) = six_segments_one_cold(|_| 0);
     let end = log.log_end_offset();
     let first = &log.segments[0];
+    let read_ahead_max = mebibytes(1);
     assert2::assert!(
         first
-            .fetch_would_block(Offset(0), end, mebibytes(1))
+            .read_raw_desc_if_cached(Offset(0), end, mebibytes(1), read_ahead_max)
             .unwrap()
+            .is_none()
     );
-    assert2::assert!(!first.fetch_would_block(end, end, mebibytes(1)).unwrap());
+    let past = first
+        .read_raw_desc_if_cached(end, end, mebibytes(1), read_ahead_max)
+        .unwrap()
+        .expect("a fetch past the segment is not blocked by it");
+    assert2::assert!(past.region.is_none());
 }

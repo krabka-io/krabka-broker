@@ -41,6 +41,18 @@ impl Segment {
     /// Otherwise a small read can return empty and the log can advance to the
     /// next segment while records in this one remain unread.
     pub(super) fn read_start_position(&self, target_rel: u32) -> Result<u64, LogError> {
+        self.read_start_position_with(target_rel, |pos, buf, len| {
+            self.read_log_range(pos, buf, len)
+        })
+    }
+
+    /// [`Segment::read_start_position`] over the positional reads of
+    /// `read_range`, so a caller can count the I/O of the lookup.
+    pub(super) fn read_start_position_with(
+        &self,
+        target_rel: u32,
+        read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
+    ) -> Result<u64, LogError> {
         let position = match self.offset_index.floor_entry(target_rel) {
             Some(OffsetIndexEntry {
                 relative_offset,
@@ -52,7 +64,7 @@ impl Segment {
             None => 0,
         };
         let target = self.base_offset.0 + i64::from(target_rel);
-        self.walk_batch_headers(position, |view| {
+        self.walk_batch_headers_with(position, read_range, |view| {
             if view.last_offset.0 >= target {
                 ControlFlow::Break(())
             } else {
@@ -73,6 +85,21 @@ impl Segment {
     pub(super) fn walk_batch_headers(
         &self,
         start_pos: u64,
+        visit: impl FnMut(&BatchHeaderView) -> ControlFlow<()>,
+    ) -> Result<u64, LogError> {
+        self.walk_batch_headers_with(
+            start_pos,
+            |pos, buf, len| self.read_log_range(pos, buf, len),
+            visit,
+        )
+    }
+
+    /// [`Segment::walk_batch_headers`] over the positional reads of
+    /// `read_range`.
+    fn walk_batch_headers_with(
+        &self,
+        start_pos: u64,
+        mut read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
         mut visit: impl FnMut(&BatchHeaderView) -> ControlFlow<()>,
     ) -> Result<u64, LogError> {
         let window = DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize().max(HEADER_LEN);
@@ -80,7 +107,7 @@ impl Segment {
         let mut pos = start_pos;
         while pos < self.log_size {
             buf.clear();
-            self.read_log_range(pos, &mut buf, window)?;
+            read_range(pos, &mut buf, window)?;
             let mut at = 0usize;
             while at + HEADER_LEN <= buf.len() {
                 let header = RecordBatchHeader::ref_from_bytes(&buf[at..at + HEADER_LEN])
