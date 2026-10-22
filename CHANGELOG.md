@@ -47,6 +47,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- `ci.yml` runs on the merge queue's `merge_group` event, treated like a
+  pull request: lanes are scoped by path, the remote cache is read-only and
+  nextest waits for `main`. Each queued pull request is then tested on top of
+  `main` and of every pull request ahead of it, so two that pass alone can no
+  longer merge into a `main` that does not build, as #1624 and #1629 did.
 - Pull request CI runs fewer lanes, and a release requires a full run. Pull
   requests no longer run `coverage`, `cargo nextest` or `benchmarks.yml`.
   Pushes to `main` still run coverage and nextest. A pull request runs the
