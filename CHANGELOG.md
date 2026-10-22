@@ -47,6 +47,7 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- OffsetFetch projects only the requested committed and pending group offsets instead of copying unrelated entries (#1656).
 - The broker writes the log start offset that local retention moves to a
   partition's `log-start-offset-checkpoint` on a timer, instead of on every
   retention pass. The `[runtime]` key
