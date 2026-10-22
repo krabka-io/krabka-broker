@@ -237,16 +237,21 @@ impl AcquisitionState {
     /// `findLastOffsetAcknowledgedAndMetadata` counts below the new start
     /// offset.
     pub(super) fn advance_spso(&mut self) {
-        while let Some(b) = self.batches.first() {
-            if b.first_offset == self.start_offset && b.is_terminal() {
-                self.start_offset = b.last_offset + 1;
-                self.delivery_complete_count = self
-                    .delivery_complete_count
-                    .saturating_sub(clamp_i32(b.len()));
-                self.batches.remove(0);
-            } else {
+        let mut prefix_len = 0;
+        let mut start_offset = self.start_offset;
+        let mut completed = 0_i32;
+        for batch in &self.batches {
+            if batch.first_offset != start_offset || !batch.is_terminal() {
                 break;
             }
+            prefix_len += 1;
+            start_offset = batch.last_offset + 1;
+            completed = completed.saturating_add(clamp_i32(batch.len()));
+        }
+        if prefix_len != 0 {
+            self.start_offset = start_offset;
+            self.delivery_complete_count = self.delivery_complete_count.saturating_sub(completed);
+            self.batches.drain(..prefix_len);
         }
         if self.end_offset < self.start_offset {
             self.end_offset = self.start_offset;

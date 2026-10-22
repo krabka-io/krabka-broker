@@ -157,7 +157,7 @@ mod tests {
         super::*,
         crate::share_partition::{
             manager::test_support::{LOCK, manager},
-            state::{AckType, test_support::acquired_state},
+            state::{AckAction, AckType, test_support::acquired_state},
         },
         assert2::assert,
         krabka_log::Offset,
@@ -274,7 +274,13 @@ mod tests {
 
         let accepted = mgr
             .apply_durably("g1", tid, 0, &cell, &mut st, |st| {
-                st.acknowledge("m1", Offset(0), Offset(3), AckType::Accept, 5)
+                let actions = [
+                    AckAction::Disposition(AckType::Release),
+                    AckAction::Disposition(AckType::Accept),
+                    AckAction::Disposition(AckType::Reject),
+                    AckAction::Disposition(AckType::Gap),
+                ];
+                st.acknowledge_mixed("m1", Offset(0), Offset(3), &actions, 5)
                     .err()
                     .unwrap_or(codes::NONE)
             })

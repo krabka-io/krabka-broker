@@ -10,9 +10,135 @@
 use {
     super::{AckType, AcquisitionState, RecordState, clamp_i32, dlq::DlqCause, window::give_back},
     krabka_log::Offset,
+    std::time::Instant,
 };
 
+/// One per-offset operation in a mixed acknowledgement batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AckAction {
+    /// Apply a terminal disposition.
+    Disposition(AckType),
+    /// Extend the acquisition lock to this deadline.
+    Renew { deadline: Instant },
+}
+
 impl AcquisitionState {
+    /// Applies one action per offset in `[first, last]` in one window pass.
+    ///
+    /// The actions must have exactly the same length as the inclusive range.
+    /// Like [`Self::acknowledge`], offsets below the SPSO are already complete,
+    /// while every remaining offset must be acquired by `member`.
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_REQUEST` for a malformed range or a range past the records
+    /// handed out, and `INVALID_RECORD_STATE` when `member` does not hold the
+    /// complete live part of the range.
+    pub fn acknowledge_mixed(
+        &mut self,
+        member: &str,
+        first: Offset,
+        last: Offset,
+        actions: &[AckAction],
+        max_attempts: i16,
+    ) -> Result<(), i16> {
+        let range_len = last
+            .0
+            .checked_sub(first.0)
+            .and_then(|len| len.checked_add(1))
+            .and_then(|len| usize::try_from(len).ok());
+        if range_len != Some(actions.len()) {
+            return Err(crate::codes::INVALID_REQUEST);
+        }
+        let Some(bounds) = self.ack_bounds(first, last)? else {
+            return Ok(());
+        };
+        if !self.range_acquired_by(member, bounds.first, bounds.last) {
+            return Err(crate::codes::INVALID_RECORD_STATE);
+        }
+
+        let old_batches = std::mem::take(&mut self.batches);
+        let mut batches = Vec::with_capacity(old_batches.len().saturating_add(actions.len()));
+        let mut archive = super::dlq::ArchiveSink {
+            dlq_enabled: self.dlq_enabled,
+            delivery_complete_count: &mut self.delivery_complete_count,
+            pending_dlq: &mut self.pending_dlq,
+        };
+        let mut action_index =
+            usize::try_from(bounds.first.0 - first.0).map_err(|_| crate::codes::INVALID_REQUEST)?;
+        let mut action_run_end = action_index;
+
+        for batch in old_batches {
+            if batch.last_offset < bounds.first || batch.first_offset > bounds.last {
+                batches.push(batch);
+                continue;
+            }
+            if batch.first_offset < bounds.first {
+                let mut prefix = batch.clone();
+                prefix.last_offset = bounds.first - 1;
+                batches.push(prefix);
+            }
+
+            let mut offset = batch.first_offset.max(bounds.first);
+            let batch_last = batch.last_offset.min(bounds.last);
+            while offset <= batch_last {
+                let action = actions[action_index];
+                if action_index == action_run_end {
+                    action_run_end += actions[action_run_end..]
+                        .iter()
+                        .take_while(|candidate| **candidate == action)
+                        .count();
+                }
+                let same = action_run_end - action_index;
+                let run_last = Offset(
+                    offset
+                        .0
+                        .saturating_add(i64::try_from(same).unwrap_or(i64::MAX) - 1)
+                        .min(batch_last.0),
+                );
+                let mut run = batch.clone();
+                run.first_offset = offset;
+                run.last_offset = run_last;
+                let n = clamp_i32(run.len());
+                match action {
+                    AckAction::Disposition(AckType::Accept) => {
+                        run.state = RecordState::Acknowledged;
+                        run.acquired_by = None;
+                        run.lock_deadline = None;
+                        *archive.delivery_complete_count += n;
+                    }
+                    AckAction::Disposition(AckType::Release) => {
+                        give_back(&mut run, max_attempts, &mut archive);
+                    }
+                    AckAction::Disposition(AckType::Reject) => {
+                        archive.archive(&mut run, DlqCause::ClientReject);
+                    }
+                    AckAction::Disposition(AckType::Gap) => {
+                        run.state = RecordState::Archived;
+                        run.acquired_by = None;
+                        run.lock_deadline = None;
+                        *archive.delivery_complete_count += n;
+                    }
+                    AckAction::Renew { deadline } => run.lock_deadline = Some(deadline),
+                }
+                batches.push(run);
+                let consumed = usize::try_from(run_last.0 - offset.0 + 1).unwrap_or(actions.len());
+                action_index += consumed;
+                offset = run_last + 1;
+            }
+
+            if batch.last_offset > bounds.last {
+                let mut suffix = batch;
+                suffix.first_offset = bounds.last + 1;
+                batches.push(suffix);
+            }
+        }
+        self.batches = batches;
+        self.dirty = true;
+        self.advance_spso();
+        Ok(())
+    }
+
     /// Acknowledges the offset range `[first, last]` that `member` acquired
     /// earlier.
     ///

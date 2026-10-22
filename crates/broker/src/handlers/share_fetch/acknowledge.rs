@@ -7,7 +7,7 @@
 use {
     crate::{
         codes,
-        share_partition::state::{AckType, AcquisitionState},
+        share_partition::state::{AckAction, AckType, AcquisitionState},
     },
     krabka_log::Offset,
     std::time::{Duration, Instant},
@@ -181,14 +181,26 @@ fn apply_one_ack(
     if range_len != Some(types.len()) {
         return Err(codes::INVALID_REQUEST);
     }
-    // Walk the per-offset type list, coalescing equal-typed runs.
-    let mut run_start = first;
-    for run in types.chunk_by(|a, b| a == b) {
-        let run_end = run_start + i64::try_from(run.len()).unwrap_or(i64::MAX) - 1;
-        apply(st, run_start, run_end, run[0])?;
-        run_start = run_end + 1;
-    }
-    Ok(())
+    let deadline = now + renewal.lock_duration;
+    let actions = types
+        .iter()
+        .map(|ack_type| {
+            if *ack_type == ACK_RENEW {
+                if !renewal.requested {
+                    return Err(codes::INVALID_REQUEST);
+                }
+                if !renewal.enabled {
+                    return Err(codes::INVALID_RECORD_STATE);
+                }
+                Ok(AckAction::Renew { deadline })
+            } else {
+                AckType::from_i8(*ack_type)
+                    .map(AckAction::Disposition)
+                    .ok_or(codes::INVALID_REQUEST)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    st.acknowledge_mixed(member, Offset(first), Offset(last), &actions, max_attempts)
 }
 
 #[cfg(test)]
@@ -280,6 +292,148 @@ mod tests {
     const LIMIT: i16 = 2;
     const ACCEPT: i8 = 1;
     const RELEASE: i8 = 2;
+
+    fn apply_one_ack_by_runs(
+        st: &mut AcquisitionState,
+        application: &AckApplication<'_>,
+        first: i64,
+        last: i64,
+        types: &[i8],
+    ) -> Result<(), i16> {
+        if first > last || types.is_empty() {
+            return Err(codes::INVALID_REQUEST);
+        }
+        if st.ack_bounds(Offset(first), Offset(last))?.is_none() {
+            return Ok(());
+        }
+        let range_len = last
+            .checked_sub(first)
+            .and_then(|len| len.checked_add(1))
+            .and_then(|len| usize::try_from(len).ok());
+        if types.len() > 1 && range_len != Some(types.len()) {
+            return Err(codes::INVALID_REQUEST);
+        }
+        let mut run_start = first;
+        for run in types.chunk_by(|a, b| a == b) {
+            let run_end = if types.len() == 1 {
+                last
+            } else {
+                run_start + i64::try_from(run.len()).expect("test run length fits i64") - 1
+            };
+            if run[0] == ACK_RENEW {
+                if !application.renewal.requested {
+                    return Err(codes::INVALID_REQUEST);
+                }
+                if !application.renewal.enabled {
+                    return Err(codes::INVALID_RECORD_STATE);
+                }
+                st.renew(
+                    application.member,
+                    Offset(run_start),
+                    Offset(run_end),
+                    application.now,
+                    application.renewal.lock_duration,
+                )?;
+            } else {
+                let ack = AckType::from_i8(run[0]).ok_or(codes::INVALID_REQUEST)?;
+                st.acknowledge(
+                    application.member,
+                    Offset(run_start),
+                    Offset(run_end),
+                    ack,
+                    application.max_attempts,
+                )?;
+            }
+            run_start = run_end + 1;
+        }
+        Ok(())
+    }
+
+    fn apply_by_runs<'a>(
+        st: &mut AcquisitionState,
+        application: &AckApplication<'_>,
+        batches: &'a [(i64, i64, &'a [i8])],
+    ) -> i16 {
+        st.expire_locks(application.now, application.max_attempts);
+        let before = st.clone();
+        for &(first, last, types) in batches {
+            if let Err(code) = apply_one_ack_by_runs(st, application, first, last, types) {
+                *st = before;
+                return code;
+            }
+        }
+        codes::NONE
+    }
+
+    fn compare_with_run_by_run(
+        state: AcquisitionState,
+        application: &AckApplication<'_>,
+        batches: &[(i64, i64, &[i8])],
+    ) {
+        let mut actual = state.clone();
+        let mut expected = state;
+        let actual_code = apply_acknowledgements(&mut actual, application, batches.iter().copied());
+        let expected_code = apply_by_runs(&mut expected, application, batches);
+        assert!((actual_code, actual) == (expected_code, expected));
+    }
+
+    #[test]
+    fn mixed_pass_matches_run_by_run_transitions() {
+        const MIXED: &[i8] = &[RELEASE, ACCEPT, 3, 0, ACK_RENEW, 1, 2, 3, 0, 4, 1, 2];
+        const DEAD_LETTER_MIX: &[i8] = &[RELEASE, 3, 0, 1, 2, 3, 0, 1, 2, 3];
+        let acquired_at = Instant::now();
+        let mut fragmented = AcquisitionState::new(Offset(0));
+        fragmented.materialize(Offset(12), 100);
+        for part in 0..3 {
+            fragmented.acquire(
+                "member",
+                4,
+                Offset(i64::MAX),
+                acquired_at + Duration::from_secs(part),
+                Duration::from_secs(30),
+                2,
+            );
+        }
+        let application = AckApplication {
+            member: "member",
+            now: acquired_at + Duration::from_secs(10),
+            renewal: Renewal {
+                requested: true,
+                enabled: true,
+                lock_duration: Duration::from_secs(45),
+            },
+            max_attempts: 2,
+        };
+        compare_with_run_by_run(fragmented, &application, &[(0, 11, MIXED)]);
+
+        let mut at_limit_with_dlq = start(Setup::AtTheLimit);
+        at_limit_with_dlq.set_dlq_enabled(true);
+        compare_with_run_by_run(at_limit_with_dlq, &application, &[(0, 9, DEAD_LETTER_MIX)]);
+
+        compare_with_run_by_run(start(Setup::Split), &application, &[(0, 9, &[
+            ACCEPT, RELEASE, ACCEPT, RELEASE, ACCEPT, RELEASE, ACCEPT, RELEASE, ACCEPT, RELEASE,
+        ])]);
+        compare_with_run_by_run(start(Setup::Acquired), &application, &[
+            (0, 9, &MIXED[..10]),
+            (10, 12, &[ACCEPT]),
+        ]);
+
+        let expired_application = AckApplication {
+            now: acquired_at + Duration::from_secs(60),
+            ..application
+        };
+        let mut expiring = AcquisitionState::new(Offset(0));
+        expiring.materialize(Offset(12), 100);
+        expiring.acquire(
+            "member",
+            12,
+            Offset(i64::MAX),
+            acquired_at,
+            Duration::from_secs(30),
+            2,
+        );
+        compare_with_run_by_run(expiring, &expired_application, &[(0, 11, MIXED)]);
+    }
 
     fn states(first: i64, last: i64, state: RecordState) -> Vec<(i64, RecordState)> {
         (first..=last).map(|offset| (offset, state)).collect()

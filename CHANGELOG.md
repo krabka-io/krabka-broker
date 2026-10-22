@@ -47,6 +47,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- Mixed per-offset share acknowledgements now update an acquisition window in
+  one pass instead of repeating the complete state transition for every run.
 - The broker writes the log start offset that local retention moves to a
   partition's `log-start-offset-checkpoint` on a timer, instead of on every
   retention pass. The `[runtime]` key
