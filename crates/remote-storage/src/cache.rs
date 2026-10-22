@@ -43,13 +43,23 @@ use {
 struct EpochIndex(HashMap<LeaderEpoch, BTreeSet<(i64, Uuid)>>);
 
 impl EpochIndex {
+    /// The `(epoch, start, id)` entries `metadata` contributes: one per epoch
+    /// it carries if it is finished, none otherwise.
+    fn entries_of(
+        metadata: &RemoteLogSegmentMetadata,
+    ) -> impl Iterator<Item = (LeaderEpoch, i64, Uuid)> + '_ {
+        let finished = metadata.state() == RemoteLogSegmentState::CopySegmentFinished;
+        let id = metadata.remote_log_segment_id().id;
+        metadata
+            .segment_leader_epochs()
+            .iter()
+            .filter(move |_| finished)
+            .map(move |(&epoch, &start)| (epoch, start, id))
+    }
+
     /// Indexes `metadata` under each of its epochs if it is finished.
     fn insert(&mut self, metadata: &RemoteLogSegmentMetadata) {
-        if metadata.state() != RemoteLogSegmentState::CopySegmentFinished {
-            return;
-        }
-        let id = metadata.remote_log_segment_id().id;
-        for (&epoch, &start) in metadata.segment_leader_epochs() {
+        for (epoch, start, id) in Self::entries_of(metadata) {
             self.0.entry(epoch).or_default().insert((start, id));
         }
     }
@@ -57,11 +67,7 @@ impl EpochIndex {
     /// Removes the entries [`Self::insert`] added for `metadata`, dropping an
     /// epoch once it has no entry left.
     fn remove(&mut self, metadata: &RemoteLogSegmentMetadata) {
-        if metadata.state() != RemoteLogSegmentState::CopySegmentFinished {
-            return;
-        }
-        let id = metadata.remote_log_segment_id().id;
-        for (&epoch, &start) in metadata.segment_leader_epochs() {
+        for (epoch, start, id) in Self::entries_of(metadata) {
             if let Entry::Occupied(mut entries) = self.0.entry(epoch) {
                 entries.get_mut().remove(&(start, id));
                 if entries.get().is_empty() {
@@ -77,14 +83,7 @@ impl EpochIndex {
     fn rebuild<'a>(&mut self, segments: impl IntoIterator<Item = &'a RemoteLogSegmentMetadata>) {
         let mut entries = segments
             .into_iter()
-            .filter(|metadata| metadata.state() == RemoteLogSegmentState::CopySegmentFinished)
-            .flat_map(|metadata| {
-                let id = metadata.remote_log_segment_id().id;
-                metadata
-                    .segment_leader_epochs()
-                    .iter()
-                    .map(move |(&epoch, &start)| (epoch, start, id))
-            })
+            .flat_map(Self::entries_of)
             .collect::<Vec<_>>();
         entries.sort_unstable();
         self.0 = entries
