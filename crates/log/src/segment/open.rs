@@ -11,7 +11,7 @@ use {
         config::DEFAULT_INDEX_INTERVAL,
         error::LogError,
         index::{OffsetIndex, TimeIndex},
-        io::FileIo,
+        io::{FileIo, LogIo},
         name,
     },
     krabka_ids::Offset,
@@ -150,6 +150,10 @@ impl FrontierScan {
 }
 
 impl TailScan {
+    /// The end of the valid prefix: the length of a file that holds exactly
+    /// what was scanned.
+    pub(crate) fn valid_end(&self) -> u64 { self.valid_end }
+
     /// Check that the scanned prefix fits a segment: its end in a `u32`
     /// position and its offsets in the 32-bit relative index.
     fn check_index_range(&self, base_offset: Offset) -> Result<(), LogError> {
@@ -189,17 +193,25 @@ impl TailScan {
 
     /// Write the scan's sparse indexes for a segment at `base_offset` into
     /// the index files at `index_path` and `timeindex_path`, which a
-    /// compaction rewrite creates empty beside its output.
+    /// compaction rewrite creates empty beside its output, through `io`.
+    ///
+    /// The index points are then dropped: the files hold them, and a
+    /// compaction pass keeps every output's scan until it installs them all.
     pub(crate) fn write_indexes(
-        &self,
+        &mut self,
+        io: &Arc<dyn LogIo>,
         base_offset: Offset,
         index_path: &Path,
         timeindex_path: &Path,
     ) -> Result<(), LogError> {
         self.check_index_range(base_offset)?;
         let mut offset_index = OffsetIndex::open(index_path)?;
+        offset_index.set_io(Arc::clone(io));
         let mut time_index = TimeIndex::open(timeindex_path)?;
-        self.write_index_points(base_offset, &mut offset_index, &mut time_index)
+        time_index.set_io(Arc::clone(io));
+        self.write_index_points(base_offset, &mut offset_index, &mut time_index)?;
+        self.index_points = Vec::new();
+        Ok(())
     }
 }
 
@@ -548,5 +560,34 @@ mod tests {
         Segment::create(dir.path(), Offset(10)).unwrap();
         let seg = Segment::open_unscanned(dir.path(), Offset(10)).unwrap();
         assert2::assert!(seg.last_offset() == Offset(9));
+    }
+
+    /// Writing a scan's indexes keeps its frontiers and drops its index
+    /// points, which the files then hold.
+    #[test]
+    fn writing_the_indexes_drops_the_points_and_keeps_the_frontiers() {
+        let dir = tempdir().unwrap();
+        let seg = seeded_segment()
+            .dir(dir.path())
+            .batches(FIVE_OFFSET_TIMESTAMP_BATCHES)
+            .call();
+        let mut scan = seg.scan_valid_tail(DENSE_INDEX).unwrap();
+        let scanned = scan.clone();
+        let out = tempdir().unwrap();
+        let index = name::index_path(out.path(), 0);
+        let timeindex = name::timeindex_path(out.path(), 0);
+        let io: Arc<dyn LogIo> = Arc::new(FileIo);
+
+        scan.write_indexes(&io, Offset(0), &index, &timeindex)
+            .unwrap();
+
+        assert2::check!(!scanned.index_points.is_empty());
+        assert2::check!(
+            scan == TailScan {
+                index_points: Vec::new(),
+                ..scanned
+            }
+        );
+        assert2::check!(OffsetIndex::open(&index).unwrap().entry_count() > 0);
     }
 }

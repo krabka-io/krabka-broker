@@ -16,7 +16,7 @@ use {
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::{Attributes, Record, RecordBatch},
     krabka_units::prelude::{ByteSize, Time},
-    std::{collections::HashMap, path::Path},
+    std::{collections::HashMap, path::Path, sync::Arc},
 };
 
 /// Kafka's default `index.interval.bytes`. The compaction tests do not
@@ -168,7 +168,16 @@ pub(super) fn rewrite_with_map(
     retention: RewriteRetention,
     round: CleaningRound<'_>,
 ) -> RewriteOutput {
-    rewrite_segments(&FileIo, dir, &inputs(segments), map, txn, retention, round).unwrap()
+    rewrite_segments(
+        Arc::new(FileIo),
+        dir,
+        &inputs(segments),
+        map,
+        txn,
+        retention,
+        round,
+    )
+    .unwrap()
 }
 
 /// Build the map and rewrite every supplied segment as one complete round.

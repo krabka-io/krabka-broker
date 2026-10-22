@@ -30,7 +30,7 @@ use {
         collections::HashMap,
         fs::File,
         path::{Path, PathBuf},
-        sync::Mutex,
+        sync::{Arc, Mutex},
     },
 };
 
@@ -184,7 +184,7 @@ fn compactable(dir: &Path, survivor_txnindex: bool) -> RewriteOutput {
         let map = build_offset_map(&inputs(&segments), vec![], None).unwrap();
         let mut txn = CleanedTransactionMetadata::default();
         rewrite_segments(
-            &FileIo,
+            Arc::new(FileIo),
             dir,
             &inputs(&segments),
             &map,

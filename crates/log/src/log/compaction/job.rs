@@ -204,7 +204,7 @@ impl CompactionJob {
             }
             txn_meta.add_aborted_transactions(std::mem::take(&mut group.aborted));
             let rewrite = rewrite_segments(
-                &*self.io,
+                Arc::clone(&self.io),
                 &self.dir,
                 inputs,
                 &offset_map,

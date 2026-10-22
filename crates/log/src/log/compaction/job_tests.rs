@@ -7,7 +7,9 @@ use {
     crate::{
         compaction_pause::compaction_pause,
         error::LogError,
-        log::test_support::{TempLog, append_keyed_samples, compact_test_log, compaction_ctx},
+        log::test_support::{
+            TempLog, append_keyed_samples, cleaned_files, compact_test_log, compaction_ctx,
+        },
         name,
     },
     assert2::{assert, check},
@@ -16,7 +18,6 @@ use {
     krabka_units::prelude::mebibytes,
     std::{
         io::Write as _,
-        path::Path,
         time::{Duration, SystemTime},
     },
 };
@@ -51,17 +52,6 @@ fn keyed(pairs: &[(i64, &'static str)]) -> Vec<(i64, Bytes)> {
         .iter()
         .map(|&(offset, key)| (offset, Bytes::from_static(key.as_bytes())))
         .collect()
-}
-
-/// The `.cleaned` files in `dir`: a pass's output that was never promoted.
-fn cleaned_files(dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".cleaned"))
-        .collect();
-    names.sort();
-    names
 }
 
 /// A log of six alternating keys, five of them sealed, and a job over them.

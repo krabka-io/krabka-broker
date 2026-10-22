@@ -1,27 +1,29 @@
-//! What [`Log::finish_compaction`](super::Log::finish_compaction) does under the log: it opens each output
+//! What [`Log::finish_compaction`] does under the log: it opens each output
 //! from what the build derived while writing it, rather than scanning the
 //! output again, and it syncs the directory a fixed number of times however
 //! many segments the pass retires.
 
 use {
+    super::Log,
     crate::{
         config::LogConfig,
         error::LogError,
-        io::LogIo,
+        io::{FileIo, IoTarget, LogIo},
         log::test_support::{
-            TempLog, append_keyed_samples, compact_test_log, compacting_segments, compaction_ctx,
-            configured_test_log, set_segment_size,
+            TempLog, append_keyed_samples, cleaned_files, compact_test_log, compacting_segments,
+            compaction_ctx, configured_test_log, set_segment_size,
         },
         name,
         segment::Segment,
     },
-    assert2::check,
+    assert2::{assert, check},
     bytes::Bytes,
     krabka_compression::CompressionType,
     krabka_ids::Offset,
     krabka_protocol::records::{Attributes, Record, RecordBatch},
-    krabka_units::prelude::{ByteSize, bytes, gibibytes},
+    krabka_units::prelude::{ByteSize, bytes, gibibytes, mebibytes},
     std::{
+        fs::File,
         path::Path,
         sync::{
             Arc,
@@ -67,9 +69,9 @@ fn mixed_batch(i: i64) -> RecordBatch {
     }
 }
 
-/// Eighty [`mixed_batch`]es, several to a segment, compacted in groups of
-/// `segment_bytes` on disk.
-fn mixed_log(segment_bytes: ByteSize) -> TempLog {
+/// Eighty [`mixed_batch`]es, several to a segment, to be compacted in groups
+/// of `segment_bytes` on disk.
+fn mixed_appends(segment_bytes: ByteSize) -> TempLog {
     let mut fixture = configured_test_log(LogConfig {
         index_interval: INDEX_INTERVAL,
         segment_size: bytes(600),
@@ -79,11 +81,24 @@ fn mixed_log(segment_bytes: ByteSize) -> TempLog {
         fixture.log.append(&mut mixed_batch(i)).unwrap();
     }
     set_segment_size(&mut fixture.log, segment_bytes);
+    fixture
+}
+
+/// [`mixed_appends`], compacted.
+fn mixed_log(segment_bytes: ByteSize) -> TempLog {
+    let mut fixture = mixed_appends(segment_bytes);
     fixture.log.compact(&compaction_ctx()).unwrap();
     fixture
 }
 
 fn read(path: &Path) -> Vec<u8> { std::fs::read(path).unwrap() }
+
+/// Every batch of the log, from its start.
+fn batches(log: &Log) -> Vec<RecordBatch> {
+    log.read(log.log_start_offset(), mebibytes(1))
+        .unwrap()
+        .batches
+}
 
 /// Every output of a pass opens with the frontiers and the sparse-index files
 /// a recovery scan of its `.log` derives, which is how the install opened it
@@ -165,11 +180,13 @@ fn a_pass_syncs_the_directory_as_often_however_many_segments_it_retires() {
 }
 
 /// The install opens an output only when its file holds exactly what the
-/// build wrote.
+/// build wrote, and refuses one that does not before it changes anything: the
+/// log keeps its segments, and the outputs are gone.
 #[test]
 fn an_output_that_is_not_what_the_build_wrote_is_refused() {
-    let TempLog { dir: _dir, mut log } = compact_test_log();
+    let TempLog { dir, mut log } = compact_test_log();
     append_keyed_samples(&mut log, 6, |i| format!("k{}", i % 2));
+    let before = batches(&log);
     let job = log.prepare_compaction(&compaction_ctx()).unwrap().unwrap();
     let built = job.build();
     let output = built.rewrites.as_ref().unwrap()[0].rewrite.log_swap.clone();
@@ -182,4 +199,37 @@ fn an_output_that_is_not_what_the_build_wrote_is_refused() {
     let refused = log.finish_compaction(built);
 
     check!(matches!(refused, Err(LogError::Corrupt(_))));
+    check!(batches(&log) == before);
+    check!(cleaned_files(dir.path()).is_empty());
+}
+
+/// A [`LogIo`] whose disk is full for sparse-index writes.
+#[derive(Debug)]
+struct FullIndexDisk;
+
+impl LogIo for FullIndexDisk {
+    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> std::io::Result<usize> {
+        match target {
+            IoTarget::OffsetIndex | IoTarget::TimeIndex => {
+                Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+            }
+            _ => FileIo.write_at(target, file, buf),
+        }
+    }
+}
+
+/// The build writes each output's sparse indexes through the log's I/O, so a
+/// failed index write fails the pass, and the log keeps what it held.
+#[test]
+fn the_build_writes_the_indexes_through_the_logs_io() {
+    let TempLog { dir, mut log } = mixed_appends(gibibytes(1));
+    let before = batches(&log);
+    log.test_set_io(Arc::new(FullIndexDisk));
+
+    let failed = log.compact(&compaction_ctx());
+
+    assert!(let Err(LogError::Io(error)) = failed);
+    check!(error.kind() == std::io::ErrorKind::StorageFull);
+    check!(batches(&log) == before);
+    check!(cleaned_files(dir.path()).is_empty());
 }

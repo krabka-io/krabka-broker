@@ -525,6 +525,20 @@ impl Log {
             return Ok(CompactionOutcome::Stale);
         }
         let rewrites = rewrites?;
+        // The install opens each output from what the build recorded, so an
+        // output that no longer holds what the build wrote fails the pass
+        // here, while the consumed segments are still in place and dropping
+        // the job deletes the outputs.
+        for GroupRewrite { rewrite, .. } in &rewrites {
+            let held = std::fs::metadata(&rewrite.log_swap)?.len();
+            if held != rewrite.frontier.valid_end() {
+                return Err(LogError::Corrupt(format!(
+                    "compaction output {} holds {held} bytes, the build wrote {}",
+                    rewrite.log_swap.display(),
+                    rewrite.frontier.valid_end()
+                )));
+            }
+        }
         let consumed = job.inputs.len();
         // The swap below claims the job's files. The job's inputs share the
         // consumed segments' file handles, which must close before it, as the

@@ -25,6 +25,7 @@ use {
         collections::HashMap,
         fs::{File, OpenOptions},
         path::{Path, PathBuf},
+        sync::Arc,
     },
     tracing::instrument,
 };
@@ -80,9 +81,10 @@ pub struct RewriteOutput {
     /// when it keeps the abort marker of one or more aborted transactions. It
     /// is `None` when no aborted transaction survives.
     pub txnindex_swap: Option<PathBuf>,
-    /// What the rewrite derived about the output as it wrote it: its length,
-    /// frontiers and index points, which `index_swap` and `timeindex_swap`
-    /// already hold. The install opens the output from it without scanning.
+    /// What the rewrite derived about the output as it wrote it: its length
+    /// and frontiers. Its index points are already in `index_swap` and
+    /// `timeindex_swap`, and dropped. The install opens the output from it
+    /// without scanning.
     pub(crate) frontier: TailScan,
 }
 
@@ -199,7 +201,7 @@ impl CleaningRound<'_> {
     err,
 )]
 pub fn rewrite_segments(
-    io: &dyn LogIo,
+    io: Arc<dyn LogIo>,
     dir: &Path,
     segments: &[SealedInput],
     offset_map: &HashMap<Bytes, Offset>,
@@ -337,8 +339,13 @@ pub fn rewrite_segments(
                 continue;
             }
             let out_batch = bare_header(batch);
-            last_kept_offset =
-                write_rewritten_batch(io, &log_file, &out_batch, last_kept_offset, &mut frontier)?;
+            last_kept_offset = write_rewritten_batch(
+                &*io,
+                &log_file,
+                &out_batch,
+                last_kept_offset,
+                &mut frontier,
+            )?;
             continue;
         }
 
@@ -372,11 +379,11 @@ pub fn rewrite_segments(
         }
 
         last_kept_offset =
-            write_rewritten_batch(io, &log_file, &out_batch, last_kept_offset, &mut frontier)?;
+            write_rewritten_batch(&*io, &log_file, &out_batch, last_kept_offset, &mut frontier)?;
     }
     io.sync_file(IoTarget::CompactionSwap, &log_file)?;
-    let frontier = frontier.finish();
-    frontier.write_indexes(new_base, &index_swap, &timeindex_swap)?;
+    let mut frontier = frontier.finish();
+    frontier.write_indexes(&io, new_base, &index_swap, &timeindex_swap)?;
     for path in [&index_swap, &timeindex_swap] {
         let file = OpenOptions::new().write(true).open(path)?;
         io.sync_file(IoTarget::CompactionSwap, &file)?;
