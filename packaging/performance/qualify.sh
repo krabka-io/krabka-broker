@@ -165,8 +165,7 @@ start_krabka() {
   manifest=$(mktemp)
   sed -e '/accessModes: \["ReadWriteOnce"\]/a\        storageClassName: standard' \
     -e "s|docker.io/krabka-io/krabka-broker:dev|${image}|g" \
-    "${root}/packaging/k8s/statefulset.yaml" >"${manifest}"
-  kubectl -n "${namespace}" apply -f "${root}/packaging/k8s/service.yaml"
+    "${root}/packaging/performance/krabka.yaml" >"${manifest}"
   kubectl -n "${namespace}" apply -f "${root}/packaging/k8s/poddisruptionbudget.yaml"
   kubectl -n "${namespace}" apply -f "${manifest}"
   rm -f "${manifest}"

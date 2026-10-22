@@ -151,9 +151,10 @@ cargo run -p krabka-parse-benches -- evaluate performance-record.json \
 
 - `packaging/performance/regression-contract.json` is the contract. `krabka-parse-benches check-contract` validates it and prints its digest. The crate's tests load it, so `bazel test //...` fails on an invalid contract.
 - `packaging/performance/qualify.sh` runs the trials. Its `full` and `smoke` modes are unchanged.
+- `packaging/performance/krabka.yaml` is the krabka cluster that both krabka sides run on: plaintext, three combined broker/controllers, 2 CPU, 2 GiB and a 100 GiB claim each. It is the `packaging/k8s` reference deployment as it stood before that deployment moved to TLS and a mounted config file, kept here so the measured setup does not change with the reference deployment. `packaging/performance/kafka.yaml` is the Kafka cluster.
 - `packaging/performance/BrokerPerformanceWorkload.java` takes an optional tenth argument, the idle seconds before the first send.
 - `krabka-parse-benches` holds the `contract`, `record`, `budget` and `render` modules beside the criterion lane.
-- The `benchmarks` workflow validates the contract when it or the crate changes. No CI runner can run the comparison itself, because it needs a dedicated host with a Kind cluster.
+- The `benchmarks` workflow validates the contract when it or the crate changes. A dispatch with `budget` set runs both comparisons, one after the other, on a 32-core cloud worker, and keeps each mode's artifact directory for 90 days. It measures the dispatched revision, so it calibrates the contract; candidate evidence comes from `qualification-profile.yml`.
 
 ## Kafka / KIP Compliance
 
