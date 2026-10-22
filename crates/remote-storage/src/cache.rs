@@ -10,7 +10,8 @@
 //! [`DeleteSegmentStarted`](RemoteLogSegmentState::DeleteSegmentStarted), the
 //! cache removes it from the epoch index.
 //! [`DeleteSegmentFinished`](RemoteLogSegmentState::DeleteSegmentFinished)
-//! drops it entirely.
+//! drops it entirely. Each transition touches only the index entries of the
+//! segment it names.
 
 use {
     crate::{
@@ -25,18 +26,115 @@ use {
         remote_read_relative_offset,
         storage::{RemoteCacheAction, remote_cache_action},
     },
-    std::collections::{BTreeMap, HashMap, HashSet},
+    std::collections::{BTreeSet, HashMap, HashSet, hash_map::Entry},
     uuid::Uuid,
 };
+
+/// The derived per-epoch index over finished segments.
+///
+/// For each leader epoch it holds every finished segment that carries the
+/// epoch, as `(offset at which the epoch starts to contribute, segment id)`.
+/// A lifecycle transition inserts or removes only the entries of the segment
+/// it touches. When two finished segments share an epoch and a start offset,
+/// which only malformed metadata produces, the lowest UUID owns the slot; the
+/// other entries stay indexed, so when the owner leaves readable state the
+/// next lowest UUID takes the slot over.
+#[derive(Debug, Default)]
+struct EpochIndex(HashMap<LeaderEpoch, BTreeSet<(i64, Uuid)>>);
+
+impl EpochIndex {
+    /// The `(epoch, start, id)` entries `metadata` contributes: one per epoch
+    /// it carries if it is finished, none otherwise.
+    fn entries_of(
+        metadata: &RemoteLogSegmentMetadata,
+    ) -> impl Iterator<Item = (LeaderEpoch, i64, Uuid)> + '_ {
+        let finished = metadata.state() == RemoteLogSegmentState::CopySegmentFinished;
+        let id = metadata.remote_log_segment_id().id;
+        metadata
+            .segment_leader_epochs()
+            .iter()
+            .filter(move |_| finished)
+            .map(move |(&epoch, &start)| (epoch, start, id))
+    }
+
+    /// Indexes `metadata` under each of its epochs if it is finished.
+    fn insert(&mut self, metadata: &RemoteLogSegmentMetadata) {
+        for (epoch, start, id) in Self::entries_of(metadata) {
+            self.0.entry(epoch).or_default().insert((start, id));
+        }
+    }
+
+    /// Removes the entries [`Self::insert`] added for `metadata`, dropping an
+    /// epoch once it has no entry left.
+    fn remove(&mut self, metadata: &RemoteLogSegmentMetadata) {
+        for (epoch, start, id) in Self::entries_of(metadata) {
+            if let Entry::Occupied(mut entries) = self.0.entry(epoch) {
+                entries.get_mut().remove(&(start, id));
+                if entries.get().is_empty() {
+                    entries.remove();
+                }
+            }
+        }
+    }
+
+    /// Replaces the index with one over the finished segments of `segments`.
+    /// It sorts every entry once, so each epoch's set is built in bulk from
+    /// an ordered run.
+    fn rebuild<'a>(&mut self, segments: impl IntoIterator<Item = &'a RemoteLogSegmentMetadata>) {
+        let mut entries = segments
+            .into_iter()
+            .flat_map(Self::entries_of)
+            .collect::<Vec<_>>();
+        entries.sort_unstable();
+        self.0 = entries
+            .chunk_by(|a, b| a.0 == b.0)
+            .map(|run| {
+                (
+                    run[0].0,
+                    run.iter().map(|&(_, start, id)| (start, id)).collect(),
+                )
+            })
+            .collect();
+    }
+
+    /// The owner of the slot with the greatest start at or below `offset`.
+    ///
+    /// The walk goes backwards from the floor entry, so it ends on the lowest
+    /// UUID that shares the floor's start.
+    fn floor(&self, leader_epoch: LeaderEpoch, offset: i64) -> Option<Uuid> {
+        let mut below = self
+            .0
+            .get(&leader_epoch)?
+            .range(..=(offset, Uuid::max()))
+            .rev();
+        let &(start, highest) = below.next()?;
+        Some(
+            below
+                .take_while(|&&(other, _)| other == start)
+                .last()
+                .map_or(highest, |&(_, id)| id),
+        )
+    }
+
+    /// The owner of every slot of `leader_epoch`, in start order.
+    fn owners(&self, leader_epoch: LeaderEpoch) -> impl Iterator<Item = (i64, Uuid)> + '_ {
+        let mut previous_start = None;
+        self.0
+            .get(&leader_epoch)
+            .into_iter()
+            .flatten()
+            .filter(move |&&(start, _)| previous_start.replace(start) != Some(start))
+            .copied()
+    }
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct RemoteLogMetadataCache {
     /// Every known segment, keyed by its per-segment UUID.
     id_to_metadata: HashMap<Uuid, RemoteLogSegmentMetadata>,
-    /// For each leader epoch, a navigable map from the offset that the epoch
-    /// starts to contribute → the finished segment id. Only finished,
-    /// readable segments appear here.
-    epoch_to_offset_to_id: HashMap<LeaderEpoch, BTreeMap<i64, Uuid>>,
+    /// The per-epoch offset index. Only finished, readable segments appear
+    /// here.
+    epoch_index: EpochIndex,
     /// Partition-delete lifecycle state, once marked.
     delete_state: Option<RemotePartitionDeleteState>,
 }
@@ -66,15 +164,18 @@ impl RemoteLogMetadataCache {
         Ok(())
     }
 
+    /// Applies a lifecycle transition. The epoch index changes only for the
+    /// segment the update names: its old entries leave if it was finished,
+    /// and its new ones enter if it is finished now.
     pub(crate) fn update(
         &mut self,
         update: &RemoteLogSegmentMetadataUpdate,
     ) -> Result<(), RemoteStorageError> {
-        let id = update.remote_log_segment_id.clone();
-        let Some(existing) = self.id_to_metadata.get(&id.id).cloned() else {
+        let id = &update.remote_log_segment_id;
+        let Some(existing) = self.id_to_metadata.get(&id.id) else {
             return match remote_cache_action(None, update.state.lifecycle(), false) {
                 RemoteCacheAction::Noop => Ok(()),
-                _ => Err(RemoteStorageError::SegmentNotFound(id)),
+                _ => Err(RemoteStorageError::SegmentNotFound(id.clone())),
             };
         };
         let exact_retry = update.state == existing.state()
@@ -91,51 +192,24 @@ impl RemoteLogMetadataCache {
             exact_retry,
         ) {
             RemoteCacheAction::Reject => Err(RemoteStorageError::InvalidSegmentTransition {
-                id,
+                id: id.clone(),
                 from: existing.state(),
                 to: update.state,
             }),
             RemoteCacheAction::Noop => Ok(()),
             RemoteCacheAction::StoreFinished | RemoteCacheAction::StoreHidden => {
                 let updated = existing.with_update(update)?;
+                self.epoch_index.remove(existing);
+                self.epoch_index.insert(&updated);
                 self.id_to_metadata.insert(id.id, updated);
-                self.rebuild_epoch_index();
                 Ok(())
             }
             RemoteCacheAction::Remove => {
                 existing.with_update(update)?;
+                self.epoch_index.remove(existing);
                 self.id_to_metadata.remove(&id.id);
-                self.rebuild_epoch_index();
                 Ok(())
             }
-        }
-    }
-
-    /// Rebuild the derived map from canonical primary state. Sorting makes a
-    /// malformed same-epoch/same-start collision deterministic; the lowest
-    /// UUID owns the slot until it leaves readable state, after which the
-    /// next finished candidate becomes visible.
-    fn rebuild_epoch_index(&mut self) {
-        let mut entries = self
-            .id_to_metadata
-            .values()
-            .filter(|metadata| metadata.state() == RemoteLogSegmentState::CopySegmentFinished)
-            .flat_map(|metadata| {
-                let id = metadata.remote_log_segment_id().id;
-                metadata
-                    .segment_leader_epochs()
-                    .iter()
-                    .map(move |(&epoch, &start)| (epoch, start, id))
-            })
-            .collect::<Vec<_>>();
-        entries.sort_unstable();
-        self.epoch_to_offset_to_id.clear();
-        for (epoch, start, id) in entries {
-            self.epoch_to_offset_to_id
-                .entry(epoch)
-                .or_default()
-                .entry(start)
-                .or_insert(id);
         }
     }
 
@@ -144,9 +218,8 @@ impl RemoteLogMetadataCache {
         leader_epoch: LeaderEpoch,
         offset: i64,
     ) -> Option<RemoteLogSegmentMetadata> {
-        let map = self.epoch_to_offset_to_id.get(&leader_epoch)?;
-        let (_start, id) = map.range(..=offset).next_back()?;
-        let md = self.id_to_metadata.get(id)?;
+        let id = self.epoch_index.floor(leader_epoch, offset)?;
+        let md = self.id_to_metadata.get(&id)?;
         let (epoch_start, next_epoch_start) = md.epoch_bounds(leader_epoch);
         if remote_read_relative_offset(
             md.start_offset(),
@@ -165,9 +238,9 @@ impl RemoteLogMetadataCache {
     }
 
     pub(crate) fn highest_offset_for_epoch(&self, leader_epoch: LeaderEpoch) -> Option<i64> {
-        let map = self.epoch_to_offset_to_id.get(&leader_epoch)?;
-        map.values()
-            .filter_map(|id| self.id_to_metadata.get(id))
+        self.epoch_index
+            .owners(leader_epoch)
+            .filter_map(|(_, id)| self.id_to_metadata.get(&id))
             .filter(|metadata| {
                 metadata.state() == RemoteLogSegmentState::CopySegmentFinished
                     && metadata.segment_leader_epochs().contains_key(&leader_epoch)
@@ -208,8 +281,9 @@ impl RemoteLogMetadataCache {
     ///
     /// Duplicate UUIDs fold toward the most advanced lifecycle state, and a
     /// `delete_finished` UUID remains tombstoned for the whole pass so later
-    /// stale rows cannot resurrect it. The seed then rebuilds the per-epoch
-    /// index from finished primary entries exactly as the live path does.
+    /// stale rows cannot resurrect it. The seed then builds the per-epoch
+    /// index from finished primary entries, the entries the live path would
+    /// have indexed.
     /// Repeating the same seed is idempotent. The partition-delete state is
     /// replaced verbatim.
     pub(crate) fn seed(
@@ -218,7 +292,6 @@ impl RemoteLogMetadataCache {
         delete_state: Option<RemotePartitionDeleteState>,
     ) {
         self.id_to_metadata.clear();
-        self.epoch_to_offset_to_id.clear();
         let mut tombstones = HashSet::new();
         for md in segments {
             let id = md.remote_log_segment_id().id;
@@ -227,10 +300,10 @@ impl RemoteLogMetadataCache {
                 tombstones.insert(id);
             } else if !tombstones.contains(&id) {
                 match self.id_to_metadata.entry(id) {
-                    std::collections::hash_map::Entry::Vacant(entry) => {
+                    Entry::Vacant(entry) => {
                         entry.insert(md);
                     }
-                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    Entry::Occupied(mut entry) => {
                         if md.state().lifecycle() > entry.get().state().lifecycle() {
                             entry.insert(md);
                         }
@@ -238,7 +311,7 @@ impl RemoteLogMetadataCache {
                 }
             }
         }
-        self.rebuild_epoch_index();
+        self.epoch_index.rebuild(self.id_to_metadata.values());
         self.delete_state = delete_state;
     }
 
@@ -267,6 +340,8 @@ mod tests {
             CustomMetadata, RemoteLogSegmentDetails, RemoteLogSegmentId, TopicIdPartition,
         },
         assert2::{assert, check},
+        proptest::prelude::*,
+        std::collections::BTreeMap,
     };
 
     fn tp() -> TopicIdPartition { TopicIdPartition::new(Uuid::from_u128(1), "t", 0) }
@@ -694,6 +769,234 @@ mod tests {
                 .id
                 == Uuid::from_u128(11)
         );
+    }
+
+    /// Every `(epoch, start, id)` entry of finished primary state: what the
+    /// index held when each transition rebuilt it from scratch.
+    fn rebuilt_entries(c: &RemoteLogMetadataCache) -> BTreeSet<(LeaderEpoch, i64, Uuid)> {
+        c.id_to_metadata
+            .values()
+            .filter(|md| md.state() == RemoteLogSegmentState::CopySegmentFinished)
+            .flat_map(|md| {
+                let id = md.remote_log_segment_id().id;
+                md.segment_leader_epochs()
+                    .iter()
+                    .map(move |(&epoch, &start)| (epoch, start, id))
+            })
+            .collect()
+    }
+
+    /// The slot owners of a full rebuild: the lowest UUID per
+    /// `(epoch, start)`.
+    fn rebuilt_owners(c: &RemoteLogMetadataCache) -> BTreeMap<(LeaderEpoch, i64), Uuid> {
+        let mut owners = BTreeMap::new();
+        for (epoch, start, id) in rebuilt_entries(c) {
+            owners.entry((epoch, start)).or_insert(id);
+        }
+        owners
+    }
+
+    fn indexed_entries(c: &RemoteLogMetadataCache) -> BTreeSet<(LeaderEpoch, i64, Uuid)> {
+        c.epoch_index
+            .0
+            .iter()
+            .flat_map(|(&epoch, entries)| {
+                entries.iter().map(move |&(start, id)| (epoch, start, id))
+            })
+            .collect()
+    }
+
+    fn indexed_owners(c: &RemoteLogMetadataCache) -> BTreeMap<(LeaderEpoch, i64), Uuid> {
+        c.epoch_index
+            .0
+            .keys()
+            .flat_map(|&epoch| {
+                c.epoch_index
+                    .owners(epoch)
+                    .map(move |(start, id)| ((epoch, start), id))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn deleting_a_collision_owner_hands_the_slot_to_the_next_lowest_uuid() {
+        let mut c = RemoteLogMetadataCache::default();
+        for id in [12, 10, 11] {
+            c.add(seg().id(Uuid::from_u128(id)).call()).unwrap();
+            c.update(&finish(Uuid::from_u128(id))).unwrap();
+        }
+        let owner = |c: &RemoteLogMetadataCache| {
+            c.segment_for(LeaderEpoch(0), 50)
+                .map(|md| md.remote_log_segment_id().id)
+        };
+        check!(owner(&c) == Some(Uuid::from_u128(10)));
+
+        for state in [
+            RemoteLogSegmentState::DeleteSegmentStarted,
+            RemoteLogSegmentState::DeleteSegmentFinished,
+        ] {
+            c.update(&transition(Uuid::from_u128(10), state)).unwrap();
+            check!(owner(&c) == Some(Uuid::from_u128(11)), "{state:?}");
+        }
+        c.update(&transition(
+            Uuid::from_u128(11),
+            RemoteLogSegmentState::DeleteSegmentStarted,
+        ))
+        .unwrap();
+        check!(owner(&c) == Some(Uuid::from_u128(12)));
+        check!(c.highest_offset_for_epoch(LeaderEpoch(0)) == Some(99));
+
+        c.update(&transition(
+            Uuid::from_u128(12),
+            RemoteLogSegmentState::DeleteSegmentStarted,
+        ))
+        .unwrap();
+        check!(owner(&c) == None);
+        check!(indexed_entries(&c).is_empty());
+        check!(c.epoch_index.0.is_empty(), "an emptied epoch is dropped");
+    }
+
+    #[test]
+    fn a_transition_leaves_other_segments_entries_in_place() {
+        let mut c = two_finished_segments();
+        c.add(
+            seg()
+                .id(Uuid::from_u128(12))
+                .epochs(&[epoch_start(LeaderEpoch(1), Offset(200))])
+                .start(Offset(200))
+                .end(Offset(299))
+                .call(),
+        )
+        .unwrap();
+        c.update(&finish(Uuid::from_u128(12))).unwrap();
+        c.update(&transition(
+            Uuid::from_u128(11),
+            RemoteLogSegmentState::DeleteSegmentStarted,
+        ))
+        .unwrap();
+        check!(
+            indexed_entries(&c)
+                == BTreeSet::from([
+                    (LeaderEpoch(0), 0, Uuid::from_u128(10)),
+                    (LeaderEpoch(1), 200, Uuid::from_u128(12)),
+                ])
+        );
+    }
+
+    /// One step of a lifecycle history over a small pool of segments.
+    #[derive(Debug, Clone)]
+    enum Step {
+        Add(usize),
+        Update {
+            slot: usize,
+            state: RemoteLogSegmentState,
+            event_timestamp_ms: i64,
+        },
+        Reseed,
+    }
+
+    const POOL: usize = 5;
+
+    fn pool_segment(slot: usize, epochs: &BTreeMap<LeaderEpoch, i64>) -> RemoteLogSegmentMetadata {
+        RemoteLogSegmentMetadata::new(
+            RemoteLogSegmentId::new(tp(), Uuid::from_u128(10 + slot as u128)),
+            0,
+            199,
+            199,
+            1,
+            100,
+            RemoteLogSegmentDetails::new(
+                1024,
+                RemoteLogSegmentState::CopySegmentStarted,
+                epochs.clone(),
+            ),
+        )
+        .unwrap()
+    }
+
+    fn any_step() -> impl Strategy<Value = Step> {
+        prop_oneof![
+            (0..POOL).prop_map(Step::Add),
+            (
+                0..POOL,
+                prop_oneof![
+                    Just(RemoteLogSegmentState::CopySegmentStarted),
+                    Just(RemoteLogSegmentState::CopySegmentFinished),
+                    Just(RemoteLogSegmentState::DeleteSegmentStarted),
+                    Just(RemoteLogSegmentState::DeleteSegmentFinished),
+                ],
+                prop_oneof![Just(200_i64), Just(300_i64)],
+            )
+                .prop_map(|(slot, state, event_timestamp_ms)| Step::Update {
+                    slot,
+                    state,
+                    event_timestamp_ms,
+                }),
+            Just(Step::Reseed),
+        ]
+    }
+
+    /// Few epochs and starts, so pool segments collide on slots often.
+    fn any_epochs() -> impl Strategy<Value = BTreeMap<LeaderEpoch, i64>> {
+        prop::collection::btree_map(
+            (0..3_i32).prop_map(LeaderEpoch),
+            prop_oneof![Just(0_i64), Just(50_i64), Just(100_i64)],
+            1..=3,
+        )
+    }
+
+    proptest! {
+        /// Whatever history of adds, accepted and rejected transitions and
+        /// reseeds runs, the incrementally kept index holds exactly the
+        /// entries, and the slot owners, that a full rebuild from primary
+        /// state produces, and lookups answer from those owners.
+        #[test]
+        fn incremental_index_matches_a_full_rebuild(
+            pool in prop::collection::vec(any_epochs(), POOL),
+            steps in prop::collection::vec(any_step(), 0..40),
+        ) {
+            let mut c = RemoteLogMetadataCache::default();
+            for step in steps {
+                match step {
+                    Step::Add(slot) => {
+                        let _ = c.add(pool_segment(slot, &pool[slot]));
+                    }
+                    Step::Update { slot, state, event_timestamp_ms } => {
+                        let _ = c.update(&RemoteLogSegmentMetadataUpdate {
+                            remote_log_segment_id: RemoteLogSegmentId::new(
+                                tp(),
+                                Uuid::from_u128(10 + slot as u128),
+                            ),
+                            event_timestamp_ms,
+                            custom_metadata: None,
+                            state,
+                            broker_id: 1,
+                        });
+                    }
+                    Step::Reseed => {
+                        let segments = c.dump_segments();
+                        c.seed(segments, None);
+                    }
+                }
+                prop_assert!(indexed_entries(&c) == rebuilt_entries(&c));
+                let owners = rebuilt_owners(&c);
+                prop_assert!(indexed_owners(&c) == owners);
+                prop_assert!(c.epoch_index.0.values().all(|entries| !entries.is_empty()));
+                for epoch in (0..3).map(LeaderEpoch) {
+                    for offset in [0, 49, 50, 99, 100, 199] {
+                        let want = owners
+                            .range((epoch, i64::MIN)..=(epoch, offset))
+                            .next_back()
+                            .map(|(_, &id)| id)
+                            .filter(|id| c.id_to_metadata[id].epoch_bounds(epoch).1.is_none_or(|next| offset < next));
+                        prop_assert!(
+                            c.segment_for(epoch, offset).map(|md| md.remote_log_segment_id().id) == want,
+                            "epoch={epoch:?} offset={offset}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

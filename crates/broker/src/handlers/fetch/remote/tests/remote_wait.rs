@@ -34,10 +34,11 @@ async fn single_reader_broker() -> TieredBroker {
     tiered_broker_with(|config| config.remote_reader_threads = 1).await
 }
 
-/// Sets `remote.fetch.max.wait.ms` on this broker through
-/// `IncrementalAlterConfigs`, and waits for the image to carry it.
-async fn alter_remote_fetch_max_wait(broker: &Broker, ms: u64) {
-    let node = broker.config.node_id;
+/// Sets the broker key `name` to `value` on this broker through
+/// `IncrementalAlterConfigs`. The alter commits on the controller and reaches
+/// the broker's image asynchronously, so the caller waits for the effect it
+/// needs.
+pub(super) async fn alter_broker_config(broker: &Broker, name: &str, value: &str) {
     let principal = principal("admin");
     let peer = peer();
     let response: IncrementalAlterConfigsResponse = dispatch_wire(
@@ -47,11 +48,11 @@ async fn alter_remote_fetch_max_wait(broker: &Broker, ms: u64) {
         &IncrementalAlterConfigsRequest {
             resources: vec![AlterConfigsResource {
                 resource_type: 4,
-                resource_name: node.0.to_string(),
+                resource_name: broker.config.node_id.0.to_string(),
                 configs: vec![AlterableConfig {
-                    name: "remote.fetch.max.wait.ms".into(),
+                    name: name.into(),
                     config_operation: 0,
-                    value: Some(ms.to_string()),
+                    value: Some(value.into()),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -62,11 +63,23 @@ async fn alter_remote_fetch_max_wait(broker: &Broker, ms: u64) {
     )
     .await;
     check!(response.responses[0].error_code == codes::NONE);
+}
+
+/// Sets `remote.fetch.max.wait.ms` on this broker through
+/// `IncrementalAlterConfigs`, and waits for the image to carry it.
+async fn alter_remote_fetch_max_wait(broker: &Broker, ms: u64) {
+    let node = broker.config.node_id;
+    alter_broker_config(broker, "remote.fetch.max.wait.ms", &ms.to_string()).await;
     let want = Duration::from_millis(ms);
+    eventually(|| remote_fetch_max_wait(&broker.controller.current_image(), node) == want).await;
+}
+
+/// Waits up to ten seconds for `done`, which reads state an alter changes.
+pub(super) async fn eventually(mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     // intentional: the alter commits on the controller and reaches this
     // broker's image asynchronously; the image has no awaitable per-key signal.
-    while remote_fetch_max_wait(&broker.controller.current_image(), node) != want {
+    while !done() {
         assert2::assert!(
             Instant::now() <= deadline,
             "the alter never reached the image"
@@ -135,4 +148,52 @@ async fn the_remote_fetch_wait_bounds_a_read_that_cannot_start_and_follows_an_al
             .as_ref()
             .is_some_and(|records| records.payload_len() > 0)
     );
+}
+
+/// A cold read whose remote wait runs out while it is queued for a reader
+/// slot gives the slot in the pending queue back. With room for one waiter,
+/// a second expired read would otherwise be refused, and once the reader is
+/// free every later cold read would be refused too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn expired_queued_reads_give_their_queue_slots_back() {
+    let owners = tiered_broker_with(|config| {
+        config.remote_reader_threads = 1;
+        config.remote_reader_max_pending_tasks = 1;
+    })
+    .await;
+    let broker = owners.handle.broker_arc_for_test();
+    alter_remote_fetch_max_wait(&broker, 100).await;
+    let part = committed_tiered_partition(&broker, owners.dir.path()).await;
+    let reader = broker.remote_reader.clone().expect("remote reader");
+    let held = reader.pool.acquire().await.expect("a reader slot");
+    for _ in 0..3 {
+        let mut expired = out_of_range_at(&part, 0);
+        let served = try_remote_read(
+            &broker,
+            &mut expired,
+            &part,
+            &mut RemoteFetchWait::default(),
+        )
+        .await;
+        // Expired, not refused: no error for the partition.
+        check!(served == Some(0));
+        check!(expired.out.error_code == codes::NONE);
+        check!(reader.pool.queue_size() == 0);
+    }
+    check!(reader.pool.rejected() == 0);
+    drop(held);
+    check!(reader.pool.queue_size() == 0);
+    check!(reader.pool.idle_percent() > 99.0);
+
+    alter_remote_fetch_max_wait(&broker, 30_000).await;
+    for _ in 0..2 {
+        let mut cold = out_of_range_at(&part, 0);
+        let served =
+            try_remote_read(&broker, &mut cold, &part, &mut RemoteFetchWait::default()).await;
+        check!(served.is_some_and(|bytes| bytes > 0));
+        check!(cold.out.error_code == codes::NONE);
+    }
+    check!(reader.pool.queue_size() == 0);
+    check!(reader.pool.rejected() == 0);
+    check!(reader.pool.idle_percent() > 99.0);
 }
