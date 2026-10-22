@@ -90,6 +90,17 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
     building the eight candidate entity keys.
   - The log-directory health check every produce and fetch makes answers
     without hashing the directory's path while every directory is online.
+- The diskless flusher publishes a flush's `__diskless_wal_index` records in
+  groups instead of waiting for each record's acknowledgment before it sends
+  the next. A group holds one range of each partition in the object, up to
+  1,024 records, so a flush that spans many partitions waits about one round
+  trip per group instead of one per range. A partition's ranges still go one
+  group after another: the flusher resumes a partition after its highest
+  indexed range, so a later range that became durable before an earlier one
+  could have let the next flush skip the gap and trim it away. The records,
+  their keys and their partitions are unchanged. `MetadataEventLog` gains
+  `publish_keyed_group` and `KeyedEvent`; its default publishes one record at
+  a time (#1617).
 
 ### Fixed
 

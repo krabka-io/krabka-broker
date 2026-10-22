@@ -41,6 +41,17 @@ pub struct MetadataEventRecord {
     pub tombstone: bool,
 }
 
+/// One keyed record of a [`MetadataEventLog::publish_keyed_group`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyedEvent {
+    /// Metadata-topic partition to append to.
+    pub partition: i32,
+    /// Compaction key.
+    pub key: Bytes,
+    /// Value, or `None` for a tombstone.
+    pub event: Option<Bytes>,
+}
+
 /// Boxed event stream the [`MetadataEventLog`] hands to subscribers.
 pub type MetadataEventStream = Pin<Box<dyn Stream<Item = MetadataEventRecord> + Send + 'static>>;
 
@@ -131,6 +142,38 @@ pub trait MetadataEventLog: Send + Sync {
         })?;
         let _ = key;
         self.publish(partition, event).await
+    }
+
+    /// Append a group of keyed records and wait until every one of them is
+    /// acknowledged. Resolves to their offsets, in the order given.
+    ///
+    /// Records for the same partition are appended in the order given. A
+    /// transport that pipelines writes submits the whole group before it
+    /// waits, so the group costs one acknowledgment round trip rather than
+    /// one per record. It still waits for every submitted record before it
+    /// returns, so none is left in flight after an error.
+    ///
+    /// The default publishes the records one at a time through
+    /// [`Self::publish_keyed`] and stops at the first failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`MetadataLogError`] that any record met. Any subset
+    /// of the group may then have been appended.
+    async fn publish_keyed_group(
+        &self,
+        events: Vec<KeyedEvent>,
+    ) -> Result<Vec<i64>, MetadataLogError> {
+        let mut offsets = Vec::with_capacity(events.len());
+        for KeyedEvent {
+            partition,
+            key,
+            event,
+        } in events
+        {
+            offsets.push(self.publish_keyed(partition, key, event).await?);
+        }
+        Ok(offsets)
     }
 
     /// Start to consume the given partitions, each from its start offset,

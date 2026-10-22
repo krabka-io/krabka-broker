@@ -246,6 +246,8 @@ mod tests {
         super::*,
         crate::diskless::{
             flusher::test_support::{orders_partition, test_index_log, test_partition},
+            index_log::test_support::GroupAckLog,
+            wal_index::WalIndexKey,
             wal_object::WalObjectBuilder,
         },
         assert2::assert,
@@ -318,6 +320,56 @@ mod tests {
         assert!(record.entries[0].last_offset == 2);
         assert!(cache.lock().await.flushed_frontier(topic_id, 0) == Some(3));
         assert!(store.head(&Path::from(record.object_key)).await.is_ok());
+        assert!(handle.log.lock().unwrap().log_start_offset() == Offset(2));
+    }
+
+    /// The local log is trimmed only behind index records that were published
+    /// and projected, so a failed publish leaves it whole for the next pass.
+    #[tokio::test]
+    async fn failed_index_publish_leaves_the_local_log_untrimmed() {
+        let dir = tempdir().unwrap();
+        let handle = orders_partition(dir.path());
+        let topic_id = Uuid::from_u128(11);
+        let log = GroupAckLog::build()
+            .inner(krabka_remote_storage_topic::InProcessMetadataEventLog::new(
+                1,
+            ))
+            .failing(vec![WalIndexKey {
+                topic_id,
+                partition: 0,
+                first_offset: 0,
+            }])
+            .call();
+        let index = DisklessIndexLog::start(log.clone()).await.unwrap();
+        let partitions = [FlushPartition {
+            topic_id,
+            handle: Arc::clone(&handle),
+            high_watermark: Offset(3),
+        }];
+        let metrics = BrokerMetrics::new();
+        let config = FlushConfig::default();
+        let flush = || {
+            flush_once(
+                Arc::new(InMemory::new()),
+                7,
+                &metrics,
+                &index,
+                index.cache(),
+                &partitions,
+                &config,
+                |_| true,
+            )
+        };
+
+        let error = flush().await.expect_err("the index publish is refused");
+        assert!(error.to_string().contains("diskless index publish"));
+        assert!(handle.log.lock().unwrap().log_start_offset() == Offset(0));
+
+        log.heal();
+        flush()
+            .await
+            .unwrap()
+            .expect("the retry flushes the same records");
         assert!(handle.log.lock().unwrap().log_start_offset() == Offset(2));
     }
 
