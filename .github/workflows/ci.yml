@@ -1,6 +1,13 @@
 name: ci
 on:
   pull_request:
+  # The merge queue. Every PR is tested again on top of main and every
+  # PR queued ahead of it before it merges, so two PRs that each pass
+  # alone cannot merge into a main that does not build: #1624 and #1629
+  # did, with no text conflict between them. A queue group is untrusted
+  # like a pull request (no cache uploads, path-scoped lanes, no nextest),
+  # and `gate` reports on it, which is what the queue waits for.
+  merge_group:
   push:
     branches: [main]
   schedule:
@@ -20,6 +27,12 @@ permissions:
   # holding this. Without it those uploads are skipped and the run says so
   # on every job.
   id-token: write
+
+env:
+  # Pushes to `main`, the nightly, a dispatch and a release tag are trusted:
+  # they may write to the remote cache. A pull request and a merge-queue group
+  # read only.
+  TRUSTED_RUN: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
 
 # Cancel superseded PR runs; let pushes to main run to completion. The event
 # is part of the group so that a push to `main` never queues behind, or
@@ -164,7 +177,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # `--severity` defaults to `auto`, which the CLI resolves to `fail` on CI
       # and `info` off it -- so this gates here and only reports locally.
@@ -191,7 +204,7 @@ jobs:
           lane: ci
           script: ${{ env.CI_BAZEL_SCRIPT }}
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.bazel.outputs.remote != 'true'
         with:
@@ -270,7 +283,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # The instrumented build and run happen on a BuildBuddy remote runner
       # when this run holds a key (see `.github/actions/buildbuddy-run`), which
@@ -287,7 +300,7 @@ jobs:
           lane: coverage
           script: bazel coverage //crates/...
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
       - name: collect the coverage report from the remote cache
         if: steps.bazel.outputs.remote == 'true'
         run: bazel coverage //crates/...
@@ -345,7 +358,7 @@ jobs:
   cargo:
     name: cargo clippy · nextest
     needs: select
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
+    if: github.event_name != 'schedule' && (!contains(fromJSON('["pull_request", "merge_group"]'), github.event_name) || needs.select.outputs.rust == 'true')
     runs-on: ubuntu-26.04
     # Cold builds, the full suite and the post-job cache upload share this budget.
     timeout-minutes: 90
@@ -388,7 +401,7 @@ jobs:
         with:
           lane: cargo
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
           # Clippy plus nextest's `cargo test --no-run` links ~140 statically
           # linked broker test binaries into one target directory. On the
           # first push run that reached nextest that filled 80 GB: ld died
@@ -400,7 +413,7 @@ jobs:
           env: |
             CARGO_PROFILE_DEV_DEBUG=line-tables-only
             CARGO_INCREMENTAL=0
-            RUN_NEXTEST=${{ github.event_name != 'pull_request' }}
+            RUN_NEXTEST=${{ env.TRUSTED_RUN }}
           script: |
             set -euo pipefail
             if ! command -v rustup >/dev/null; then
@@ -446,7 +459,7 @@ jobs:
   wasm:
     name: cargo clippy · wasm32-wasip1
     needs: select
-    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || needs.select.outputs.rust == 'true')
+    if: github.event_name != 'schedule' && (!contains(fromJSON('["pull_request", "merge_group"]'), github.event_name) || needs.select.outputs.rust == 'true')
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
@@ -526,7 +539,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # Every check and generator this repository runs on a runner is an AXL task
       # under `.aspect/`, and this step is their unit tests. It is also where the
@@ -701,7 +714,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # A digest of everything that decides the image's contents. See
       # //tools/creusot for why the registry, and not the Bazel disk cache, is
@@ -750,7 +763,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # `--verbose_failures`: the toolchain layer is built by a genrule that
       # shells out to Docker, and when it fails Bazel otherwise reports only
@@ -818,7 +831,7 @@ jobs:
       kubernetes: ${{ steps.scope.outputs.kubernetes }}
       proofs: ${{ steps.scope.outputs.proofs }}
     env:
-      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
       FULL_MATRIX: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     steps:
       - name: Keep temporary files off the size-limited /tmp tmpfs
@@ -844,7 +857,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       - id: select
         run: |
@@ -903,7 +916,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # The host side of these suites reaches the broker over loopback, but a few
       # host-side Rust clients bootstrap through the advertised name, so it has to
@@ -989,7 +1002,7 @@ jobs:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
           client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: krabka
@@ -1051,7 +1064,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
       - name: load KDC image
         run: bazel run //crates/broker/tests/fixtures/security/kdc:image_load
@@ -1121,7 +1134,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # Each broker advertises `host.docker.internal` so that its two peers and
       # the host-side clients reach it by one name. The containers resolve it
@@ -1178,7 +1191,7 @@ jobs:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           client-cert: ${{ secrets.BUILDBUDDY_CLIENT_CERT }}
           client-key: ${{ secrets.BUILDBUDDY_CLIENT_KEY }}
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
 
       # As in `soak`: every broker advertises `host.docker.internal`.
       - run: echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
@@ -1447,7 +1460,7 @@ jobs:
           # Everything that is not a pull request is a trusted context: pushes
           # to `main`, the nightly, a dispatch, a release tag. Pull requests
           # read only.
-          upload: ${{ github.event_name != 'pull_request' }}
+          upload: ${{ env.TRUSTED_RUN }}
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io

@@ -57,8 +57,8 @@ pub(crate) use self::writer_gate::WriterGate;
 pub(crate) mod test_support;
 
 pub use self::messages::{
-    AppendedBatch, ProduceData, ProduceJob, ProducerAppendCheck, ReplicatedBatch, SwapOutcome,
-    WriterMessage,
+    AppendedBatch, EncodedBatch, ProduceData, ProduceJob, ProducerAppendCheck, ReplicatedBatch,
+    SwapOutcome, WriterMessage,
 };
 // Only watermark's own tests name crate::partition::HwTimeout.
 #[cfg(test)]
@@ -67,6 +67,7 @@ pub(crate) use self::{
     commands::ProduceBatchError,
     commit_wait::Uncommitted,
     leadership::{ReplicationTarget, initial_replication_target},
+    messages::verbatim_of,
 };
 
 /// Absolute record offset within a partition's log (base offset, log end

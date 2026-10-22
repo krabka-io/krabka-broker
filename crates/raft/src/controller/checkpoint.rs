@@ -10,11 +10,12 @@ use {
     crate::{
         error::RaftError,
         kraft::{
-            controller::checkpoint::{latest_checkpoint_id, load_checkpoint_by_id},
+            controller::checkpoint::{
+                CheckpointChunk, latest_checkpoint_id, load_checkpoint_by_id, open_checkpoint,
+            },
             snapshot_fetch::SnapshotId,
             transport::Inbound,
         },
-        snapshot::SnapshotReader,
     },
 };
 
@@ -50,23 +51,24 @@ impl ControllerHandle {
     /// layer between the decode and the slice index for a quantity to occupy.
     #[must_use]
     pub fn read_snapshot_range(&self, position: i64, max_bytes: i32) -> SnapshotRange {
-        let Some((id, bytes)) = load_latest_checkpoint(&self.data_dir) else {
+        let Some(id) = latest_checkpoint_id(&self.data_dir) else {
             return SnapshotRange::NoSnapshot;
         };
-        let Some(pos) = usize::try_from(position)
-            .ok()
-            .filter(|pos| *pos < bytes.len())
-        else {
-            return SnapshotRange::OutOfRange;
+        // Retention can delete the id between the scan and the open, which
+        // reads as no checkpoint, as it did before the scan saw it.
+        let Some(mut checkpoint) = open_checkpoint(&self.data_dir, id.0, id.1) else {
+            return SnapshotRange::NoSnapshot;
         };
-        let max = usize::try_from(max_bytes.max(0)).unwrap_or(0);
-        let slice = SnapshotReader::byte_range(&bytes, pos, max);
-        SnapshotRange::Slice(SnapshotSlice {
-            end_offset: id.0,
-            epoch: id.1,
-            total_size: i64::try_from(bytes.len()).unwrap_or(i64::MAX),
-            bytes: bytes::Bytes::copy_from_slice(slice),
-        })
+        match checkpoint.read_chunk(position, max_bytes) {
+            Ok(CheckpointChunk::Bytes(bytes)) => SnapshotRange::Slice(SnapshotSlice {
+                end_offset: id.0,
+                epoch: id.1,
+                total_size: i64::try_from(checkpoint.len()).unwrap_or(i64::MAX),
+                bytes: bytes::Bytes::from(bytes),
+            }),
+            Ok(CheckpointChunk::OutOfRange) => SnapshotRange::OutOfRange,
+            Err(_) => SnapshotRange::NoSnapshot,
+        }
     }
 
     /// Answer one KIP-630 `FetchSnapshot` request through the engine, as the

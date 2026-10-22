@@ -900,6 +900,51 @@ async fn fetch_snapshot_runs_kafka_request_checks() {
             ),
         },
         Row {
+            label: "middle chunk",
+            request: fetch_snapshot_request(|_, p| p.position = 4),
+            expected: fetch_snapshot_answer(
+                metadata,
+                0,
+                leader,
+                Some(AnsweredChunk {
+                    size: 10,
+                    position: 4,
+                    bytes: b"4567",
+                }),
+            ),
+        },
+        Row {
+            label: "chunk clamped to the end",
+            request: fetch_snapshot_request(|r, p| {
+                r.max_bytes = i32::MAX;
+                p.position = 7;
+            }),
+            expected: fetch_snapshot_answer(
+                metadata,
+                0,
+                leader,
+                Some(AnsweredChunk {
+                    size: 10,
+                    position: 7,
+                    bytes: b"789",
+                }),
+            ),
+        },
+        Row {
+            label: "negative max bytes",
+            request: fetch_snapshot_request(|r, _| r.max_bytes = -1),
+            expected: fetch_snapshot_answer(
+                metadata,
+                0,
+                leader,
+                Some(AnsweredChunk {
+                    size: 10,
+                    position: 0,
+                    bytes: b"",
+                }),
+            ),
+        },
+        Row {
             label: "first chunk",
             request: fetch_snapshot_request(|_, _| {}),
             expected: fetch_snapshot_answer(

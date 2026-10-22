@@ -47,6 +47,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- `ci.yml` runs on the merge queue's `merge_group` event, treated like a
+  pull request: lanes are scoped by path, the remote cache is read-only and
+  nextest waits for `main`. Each queued pull request is then tested on top of
+  `main` and of every pull request ahead of it, so two that pass alone can no
+  longer merge into a `main` that does not build, as #1624 and #1629 did.
 - Pull request CI runs fewer lanes, and a release requires a full run. Pull
   requests no longer run `coverage`, `cargo nextest` or `benchmarks.yml`.
   Pushes to `main` still run coverage and nextest. A pull request runs the
@@ -61,6 +66,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   its own last run, so the GitHub runner no longer compiles the closure or
   downloads test binaries. A run without a key, such as a fork's pull
   request, runs the same script on the GitHub runner.
+- A produce batch the broker re-encodes (a topic whose `compression.type`
+  forces another codec, or a legacy `MessageSet` it up-converts) is encoded
+  once instead of three times. The `max.message.bytes` gate keeps the bytes
+  it measured, the `segment.bytes` gate measures those, and the writer
+  appends them when the codec and compression level in force under the log
+  lock are still the ones they were encoded with. A config change in between
+  encodes again under the new settings, as before. The stored bytes are
+  unchanged.
 - Log compaction holds one record batch at a time. The offset-map and rewrite
   passes used to read and decode each sealed segment whole, the rewrite held
   every decoded batch of its group at once, and the offset map kept each
@@ -135,6 +148,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   and the time a lookup could wait behind it, grew with the partition's
   retained remote history. With 100,000 retained segments one lifecycle went
   from about 36 ms to under 1 µs in the `remote_epoch_index` benchmark (#1616).
+- A controller serving a KIP-630 `FetchSnapshot` reads only the requested
+  chunk of the checkpoint. It used to read the whole file for every chunk, so
+  a transfer of a snapshot of size S in chunks of C read about
+  `S × ceil(S/C)` bytes on the controller engine, which other controller
+  requests wait behind. A checkpoint that retention deletes while it is
+  being served is still read through its open file.
 - The diskless flusher publishes a flush's `__diskless_wal_index` records in
   groups instead of waiting for each record's acknowledgment before it sends
   the next. A group holds one range of each partition in the object, up to
