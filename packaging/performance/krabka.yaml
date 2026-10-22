@@ -8,7 +8,6 @@
 # copy so the measured setup stays the one the published results and the
 # `rf3-regression-v1` contract describe, and so an older reference revision
 # such as v1.0.5 runs from the same manifest as the candidate.
----
 # Two Services, because a Kafka client needs two different things from DNS.
 #
 # `krabka` is headless: it exists so `krabka-0.krabka.<ns>.svc.cluster.local`
