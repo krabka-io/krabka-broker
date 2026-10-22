@@ -43,6 +43,10 @@ pub async fn boot_single_trunk() -> (BrokerHandle, String, TempDir) {
 async fn boot_single_with(configure: fn(&mut BrokerConfig)) -> (BrokerHandle, String, TempDir) {
     let dir = TempDir::new().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    // One broker that must never be fenced: under parallel load it can miss
+    // its own heartbeats for the 2 s test session, and a fenced sole broker
+    // leaves CreateTopics no broker to place a replica on (see #1651).
+    config.heartbeat_timeout = krabka_units::secs(30);
     configure(&mut config);
     let broker = Broker::start(config).await.unwrap();
     wait_until_coordinators_ready(&broker).await;
