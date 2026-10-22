@@ -839,6 +839,39 @@ async fn led_partition_without_a_local_log_loads_once_the_log_opens() {
     check_empty_active_partition(&coordinator, &image, state_partition, topic_id).await;
 }
 
+/// The image can name a new leader epoch before the state partition log
+/// installs it. The partition then stays pending and answers
+/// `COORDINATOR_LOAD_IN_PROGRESS`, rather than serving a term that its log
+/// does not lead and failing every commit wait with `NOT_COORDINATOR`. The
+/// refresh after the log installs the epoch loads it.
+#[tokio::test]
+async fn led_partition_loads_once_its_log_installs_the_image_epoch() {
+    let dir = tempdir().unwrap();
+    let registry = Arc::new(PartitionRegistry::new());
+    let topic_id = uuid::Uuid::from_bytes([48; 16]);
+    let CoordinatorForTopic {
+        coordinator,
+        state_partition,
+    } = coordinator_for_topic(&registry, topic_id);
+    // The log leads at epoch 0, and the image already names epoch 1.
+    open_state_partition(&registry, dir.path(), state_partition.get());
+    let image = state_partition_image(state_partition.get(), 1, 1);
+
+    refresh_and_wait(&coordinator, &image).await;
+    check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Pending));
+    check!(
+        coordinator.read_summary("g", topic_id, 0).await
+            == Err(crate::codes::COORDINATOR_LOAD_IN_PROGRESS)
+    );
+
+    registry
+        .get(bootstrap::TOPIC, state_partition)
+        .expect("open state partition")
+        .install_leader_change(1, 1)
+        .await;
+    check_empty_active_partition(&coordinator, &image, state_partition, topic_id).await;
+}
+
 /// A failed replay installs no partial state: the partition answers
 /// `NOT_COORDINATOR`, as Kafka's runtime answers for a `FAILED` shard, and the
 /// next refresh loads it again.

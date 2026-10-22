@@ -338,7 +338,8 @@ impl ShareCoordinator {
     /// For each partition that this broker now leads with a new leader epoch,
     /// the method drops the in-memory keys of the partition and starts a
     /// replay of its log, as Kafka's `ShareCoordinatorService.onElection`
-    /// does. For each partition that this broker no longer leads, the method
+    /// does. The replay starts only once the local log has installed that
+    /// leader epoch; until then the partition is pending. For each partition that this broker no longer leads, the method
     /// drops the keys, as `onResignation` does. The broker calls this method
     /// on every metadata change.
     pub(crate) async fn refresh_leader_partitions(
@@ -367,7 +368,7 @@ impl ShareCoordinator {
                 keep
             });
             for (partition, leader_epoch) in desired {
-                let local = self.partitions.contains(bootstrap::TOPIC, partition);
+                let local = self.leads_locally(partition, leader_epoch);
                 let entry = led.get(&partition).copied();
                 let new_term = entry.is_none_or(|e| e.leader_epoch != leader_epoch);
                 let reload = entry
@@ -423,9 +424,29 @@ impl ShareCoordinator {
                 led.get(partition).is_none_or(|entry| {
                     entry.leader_epoch != *leader_epoch
                         || (matches!(entry.status, LoadStatus::Pending | LoadStatus::Failed)
-                            && self.partitions.contains(bootstrap::TOPIC, *partition))
+                            && self.leads_locally(*partition, *leader_epoch))
                         || (entry.status == LoadStatus::Active
                             && self.uncertain_appends.contains_key(partition))
+                })
+            })
+    }
+
+    /// Whether the local log of `state_partition` is open and has installed
+    /// this broker as its leader at `leader_epoch`.
+    ///
+    /// The image can name a new leader epoch before the partition installs
+    /// it. A load in that window would serve a term the partition does not
+    /// lead yet, and every append and commit wait of it would answer
+    /// `NOT_COORDINATOR`. Kafka loads a shard only after the replica manager
+    /// made the partition leader at that epoch (`onElection`), so the
+    /// partition stays pending until then, and a later refresh loads it.
+    fn leads_locally(&self, state_partition: PartitionIndex, leader_epoch: i32) -> bool {
+        self.partitions
+            .get(bootstrap::TOPIC, state_partition)
+            .is_some_and(|part| {
+                self.leads(&part, Term {
+                    partition: state_partition,
+                    leader_epoch,
                 })
             })
     }
