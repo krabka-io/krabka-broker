@@ -88,51 +88,42 @@ jobs:
           echo "build --noremote_upload_local_results" >>user.bazelrc
         fi
 
-        echo "::group::build"
-        bazel build --build_tag_filters=-docker //...
-        echo "::endgroup::"
-
-        # Every test target that needs no Docker daemon and asserts on no wall
-        # clock. The tag filter is named in full because `--test_tag_filters`
-        # is last-wins: `-timing-sensitive` alone would drop the `-docker` that
+        # One invocation builds `//...` and runs every test that needs no
+        # Docker daemon and asserts on no wall clock, so test execution overlaps
+        # the rest of the build instead of waiting for all of it. That covers
+        # the rustdoc targets (none is `manual`), `//packaging:image_binaries_test`
+        # and the Stateright models but `kraft_model_test`, which is
+        # timing-sensitive and runs below. There are no test targets outside
+        # `//crates` and `//packaging`.
+        #
+        # The test tag filter is named in full because `--test_tag_filters` is
+        # last-wins: `-timing-sensitive` alone would drop the `-docker` that
         # `.bazelrc` sets for `test`. The remote cache holds test results, so a
         # change that leaves a target's inputs alone does not run it again.
-        echo "::group::daemon-free tests"
-        bazel test --test_tag_filters=-docker,-timing-sensitive //crates/...
+        echo "::group::build and daemon-free tests"
+        bazel test \
+          --build_tag_filters=-docker \
+          --test_tag_filters=-docker,-timing-sensitive \
+          //...
         echo "::endgroup::"
 
         # The suites that assert on wall clock run in an invocation of their
-        # own, so the suites above do not compete with them for cores, and
+        # own, after the build, so nothing competes with them for cores, and
         # never under `--config=rbe`: `cpu:4` means nothing to a remote
         # executor. //crates/raft records `kraft_engine_sim` failing 7 of 7 at
-        # twelve concurrent runs and passing at six.
+        # twelve concurrent runs and passing at six. The build tag filter
+        # matches the invocation above so Bazel keeps its analysis cache.
         echo "::group::timing-sensitive tests"
-        bazel test --test_tag_filters=timing-sensitive //crates/...
-        bazel test //packaging/...
+        bazel test \
+          --build_tag_filters=-docker \
+          --test_tag_filters=timing-sensitive \
+          //crates/...
         echo "::endgroup::"
 
-        echo "::group::docgen"
-        targets="$(mktemp)"
-        bazel query 'kind("rust_doc rule", //crates/...)' >"${targets}"
-        test -s "${targets}"
-        bazel build --target_pattern_file="${targets}"
         if [ -n "${BUILDBUDDY_ARTIFACTS_DIRECTORY:-}" ]; then
           (cd bazel-bin && find crates -name '*.rustdoc' -print0 \
             | tar --null -czf "${BUILDBUDDY_ARTIFACTS_DIRECTORY}/rustdoc.tar.gz" -T -)
         fi
-        echo "::endgroup::"
-
-        # Impact analysis may omit a model when its source did not change. Run
-        # every Stateright-bearing target explicitly so the verification
-        # catalog remains a merge gate on every pull request.
-        echo "::group::stateright models"
-        bazel test \
-          //crates/audit:audit_test \
-          //crates/broker:broker_test \
-          //crates/log:log_test \
-          //crates/raft:kraft_model_test \
-          //crates/throttle:bucket_model_test
-        echo "::endgroup::"
     steps:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
