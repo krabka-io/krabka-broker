@@ -22,7 +22,7 @@ use {
     krabka_units::prelude::{
         ByteSize, ByteSizeExt as _, Ratio, RatioExt as _, Time, TimeExt as _, fraction,
     },
-    std::sync::Arc,
+    std::{collections::BTreeSet, sync::Arc},
     tracing::instrument,
 };
 
@@ -574,6 +574,19 @@ impl Log {
         let consumed_segments: Vec<Segment> = self.segments.drain(..consumed).collect();
         drop(consumed_segments);
 
+        // A consumed segment with no aborted transaction usually has no
+        // `.txnindex`, and a rename of a missing file costs a path lookup for
+        // each such segment under the log.
+        let without_txn_file: BTreeSet<Offset> = rewrites
+            .iter()
+            .flat_map(|group| &group.group_bases)
+            .copied()
+            .filter(|base| {
+                self.sealed_txn_indexes
+                    .get(base)
+                    .is_some_and(|index| !index.on_disk())
+            })
+            .collect();
         let mut new_segments: Vec<Segment> = Vec::with_capacity(rewrites.len());
         for GroupRewrite {
             group_bases,
@@ -587,15 +600,16 @@ impl Log {
                 let dir = self.dir.clone();
                 let now = std::time::SystemTime::now();
                 atomic_swap_retiring(&*io, &dir, group_bases, rewrite, |base| {
-                    let files: &[&str] =
-                        if replaces_producer_snapshot(base, rewrite.new_base_offset) {
-                            &["log", "index", "timeindex", "txnindex", "snapshot"]
-                        } else {
-                            &["log", "index", "timeindex", "txnindex"]
-                        };
+                    let mut files = vec!["log", "index", "timeindex"];
+                    if !without_txn_file.contains(&base) {
+                        files.push("txnindex");
+                    }
+                    if replaces_producer_snapshot(base, rewrite.new_base_offset) {
+                        files.push("snapshot");
+                    }
                     // The swap syncs the directory once all the consumed
                     // segments are retired, before anything depends on it.
-                    self.retire_files(base, now, files, DirSync::Deferred)
+                    self.retire_files(base, now, &files, DirSync::Deferred)
                 })?;
             }
 

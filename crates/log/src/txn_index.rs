@@ -70,6 +70,9 @@ impl AbortedTxnRaw {
 pub struct TxnIndex {
     path: PathBuf,
     entries: Vec<AbortedTxn>,
+    /// Whether the file exists: it did at open, or a write created it. A
+    /// segment with no aborted transaction usually has none.
+    on_disk: bool,
 }
 
 impl TxnIndex {
@@ -82,7 +85,7 @@ impl TxnIndex {
     /// # Panics
     /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn open(path: PathBuf) -> Result<Self, LogError> {
-        let entries = read_sidecar::<AbortedTxnRaw, _>(
+        let read = read_sidecar::<AbortedTxnRaw, _>(
             &path,
             "txnindex",
             "length is a multiple of ENTRY_BYTES and AbortedTxnRaw is Unaligned",
@@ -115,8 +118,15 @@ impl TxnIndex {
                 Ok(entries)
             },
         )?;
+        // A missing file is an index with no entries.
+        let on_disk = read.is_some();
+        let entries = read.unwrap_or_default();
         tracing::Span::current().record("entries", entries.len());
-        Ok(Self { path, entries })
+        Ok(Self {
+            path,
+            entries,
+            on_disk,
+        })
     }
 
     /// Append one aborted-txn entry.
@@ -143,6 +153,7 @@ impl TxnIndex {
             .append(true)
             .open(&self.path)
             .map_err(LogError::Io)?;
+        self.on_disk = true;
         let raw = AbortedTxnRaw::new(entry);
         f.write_all(raw.as_bytes()).map_err(LogError::Io)?;
         f.sync_data().map_err(LogError::Io)?;
@@ -177,6 +188,10 @@ impl TxnIndex {
 
     #[must_use]
     pub fn entries(&self) -> &[AbortedTxn] { &self.entries }
+
+    /// Whether the index has a file on disk.
+    #[must_use]
+    pub fn on_disk(&self) -> bool { self.on_disk }
 
     fn entry_valid(entry: AbortedTxn) -> bool {
         krabka_verified::aborted_transaction_interval(
@@ -556,5 +571,36 @@ mod tests {
                 ]
         );
         assert2::assert!(in_5_to_9 == Vec::new());
+    }
+
+    /// No file before anything writes one.
+    fn write_nothing(_: &mut TxnIndex) {}
+
+    /// The first entry creates the file.
+    fn append_one(index: &mut TxnIndex) { index.append(retry_entry()).unwrap(); }
+
+    /// Truncating every entry rewrites the file empty.
+    fn append_then_empty(index: &mut TxnIndex) {
+        append_one(index);
+        index.truncate_from(Offset(0)).unwrap();
+    }
+
+    /// Whether an index says it has a file is whether the file exists, and a
+    /// reopen agrees.
+    #[yare::parameterized(
+        untouched = { write_nothing, false },
+        appended = { append_one, true },
+        appended_then_emptied = { append_then_empty, true },
+    )]
+    fn an_index_knows_whether_its_file_exists(write: fn(&mut TxnIndex), exists: bool) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.txnindex");
+        let mut index = TxnIndex::open(path.clone()).unwrap();
+
+        write(&mut index);
+
+        assert2::check!(index.on_disk() == exists);
+        assert2::check!(path.exists() == exists);
+        assert2::check!(TxnIndex::open(path).unwrap().on_disk() == exists);
     }
 }

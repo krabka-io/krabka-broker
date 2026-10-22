@@ -124,6 +124,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   producer snapshot at its end, so it must finish before the swap retires
   them. In the measurements on the pull request, starting a pass over 45 MiB
   of gzip records held the mutex for 0.01 ms instead of 8 ms.
+- A compaction pass no longer tries to retire a `.txnindex` file that a
+  consumed segment does not have. Most segments hold no aborted transaction
+  and have none, and each failed rename cost a path lookup under the log
+  mutex. In the measurements on the pull request, retiring 256 segments took
+  6.3 ms instead of 6.6 ms.
 - A produce append runs on the request's own task when it only writes to the
   page cache. The partition writer task used to take every produce, so each
   one paid two cross-thread wakes before its write. The request task now takes
