@@ -70,7 +70,7 @@ use {
             encode_request, initialize_share_state, peer, principal, request_context,
             sasl_principal, start_broker_no_audit_with,
             start_broker_with as start_test_broker_with, start_group_broker_no_audit,
-            start_share_broker, try_dispatch_context,
+            start_share_broker, tolerate_starved_heartbeats, try_dispatch_context,
         },
         topic_policy::TopicPolicy,
     },
@@ -520,9 +520,12 @@ pub(crate) fn cluster_acl(operation: krabka_metadata::AclOperation) -> krabka_me
         .call()
 }
 
-pub(crate) async fn start_allow_all_no_audit() -> StartedBroker {
+/// Start a broker with every request allowed, audit logging off, and the
+/// share-test broker session ([`tolerate_starved_heartbeats`]).
+pub(crate) async fn start_share_allow_all_no_audit() -> StartedBroker {
     start_broker_no_audit_with(|config| {
         config.authorizer = Arc::new(AllowAllAuthorizer);
+        tolerate_starved_heartbeats(config);
     })
     .await
 }

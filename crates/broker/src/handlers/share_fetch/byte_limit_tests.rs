@@ -25,6 +25,7 @@ use {
         },
         test_support::{
             decode_response, encode_request, initialize_share_state, start_broker_no_audit_with,
+            tolerate_starved_heartbeats,
         },
     },
     assert2::assert,
@@ -59,6 +60,7 @@ async fn start() -> StartedBroker { start_with_delivery_attempts(5).await }
 
 async fn start_with_delivery_attempts(attempts: i16) -> StartedBroker {
     let HandlerStartedBroker { broker, dir } = start_broker_no_audit_with(|cfg| {
+        tolerate_starved_heartbeats(cfg);
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_group.max_delivery_attempts = attempts;
     })
@@ -68,6 +70,7 @@ async fn start_with_delivery_attempts(attempts: i16) -> StartedBroker {
 
 async fn start_with_fetch_cap(cap: i32) -> StartedBroker {
     let HandlerStartedBroker { broker, dir } = start_broker_no_audit_with(|cfg| {
+        tolerate_starved_heartbeats(cfg);
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.fetch_max_bytes = ByteSize::from_bytes(u64::try_from(cap).expect("positive cap"));
     })
@@ -456,6 +459,7 @@ enum UserQuota {
 #[tokio::test]
 async fn consumer_quota_window_limits_share_fetch() {
     let HandlerStartedBroker { broker, dir: _dir } = start_broker_no_audit_with(|cfg| {
+        tolerate_starved_heartbeats(cfg);
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.quota_window = secs(2);
         cfg.quota_throttle_max = secs(1);

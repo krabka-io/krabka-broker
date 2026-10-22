@@ -22,7 +22,8 @@ use {
         share_partition::session::{FetchPartitions, ShareFetchSessionRequest},
         test_support::{
             decode_response, encode_request, initialize_share_state, peer, principal,
-            request_context, start_broker_no_audit_with, try_dispatch_context,
+            request_context, start_broker_no_audit_with, tolerate_starved_heartbeats,
+            try_dispatch_context,
         },
     },
     assert2::assert,
@@ -113,8 +114,11 @@ krabka_macros::test_authorizer!(GrantsByName, request; {
 });
 
 async fn start() -> StartedBroker {
-    let HandlerStartedBroker { broker, dir } =
-        start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(GrantsByName)).await;
+    let HandlerStartedBroker { broker, dir } = start_broker_no_audit_with(|cfg| {
+        cfg.authorizer = Arc::new(GrantsByName);
+        tolerate_starved_heartbeats(cfg);
+    })
+    .await;
     StartedBroker { broker, dir }
 }
 

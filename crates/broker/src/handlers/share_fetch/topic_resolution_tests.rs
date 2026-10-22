@@ -20,7 +20,7 @@ use {
             create_topic as create_topic_from_test_support, initialized_share_topic,
             share_fetch_wire,
         },
-        test_support::start_broker_no_audit_with,
+        test_support::{start_broker_no_audit_with, tolerate_starved_heartbeats},
     },
     assert2::assert,
     bytes::Bytes,
@@ -60,8 +60,11 @@ struct Outcome {
 }
 
 async fn start(authorizer: Arc<dyn Authorizer>) -> StartedBroker {
-    let HandlerStartedBroker { broker, dir } =
-        start_broker_no_audit_with(|cfg| cfg.authorizer = authorizer).await;
+    let HandlerStartedBroker { broker, dir } = start_broker_no_audit_with(|cfg| {
+        cfg.authorizer = authorizer;
+        tolerate_starved_heartbeats(cfg);
+    })
+    .await;
     StartedBroker { broker, dir }
 }
 

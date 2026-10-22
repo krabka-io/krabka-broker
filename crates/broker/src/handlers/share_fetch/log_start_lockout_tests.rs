@@ -29,10 +29,13 @@ use {
                 OffsetRun, RecordCount, StartedBroker,
                 create_topic as create_topic_from_test_support,
                 produce_records as produce_records_from_test_support, share_fetch_partition_rows,
-                share_fetch_topics, share_fetch_wire, share_topic_uuid, start_allow_all_no_audit,
+                share_fetch_topics, share_fetch_wire, share_topic_uuid,
+                start_share_allow_all_no_audit,
             },
         },
-        test_support::{initialize_share_state, start_broker_no_audit_with},
+        test_support::{
+            initialize_share_state, start_broker_no_audit_with, tolerate_starved_heartbeats,
+        },
     },
     assert2::assert,
     krabka_protocol::{
@@ -72,7 +75,7 @@ fn acquired_run(partition_index: i32, first_offset: i64, last_offset: i64) -> Pa
 /// `DeleteRecords` v2, matching the other handler tests.
 const DELETE_RECORDS_VERSION: i16 = 2;
 
-async fn start() -> StartedBroker { start_allow_all_no_audit().await }
+async fn start() -> StartedBroker { start_share_allow_all_no_audit().await }
 
 async fn create_topic(broker: &BrokerHandle, name: &str, num_partitions: i32) -> WireUuid {
     create_topic_from_test_support()
@@ -450,6 +453,7 @@ async fn a_partition_failure_does_not_affect_other_partitions(failure: IsolatedP
 #[tokio::test]
 async fn a_member_that_does_not_acknowledge_gets_no_more_than_the_record_lock_limit() {
     let HandlerStartedBroker { broker, dir: _dir } = start_broker_no_audit_with(|cfg| {
+        tolerate_starved_heartbeats(cfg);
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_group.max_inflight_records = 100;
     })

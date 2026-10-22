@@ -1925,8 +1925,24 @@ pub(crate) struct ShareBrokerSetup {
     pub support: ShareApiSupport,
 }
 
+/// The broker-session timeout of the brokers that the share tests start.
+///
+/// [`BrokerConfig::for_tests`] gives a broker two seconds to heartbeat, so the
+/// failover tests see a dead broker fenced quickly. A share test runs one
+/// broker and never means it to be fenced. Under heavy parallel load,
+/// though, that broker can miss its own heartbeats for two seconds. The
+/// controller then fences it and elects it again at a new leader epoch, and
+/// a coordinator write in flight ends with `NOT_COORDINATOR`.
+pub(crate) const SHARE_TEST_HEARTBEAT_TIMEOUT: krabka_units::Time = krabka_units::secs(30);
+
+/// Gives a share-test broker the [`SHARE_TEST_HEARTBEAT_TIMEOUT`] session.
+pub(crate) fn tolerate_starved_heartbeats(cfg: &mut BrokerConfig) {
+    cfg.heartbeat_timeout = SHARE_TEST_HEARTBEAT_TIMEOUT;
+}
+
 /// Like [`start_group_broker`], but it also waits until the share coordinator
-/// serves `__share_group_state`. Disabled support then finalizes
+/// serves `__share_group_state`, and it gives the broker the
+/// [`SHARE_TEST_HEARTBEAT_TIMEOUT`] session. Disabled support then finalizes
 /// `share.version` at 0, which turns the share-group APIs off.
 #[bon::builder]
 pub(crate) async fn start_share_broker(
@@ -1937,7 +1953,11 @@ pub(crate) async fn start_share_broker(
     let StartedBroker {
         broker: handle,
         dir,
-    } = start_group_broker(authorizer).await;
+    } = start_group_broker_with(|cfg| {
+        cfg.authorizer = controller_peer_allowed(authorizer);
+        tolerate_starved_heartbeats(cfg);
+    })
+    .await;
     handle.wait_until_share_coordinator_ready().await;
     if matches!(setup.support, ShareApiSupport::Disabled) {
         finalize_share_version(&handle.broker_arc_for_test(), 0).await;

@@ -21,7 +21,7 @@ use {
         test_support::{
             ControllerPeerAllowed, GrantsInPrincipalName, StartedBroker, decode_response,
             dispatch_context, encode_request, peer, principal, request_context,
-            start_broker_with_authorizer_no_audit,
+            start_broker_no_audit_with, tolerate_starved_heartbeats,
         },
     },
     assert2::check,
@@ -305,9 +305,10 @@ async fn share_state_rpcs_need_cluster_action() {
     let StartedBroker {
         broker: handle,
         dir: _dir,
-    } = start_broker_with_authorizer_no_audit(Arc::new(ControllerPeerAllowed(
-        GrantsInPrincipalName,
-    )))
+    } = start_broker_no_audit_with(|cfg| {
+        cfg.authorizer = Arc::new(ControllerPeerAllowed(GrantsInPrincipalName));
+        tolerate_starved_heartbeats(cfg);
+    })
     .await;
     let broker = handle.broker_arc_for_test();
     // The data topics that the requests name. The share coordinator refuses a

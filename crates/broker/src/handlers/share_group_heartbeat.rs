@@ -207,7 +207,7 @@ mod tests {
     use {
         super::*,
         crate::{
-            authorizer::AllowAllAuthorizer,
+            authorizer::{AllowAllAuthorizer, Authorizer},
             coordinator::unified::share::actor::{ShareDescribeView, ShareGroupActorHandle},
             handlers::{
                 encode_response,
@@ -220,8 +220,8 @@ mod tests {
             },
             task_util::ask,
             test_support::{
-                ControllerPeerAllowed, finalize_share_version, request_context,
-                start_broker_with_authorizer as start_broker,
+                ControllerPeerAllowed, finalize_share_version, request_context, start_broker_with,
+                tolerate_starved_heartbeats,
             },
         },
         assert2::assert,
@@ -231,6 +231,16 @@ mod tests {
     };
 
     const VERSION: i16 = share_group_heartbeat_response::MAX_VERSION;
+
+    /// Starts a broker with `authorizer` installed and the share-test
+    /// heartbeat session.
+    async fn start_broker(authorizer: Arc<dyn Authorizer>) -> HandlerStartedBroker {
+        start_broker_with(|cfg| {
+            cfg.authorizer = authorizer;
+            tolerate_starved_heartbeats(cfg);
+        })
+        .await
+    }
 
     #[bon::builder]
     fn heartbeat_request(
@@ -309,7 +319,8 @@ mod tests {
     async fn handle_disabled_feature_returns_unsupported_version() {
         let version = VERSION;
         let dir = tempfile::TempDir::new().expect("tempdir");
-        let cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
+        let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
+        tolerate_starved_heartbeats(&mut cfg);
         let broker_handle = Broker::start(cfg).await.expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
         finalize_share_version(&broker, 0).await;
