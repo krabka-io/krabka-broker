@@ -100,7 +100,7 @@ runs:
         MEMORY: ${{ inputs.memory }}
         DISK: ${{ inputs.disk }}
         TIMEOUT: ${{ inputs.timeout }}
-        SNAPSHOT_SAVE: ${{ github.event_name == 'pull_request' && 'none-available' || 'always' }}
+        SNAPSHOT_SAVE: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'none-available' || 'always' }}
         REMOTE_PRELUDE: |
           set -euo pipefail
           if [ "${UPLOAD:-false}" != "true" ]; then
