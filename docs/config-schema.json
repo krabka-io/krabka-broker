@@ -2039,6 +2039,15 @@
             "null"
           ]
         },
+        "log_flush_start_offset_checkpoint_interval": {
+          "default": null,
+          "description": "How often a partition writes the log start offset that local retention\nmoved to its `log-start-offset-checkpoint` file, Kafka's\n`log.flush.start.offset.checkpoint.interval.ms`. Retention moves the\nstart at once, and the file records it at the next write. A\n`DeleteRecords` trim writes the file on the trim itself. The default is\n1 minute.",
+          "format": "duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "log_read_ahead_max": {
           "default": null,
           "description": "Cap on how far past a fetch read's own byte range the broker asks the\nkernel to read ahead, so a consumer that is behind finds its next fetch\nin the page cache. The hint reaches up to one more range of the same\nsize, and no further than this. The default is 4 MiB, and 0 limits the\nhint to the fetch's own range. The hint has no effect on a host other\nthan Linux.",

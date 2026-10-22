@@ -29,7 +29,7 @@ A partition lives in `<log_dir>/<topic>-<partition>/`, named by [`name.rs`](../s
 | `.leader-epoch-checkpoint` | Per-partition two-column text file of `(epoch, start_offset)`. | [`leader_epoch_checkpoint.rs`](../src/leader_epoch_checkpoint.rs) |
 | `log-start-offset-checkpoint` | The log start offset, when the segment names alone cannot express it. | [`log_start_offset_checkpoint.rs`](../src/log_start_offset_checkpoint.rs) |
 
-Kafka keeps the log start offset per log dir, keyed by partition, and writes it on a `log.flush.start.offset.checkpoint.interval.ms` schedule; krabka keeps it per partition directory, which needs no key inside the file, and writes it on the trim itself.
+Kafka keeps the log start offset per log dir, keyed by partition, and writes it on a `log.flush.start.offset.checkpoint.interval.ms` schedule. krabka keeps it per partition directory, which needs no key inside the file. A start that no segment boundary records, such as a trim inside a segment or a tiered floor, is written before the trim returns. A start that retention moved to a segment boundary waits for `LogConfig::start_offset_checkpoint_interval`, Kafka's interval. A crash before that write leaves an older, lower start on disk, and `Log::open` raises it to the first segment on a log without remote storage, as Kafka's `LogLoader` does.
 
 The `.stampindex` sidecar is the one file Kafka does not have. It never changes the `.log` bytes, offset assignment, the LSO, or the high watermark, and nothing on any client-facing API reads it.
 

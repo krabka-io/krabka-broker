@@ -115,6 +115,13 @@ pub struct RuntimeFileConfig {
     /// Every such partition holds up to this much, plus one batch. The
     /// default is 32 MiB, and 0 keeps only the newest batch.
     pub log_tail_cache_size: Option<ByteSize>,
+    /// How often a partition writes the log start offset that local retention
+    /// moved to its `log-start-offset-checkpoint` file, Kafka's
+    /// `log.flush.start.offset.checkpoint.interval.ms`. Retention moves the
+    /// start at once, and the file records it at the next write. A
+    /// `DeleteRecords` trim writes the file on the trim itself. The default is
+    /// 1 minute.
+    pub log_flush_start_offset_checkpoint_interval: Option<Time>,
     /// Size of the window a timestamp search reads the log in.
     pub log_timestamp_scan_window: Option<ByteSize>,
     /// Roll the active segment once it grows past this. Kafka's

@@ -21,9 +21,19 @@ use {
     },
     krabka_ids::{Offset, ProducerId},
     krabka_units::prelude::{ByteSize, ByteSizeExt},
-    std::path::Path,
+    std::{path::Path, time::Instant},
     tracing::instrument,
 };
+
+/// When [`Log::advance_log_start_offset`] writes `log-start-offset-checkpoint`.
+#[derive(Clone, Copy)]
+enum StartCheckpoint {
+    /// Before it returns.
+    Now,
+    /// After [`LogConfig::start_offset_checkpoint_interval`], counted
+    /// from this instant.
+    Deferred(Instant),
+}
 
 impl Log {
     /// Empty the volatile state before a hard reset or a durable producer-state reload.
@@ -158,7 +168,9 @@ impl Log {
     /// that landed inside a segment, or a tiered floor below every segment
     /// still on disk -- survives a reopen. Without that, [`Log::open`] derives
     /// the start from the first surviving base offset and serves records that
-    /// a `DeleteRecords` already deleted.
+    /// a `DeleteRecords` already deleted. Retention moves the start to a
+    /// segment boundary instead and defers the write; see
+    /// [`Log::checkpoint_log_start_if_due`].
     ///
     /// When the start does move up, the rest of the log follows it the way
     /// Kafka's `maybeIncrementLogStartOffset` makes it follow:
@@ -181,6 +193,23 @@ impl Log {
     /// [`LogError::Io`] if the log-start or leader-epoch checkpoint cannot be
     /// written.
     pub fn set_log_start_offset(&mut self, new_start: Offset) -> Result<(), LogError> {
+        self.advance_log_start_offset(new_start, StartCheckpoint::Now)
+    }
+
+    /// [`Log::set_log_start_offset`] for retention, which moves the start to
+    /// the base offset of the first segment it keeps. The segment names
+    /// already record that start, so the checkpoint write waits for
+    /// [`Log::checkpoint_log_start_if_due`], as Kafka's waits for
+    /// `log.flush.start.offset.checkpoint.interval.ms`.
+    pub(super) fn follow_retained_segments(&mut self, now: Instant) -> Result<(), LogError> {
+        self.advance_log_start_offset(self.first_local_offset(), StartCheckpoint::Deferred(now))
+    }
+
+    fn advance_log_start_offset(
+        &mut self,
+        new_start: Offset,
+        checkpoint: StartCheckpoint,
+    ) -> Result<(), LogError> {
         if new_start < 0 {
             return Err(LogError::InvalidArgument(
                 "set_log_start_offset: new_start must be >= 0".into(),
@@ -188,11 +217,18 @@ impl Log {
         }
         let incremented = new_start > self.start_offset;
         let new_start = self.start_offset.max(new_start);
-        // The checkpoint is durable when this returns, directory sync
-        // included: `DeleteRecords` is acknowledged as soon as the trim does,
-        // and a trimmed partition can then sit idle with no later `sync()` to
-        // pay a deferred debt.
-        log_start_offset_checkpoint::write(&*self.io, &self.dir, new_start)?;
+        match checkpoint {
+            // The checkpoint is durable when this returns, directory sync
+            // included: `DeleteRecords` is acknowledged as soon as the trim
+            // does, and a trimmed partition can then sit idle with no later
+            // `sync()` to pay a deferred debt. A file that already holds the
+            // value is durable already.
+            StartCheckpoint::Now if self.checkpointed_start != Some(new_start) => {
+                self.write_start_checkpoint(new_start)?;
+            }
+            StartCheckpoint::Now => {}
+            StartCheckpoint::Deferred(now) => self.defer_start_checkpoint(new_start, now),
+        }
         self.start_offset = new_start;
         // Whoever calls this deleted the records below `new_start`, so the
         // floor now means something a reader may be refused against, and the
@@ -263,7 +299,7 @@ impl Log {
                 "follow_leader_log_start: leader_start must be >= 0".into(),
             ));
         }
-        log_start_offset_checkpoint::write(&*self.io, &self.dir, leader_start)?;
+        self.write_start_checkpoint(leader_start)?;
         self.start_offset = leader_start;
         self.start_offset_established = true;
         Ok(leader_start)
@@ -279,7 +315,7 @@ impl Log {
         if ceiling >= self.start_offset {
             return Ok(());
         }
-        log_start_offset_checkpoint::write(&*self.io, &self.dir, ceiling)?;
+        self.write_start_checkpoint(ceiling)?;
         self.start_offset = ceiling;
         Ok(())
     }
@@ -331,6 +367,7 @@ impl Log {
         self.start_offset = new_base;
         self.start_offset_established = false;
         log_start_offset_checkpoint::remove(&self.dir)?;
+        self.forget_start_checkpoint();
 
         let mut new_active = Segment::create(&self.dir, new_base)?;
         new_active.set_io(self.io.clone());

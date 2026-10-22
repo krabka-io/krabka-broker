@@ -256,6 +256,16 @@ pub struct LogConfig {
     #[default(krabka_units::secs(60))]
     pub file_delete_delay: Time,
 
+    /// How long a log start that only retention moved may wait before it is
+    /// written to `log-start-offset-checkpoint`. Kafka's broker-wide
+    /// `log.flush.start.offset.checkpoint.interval.ms`; default one minute.
+    /// Zero writes the start on the next maintenance pass.
+    /// Retention moves the start to a segment boundary, which the segment
+    /// names already record, so the write can wait: see
+    /// [`Log::checkpoint_log_start_if_due`](crate::Log::checkpoint_log_start_if_due).
+    #[default(krabka_units::secs(60))]
+    pub start_offset_checkpoint_interval: Time,
+
     /// Offset span between forced syncs. `None` disables the threshold.
     pub flush_messages: Option<u64>,
 
@@ -479,6 +489,7 @@ mod tests {
                     segment_roll_interval: days(7),
                     segment_jitter: Time::ZERO,
                     file_delete_delay: secs(60),
+                    start_offset_checkpoint_interval: secs(60),
                     flush_messages: None,
                     flush_interval: None,
                     compression_gzip_level: -1,

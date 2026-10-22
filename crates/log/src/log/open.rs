@@ -173,6 +173,7 @@ impl Log {
         let lso = active.last_offset() + 1;
         epoch_checkpoint.truncate_from_end(lso)?;
 
+        let remote_storage_enable = config.remote_storage_enable;
         let config = std::sync::Arc::new(std::sync::RwLock::new(config));
 
         let span = tracing::Span::current();
@@ -206,6 +207,8 @@ impl Log {
             // The checkpoint restore below is what may set it: see
             // `Log::established_log_start`.
             start_offset_established: false,
+            checkpointed_start: None,
+            start_checkpoint_due: None,
             // Nothing has cleaned this log yet, so every sealed segment is
             // dirty until the first pass says otherwise.
             clean_prefix_segments: 0,
@@ -229,32 +232,46 @@ impl Log {
         // Restore a log start that the segment names cannot express: a trim
         // that landed inside a segment left its records on disk, and only the
         // checkpoint says they are gone.
-        if let Some(checkpointed) = log_start_offset_checkpoint::read(&log.dir)? {
-            // Cap at the log end and nothing else. Above it, the whole
-            // surviving log is below a start that was acknowledged, so every
-            // record left is one the trim removed and the log start is the log
-            // end -- a crash between a trim and the fsync of the records it
-            // trimmed past lands there.
+        let checkpoint = log_start_offset_checkpoint::read(&log.dir)?;
+        log.checkpointed_start = checkpoint;
+        if let Some(checkpointed) = checkpoint {
+            // Cap at the log end. Above it, the whole surviving log is below a
+            // start that was acknowledged, so every record left is one the
+            // trim removed and the log start is the log end -- a crash between
+            // a trim and the fsync of the records it trimmed past lands there.
+            let capped = checkpointed.min(log.log_end_offset());
+            // Kafka's `LogLoader.load`: without remote storage the start is
+            // never below the first segment, whose base offset is the start
+            // derived above. Retention writes the start it moves on a timer,
+            // so a crash before the timer leaves an older, lower value here.
             //
-            // There is deliberately no floor at the segment-derived start. On
-            // a tiered partition (KIP-405) the global floor belongs *below*
-            // the oldest local segment, in the band the archive serves, and
-            // raising the checkpoint to meet the surviving files would hide
-            // every offset the remote tier still holds -- and then write that
-            // loss back to disk. `Log::local_log_start_offset` is the floor
-            // that follows the files.
-            let effective = checkpointed.min(log.log_end_offset());
+            // A tiered partition (KIP-405) gets no such floor. Its global
+            // start belongs *below* the oldest local segment, in the band the
+            // archive serves, and raising the checkpoint to meet the surviving
+            // files would hide every offset the remote tier still holds.
+            // `Log::local_log_start_offset` is the floor that follows the
+            // files there.
+            let effective = if remote_storage_enable {
+                capped
+            } else {
+                capped.max(log.start_offset)
+            };
             log.start_offset = effective;
             // A checkpoint exists, so somebody deleted up to this floor: it is
             // one a reader may be refused against and remote retention may
             // delete against.
             log.start_offset_established = true;
-            if effective != checkpointed {
+            if capped != checkpointed {
                 // Persist what was resolved instead of leaving the
                 // out-of-range value on disk. It is inert against this log,
                 // but appends move the log end, and the next open would find
                 // the stale value back in range and hide live records.
-                log_start_offset_checkpoint::write(&*log.io, &log.dir, effective)?;
+                log.write_start_checkpoint(effective)?;
+            } else if effective != capped {
+                // A start raised to the first segment goes out on the timer
+                // instead: the segment names record it, and every open of this
+                // log raises it again until then.
+                log.defer_start_checkpoint(effective, std::time::Instant::now());
             }
             // Kafka's `LogLoader.load` → `truncateFromStart(logStartOffsetCheckpoint)`:
             // a crash can land between a start increment and the epoch-cache

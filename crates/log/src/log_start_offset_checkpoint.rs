@@ -10,7 +10,8 @@
 //! `LogManager.checkpointLogStartOffsets` and read back by `UnifiedLog`.
 //! krabka writes one file per partition directory instead, which is the layout
 //! `leader-epoch-checkpoint` already uses here and needs no topic/partition key
-//! inside the file.
+//! inside the file. When the file is written is decided in
+//! `log::start_checkpoint`.
 //!
 //! The format is the checkpoint-file family's version header followed by the
 //! offset:

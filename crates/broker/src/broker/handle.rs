@@ -79,9 +79,10 @@ async fn shutdown_partition_writers(partitions: &PartitionRegistry) {
 
 /// Take a producer-state snapshot at the end of every partition's log, as
 /// Kafka's `UnifiedLog.close` does on a clean shutdown, so the next start
-/// restores producer state without replaying the active segment. The writers
+/// restores producer state without replaying the active segment, and write a
+/// log start that retention moved and has not yet checkpointed. The writers
 /// are stopped first, so no append races the snapshot.
-fn snapshot_producer_state(partitions: &PartitionRegistry) {
+fn close_logs(partitions: &PartitionRegistry) {
     for partition in partitions.arcs() {
         let Ok(mut log) = partition.log.lock() else {
             continue;
@@ -92,6 +93,16 @@ fn snapshot_producer_state(partitions: &PartitionRegistry) {
                 partition = partition.index.0,
                 %error,
                 "producer-state snapshot at shutdown failed; the next start replays the log"
+            );
+        }
+        // Kafka's `LogManager.shutdown` checkpoints every log start. Retention
+        // writes the start it moves on a timer, which will not fire again.
+        if let Err(error) = log.flush_log_start_checkpoint() {
+            tracing::warn!(
+                topic = %partition.topic,
+                partition = partition.index.0,
+                %error,
+                "log start checkpoint at shutdown failed; the next start reads the segments"
             );
         }
     }
@@ -571,7 +582,7 @@ impl BrokerHandle {
         }
         shutdown_moves(&self.broker.future_logs).await;
         shutdown_partition_writers(&self.broker.partitions).await;
-        snapshot_producer_state(&self.broker.partitions);
+        close_logs(&self.broker.partitions);
         self.broker.client_metrics.shutdown().await;
         // Every log this broker holds is now closed, so the record set it
         // brings back on restart is the one the cluster believes it has. That

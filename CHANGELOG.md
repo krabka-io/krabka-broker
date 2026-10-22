@@ -47,6 +47,17 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- The broker writes the log start offset that local retention moves to a
+  partition's `log-start-offset-checkpoint` on a timer, instead of on every
+  retention pass. The `[runtime]` key
+  `log_flush_start_offset_checkpoint_interval`, with the
+  `--log-flush-start-offset-checkpoint-interval` flag, sets the timer. It is
+  Kafka's `log.flush.start.offset.checkpoint.interval.ms`, which
+  `DescribeConfigs` reports, and the default is 1 minute. A `DeleteRecords`
+  trim still writes the file on the trim itself. A partition without remote
+  storage now reopens with its log start at or above its first segment, as
+  Kafka's `LogLoader` does, so a crash before the timer fires cannot bring
+  back an older start.
 - `ci.yml` runs on the merge queue's `merge_group` event, treated like a
   pull request: lanes are scoped by path, the remote cache is read-only and
   nextest waits for `main`. Each queued pull request is then tested on top of

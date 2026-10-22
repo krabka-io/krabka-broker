@@ -511,6 +511,11 @@ pub(crate) const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = &[
     KafkaStaticKey::new("log.segment.delete.delay.ms", None, |c| {
         time_ms(c.log_config.file_delete_delay)
     }),
+    KafkaStaticKey::new(
+        "log.flush.start.offset.checkpoint.interval.ms",
+        Some("log_flush_start_offset_checkpoint_interval"),
+        |c| time_ms(c.log_config.start_offset_checkpoint_interval),
+    ),
     KafkaStaticKey::new("log.flush.interval.messages", None, |c| {
         c.log_config
             .flush_messages

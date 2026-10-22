@@ -17,7 +17,10 @@ use {
     krabka_ids::Offset,
     krabka_units::prelude::{ByteSizeExt, TimeExt as _},
     krabka_verified::retention::{LocalRetentionSegment, local_retention_prefix},
-    std::{collections::HashSet, time::SystemTime},
+    std::{
+        collections::HashSet,
+        time::{Instant, SystemTime},
+    },
     tracing::instrument,
 };
 
@@ -172,7 +175,7 @@ impl Log {
         if let Some(error) = failure {
             // The floor still follows whatever did come off disk, so the log
             // start is refreshed before the failure is reported.
-            self.set_log_start_offset(self.first_local_offset())?;
+            self.follow_retained_segments(Instant::now())?;
             return Err(error);
         }
         // Ordinary retention deletes the records outright: nothing holds them
@@ -181,8 +184,9 @@ impl Log {
         // opposite of the tiered eviction in `delete_local_segments_through`,
         // which leaves the floor behind because the remote tier still answers
         // for those offsets. The early return above keeps a tiered topic out
-        // of this path entirely.
-        self.set_log_start_offset(self.first_local_offset())?;
+        // of this path entirely. The segment names record the new start, so
+        // its checkpoint write waits for the timer Kafka writes it on.
+        self.follow_retained_segments(Instant::now())?;
         Ok(())
     }
 }
