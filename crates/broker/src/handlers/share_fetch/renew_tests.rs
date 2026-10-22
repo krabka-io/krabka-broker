@@ -52,7 +52,7 @@ type Batch = WireAckBatch<'static>;
 
 use crate::{
     handlers::test_support::start_allow_all_no_audit as start,
-    test_support::start_broker_no_audit_with,
+    test_support::{start_broker_no_audit_with, tolerate_starved_heartbeats},
 };
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
@@ -416,8 +416,11 @@ krabka_macros::test_authorizer!(DenyTopicReadToOne, request; {
 /// `NONE`.
 #[tokio::test]
 async fn a_renew_fetch_answers_a_denied_topic_as_an_acknowledge_error() {
-    let HandlerStartedBroker { broker, dir: _dir } =
-        start_broker_no_audit_with(|cfg| cfg.authorizer = Arc::new(DenyTopicReadToOne)).await;
+    let HandlerStartedBroker { broker, dir: _dir } = start_broker_no_audit_with(|cfg| {
+        cfg.authorizer = Arc::new(DenyTopicReadToOne);
+        tolerate_starved_heartbeats(cfg);
+    })
+    .await;
     let topic_id = create_topic(&broker, "renew-denied").await;
     initialize_share_state(
         &broker,

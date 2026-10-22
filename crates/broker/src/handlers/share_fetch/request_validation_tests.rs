@@ -17,8 +17,8 @@ use {
         codes,
         handlers::{RequestContext, test_support::StartedBroker},
         test_support::{
-            decode_response, encode_request, start_broker_with_authorizer_no_audit,
-            try_dispatch_context,
+            decode_response, encode_request, start_broker_no_audit_with,
+            tolerate_starved_heartbeats, try_dispatch_context,
         },
     },
     assert2::assert,
@@ -55,8 +55,11 @@ krabka_macros::test_authorizer!(ReadOneGroup, request; {
 });
 
 async fn start() -> StartedBroker {
-    let HandlerStartedBroker { broker, dir } =
-        start_broker_with_authorizer_no_audit(Arc::new(ReadOneGroup)).await;
+    let HandlerStartedBroker { broker, dir } = start_broker_no_audit_with(|cfg| {
+        cfg.authorizer = Arc::new(ReadOneGroup);
+        tolerate_starved_heartbeats(cfg);
+    })
+    .await;
     StartedBroker { broker, dir }
 }
 

@@ -24,7 +24,9 @@ use {
             share_record_states,
         },
         share_partition::state::RecordState::Acquired,
-        test_support::{initialize_share_state, start_broker_no_audit_with},
+        test_support::{
+            initialize_share_state, start_broker_no_audit_with, tolerate_starved_heartbeats,
+        },
     },
     assert2::assert,
     bytes::Bytes,
@@ -59,6 +61,7 @@ const QUOTA_WINDOW_SECS: u32 = 20;
 /// A broker with a [`QUOTA_WINDOW_SECS`] quota window.
 async fn start() -> HandlerStartedBroker {
     start_broker_no_audit_with(|cfg| {
+        tolerate_starved_heartbeats(cfg);
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.quota_window = secs(QUOTA_WINDOW_SECS);
         cfg.quota_throttle_max = secs(QUOTA_WINDOW_SECS / 2);

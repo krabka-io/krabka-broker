@@ -25,7 +25,7 @@ use {
         handlers::{RequestContext, group_heartbeat_test_support::streams_request},
         test_support::{
             decode_response, encode_request, peer, principal, request_context, start_broker_with,
-            try_dispatch_context,
+            tolerate_starved_heartbeats, try_dispatch_context,
         },
     },
     assert2::assert,
@@ -224,6 +224,7 @@ impl Env {
             cfg.authorizer = Arc::new(AllowAllAuthorizer);
             cfg.streams_group.enable = true;
             cfg.classic_group_initial_rebalance_delay = krabka_units::secs(0);
+            tolerate_starved_heartbeats(cfg);
         })
         .await;
         handle.wait_until_group_coordinator_ready().await;

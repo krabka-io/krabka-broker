@@ -25,7 +25,7 @@ use {
             produce_records, share_acknowledge_wire, share_fetch_wire, share_record_states,
         },
         share_partition::state::RecordState::{self, Acquired},
-        test_support::start_broker_with_authorizer_no_audit,
+        test_support::{start_broker_no_audit_with, tolerate_starved_heartbeats},
     },
     assert2::assert,
     krabka_metadata::{AclOperation, ResourceType},
@@ -83,8 +83,11 @@ krabka_macros::test_authorizer!(DenyOnePrincipal, request; {
 });
 
 async fn start() -> StartedBroker {
-    let HandlerStartedBroker { broker, dir } =
-        start_broker_with_authorizer_no_audit(Arc::new(DenyOnePrincipal)).await;
+    let HandlerStartedBroker { broker, dir } = start_broker_no_audit_with(|cfg| {
+        cfg.authorizer = Arc::new(DenyOnePrincipal);
+        tolerate_starved_heartbeats(cfg);
+    })
+    .await;
     StartedBroker { broker, dir }
 }
 

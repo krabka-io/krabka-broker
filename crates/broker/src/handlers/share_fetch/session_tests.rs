@@ -22,7 +22,8 @@ use {
         },
         share_partition::state::RecordState::{self, Acquired, Available},
         test_support::{
-            decode_response, encode_request, start_broker_no_audit_with, try_dispatch_context,
+            decode_response, encode_request, start_broker_no_audit_with,
+            tolerate_starved_heartbeats, try_dispatch_context,
         },
     },
     assert2::assert,
@@ -47,6 +48,7 @@ const ACCEPT: i8 = 1;
 
 async fn start(session_max: usize) -> StartedBroker {
     let HandlerStartedBroker { broker, dir } = start_broker_no_audit_with(move |cfg| {
+        tolerate_starved_heartbeats(cfg);
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_session_cache_max_when_unlimited = session_max;
     })
@@ -397,6 +399,7 @@ async fn group_share_settings_override_the_broker_defaults() {
     // asks for, which is below Kafka's default minimum and would be capped to
     // it.
     let HandlerStartedBroker { broker, dir: _dir } = start_broker_no_audit_with(|cfg| {
+        tolerate_starved_heartbeats(cfg);
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_session_cache_max_when_unlimited = 10_000;
         cfg.share_group.min_partition_max_record_locks = 2;

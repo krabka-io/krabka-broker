@@ -283,7 +283,10 @@ mod tests {
                 create_topic as create_topic_from_test_support, initialized_share_topic,
             },
             share_partition::session::{FetchPartitions, ShareFetchSessionRequest},
-            test_support::{ShareApiSupport, dispatch_wire, start_broker_with, start_share_broker},
+            test_support::{
+                ShareApiSupport, dispatch_wire, start_broker_with, start_share_broker,
+                tolerate_starved_heartbeats,
+            },
         },
         assert2::assert,
         krabka_protocol::{
@@ -516,6 +519,7 @@ mod tests {
             async {
                 let HandlerStartedBroker { broker, dir } = start_broker_with(|cfg| {
                     cfg.authorizer = std::sync::Arc::new(DenyTopicRead);
+                    tolerate_starved_heartbeats(cfg);
                 })
                 .await;
                 StartedBroker { broker, dir }

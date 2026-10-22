@@ -32,7 +32,9 @@ use {
                 share_fetch_topics, share_fetch_wire, share_topic_uuid, start_allow_all_no_audit,
             },
         },
-        test_support::{initialize_share_state, start_broker_no_audit_with},
+        test_support::{
+            initialize_share_state, start_broker_no_audit_with, tolerate_starved_heartbeats,
+        },
     },
     assert2::assert,
     krabka_protocol::{
@@ -450,6 +452,7 @@ async fn a_partition_failure_does_not_affect_other_partitions(failure: IsolatedP
 #[tokio::test]
 async fn a_member_that_does_not_acknowledge_gets_no_more_than_the_record_lock_limit() {
     let HandlerStartedBroker { broker, dir: _dir } = start_broker_no_audit_with(|cfg| {
+        tolerate_starved_heartbeats(cfg);
         cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.share_group.max_inflight_records = 100;
     })

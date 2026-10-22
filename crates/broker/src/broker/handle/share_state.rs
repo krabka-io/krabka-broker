@@ -139,7 +139,7 @@ mod tests {
                 handlers::test_support::lead_share_state_partitions,
             },
             share_partition::state::AcquisitionState,
-            test_support::start_broker_with,
+            test_support::{start_broker_with, tolerate_starved_heartbeats},
         },
         assert2::check,
     };
@@ -149,7 +149,7 @@ mod tests {
         let StartedBroker {
             broker: handle,
             dir,
-        } = start_broker_with(|_| {}).await;
+        } = start_broker_with(tolerate_starved_heartbeats).await;
         let broker = handle.broker_arc_for_test();
 
         let share_group = "handle-share-summary-mutant-group";
