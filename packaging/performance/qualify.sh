@@ -112,6 +112,18 @@ reset_namespace() {
   kubectl create namespace "${namespace}"
 }
 
+# `kind load docker-image` exports every platform of an image index. Docker's
+# containerd image store keeps only the host platform of a pulled image, so
+# the node's `ctr import --all-platforms` fails on the missing blobs. Export
+# the host platform alone.
+kind_load() {
+  local archive=${build_dir}/kind-images.tar
+  docker save --platform "linux/$(docker version --format '{{.Server.Arch}}')" \
+    -o "${archive}" "$@"
+  kind load image-archive --name "${cluster}" "${archive}"
+  rm -f -- "${archive}"
+}
+
 start_tools() {
   local image=${1:-apache/kafka:4.0.0}
   kubectl -n "${namespace}" run kafka-tools --image="${image}" --restart=Never \
@@ -376,7 +388,7 @@ if [[ ${mode} == budget ]]; then
   bazel run -c opt //packaging:image_load
   docker tag docker.io/krabka-io/krabka-broker:dev "${candidate_image}"
   candidate_image_digest=$(docker image inspect --format '{{.Id}}' "${candidate_image}")
-  kind load docker-image --name "${cluster}" "${candidate_image}" "${kafka_tag}"
+  kind_load "${candidate_image}" "${kafka_tag}"
 
   if [[ ${budget_mode} == before_after ]]; then
     reference_label=krabka
@@ -386,7 +398,7 @@ if [[ ${mode} == budget ]]; then
     (cd "${reference_parent}/reference" && bazel run -c opt //packaging:image_load)
     docker tag docker.io/krabka-io/krabka-broker:dev "${reference_image}"
     reference_image_digest=$(docker image inspect --format '{{.Id}}' "${reference_image}")
-    kind load docker-image --name "${cluster}" "${reference_image}"
+    kind_load "${reference_image}"
     remove_reference_worktree
     docker image inspect "${kafka_tag}" "${candidate_image}" "${reference_image}" \
       >"${artifact_dir}/image-inspect.json"
