@@ -54,6 +54,8 @@ connections_max_idle = "10m"
 # The controller listener terminates TLS with `[tls_config]` and demands a
 # client certificate from its peers. `controller_server_name` is the SNI name
 # every peer's certificate carries, so a dial to any pod IP validates.
+# `[runtime] inter_broker_server_name` below does the same for the INTERNAL
+# listener's replica fetches.
 inter_broker_listener_name = "INTERNAL"
 controller_listener_protocol = "Ssl"
 controller_server_name = "krabka.default.svc"
@@ -121,6 +123,10 @@ transaction_state_replication_factor = 3
 metadata_max_snapshot_interval = "1h"
 partition_disk_scan_interval = "1m"
 tls_reload_interval = "30s"
+# The name a dial to a peer's INTERNAL listener verifies its certificate
+# against. It defaults to "localhost", which no peer certificate carries, so
+# with a TLS inter-broker listener every replica fetch would fail its handshake.
+inter_broker_server_name = "krabka.default.svc"
 # The diskless WAL: how often the hot tail flushes to the object store, how
 # large a flush and the hot tail may grow, how many local replicas hold the
 # tail (an odd count), and how far the trim point may lag the flushed offset.

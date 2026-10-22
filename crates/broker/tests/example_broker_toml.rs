@@ -62,6 +62,26 @@ async fn examples_parse_and_apply_as_written() {
     }
 }
 
+/// A follower verifies the leader's certificate against
+/// `inter_broker_server_name`. Over a TLS inter-broker listener, the default
+/// `localhost` matches no peer certificate, and replication never starts.
+#[tokio::test]
+async fn examples_with_a_tls_inter_broker_listener_name_its_server() {
+    let default_name = BrokerConfig::default().inter_broker_server_name;
+    for relative in EXAMPLES {
+        let file = parse(relative, &read_example(relative));
+        let mut config = BrokerConfig::default();
+        file.apply_to(&mut config)
+            .unwrap_or_else(|error| panic!("{relative} does not apply: {error}"));
+        if config.inter_broker_listener_protocol().requires_tls() {
+            check!(
+                config.inter_broker_server_name != default_name,
+                "{relative} dials peers over TLS but leaves inter_broker_server_name at {default_name:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn examples_parse_with_every_disabled_setting_enabled() {
     for relative in EXAMPLES {
