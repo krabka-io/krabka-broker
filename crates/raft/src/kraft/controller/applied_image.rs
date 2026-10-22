@@ -19,11 +19,9 @@
 //!   and only that copies the image. The last record of a batch is applied to
 //!   nothing, so a one-record batch copies nothing.
 
-#[cfg(test)]
-use std::cell::Cell;
 use {
     krabka_metadata::{MetadataImage, MetadataRecord},
-    std::{borrow::Cow, ops::Deref, sync::Arc},
+    std::{borrow::Cow, cell::Cell, ops::Deref, sync::Arc},
     tokio::sync::watch,
 };
 
@@ -45,8 +43,7 @@ pub(super) struct AppliedImage {
     /// order. `None` when they no longer describe the difference: the image
     /// was replaced, or more records applied than the log keeps.
     since_publish: Option<Vec<MetadataRecord>>,
-    /// How many deep copies of the image this value has made.
-    #[cfg(test)]
+    /// How many deep copies of the image this value and its overlays made.
     copies: Cell<u64>,
 }
 
@@ -58,7 +55,6 @@ impl AppliedImage {
             image,
             tx,
             since_publish: Some(Vec::new()),
-            #[cfg(test)]
             copies: Cell::new(0),
         };
         (applied, rx)
@@ -132,8 +128,9 @@ impl AppliedImage {
     pub(super) fn copies(&self) -> u64 { self.copies.get() }
 
     fn copy_of(&self, image: &MetadataImage) -> MetadataImage {
-        #[cfg(test)]
-        self.copies.set(self.copies.get() + 1);
+        let copies = self.copies.get().saturating_add(1);
+        self.copies.set(copies);
+        tracing::trace!(copies, "kraft: copied the whole metadata image");
         image.clone()
     }
 }
