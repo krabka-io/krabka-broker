@@ -47,6 +47,10 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- Opening and appending to a transaction index now uses constant-time exact
+  retry detection while retaining the index's first-occurrence scan order.
+  Broker recovery no longer performs a quadratic scan of aborted transactions
+  in each segment (#1663).
 - The broker writes the log start offset that local retention moves to a
   partition's `log-start-offset-checkpoint` on a timer, instead of on every
   retention pass. The `[runtime]` key
