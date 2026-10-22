@@ -164,10 +164,18 @@ pub(crate) struct PushCheck {
 
 /// The outcome of the `PushTelemetry` checks. A rejection carries no throttle
 /// time, for the same reason as [`SubscriptionDecision::Reject`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PushDecision {
-    Accept,
-    Reject { error_code: i16 },
+    /// The push passed the checks. `metrics` are the metric-name prefixes of
+    /// the subscription the instance holds, which the payload must stay
+    /// within: the subscription built from the instance's first attributes,
+    /// not from the header of this push.
+    Accept {
+        metrics: Vec<String>,
+    },
+    Reject {
+        error_code: i16,
+    },
 }
 
 struct State {
@@ -256,9 +264,7 @@ pub(crate) const ACCEPTED_COMPRESSION_TYPES: [i8; 4] = [4, 3, 1, 2];
 
 /// Kafka's `Uuid.RESERVED`: the zero UUID and `Uuid.ONE_UUID`, which no
 /// client instance may use.
-fn is_reserved_instance_id(id: Uuid) -> bool {
-    id.is_nil() || id == Uuid::from_u128(1)
-}
+fn is_reserved_instance_id(id: Uuid) -> bool { id.is_nil() || id == Uuid::from_u128(1) }
 
 impl ClientMetricsManager {
     pub(crate) fn new(telemetry_max: ByteSize, default_interval_ms: i32) -> Self {
@@ -276,15 +282,11 @@ impl ClientMetricsManager {
 
     /// The KIP-714 `telemetry.max.bytes` ceiling: the largest compressed push,
     /// and the largest payload a push may decompress to.
-    pub(crate) fn telemetry_max(&self) -> ByteSize {
-        self.telemetry_max
-    }
+    pub(crate) fn telemetry_max(&self) -> ByteSize { self.telemetry_max }
 
     /// The KIP-714 `PushTelemetry` size ceiling in the `int32` byte form the
     /// wire response carries.
-    pub(crate) fn telemetry_max_bytes(&self) -> i32 {
-        self.telemetry_max.bytes_i32()
-    }
+    pub(crate) fn telemetry_max_bytes(&self) -> i32 { self.telemetry_max.bytes_i32() }
 
     /// Kafka's `processGetTelemetrySubscriptionRequest`. A zero
     /// `attrs.client_instance_id` asks for a new id, and the assignment
@@ -398,7 +400,9 @@ impl ClientMetricsManager {
         // errors the next `GetTelemetrySubscriptions` reads are the two the
         // checks above give, so an accepted push leaves none behind.
         inst.last_error = codes::NONE;
-        PushDecision::Accept
+        PushDecision::Accept {
+            metrics: inst.subscription.metrics.clone(),
+        }
     }
 
     /// Drops an instance that has been idle for longer than
@@ -447,7 +451,10 @@ mod tests {
             test_support::{all_metrics_img, attrs, expect_assignment},
             *,
         },
-        crate::{client_metrics::config::INTERVAL_MS_DEFAULT, test_support::KafkaErrorCode},
+        crate::{
+            client_metrics::config::{ALL_METRICS, INTERVAL_MS_DEFAULT},
+            test_support::KafkaErrorCode,
+        },
         assert2::assert,
         uuid::Uuid,
     };
@@ -566,7 +573,11 @@ mod tests {
         })
     }
 
-    const ACCEPT: Outcome = Outcome::Push(PushDecision::Accept);
+    fn accept() -> Outcome {
+        Outcome::Push(PushDecision::Accept {
+            metrics: vec![ALL_METRICS.to_string()],
+        })
+    }
 
     /// Kafka's `validatePushRequest` order after a `GetTelemetrySubscriptions`
     /// at T: terminating, throttle, subscription id, compression, size. The
@@ -585,7 +596,7 @@ mod tests {
                 "first push after the get",
                 secs(1),
                 push(TelemetrySubscriptionId(right)),
-                ACCEPT,
+                accept(),
             ),
             (
                 "early push",
@@ -637,7 +648,7 @@ mod tests {
                     payload_len: 1024,
                     ..push(TelemetrySubscriptionId(right))
                 },
-                ACCEPT,
+                accept(),
             ),
             (
                 "an early terminating push skips the throttle",
@@ -646,7 +657,7 @@ mod tests {
                     terminating: true,
                     ..push(TelemetrySubscriptionId(right))
                 },
-                ACCEPT,
+                accept(),
             ),
             (
                 "nothing is accepted after a terminating push",
@@ -707,7 +718,7 @@ mod tests {
                 steps: [
                     mv(0, true, false, unsupported()),
                     mv(60, false, true, locked()),
-                    mv(120, false, true, ACCEPT),
+                    mv(120, false, true, accept()),
                 ],
             },
             Row {
@@ -715,24 +726,24 @@ mod tests {
                 unstable: Enabled,
                 steps: [
                     mv(0, true, false, unsupported()),
-                    mv(60, false, true, ACCEPT),
-                    mv(120, false, true, ACCEPT),
+                    mv(60, false, true, accept()),
+                    mv(120, false, true, accept()),
                 ],
             },
             Row {
                 name: "4.3.1: the push that the lock refuses resets the flag",
                 unstable: Disabled,
                 steps: [
-                    mv(0, true, true, ACCEPT),
+                    mv(0, true, true, accept()),
                     mv(60, false, true, locked()),
-                    mv(120, false, true, ACCEPT),
+                    mv(120, false, true, accept()),
                 ],
             },
             Row {
                 name: "trunk: an accepted terminating push locks until expiry",
                 unstable: Enabled,
                 steps: [
-                    mv(0, true, true, ACCEPT),
+                    mv(0, true, true, accept()),
                     mv(60, false, true, locked()),
                     mv(120, false, true, locked()),
                 ],
@@ -788,7 +799,7 @@ mod tests {
             attrs.client_instance_id,
         );
         let rows = [
-            ("current subscription id", attrs.clone(), current, ACCEPT),
+            ("current subscription id", attrs.clone(), current, accept()),
             (
                 "other subscription id",
                 attrs.clone(),
@@ -924,7 +935,7 @@ mod tests {
                 "push at 150 ms",
                 ms(150),
                 Step::Push(push(TelemetrySubscriptionId(id))),
-                ACCEPT,
+                accept(),
             ),
             ("get after a recent push", ms(200), Step::Get, throttled()),
             (
@@ -971,22 +982,16 @@ mod tests {
     fn get_answers_with_the_instance_id_it_used() {
         let m = manager();
         let img = MetadataImage::new(Uuid::nil());
-        let fresh = expect_assignment(m.get_subscription(
-            &img,
-            &ClientAttributes {
-                client_instance_id: Uuid::nil(),
-                ..attrs()
-            },
-        ));
+        let fresh = expect_assignment(m.get_subscription(&img, &ClientAttributes {
+            client_instance_id: Uuid::nil(),
+            ..attrs()
+        }));
         assert!(!fresh.client_instance_id.is_nil());
         for id in [Uuid::from_u128(1), Uuid::from_u128(42)] {
-            let assigned = expect_assignment(m.get_subscription(
-                &img,
-                &ClientAttributes {
-                    client_instance_id: id,
-                    ..attrs()
-                },
-            ));
+            let assigned = expect_assignment(m.get_subscription(&img, &ClientAttributes {
+                client_instance_id: id,
+                ..attrs()
+            }));
             assert!(assigned.client_instance_id == id);
         }
     }
@@ -1068,7 +1073,7 @@ mod tests {
                     .now(t)
                     .step(Step::Push(terminate))
                     .call()
-                    == ACCEPT
+                    == accept()
             );
 
             m.evict_stale_at(3, floor, t + Duration::from_secs(idle));
@@ -1081,7 +1086,7 @@ mod tests {
                 .step(Step::Push(push(TelemetrySubscriptionId(id))))
                 .call();
             let expected = if expired {
-                ACCEPT
+                accept()
             } else {
                 reject_push(KafkaErrorCode(codes::INVALID_REQUEST))
             };
@@ -1115,9 +1120,9 @@ mod tests {
                 .call()
         };
 
-        assert!(push_on("a", 0, terminate) == ACCEPT, "built on a");
+        assert!(push_on("a", 0, terminate) == accept(), "built on a");
         m.evict_stale_at(3, Duration::from_secs(60), secs(200));
-        assert!(push_on("b", 200, terminate) == ACCEPT, "rebuilt on b");
+        assert!(push_on("b", 200, terminate) == accept(), "rebuilt on b");
         m.connection_closed("a");
         assert!(
             push_on("b", 201, push(TelemetrySubscriptionId(id)))

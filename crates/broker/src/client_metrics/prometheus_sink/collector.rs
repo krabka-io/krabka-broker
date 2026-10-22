@@ -17,8 +17,10 @@ use {
 };
 
 /// Hard ceilings keep the retained snapshot deterministic even when clients
-/// reconnect with fresh instance ids. These include existing series updates;
-/// new series beyond either ceiling are discarded atomically.
+/// reconnect with fresh instance ids. They count the series a scrape renders,
+/// so a histogram counts each of its buckets plus `_sum` and `_count`. These
+/// include existing series updates; a point that would take a total past
+/// either ceiling is discarded.
 pub(crate) const MAX_RETAINED_SERIES: usize = 10_000;
 pub(crate) const MAX_RETAINED_SERIES_PER_CLIENT: usize = 1_000;
 pub(crate) const MAX_RETAINED_SERIES_PER_INSTANCE: usize = 500;
@@ -47,9 +49,7 @@ pub(crate) struct ClientMetricsCollector {
 }
 
 impl ClientMetricsCollector {
-    pub(super) fn is_live(age: Duration, ttl: Duration) -> bool {
-        age < ttl
-    }
+    pub(super) fn is_live(age: Duration, ttl: Duration) -> bool { age < ttl }
 
     pub(crate) fn new(ttl: Duration) -> Self {
         Self {
@@ -68,13 +68,16 @@ impl ClientMetricsCollector {
             return;
         }
         guard.retain(|_, sp| Self::is_live(now.duration_since(sp.at), self.ttl));
+        let mut total = 0;
         let mut client_counts = HashMap::<String, usize>::new();
         let mut instance_counts = HashMap::<String, usize>::new();
-        for key in guard.keys() {
-            *client_counts.entry(key.client_id.clone()).or_default() += 1;
+        for (key, stored) in guard.iter() {
+            let series = stored.value.series_count();
+            total += series;
+            *client_counts.entry(key.client_id.clone()).or_default() += series;
             *instance_counts
                 .entry(key.client_instance_id.clone())
-                .or_default() += 1;
+                .or_default() += series;
         }
         for p in points {
             let key = SeriesKey {
@@ -83,43 +86,55 @@ impl ClientMetricsCollector {
                 client_id: p.client_id.clone(),
                 attributes: p.attributes.clone(),
             };
-            if !guard.contains_key(&key) {
-                let client_count = client_counts.get(&key.client_id).copied().unwrap_or(0);
-                let instance_count = instance_counts
-                    .get(&key.client_instance_id)
-                    .copied()
-                    .unwrap_or(0);
-                if guard.len() >= MAX_RETAINED_SERIES
-                    || client_count >= MAX_RETAINED_SERIES_PER_CLIENT
-                    || instance_count >= MAX_RETAINED_SERIES_PER_INSTANCE
-                {
-                    continue;
-                }
-                *client_counts.entry(key.client_id.clone()).or_default() += 1;
-                *instance_counts
-                    .entry(key.client_instance_id.clone())
-                    .or_default() += 1;
-            }
-            if let Some(start) = p.delta_start
-                && let Some(stored) = guard.get_mut(&key)
-                && stored
-                    .delta_start
-                    .is_some_and(|previous| previous == 0 || start == 0 || previous == start)
-                && stored.value.accumulate(&p.value)
+            let before = guard
+                .get(&key)
+                .map_or(0, |stored| stored.value.series_count());
+            let growth = p.value.series_count().saturating_sub(before);
+            let client_count = client_counts.get(&key.client_id).copied().unwrap_or(0);
+            let instance_count = instance_counts
+                .get(&key.client_instance_id)
+                .copied()
+                .unwrap_or(0);
+            if growth > 0
+                && (total + growth > MAX_RETAINED_SERIES
+                    || client_count + growth > MAX_RETAINED_SERIES_PER_CLIENT
+                    || instance_count + growth > MAX_RETAINED_SERIES_PER_INSTANCE)
             {
-                stored.delta_start = Some(start);
-                stored.at = now;
                 continue;
             }
-            guard.insert(
-                key,
-                StoredPoint {
+            let accumulated = p.delta_start.is_some_and(|start| {
+                guard.get_mut(&key).is_some_and(|stored| {
+                    let accumulated = stored
+                        .delta_start
+                        .is_some_and(|previous| previous == 0 || start == 0 || previous == start)
+                        && stored.value.accumulate(&p.value);
+                    if accumulated {
+                        stored.delta_start = Some(start);
+                        stored.at = now;
+                    }
+                    accumulated
+                })
+            });
+            if !accumulated {
+                guard.insert(key.clone(), StoredPoint {
                     attributes: p.attributes.clone(),
                     value: p.value.clone(),
                     delta_start: p.delta_start,
                     at: now,
-                },
-            );
+                });
+            }
+            let after = guard
+                .get(&key)
+                .map_or(0, |stored| stored.value.series_count());
+            total = total + after - before;
+            for count in [
+                client_counts.entry(key.client_id.clone()).or_default(),
+                instance_counts
+                    .entry(key.client_instance_id.clone())
+                    .or_default(),
+            ] {
+                *count = *count + after - before;
+            }
         }
     }
 
@@ -161,7 +176,9 @@ mod tests {
                     .metric(format!("attacker_metric_{index}"))
                     .client_instance_id(instance.to_string())
                     .client_id("attacker".into())
-                    .value(PointValue::Gauge(index as f64))
+                    .value(PointValue::Gauge(f64::from(
+                        u32::try_from(index).expect("index fits in u32"),
+                    )))
                     .call()
             })
             .collect::<Vec<_>>();
@@ -171,6 +188,35 @@ mod tests {
 
         sink.remove_instance(instance);
         assert2::assert!(sink.live_point_count() == 0);
+    }
+
+    #[test]
+    fn a_histogram_counts_every_series_it_renders_toward_the_ceilings() {
+        let sink = ClientMetricsCollector::new(Duration::from_mins(1));
+        let instance = Uuid::from_u128(8);
+        // 129 buckets plus `_sum` and `_count` render 131 series, so three
+        // histograms (393 series) fit under the per-instance ceiling of 500
+        // and a fourth does not.
+        let buckets = (0..129_u32)
+            .map(|bound| (f64::from(bound), 1))
+            .collect::<Vec<_>>();
+        let points = (0..4)
+            .map(|index| {
+                data_point()
+                    .metric(format!("attacker_histogram_{index}"))
+                    .client_instance_id(instance.to_string())
+                    .client_id("attacker".into())
+                    .value(PointValue::Histogram {
+                        count: 129,
+                        sum: 1.0,
+                        buckets: buckets.clone(),
+                    })
+                    .call()
+            })
+            .collect::<Vec<_>>();
+
+        sink.ingest(&points);
+        assert2::assert!(sink.live_point_count() == 3);
     }
 
     #[test]

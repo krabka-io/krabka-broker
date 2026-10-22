@@ -29,7 +29,24 @@ pub(super) fn flatten_for_prometheus(
         common::v1::{AnyValue, KeyValue, any_value::Value as AnyValueKind},
         metrics::v1::{AggregationTemporality, metric::Data, number_data_point::Value},
     };
-    let mut out = Vec::new();
+    // Count the points before flattening any, so a compact payload cannot
+    // make the broker materialize more than the bound.
+    let point_count = md
+        .resource_metrics
+        .iter()
+        .flat_map(|rm| &rm.scope_metrics)
+        .flat_map(|sm| &sm.metrics)
+        .map(|m| match &m.data {
+            Some(Data::Gauge(g)) => g.data_points.len(),
+            Some(Data::Sum(s)) => s.data_points.len(),
+            Some(Data::Histogram(h)) => h.data_points.len(),
+            _ => 0,
+        })
+        .sum::<usize>();
+    if point_count > MAX_POINTS_PER_PUSH {
+        return Err(());
+    }
+    let mut out = Vec::with_capacity(point_count);
     let num = |v: &Value| -> f64 {
         match v {
             Value::AsDouble(d) => *d,
@@ -55,20 +72,25 @@ pub(super) fn flatten_for_prometheus(
         if sets.iter().map(|set| set.len()).sum::<usize>() > MAX_ATTRIBUTES_PER_POINT {
             return Err(());
         }
-        let mut labels = sets
-            .iter()
-            .flat_map(|set| set.iter())
-            .filter_map(|attribute| {
-                let name = sanitize_prometheus_label(&attribute.key);
-                if matches!(name.as_str(), "client_id" | "client_instance_id") {
-                    return None;
-                }
-                let value = attribute_value(attribute.value.as_ref()?)?;
-                (attribute.key.len() <= MAX_ATTRIBUTE_KEY_BYTES
-                    && value.len() <= MAX_ATTRIBUTE_VALUE_BYTES)
-                    .then_some((name, value))
-            })
-            .collect::<Vec<_>>();
+        // An oversized key or value fails the push: dropping the label instead
+        // would merge distinct series into one.
+        let mut labels = Vec::new();
+        for attribute in sets.iter().flat_map(|set| set.iter()) {
+            if attribute.key.len() > MAX_ATTRIBUTE_KEY_BYTES {
+                return Err(());
+            }
+            let name = sanitize_prometheus_label(&attribute.key);
+            if matches!(name.as_str(), "client_id" | "client_instance_id") {
+                continue;
+            }
+            let Some(value) = attribute.value.as_ref().and_then(attribute_value) else {
+                continue;
+            };
+            if value.len() > MAX_ATTRIBUTE_VALUE_BYTES {
+                return Err(());
+            }
+            labels.push((name, value));
+        }
         labels.sort();
         labels.dedup_by(|left, right| left.0 == right.0);
         Ok(labels)
@@ -99,10 +121,13 @@ pub(super) fn flatten_for_prometheus(
                 let mut numbers =
                     |points: &[opentelemetry_proto::tonic::metrics::v1::NumberDataPoint],
                      monotonic: bool,
-                     delta: bool| {
-                        out.extend(points.iter().filter_map(|dp| {
-                            let value = num(dp.value.as_ref()?);
-                            point(
+                     delta: bool|
+                     -> Result<(), ()> {
+                        for dp in points {
+                            let Some(value) = dp.value.as_ref().map(num) else {
+                                continue;
+                            };
+                            out.push(point(
                                 &dp.attributes,
                                 if monotonic {
                                     PointValue::Counter(value)
@@ -110,17 +135,17 @@ pub(super) fn flatten_for_prometheus(
                                     PointValue::Gauge(value)
                                 },
                                 delta.then_some(dp.start_time_unix_nano),
-                            )
-                            .ok()
-                        }));
+                            )?);
+                        }
+                        Ok(())
                     };
                 match &m.data {
-                    Some(Data::Gauge(g)) => numbers(&g.data_points, false, false),
+                    Some(Data::Gauge(g)) => numbers(&g.data_points, false, false)?,
                     Some(Data::Sum(s)) => numbers(
                         &s.data_points,
                         s.is_monotonic,
                         s.aggregation_temporality == AggregationTemporality::Delta as i32,
-                    ),
+                    )?,
                     Some(Data::Histogram(h)) => {
                         for dp in &h.data_points {
                             if dp.explicit_bounds.len() > MAX_HISTOGRAM_BUCKETS
@@ -153,9 +178,6 @@ pub(super) fn flatten_for_prometheus(
                         }
                     }
                     _ => {}
-                }
-                if out.len() > MAX_POINTS_PER_PUSH {
-                    return Err(());
                 }
             }
         }
@@ -202,13 +224,50 @@ mod tests {
             name: "attacker.metric".into(),
             data: Some(metric::Data::Gauge(Gauge {
                 data_points: (0..=MAX_POINTS_PER_PUSH)
-                    .map(|value| number_point(number_data_point::Value::AsInt(value as i64)))
+                    .map(|value| {
+                        number_point(number_data_point::Value::AsInt(
+                            i64::try_from(value).expect("point index fits in i64"),
+                        ))
+                    })
                     .collect(),
             })),
             ..Default::default()
         };
 
         assert!(flatten_for_prometheus(&metrics_data(vec![metric]), "i", "c").is_err());
+    }
+
+    #[test]
+    fn flatten_rejects_a_number_point_whose_attributes_exceed_a_limit() {
+        let long_key = "k".repeat(MAX_ATTRIBUTE_KEY_BYTES + 1);
+        let long_value = "v".repeat(MAX_ATTRIBUTE_VALUE_BYTES + 1);
+        let too_many = (0..=MAX_ATTRIBUTES_PER_POINT)
+            .map(|index| string_attribute(&format!("key{index}"), "value"))
+            .collect::<Vec<_>>();
+        for (name, attributes) in [
+            ("too many attributes", too_many),
+            ("oversized key", vec![string_attribute(&long_key, "value")]),
+            ("oversized value", vec![string_attribute(
+                "key",
+                &long_value,
+            )]),
+        ] {
+            let metric = Metric {
+                name: "requests.total".into(),
+                data: Some(metric::Data::Sum(Sum {
+                    data_points: vec![NumberDataPoint {
+                        attributes,
+                        ..number_point(number_data_point::Value::AsInt(1))
+                    }],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert!(
+                flatten_for_prometheus(&metrics_data(vec![metric]), "i", "c").is_err(),
+                "row {name}"
+            );
+        }
     }
 
     #[test]

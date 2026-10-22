@@ -25,10 +25,11 @@ use {
     },
     assert2::assert,
     bytes::Bytes,
+    krabka_metadata::{ClientMetricsConfigRecord, MetadataRecord},
     krabka_protocol::{owned::push_telemetry_response, primitives::uuid::Uuid as ProtoUuid},
     opentelemetry_proto::tonic::metrics::v1::number_data_point,
-    uuid::Uuid,
     std::sync::Arc,
+    uuid::Uuid,
 };
 
 krabka_macros::wire_codec_helpers! {
@@ -332,6 +333,17 @@ async fn push_without_a_get_builds_the_instance() {
         bind(broker_handle, _dir, broker);
         boot [broker_fixture_support::start_broker_with(|cfg| cfg.client_metrics_enable = true)];
     };
+    // The broker accepts only subscribed metrics, so subscribe every client
+    // to the one metric `otlp` pushes.
+    broker_handle
+        .submit_metadata_record_for_test(MetadataRecord::V1ClientMetricsConfig(
+            ClientMetricsConfigRecord {
+                name: "cpu".into(),
+                configs: [("metrics".to_string(), "cpu.utilization".to_string())].into(),
+            },
+        ))
+        .await
+        .expect("submit client-metrics subscription");
     let peer_addr = peer();
     let principal = broker_fixture_support::principal("telemetry-client");
     let client_ctx = TelemetryContext {
@@ -385,5 +397,54 @@ async fn push_without_a_get_builds_the_instance() {
             "row {name}"
         );
     }
+    broker_handle.shutdown().await;
+}
+
+/// An instance keeps the attributes of its first request, so a push whose
+/// header names another `client_id` stays within the subscription the first
+/// request was given rather than the one the new header would match.
+#[tokio::test]
+async fn push_checks_metrics_against_the_instances_first_attributes() {
+    krabka_macros::broker_test_setup! {
+        bind(broker_handle, _dir, broker);
+        boot [broker_fixture_support::start_broker_with(|cfg| cfg.client_metrics_enable = true)];
+    };
+    broker_handle
+        .submit_metadata_record_for_test(MetadataRecord::V1ClientMetricsConfig(
+            ClientMetricsConfigRecord {
+                name: "client-b-only".into(),
+                configs: [
+                    ("metrics".to_string(), "cpu.utilization".to_string()),
+                    ("match".to_string(), "client_id=client-b".to_string()),
+                ]
+                .into(),
+            },
+        ))
+        .await
+        .expect("submit client-metrics subscription");
+    let peer_addr = peer();
+    let principal = broker_fixture_support::principal("telemetry-client");
+    let client = |client_id| Client {
+        broker: &broker,
+        ctx: TelemetryContext {
+            principal: &principal,
+            connection_id: "connection-a",
+            client_id,
+            peer: &peer_addr,
+            software_name: "test-client",
+            software_version: "1.0.0",
+        },
+    };
+    let instance = Uuid::from_u128(0x9abc);
+    let subscription = client("client-a").get(instance);
+
+    assert!(
+        client("client-b").push(PushSetup {
+            instance,
+            subscription,
+            metrics: gzip(&otlp()),
+            ..Default::default()
+        }) == response(KafkaErrorCode(codes::INVALID_RECORD))
+    );
     broker_handle.shutdown().await;
 }

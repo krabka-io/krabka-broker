@@ -190,9 +190,10 @@ impl<'a> RequestContext<'a> {
         handler_time: std::time::Duration,
     ) -> i32 {
         let request_delay = self.charge_request_quota(broker, image, handler_time);
-        let delay = broker
-            .metrics
-            .record_applied_throttle(api_key, &[(QuotaType::Request, request_delay).into()]);
+        let delay =
+            broker
+                .metrics
+                .record_applied_throttle(api_key, &[(QuotaType::Request, request_delay).into()]);
         // KIP-219: the response goes out now and the connection is muted for
         // the window afterwards.
         self.record_throttle(delay);
@@ -209,15 +210,11 @@ impl<'a> RequestContext<'a> {
     /// Leaves a quota charge for the dispatch loop to resolve with the request
     /// quota in one metrics call, and records its window. See
     /// [`crate::quota::ThrottleSlot::defer`].
-    pub(crate) fn defer_quota_charge(&self, charge: QuotaCharge) {
-        self.throttle.defer(charge);
-    }
+    pub(crate) fn defer_quota_charge(&self, charge: QuotaCharge) { self.throttle.defer(charge); }
 
     /// Drains the recorded KIP-219 window. It returns a zero extent when no
     /// quota charged this request.
-    pub(crate) fn take_throttle(&self) -> krabka_units::Time {
-        self.throttle.take()
-    }
+    pub(crate) fn take_throttle(&self) -> krabka_units::Time { self.throttle.take() }
 
     /// Marks this request's connection to be closed once its (suppressed)
     /// response has been written. Only an `acks=0` `Produce` whose response

@@ -32,16 +32,14 @@ mod tests;
 use {
     self::prometheus::flatten_for_prometheus,
     crate::{
-        api_catalog::ClientMetricsReceiver,
-        api_catalog::UnstableApiVersions,
+        api_catalog::{ClientMetricsReceiver, UnstableApiVersions},
         client_metrics::{
             config::ALL_METRICS,
-            manager::{PushCheck, PushDecision, compute_subscription},
+            manager::{PushCheck, PushDecision},
         },
         codes,
         handlers::{acl_wire::CLUSTER_RESOURCE_NAME, context::TelemetryContext},
     },
-    krabka_units::convert::TimeExt as _,
 };
 
 /// Kafka's `CompressionType.forId`: the ids 0 to 4 and nothing else. The
@@ -84,16 +82,17 @@ crate::handlers::raw_request_handler!(
         let attrs = ctx.client_attributes(instance);
         let unstable = broker.config.features.unstable_api_versions;
         let image = broker.controller.current_image();
-        let authorized = broker.config.authorizer.authorize(
-            &*image,
-            &AuthorizationRequest {
+        let authorized = broker
+            .config
+            .authorizer
+            .authorize(&*image, &AuthorizationRequest {
                 principal: ctx.principal,
                 host: ctx.peer,
                 resource_type: ResourceType::Cluster,
                 resource_name: CLUSTER_RESOURCE_NAME,
                 operation: AclOperation::ClusterAction,
-            },
-        ) == AuthorizationResult::Allow;
+            })
+            == AuthorizationResult::Allow;
         if !authorized {
             return encode_response(
                 &PushTelemetryResponse {
@@ -103,30 +102,22 @@ crate::handlers::raw_request_handler!(
                 version,
             );
         }
-        let subscribed = compute_subscription(
-            &image,
-            &attrs,
-            broker.config.client_metrics_default_interval.millis_i32(),
-        )
-        .metrics;
-        let decision = manager.authorize_push(
-            &image,
-            &attrs,
-            PushCheck {
-                subscription_id: req.subscription_id,
-                terminating: req.terminating,
-                compression_supported: codec.is_some(),
-                payload_len: req.metrics.len(),
-                unstable,
-            },
-        );
+        let decision = manager.authorize_push(&image, &attrs, PushCheck {
+            subscription_id: req.subscription_id,
+            terminating: req.terminating,
+            compression_supported: codec.is_some(),
+            payload_len: req.metrics.len(),
+            unstable,
+        });
 
         // Kafka answers every error with `throttle_time_ms` 0; only the request
         // quota raises it.
         let error_code = match decision {
             PushDecision::Reject { error_code } => error_code,
-            PushDecision::Accept if req.metrics.is_empty() => codes::NONE,
-            PushDecision::Accept => {
+            PushDecision::Accept { .. } if req.metrics.is_empty() => codes::NONE,
+            PushDecision::Accept {
+                metrics: subscribed,
+            } => {
                 let ct = codec.expect("authorize_push accepts only a supported codec");
                 // Kafka's exporter decompresses up to `telemetry.max.bytes`. A
                 // larger payload throws `TelemetryTooLargeException`, which 4.3.1
