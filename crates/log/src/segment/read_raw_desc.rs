@@ -56,47 +56,14 @@ impl Segment {
         max_size: ByteSize,
         read_ahead_max: ByteSize,
     ) -> Result<Option<RawSegmentDesc>, LogError> {
-        self.read_raw_desc_if_cached_with_reader(
+        self.describe_with_reader(
             fetch_offset,
             limit_offset,
             max_size,
             read_ahead_max,
+            Probe::PageCache,
             |pos, buf, len| self.read_log_range(pos, buf, len),
         )
-    }
-
-    fn read_raw_desc_if_cached_with_reader(
-        &self,
-        fetch_offset: Offset,
-        limit_offset: Offset,
-        max_size: ByteSize,
-        read_ahead_max: ByteSize,
-        mut read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
-    ) -> Result<Option<RawSegmentDesc>, LogError> {
-        if self.wrote_direct {
-            return Ok(None);
-        }
-        let Some(start_pos) = self.raw_start_position_with(
-            fetch_offset,
-            limit_offset,
-            "read_raw_desc",
-            &mut read_range,
-        )?
-        else {
-            return Ok(Some(RawSegmentDesc::empty()));
-        };
-        if !self.run_is_cached(start_pos, max_size) {
-            return Ok(None);
-        }
-        self.describe_run(
-            start_pos,
-            fetch_offset,
-            limit_offset,
-            max_size,
-            read_ahead_max,
-            read_range,
-        )
-        .map(Some)
     }
 
     /// Whether the page cache holds both the first and the last byte of the
@@ -150,25 +117,35 @@ impl Segment {
         max_size: ByteSize,
         read_ahead_max: ByteSize,
     ) -> Result<RawSegmentDesc, LogError> {
-        self.read_raw_desc_with_reader(
+        self.describe_with_reader(
             fetch_offset,
             limit_offset,
             max_size,
             read_ahead_max,
+            Probe::None,
             |pos, buf, len| self.read_log_range(pos, buf, len),
         )
+        .map(|desc| desc.unwrap_or_else(RawSegmentDesc::empty))
     }
 
-    /// Keep the positional reads injectable so tests can measure the synchronous
-    /// I/O of the descriptor walk as well as the file region it selects.
-    fn read_raw_desc_with_reader(
+    /// The descriptor walk behind both public forms. `None` means the run
+    /// is not described at all: the segment wrote through `O_DIRECT`, or
+    /// `probe` found the run outside the page cache.
+    ///
+    /// The sparse-index lookup for the start position runs once, before the
+    /// probe, and the walk starts from the position it found. The positional
+    /// reads stay injectable so tests can measure the synchronous I/O of the
+    /// whole fetch, the lookup included, as well as the file region it
+    /// selects.
+    fn describe_with_reader(
         &self,
         fetch_offset: Offset,
         limit_offset: Offset,
         max_size: ByteSize,
         read_ahead_max: ByteSize,
+        probe: Probe,
         mut read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
-    ) -> Result<RawSegmentDesc, LogError> {
+    ) -> Result<Option<RawSegmentDesc>, LogError> {
         // The bytes of a segment that wrote through `O_DIRECT` are not in
         // the page cache: the newest are in its tail cache, and the rest are
         // only on the disk, sealed or not. Walking their batch headers here
@@ -179,7 +156,7 @@ impl Segment {
         // an empty description is what the broker falls back on, and a
         // segment that contributes nothing is one the log's walk passes over.
         if self.wrote_direct {
-            return Ok(RawSegmentDesc::empty());
+            return Ok(None);
         }
         let Some(start_pos) = self.raw_start_position_with(
             fetch_offset,
@@ -188,29 +165,11 @@ impl Segment {
             &mut read_range,
         )?
         else {
-            return Ok(RawSegmentDesc::empty());
+            return Ok(Some(RawSegmentDesc::empty()));
         };
-        self.describe_run(
-            start_pos,
-            fetch_offset,
-            limit_offset,
-            max_size,
-            read_ahead_max,
-            read_range,
-        )
-    }
-
-    /// Describe the run that starts at byte `start_pos`, which the sparse
-    /// index lookup for `fetch_offset` already resolved.
-    fn describe_run(
-        &self,
-        start_pos: u64,
-        fetch_offset: Offset,
-        limit_offset: Offset,
-        max_size: ByteSize,
-        read_ahead_max: ByteSize,
-        mut read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
-    ) -> Result<RawSegmentDesc, LogError> {
+        if probe == Probe::PageCache && !self.run_is_cached(start_pos, max_size) {
+            return Ok(None);
+        }
         // Scan bounded windows to find headers; keep the selected payload file-backed.
         let max_bytes = max_size.bytes_usize();
         let window =
@@ -246,12 +205,12 @@ impl Segment {
             Ok(Some(batch))
         })?
         else {
-            return Ok(RawSegmentDesc::empty());
+            return Ok(Some(RawSegmentDesc::empty()));
         };
         if start_pos + range.positions.end as u64 > self.log_size {
-            return Ok(RawSegmentDesc::empty());
+            return Ok(Some(RawSegmentDesc::empty()));
         }
-        Ok(RawSegmentDesc {
+        Ok(Some(RawSegmentDesc {
             start_offset: range.start_offset,
             last_offset: range.last_offset,
             region: Some(krabka_protocol::records::FileRegion {
@@ -259,8 +218,17 @@ impl Segment {
                 offset: start_pos + range.positions.start as u64,
                 len: range.positions.len(),
             }),
-        })
+        }))
     }
+}
+
+/// Whether the descriptor walk first asks the page cache about its run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Probe {
+    /// Walk the run wherever its bytes are.
+    None,
+    /// Describe nothing when the run's first or last byte is not cached.
+    PageCache,
 }
 
 #[cfg(test)]
@@ -299,11 +267,12 @@ mod tests {
     ) -> (Option<RawSegmentDesc>, Reads) {
         let mut reads = Vec::new();
         let desc = seg
-            .read_raw_desc_if_cached_with_reader(
+            .describe_with_reader(
                 fetch_offset,
                 limit_offset,
                 mebibytes(1),
                 DEFAULT_READ_AHEAD_MAX,
+                Probe::PageCache,
                 |pos, buf, len| {
                     reads.push((pos, len));
                     seg.read_log_range(pos, buf, len)
@@ -478,17 +447,19 @@ mod tests {
             let limit = Offset(i64::try_from(payload_sizes.len()).unwrap());
             let mut reads = Vec::new();
             let desc = seg
-                .read_raw_desc_with_reader(
+                .describe_with_reader(
                     Offset(0),
                     limit,
                     mebibytes(16),
                     DEFAULT_READ_AHEAD_MAX,
+                    Probe::None,
                     |pos, buf, len| {
                         reads.push((pos, len));
                         seg.read_log_range(pos, buf, len)
                     },
                 )
-                .unwrap();
+                .unwrap()
+                .expect("a buffered segment is always described");
             assert2::assert!(
                 reads.iter().map(|(_, len)| *len).collect::<Vec<_>>() == expected_reads
             );
