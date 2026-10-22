@@ -211,6 +211,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- Require `ClusterAction` for `PushTelemetry`, refuse both client-telemetry
+  RPCs when no receiver is enabled, reject unsubscribed or structurally
+  excessive OTLP metrics, and cap retained Prometheus client series globally
+  and per client/instance. Disconnects now release an instance's series
+  immediately (#1592).
 - The nightly criterion lane builds the reference and the candidate into
   separate Cargo target directories, both before either is measured. With one
   shared directory, Cargo could judge a candidate that changed only source as
