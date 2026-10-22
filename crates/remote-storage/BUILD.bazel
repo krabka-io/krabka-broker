@@ -7,8 +7,8 @@ exports_files(["Cargo.toml"])
 
 crate_library(name = "remote-storage")
 
-# `benches/remote_epoch_index.rs`, run on demand with `cargo bench`. This
-# target compiles and lints it in `bazel build //...`.
+# `benches/remote_epoch_index.rs`, which `ci.yml`'s nightly `bench` job runs
+# under Cargo. This target compiles and lints it in `bazel build //...`.
 crate_bench(lib = "remote-storage")
 
 # `krabka-worm-verify verify` — audits a WORM archive with read-only credentials.

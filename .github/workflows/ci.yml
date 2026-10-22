@@ -1263,7 +1263,7 @@ jobs:
     name: variance-calibrated criterion benches
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
-    # Four alternating reference/candidate passes over all seven suites.
+    # Four alternating reference/candidate passes over all eight suites.
     timeout-minutes: 360
     permissions:
       contents: read
@@ -1328,7 +1328,7 @@ jobs:
             [reference]="${RUNNER_TEMP}/krabka-benchmark-reference-target"
             [candidate]="${GITHUB_WORKSPACE}/target"
           )
-          bench_args=(-p krabka-broker -p krabka-log --features tracing/log --bench '*')
+          bench_args=(-p krabka-broker -p krabka-log -p krabka-remote-storage --features tracing/log --bench '*')
           mkdir -p benchmark-artifacts/{reference,candidate}/summaries
           {
             echo "candidate=${candidate_sha}"
@@ -1345,7 +1345,7 @@ jobs:
             source_dir="${reference_dir}"
             if [ "${side}" = candidate ]; then source_dir="${GITHUB_WORKSPACE}"; fi
             (cd "${source_dir}" && cargo tree --locked -p krabka-broker -p krabka-log \
-              --features tracing/log -e features -i tracing) \
+              -p krabka-remote-storage --features tracing/log -e features -i tracing) \
               > "benchmark-artifacts/${side}/tracing-features.txt"
           done
           # Build both revisions before measuring either, and record each
@@ -1569,7 +1569,7 @@ jobs:
   #
   # `docker` (every JVM/librdkafka container suite), `gssapi` (both
   # Kerberos acceptance cases), `links` (every external URL in the markdown
-  # the pull-request lychee run skips under `--offline`) and `bench` (the seven
+  # the pull-request lychee run skips under `--offline`) and `bench` (the eight
   # criterion suites) run once a day, on the 05:00 UTC schedule, and `gate`
   # deliberately excludes scheduled runs -- they gate no merge. Nothing else consumed their result, so a red nightly was
   # visible only to whoever opened the Actions tab. This job is what turns it

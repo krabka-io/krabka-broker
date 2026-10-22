@@ -72,6 +72,10 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   compiles the broker once and starts every selected suite together, and
   the matrix's runners are free for other jobs. `aspect container-suites`
   now writes one `targets` list instead of grouped matrix entries.
+- The nightly `bench` lane also runs `krabka-remote-storage`'s
+  `remote_epoch_index` suite, so the epoch index's transition, replay, restore
+  and lookup costs from #1616 are compared against the previous commit like
+  the broker and log suites.
 - A produce batch the broker re-encodes (a topic whose `compression.type`
   forces another codec, or a legacy `MessageSet` it up-converts) is encoded
   once instead of three times. The `max.message.bytes` gate keeps the bytes

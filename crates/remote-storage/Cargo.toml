@@ -72,7 +72,8 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 yare = { workspace = true }
 # Drives `benches/remote_epoch_index.rs`. `codspeed-criterion-compat` is
 # criterion under another name, the same pin `krabka-log` and `krabka-broker`
-# use. The suite runs on demand with `cargo bench -p krabka-remote-storage`.
+# use. `ci.yml`'s `bench` job executes this suite beside `krabka-broker`'s
+# six and `krabka-log`'s one, nightly and on demand.
 criterion = { version = "5.0.2", package = "codspeed-criterion-compat" }
 
 [[bench]]
