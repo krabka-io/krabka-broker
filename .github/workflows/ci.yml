@@ -389,8 +389,17 @@ jobs:
           lane: cargo
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           upload: ${{ github.event_name != 'pull_request' }}
+          # Clippy plus nextest's `cargo test --no-run` links ~140 statically
+          # linked broker test binaries into one target directory. On the
+          # first push run that reached nextest that filled 80 GB: ld died
+          # with a bus error and rustc with "No space left on device". So the
+          # runner takes BuildBuddy's 100 GB maximum, incremental compilation
+          # (whose dep-graph files are useless in CI) is off, and the script
+          # clears a target directory that the snapshot has let grow.
+          disk: 100GB
           env: |
             CARGO_PROFILE_DEV_DEBUG=line-tables-only
+            CARGO_INCREMENTAL=0
             RUN_NEXTEST=${{ github.event_name != 'pull_request' }}
           script: |
             set -euo pipefail
@@ -401,6 +410,15 @@ jobs:
             export PATH="${CARGO_HOME:-${HOME}/.cargo}/bin:${PATH}"
             # Installs the channel and components `rust-toolchain.toml` names.
             rustup toolchain install
+
+            # The snapshot keeps `target/` between runs, and Cargo never
+            # removes artifacts a later dependency graph no longer uses. Drop
+            # the incremental caches older runs left, and start clean once the
+            # directory passes 40 GB, so it cannot creep up to the disk limit.
+            rm -rf target/debug/incremental
+            if [ -d target ] && [ "$(du -sm target | cut -f1)" -gt 40000 ]; then
+              cargo clean
+            fi
 
             cargo clippy --workspace --all-targets -- -D warnings
 
