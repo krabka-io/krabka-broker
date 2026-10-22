@@ -117,6 +117,13 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   request, the install held the mutex for 9 ms instead of 150 ms over 256
   compressed segments, and for 1.4 ms instead of 43 ms over 45 MiB of gzip
   records. The files on disk are the same as before.
+- Starting a compaction pass no longer waits under the log mutex for the
+  background flushes of recently rolled segments. The install waits instead,
+  and only for the flushes queued when the pass started, which have almost
+  always ended by then: a flush holds a segment's files and writes the
+  producer snapshot at its end, so it must finish before the swap retires
+  them. In the measurements on the pull request, starting a pass over 45 MiB
+  of gzip records held the mutex for 0.01 ms instead of 8 ms.
 - A produce append runs on the request's own task when it only writes to the
   page cache. The partition writer task used to take every produce, so each
   one paid two cross-thread wakes before its write. The request task now takes
