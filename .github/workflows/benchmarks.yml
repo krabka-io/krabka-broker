@@ -15,6 +15,15 @@ on:
       - "Cargo.lock"
       - ".github/workflows/benchmarks.yml"
   workflow_dispatch:
+    inputs:
+      budget:
+        description: Run both regression-budget modes on a cloud benchmark worker
+        type: boolean
+        default: false
+      reference:
+        description: Reference commit for the before/after mode (default v1.0.5)
+        type: string
+        default: ac9deff316d38418622b16c237c671df88f57c7a
 
 permissions:
   contents: read
@@ -26,7 +35,8 @@ concurrency:
 
 jobs:
   # The broker performance budgets are judged on a dedicated host by
-  # `packaging/performance/qualify.sh budget` in qualification-profile.yml.
+  # `packaging/performance/qualify.sh budget`, in qualification-profile.yml
+  # for a frozen candidate and in `performance-budget` below for calibration.
   # This nightly lane checks the predeclared contract instead: it must
   # parse and validate, and the digest the harness will record is printed so a
   # published verdict can be traced back to this commit's contract. The
@@ -48,6 +58,71 @@ jobs:
           set -euo pipefail
           cargo run -p krabka-parse-benches -- check-contract \
             packaging/performance/regression-contract.json | tee -a "${GITHUB_STEP_SUMMARY}"
+
+  # A measured run of the predeclared regression budgets (#1395) on the cloud
+  # benchmark worker, without a frozen candidate. It measures the dispatched
+  # revision, so it calibrates the contract; candidate evidence still comes
+  # from qualification-profile.yml. The two modes run one after the other so
+  # neither shares its host. Each has about 20 hours of declared timeouts.
+  performance-budget:
+    name: broker · performance budget (${{ matrix.mode }})
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.budget }}
+    needs: performance-budget-contract
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        mode: [before_after, pinned_kafka]
+    runs-on: gcp-ubuntu-24-04-32core
+    timeout-minutes: 1380
+    steps:
+      - name: Keep temporary files off the size-limited /tmp tmpfs
+        run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: aspect-build/setup-aspect@ebca96eb49ef58c00d4226de8bd3a0813507dd87
+        with:
+          disk-cache: false
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa
+        with:
+          install_only: true
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Check every benchmark host prerequisite before measurement
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/performance"
+          if test "$(cat /proc/sys/fs/inotify/max_user_instances)" -lt 512; then
+            sudo sysctl -w fs.inotify.max_user_instances=512
+          fi
+          result=0
+          for program in awk bazel docker getconf git javac jq kind kubectl nproc realpath sed sha256sum timeout; do
+            if ! command -v "$program"; then echo "missing benchmark prerequisite: $program"; result=1; fi
+          done
+          { nproc; grep '^MemTotal:' /proc/meminfo; df -T .; } > "$RUNNER_TEMP/performance/host-prerequisites.txt"
+          exit "$result"
+      - name: Run the predeclared five-round comparison on this host
+        env:
+          BUDGET_MODE: ${{ matrix.mode }}
+          REFERENCE: ${{ inputs.reference }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/performance-tmp"
+          export TMPDIR="$RUNNER_TEMP/performance-tmp"
+          reference=()
+          if test "$BUDGET_MODE" = before_after; then reference=("$REFERENCE"); fi
+          PERF_ARTIFACT_DIR="$RUNNER_TEMP/performance/$BUDGET_MODE" \
+            packaging/performance/qualify.sh budget "$BUDGET_MODE" "${reference[@]}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: performance-budget-${{ matrix.mode }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/performance/
+          retention-days: 90
+          if-no-files-found: error
 
   # Automated storage microbenchmarks for krabka-log.
   # Bazel's crate_bench macro compiles and lints this suite. This lane measures
