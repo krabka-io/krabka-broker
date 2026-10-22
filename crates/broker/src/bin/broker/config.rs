@@ -126,6 +126,7 @@ impl Args {
             bootstrap_mode: BootstrapMode::Bootstrap,
             cluster_id: self.cluster_id.take(),
             metrics_listen_addr,
+            profiling_auth_token_file: self.profiling_auth_token_file.clone(),
             profiling: self.profiling.clone(),
             client_metrics_otlp_endpoint,
             client_metrics_otlp_protocol,

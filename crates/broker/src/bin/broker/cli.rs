@@ -127,6 +127,16 @@ pub struct Args {
     )]
     pub metrics_listen_addr: String,
 
+    /// Bind address for the authenticated pprof administration endpoint.
+    /// `none` (the default) disables profiling. Only loopback addresses are
+    /// accepted; enabling also requires `--profiling-auth-token-file`.
+    #[arg(long, env = "KRABKA_PROFILING_LISTEN_ADDR", default_value = "none")]
+    pub profiling_listen_addr: String,
+
+    /// File containing the bearer token required by the profiling endpoint.
+    #[arg(long, env = "KRABKA_PROFILING_AUTH_TOKEN_FILE")]
+    pub profiling_auth_token_file: Option<PathBuf>,
+
     /// Bind address for the `/healthz` and `/readyz` HTTP probes.
     /// An empty string or `none` disables them. Default: `0.0.0.0:9405`,
     /// one past the metrics port. The reference Kubernetes manifests under
@@ -593,6 +603,8 @@ mod tests {
         process-roles KRABKA_PROCESS_ROLES [] +++++++++++++++++\n\
         cluster-id KRABKA_CLUSTER_ID [] ----------------+\n\
         metrics-listen-addr KRABKA_METRICS_LISTEN_ADDR [\"0.0.0.0:9404\"] +++++++++++++++++\n\
+        profiling-listen-addr KRABKA_PROFILING_LISTEN_ADDR [\"none\"] +++++++++++++++++\n\
+        profiling-auth-token-file KRABKA_PROFILING_AUTH_TOKEN_FILE [] +++++++++++++++++\n\
         health-listen-addr KRABKA_HEALTH_LISTEN_ADDR [\"0.0.0.0:9405\"] +++++++++++++++++\n\
         readiness-max-metadata-lag KRABKA_READINESS_MAX_METADATA_LAG [] ++--+++----------\n\
         partition-disk-scan-interval KRABKA_PARTITION_DISK_SCAN_INTERVAL [] +------++--------\n\
