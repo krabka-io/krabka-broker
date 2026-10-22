@@ -67,6 +67,7 @@ pub(crate) use self::{
     commands::ProduceBatchError,
     commit_wait::Uncommitted,
     leadership::{ReplicationTarget, initial_replication_target},
+    messages::verbatim_of,
 };
 
 /// Absolute record offset within a partition's log (base offset, log end

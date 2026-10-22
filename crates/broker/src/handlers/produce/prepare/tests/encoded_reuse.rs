@@ -50,8 +50,9 @@ fn producer_batch() -> RecordBatch {
     }
 }
 
-fn prepared(wire: Bytes, topic_compression: Option<CompressionType>) -> PreparedBatch {
-    let prepared = prepare_batch(
+/// `wire` through `prepare_batch` on a topic with `topic_compression`.
+fn prepare(wire: Bytes, topic_compression: Option<CompressionType>) -> PreparedBatch {
+    prepare_batch(
         PartitionPayload::Slice(wire),
         topic_compression,
         TimestampPolicy::default(),
@@ -63,7 +64,12 @@ fn prepared(wire: Bytes, topic_compression: Option<CompressionType>) -> Prepared
         },
         13,
     )
-    .expect("a valid produce payload");
+    .expect("a valid produce payload")
+}
+
+/// [`prepare`], on a shape that takes the owned path.
+fn prepared(wire: Bytes, topic_compression: Option<CompressionType>) -> PreparedBatch {
+    let prepared = prepare(wire, topic_compression);
     assert!(matches!(prepared.source, PreparedSource::Owned(_)));
     prepared
 }
@@ -240,19 +246,7 @@ fn the_segment_gate_and_the_writer_reuse_the_message_gate_encode_while_the_confi
 /// gate encodes them.
 #[test]
 fn a_verbatim_batch_keeps_no_encode() {
-    let mut prepared = prepare_batch(
-        PartitionPayload::Slice(encode_batch(&producer_batch())),
-        None,
-        TimestampPolicy::default(),
-        false,
-        DecodeEnv {
-            topic_name: &Arc::from("t"),
-            metrics: &BrokerMetrics::new(),
-            policy: RecordDecompressionPolicy::default(),
-        },
-        13,
-    )
-    .expect("a valid produce payload");
+    let mut prepared = prepare(encode_batch(&producer_batch()), None);
     assert!(matches!(prepared.source, PreparedSource::Verbatim(_)));
 
     check!(prepared.stored_len(None, Some(&LogConfig::default())) == None);

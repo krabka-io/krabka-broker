@@ -116,6 +116,21 @@ impl EncodedBatch {
     pub(crate) fn bytes(&self) -> &Bytes { &self.bytes }
 }
 
+/// `bytes`, the wire encoding of `batch`, with the header fields the log's
+/// verbatim append reads copied from `batch` rather than parsed back out.
+pub(crate) fn verbatim_of(batch: &RecordBatch, bytes: Bytes) -> VerbatimBatch {
+    VerbatimBatch {
+        bytes,
+        last_offset_delta: batch.last_offset_delta,
+        max_timestamp: batch.max_timestamp,
+        leader_epoch: LeaderEpoch(batch.partition_leader_epoch),
+        producer_id: ProducerId(batch.producer_id),
+        producer_epoch: batch.producer_epoch,
+        base_sequence: batch.base_sequence,
+        is_transactional: batch.attributes.is_transactional(),
+    }
+}
+
 /// `batch` with its codec set to the topic's `compression.type`, when that
 /// names one. `None` is `compression.type=producer`.
 fn with_target_compression(batch: &mut RecordBatch, target: Option<CompressionType>) {
@@ -152,16 +167,7 @@ impl ProduceData {
                 with_target_compression(&mut batch, target);
                 let codec = batch.attributes.compression();
                 if encoded.encoded_with(codec, config.compression_level(codec)) {
-                    Self::Verbatim(VerbatimBatch {
-                        bytes: encoded.bytes,
-                        last_offset_delta: batch.last_offset_delta,
-                        max_timestamp: batch.max_timestamp,
-                        leader_epoch: LeaderEpoch(batch.partition_leader_epoch),
-                        producer_id: ProducerId(batch.producer_id),
-                        producer_epoch: batch.producer_epoch,
-                        base_sequence: batch.base_sequence,
-                        is_transactional: batch.attributes.is_transactional(),
-                    })
+                    Self::Verbatim(verbatim_of(&batch, encoded.bytes))
                 } else {
                     Self::Owned(batch)
                 }
