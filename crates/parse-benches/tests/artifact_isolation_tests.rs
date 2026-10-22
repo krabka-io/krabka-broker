@@ -16,7 +16,7 @@ use {
         collections::BTreeMap,
         ffi::OsString,
         fs,
-        path::Path,
+        path::{Path, PathBuf},
         process::{Command, Output},
     },
     tempfile::tempdir,
@@ -99,13 +99,19 @@ fn summary(commit: &str, executables: Vec<BenchExecutable>) -> BenchmarkSummary 
     }
 }
 
+/// Both revisions under `work`, written in the issue's order: the candidate
+/// tree exists first.
+fn revisions(work: &Path) -> (PathBuf, PathBuf) {
+    let (reference, candidate) = (work.join("reference"), work.join("candidate"));
+    revision(&candidate, "candidate");
+    revision(&reference, "reference");
+    (reference, candidate)
+}
+
 #[test]
 fn separate_target_directories_measure_each_revision_on_every_pass() {
     let work = tempdir().unwrap();
-    let (reference, candidate) = (work.path().join("reference"), work.path().join("candidate"));
-    // The issue's order: the candidate tree exists first.
-    revision(&candidate, "candidate");
-    revision(&reference, "reference");
+    let (reference, candidate) = revisions(work.path());
     let reference_target = work.path().join("target-reference");
     let candidate_target = work.path().join("target-candidate");
     let reference_manifest = prebuild(&reference, &reference_target, "reference");
@@ -162,9 +168,7 @@ fn separate_target_directories_measure_each_revision_on_every_pass() {
 #[test]
 fn a_shared_target_directory_never_yields_a_mislabelled_verdict() {
     let work = tempdir().unwrap();
-    let (reference, candidate) = (work.path().join("reference"), work.path().join("candidate"));
-    revision(&candidate, "candidate");
-    revision(&reference, "reference");
+    let (reference, candidate) = revisions(work.path());
     let shared = work.path().join("target");
     let reference_manifest = prebuild(&reference, &shared, "reference");
     let candidate_manifest = prebuild(&candidate, &shared, "candidate");

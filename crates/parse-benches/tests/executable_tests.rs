@@ -342,13 +342,8 @@ fn a_shared_executable_path_is_refused() {
     ));
 }
 
-#[test]
-fn passes_that_ran_different_executables_are_refused() {
-    let reference = summaries("reference", &[
-        recorded("/reference/release/deps/hot-0123", "aaaa"),
-        recorded("/reference/release/deps/hot-0123", "aaaa"),
-        recorded("/reference/release/deps/hot-0123", "rebuilt"),
-    ]);
+/// The error comparing `reference` with three well-formed candidate passes.
+fn refusal(reference: &[Vec<BenchExecutable>]) -> ParseBenchesError {
     let candidate = summaries("candidate", &vec![
         recorded(
             "/candidate/release/deps/hot-0123",
@@ -356,8 +351,16 @@ fn passes_that_ran_different_executables_are_refused() {
         );
         3
     ]);
+    compare_summaries(&summaries("reference", reference), &candidate, 0.1).unwrap_err()
+}
 
-    let error = compare_summaries(&reference, &candidate, 0.1).unwrap_err();
+#[test]
+fn passes_that_ran_different_executables_are_refused() {
+    let error = refusal(&[
+        recorded("/reference/release/deps/hot-0123", "aaaa"),
+        recorded("/reference/release/deps/hot-0123", "aaaa"),
+        recorded("/reference/release/deps/hot-0123", "rebuilt"),
+    ]);
 
     assert!(matches!(
         error,
@@ -367,16 +370,7 @@ fn passes_that_ran_different_executables_are_refused() {
 
 #[test]
 fn summaries_without_executable_identity_are_refused() {
-    let reference = summaries("reference", &vec![Vec::new(); 3]);
-    let candidate = summaries("candidate", &vec![
-        recorded(
-            "/candidate/release/deps/hot-0123",
-            "bbbb"
-        );
-        3
-    ]);
-
-    let error = compare_summaries(&reference, &candidate, 0.1).unwrap_err();
+    let error = refusal(&vec![Vec::new(); 3]);
 
     assert!(matches!(
         error,
