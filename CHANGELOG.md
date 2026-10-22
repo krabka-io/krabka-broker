@@ -77,6 +77,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   index floor, header scan and readahead hint under the log lock. It now
   reads the regions the first walk found. Followers and consumers at the tail
   of a log make this fetch on every round trip.
+- A wide fetch counts its bytes in linear time. Before each partition read the
+  read loop asks whether the response is still empty, and it used to answer by
+  summing every partition's bytes, so a fetch over `P` partitions did `P²`
+  additions. It now keeps a running total. On a 4-vCPU host, the read loop
+  over 10,000 entries took 21-23 ms instead of 32-34 ms (#1609).
 - Less work per request on the produce and fetch paths:
   - Dispatch reads a Produce request's `acks` from its leading fields to
     decide whether a response is owed, instead of decoding the request a
