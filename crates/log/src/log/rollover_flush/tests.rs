@@ -2,10 +2,10 @@
 
 use {
     crate::{
-        Log, LogConfig, LogError, LogIo, Segment,
+        CompactionOutcome, Log, LogConfig, LogError, LogIo, Segment,
         log::test_support::{
-            EncodedVerbatim, TempLog, append_samples, install_stamps, sample_batch, tiny_segments,
-            verbatim_from,
+            EncodedVerbatim, TempLog, append_keyed_samples, append_samples, compacting_segments,
+            compaction_ctx, install_stamps, sample_batch, tiny_segments, verbatim_from,
         },
         name,
         producer_snapshot::{self, LoadedSnapshot, ProducerSnapshotEntry},
@@ -556,4 +556,77 @@ fn a_busy_partition_yields_between_flushes_without_reordering_its_boundaries() {
     );
     assert!(first.tierable_segments().len() == 2);
     assert!(second.tierable_segments().len() == 1);
+}
+
+/// A compacted log of five keyed segments, with flushes on a private pool.
+fn compacted_log(dir: &std::path::Path) -> Log {
+    let mut log = Log::open(dir, LogConfig {
+        flush_on_append: false,
+        retention: None,
+        ..compacting_segments()
+    })
+    .unwrap();
+    append_keyed_samples(&mut log, 5, |i| format!("k{}", i % 2));
+    log.rollover_flusher.executor =
+        Some(super::executor::Executor::new(2, 256, 64 * 1024 * 1024).unwrap());
+    log
+}
+
+/// A compaction pass is prepared and built while the flush of a segment it
+/// consumes is still on the disk, and installed only once that flush ends:
+/// the flush holds the segment's files and writes the snapshot at its end.
+#[test]
+fn compaction_builds_during_a_rollover_flush_and_installs_after_it() {
+    let dir = tempdir().unwrap();
+    let mut log = compacted_log(dir.path());
+    let Gate { io: gate, started } = install_gate(&mut log, false);
+    append_keyed_samples(&mut log, 1, |_| "k1".to_owned());
+    let began = await_progress(&started);
+    let (built_tx, built) = mpsc::channel();
+    let SpawnedWriter {
+        writer,
+        received: installed,
+    } = spawn_writer(log, move |log| {
+        let job = log.prepare_compaction(&compaction_ctx()).unwrap().unwrap();
+        let pass = job.build();
+        built_tx.send(()).unwrap();
+        log.finish_compaction(pass)
+    });
+
+    let built_meanwhile = await_progress(&built);
+    let pending = observe_pending(&installed);
+    let log = join_blocked_writer(&gate, writer, began, &pending);
+
+    assert!(built_meanwhile.is_ok());
+    assert!(matches!(
+        installed.recv().unwrap(),
+        Ok(CompactionOutcome::Installed)
+    ));
+    assert!(log.log_end_offset() == Offset(6));
+}
+
+/// A ticket covers the flushes submitted before it, not those after.
+#[test]
+fn a_ticket_waits_only_for_the_flushes_before_it() {
+    let dir = tempdir().unwrap();
+    let mut log = first_append(dir.path(), false);
+    let before = log.rollover_flusher.ticket();
+    let GatedRollover { gate, began } = begin_gated_rollover(&mut log);
+    let after = log.rollover_flusher.ticket();
+    let wait_for = |ticket| {
+        let (tx, waited) = mpsc::channel();
+        let shared = Arc::clone(&log.rollover_flusher.shared);
+        std::thread::spawn(move || tx.send(shared.finish_through(ticket)).unwrap());
+        waited
+    };
+    let (earlier, later) = (wait_for(before), wait_for(after));
+
+    let unblocked = await_progress(&earlier);
+    let pending = observe_pending(&later);
+    gate.release();
+
+    began.unwrap();
+    assert!(matches!(unblocked, Ok(Ok(()))));
+    assert!(matches!(pending, Err(mpsc::RecvTimeoutError::Timeout)));
+    assert!(matches!(await_progress(&later), Ok(Ok(()))));
 }

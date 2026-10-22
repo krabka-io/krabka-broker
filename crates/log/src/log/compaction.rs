@@ -457,7 +457,6 @@ impl Log {
         // Kafka's `Cleaner.cleanSegments` reads the last record of each
         // active producer from the producer state of the log, once for the
         // groups of one pass.
-        self.rollover_flusher.finish()?;
         let fenced = self.compaction_gate.fenced_flag();
         let inputs: Vec<SealedInput> = self.segments[..consumed]
             .iter()
@@ -494,6 +493,12 @@ impl Log {
                 delete_retention,
             },
             index_interval,
+            // A rollover flush still holds the files of a segment it sealed,
+            // and writes the producer snapshot at its end, which the swap may
+            // retire. The install waits for the flushes of the consumed
+            // segments, all submitted by now; the build reads the page cache
+            // and need not wait for them.
+            flushes: self.rollover_flusher.ticket(),
             slot,
             output_unclaimed: false,
         }))
@@ -539,6 +544,9 @@ impl Log {
                 )));
             }
         }
+        // The build has usually outlasted these flushes, so this rarely
+        // waits, and never for a flush of a segment rolled since the job.
+        self.rollover_flusher.finish_through(job.flushes)?;
         let consumed = job.inputs.len();
         // The swap below claims the job's files. The job's inputs share the
         // consumed segments' file handles, which must close before it, as the

@@ -22,6 +22,7 @@ use {
         },
         error::LogError,
         io::LogIo,
+        log::rollover_flush::FlushTicket,
         recovery::swap::{cleaned_path, remove_if_present},
         segment::SealedInput,
         txn_index::AbortedTxn,
@@ -157,6 +158,9 @@ pub struct CompactionJob {
     pub(in crate::log) record_limit: Option<ByteSize>,
     pub(in crate::log) retention: RewriteRetention,
     pub(in crate::log) index_interval: ByteSize,
+    /// The rollover flushes submitted when the job was prepared, which cover
+    /// every consumed segment. The install waits for them.
+    pub(in crate::log) flushes: FlushTicket,
     pub(in crate::log) slot: JobSlot,
     /// Whether the build may have written `.cleaned` files that no install
     /// has taken. Dropping the job deletes them then, so a pass that is

@@ -44,6 +44,11 @@ struct State {
     jobs: VecDeque<Flush>,
     running: bool,
     error: Option<FlushError>,
+    /// Jobs submitted so far.
+    submitted: u64,
+    /// Jobs run or dropped after a failure so far. Jobs run in submission
+    /// order, so the first `ended` jobs are the ones that ended.
+    ended: u64,
 }
 
 /// The kind and message of the I/O error that failed a flush job.
@@ -67,6 +72,20 @@ struct Shared {
     changed: Condvar,
 }
 
+impl Shared {
+    fn finish_through(&self, ticket: FlushTicket) -> io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        while state.ended < ticket.0 {
+            state = self.changed.wait(state).unwrap();
+        }
+        state.result()
+    }
+}
+
+/// The jobs a [`Flusher`] had taken when [`Flusher::ticket`] was called.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FlushTicket(u64);
+
 /// Ordered per-log jobs on a bounded process-wide executor.
 /// WASI flushes inline in the rollover caller and needs no executor.
 #[derive(Debug, Default)]
@@ -87,6 +106,16 @@ impl Flusher {
         state.result()
     }
 
+    /// The jobs submitted so far, for [`Self::finish_through`] to wait for
+    /// later without waiting for any submitted after.
+    pub fn ticket(&self) -> FlushTicket { FlushTicket(self.shared.state.lock().unwrap().submitted) }
+
+    /// Wait until every job submitted before `ticket` was taken has ended,
+    /// then report a failed flush as [`Self::check`] does.
+    pub fn finish_through(&self, ticket: FlushTicket) -> io::Result<()> {
+        self.shared.finish_through(ticket)
+    }
+
     #[cfg(not(target_os = "wasi"))]
     pub fn reserve(&mut self, bytes: usize) -> io::Result<executor::Permit> {
         self.check()?;
@@ -101,6 +130,7 @@ impl Flusher {
         let mut state = self.shared.state.lock().unwrap();
         state.result()?;
         state.jobs.push_back(flush);
+        state.submitted += 1;
         if !state.running {
             state.running = true;
             self.executor
@@ -119,6 +149,7 @@ fn run(shared: &Shared) -> bool {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run()))
         .unwrap_or_else(|_| Err(io::Error::other("rollover flush panicked")));
     let mut state = shared.state.lock().unwrap();
+    state.ended += 1;
     if let Err(error) = result {
         tracing::error!(%error, "rollover flush failed");
         state.error = Some(FlushError {
@@ -126,10 +157,12 @@ fn run(shared: &Shared) -> bool {
             message: error.to_string(),
         });
         state.jobs.clear();
+        state.ended = state.submitted;
     }
+    // A waiter on a ticket may be satisfied before the queue drains.
+    shared.changed.notify_all();
     if state.jobs.is_empty() {
         state.running = false;
-        shared.changed.notify_all();
         false
     } else {
         true
