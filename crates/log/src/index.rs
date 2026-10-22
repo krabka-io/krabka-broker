@@ -176,20 +176,20 @@ pub(crate) fn rewrite_retained_entries<T: Copy>(
     Ok(Some(retained))
 }
 
-/// Read a fixed-width sidecar, treating only a missing file as an empty index.
+/// Read a fixed-width sidecar, or `None` when the file is missing.
 pub(crate) fn read_sidecar<Raw, Entries>(
     path: &Path,
     name: &str,
     invariant: &str,
     decode: impl FnOnce(&[Raw]) -> Result<Entries, LogError>,
-) -> Result<Entries, LogError>
+) -> Result<Option<Entries>, LogError>
 where
     Raw: FromBytes + KnownLayout + Immutable + Unaligned,
 {
     let entry_size = std::mem::size_of::<Raw>();
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     if !bytes.len().is_multiple_of(entry_size) {
@@ -199,7 +199,7 @@ where
             bytes.len(),
         )));
     }
-    decode(<[Raw]>::ref_from_bytes(&bytes).expect(invariant))
+    decode(<[Raw]>::ref_from_bytes(&bytes).expect(invariant)).map(Some)
 }
 
 /// A sparse index, the path of its file, and the temporary directory that

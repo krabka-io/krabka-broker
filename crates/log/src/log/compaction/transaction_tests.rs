@@ -6,6 +6,7 @@ use {
     super::*,
     crate::{
         config::LogConfig,
+        io::{FileIo, IoTarget, LogIo},
         log::test_support::{
             KeyedRecord, abort_marker, commit_marker, compacting_segments, compaction_ctx,
             keyed_batch, set_segment_size,
@@ -17,6 +18,10 @@ use {
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::{Attributes, RecordBatch},
     krabka_units::prelude::mebibytes,
+    std::{
+        path::Path,
+        sync::atomic::{AtomicUsize, Ordering},
+    },
     tempfile::tempdir,
 };
 
@@ -253,4 +258,58 @@ fn an_aborted_batch_is_dropped_when_its_marker_lies_beyond_the_consumed_range() 
     assert2::assert!(values_of(&log, b"k") == vec![Bytes::from_static(b"committed")]);
     assert2::assert!(values_of(&log, b"other") == vec![Bytes::from_static(b"o")]);
     assert2::assert!(marker_offsets(&log) == vec![1, 4]);
+}
+
+/// A [`LogIo`] that counts the renames of files that are not there.
+#[derive(Debug, Default)]
+struct CountedMissingRenames(AtomicUsize);
+
+impl LogIo for CountedMissingRenames {
+    fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> std::io::Result<()> {
+        let renamed = FileIo.rename(target, from, to);
+        if renamed
+            .as_ref()
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        renamed
+    }
+}
+
+/// The `.txnindex` files in `dir`, live or retired.
+fn txn_index_files(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".txnindex"))
+        .map(|name| match name.find(".txnindex.") {
+            // A retired file's name carries a generation number.
+            Some(at) => format!("{}.txnindex.deleted", &name[..at]),
+            None => name,
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// A pass retires only the `.txnindex` files its segments have: it tries no
+/// rename of a missing one, and still retires the one beside the abort marker.
+#[test]
+fn a_pass_retires_only_the_transaction_indexes_that_exist() {
+    let dir = tempdir().unwrap();
+    let mut log = committed_then_aborted(dir.path());
+    let io = Arc::new(CountedMissingRenames::default());
+    log.test_set_io(io.clone());
+
+    log.compact(&compaction_ctx()).unwrap();
+
+    assert2::check!(io.0.load(Ordering::SeqCst) == 0);
+    assert2::check!(
+        txn_index_files(dir.path())
+            == [
+                "00000000000000000000.txnindex",
+                "00000000000000000003.txnindex.deleted",
+            ]
+    );
 }
