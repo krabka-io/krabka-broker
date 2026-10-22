@@ -39,7 +39,7 @@ impl Segment {
     /// well as the first: the previous fetch's readahead hint usually leaves
     /// the start cached while the rest is still on its way from the disk, so
     /// a window whose first or last byte is not cached is read in one read
-    /// by the byte-copy path.
+    /// by the byte-copy path. A window with no bytes in it never blocks.
     ///
     /// # Errors
     /// Returns an error when the offset lookup fails.
@@ -59,6 +59,14 @@ impl Segment {
         };
         let window = (max_size.bytes_u64().max(HEADER_LEN as u64))
             .min(self.log_size.saturating_sub(start_pos));
+        // No bytes from the start: an empty segment, which compaction leaves
+        // behind, or a run that starts at the end of the file. The walk reads
+        // nothing there, so it cannot wait on the disk. Asking the page cache
+        // would read at the end of the file, which answers as not cached, and
+        // stop the walk before the later segments that hold the run.
+        if window == 0 {
+            return Ok(false);
+        }
         let last = start_pos + window.saturating_sub(1);
         Ok(!self.io.is_cached(&self.log_file, start_pos)
             || !self.io.is_cached(&self.log_file, last))
