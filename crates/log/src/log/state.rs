@@ -379,14 +379,23 @@ impl Log {
         Ok(())
     }
 
-    /// Refuses every append from now on with [`LogError::Fenced`].
+    /// Refuses every append from now on with [`LogError::Fenced`], and stops
+    /// any compaction job.
     ///
     /// The broker fences a partition's log, under the log's mutex, before it
     /// removes the partition's directory. An append that holds the mutex
     /// first finishes before the directory goes; any later one, from whatever
     /// task, is refused rather than written into a log that is about to be
     /// deleted. Reads are unaffected.
-    pub fn fence(&mut self) { self.fenced = true; }
+    ///
+    /// A compaction job builds without the mutex, writing `.cleaned` files
+    /// into the directory. The fence stops it at its next batch and returns
+    /// only once it writes nothing more, so the directory can go as soon as
+    /// the fence returns. [`Log::finish_compaction`] then installs nothing.
+    pub fn fence(&mut self) {
+        self.fenced = true;
+        self.compaction_gate.fence();
+    }
 
     pub(super) fn ensure_unfenced(&self) -> Result<(), LogError> {
         if self.fenced {
@@ -562,7 +571,14 @@ impl Log {
     /// Close all segments, first taking a producer-state snapshot at the log
     /// end as Kafka's `UnifiedLog.close` does. A snapshot that cannot be
     /// written is not an error: the next open replays the log instead.
+    ///
+    /// A running compaction build stops first, as on [`Log::fence`], and the
+    /// call returns once it writes nothing more.
     pub fn close(mut self) {
+        // A compaction build writes into the directory without the log; stop
+        // it, as the fence does, before the caller moves or deletes the
+        // directory.
+        self.compaction_gate.fence();
         if let Err(error) = self.take_producer_snapshot() {
             tracing::warn!(
                 dir = %self.dir.display(),

@@ -13,7 +13,7 @@ use {
         io::{IoTarget, LogIo, write_all},
         record_limit::check_records_read,
         recovery::swap::cleaned_path,
-        segment::Segment,
+        segment::SealedInput,
         txn_index::TxnIndex,
     },
     bytes::{Bytes, BytesMut},
@@ -57,6 +57,7 @@ const NO_TIMESTAMP: i64 = -1;
 
 /// Result of [`rewrite_segments`]: paths to the `.cleaned` files that
 /// [`atomic_swap`] should promote through `.swap` to their final names.
+#[derive(Debug)]
 pub struct RewriteOutput {
     pub log_swap: PathBuf,
     pub index_swap: PathBuf,
@@ -185,7 +186,7 @@ impl CleaningRound<'_> {
 pub fn rewrite_segments(
     io: &dyn LogIo,
     dir: &Path,
-    segments: &[&Segment],
+    segments: &[SealedInput],
     offset_map: &HashMap<Bytes, Offset>,
     txn_meta: &mut CleanedTransactionMetadata,
     retention: RewriteRetention,

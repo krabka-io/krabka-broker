@@ -25,6 +25,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Added
 
+- `krabka-log` gains `Log::prepare_compaction`, `CompactionJob::build` and
+  `Log::finish_compaction`, with `BuiltCompaction` and `CompactionOutcome`:
+  `Log::compact` in three steps, the middle one runnable without the log.
+  `Log::compact` runs all three and behaves as before, except that it does
+  nothing on a fenced log (#1639).
 - `packaging/k8s/profiles/krabka-io-uring.json`, a seccomp profile for the
   reference StatefulSet. It is containerd v2.4.2's `RuntimeDefault` profile
   plus the three io_uring system calls, which the default profiles of
@@ -73,7 +78,20 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   the map copies each distinct key once. In the measurements on #1613, a pass
   over 256 MiB of gzip-expanded records raised the peak resident set by 1.4
   MiB instead of 521 MiB. Damaged segments fail the pass with the same errors
-  as before. The pass still runs under the log lock (#1613).
+  as before (#1613).
+- Log compaction reads and rewrites a partition's sealed segments without
+  holding the partition's log mutex or its writer task, as Kafka's cleaner
+  does. The writer takes the mutex only to start the pass and to install its
+  output, and handles other messages while the pass builds, so produce,
+  replica appends and fetches of the partition no longer wait for the whole
+  pass. A pass whose input a truncation, retention or reset took
+  away meanwhile installs nothing and is not reported as a storage failure.
+  `Log::fence` and `Log::close` now stop a running pass and return once it
+  writes no more files, so a retired or moved partition's directory can be
+  deleted as before. A built pass that is never installed deletes its files. In the
+  measurements on #1639, the lock was held for 50 ms instead of 1.5 s during
+  a pass over 45 MiB of gzip records, and for 150 ms instead of 0.8 s over
+  256 compressed segments (#1639).
 - A produce append runs on the request's own task when it only writes to the
   page cache. The partition writer task used to take every produce, so each
   one paid two cross-thread wakes before its write. The request task now takes
