@@ -14,7 +14,7 @@ use {
         codes,
         handlers::test_support::{
             StartedBroker, configured_topic_request, replicated_partition, share_fetch_wire,
-            start_allow_all_no_audit,
+            start_share_allow_all_no_audit,
         },
         share_partition::session::{FetchPartitions, ShareFetchSessionRequest},
         test_support::{
@@ -57,7 +57,7 @@ const UNREGISTERED_NODE: i32 = 7;
 const REMOTE: WireUuid = WireUuid([0x22; 16]);
 const ORPHAN: WireUuid = WireUuid([0x77; 16]);
 
-async fn start() -> StartedBroker { start_allow_all_no_audit().await }
+async fn start() -> StartedBroker { start_share_allow_all_no_audit().await }
 
 async fn create_local_topic(broker: &BrokerHandle) -> WireUuid {
     let client = krabka_client_core::Client::builder()

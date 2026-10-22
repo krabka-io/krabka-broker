@@ -29,7 +29,8 @@ use {
                 OffsetRun, RecordCount, StartedBroker,
                 create_topic as create_topic_from_test_support,
                 produce_records as produce_records_from_test_support, share_fetch_partition_rows,
-                share_fetch_topics, share_fetch_wire, share_topic_uuid, start_allow_all_no_audit,
+                share_fetch_topics, share_fetch_wire, share_topic_uuid,
+                start_share_allow_all_no_audit,
             },
         },
         test_support::{
@@ -74,7 +75,7 @@ fn acquired_run(partition_index: i32, first_offset: i64, last_offset: i64) -> Pa
 /// `DeleteRecords` v2, matching the other handler tests.
 const DELETE_RECORDS_VERSION: i16 = 2;
 
-async fn start() -> StartedBroker { start_allow_all_no_audit().await }
+async fn start() -> StartedBroker { start_share_allow_all_no_audit().await }
 
 async fn create_topic(broker: &BrokerHandle, name: &str, num_partitions: i32) -> WireUuid {
     create_topic_from_test_support()

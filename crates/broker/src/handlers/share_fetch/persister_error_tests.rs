@@ -52,7 +52,7 @@ enum Api {
     ShareFetch,
 }
 
-use crate::handlers::test_support::start_allow_all_no_audit as start;
+use crate::handlers::test_support::start_share_allow_all_no_audit as start;
 
 async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
     create_topic_from_test_support()

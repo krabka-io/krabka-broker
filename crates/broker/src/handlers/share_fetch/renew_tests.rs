@@ -51,7 +51,7 @@ const RENEW: i8 = 4;
 type Batch = WireAckBatch<'static>;
 
 use crate::{
-    handlers::test_support::start_allow_all_no_audit as start,
+    handlers::test_support::start_share_allow_all_no_audit as start,
     test_support::{start_broker_no_audit_with, tolerate_starved_heartbeats},
 };
 

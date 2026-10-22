@@ -319,7 +319,8 @@ mod tests {
     async fn handle_disabled_feature_returns_unsupported_version() {
         let version = VERSION;
         let dir = tempfile::TempDir::new().expect("tempdir");
-        let cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
+        let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
+        tolerate_starved_heartbeats(&mut cfg);
         let broker_handle = Broker::start(cfg).await.expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
         finalize_share_version(&broker, 0).await;
