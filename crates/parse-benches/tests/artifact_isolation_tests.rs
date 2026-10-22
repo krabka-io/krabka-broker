@@ -1,8 +1,11 @@
 //! Two revisions that differ only in source, built and measured the way the
 //! nightly criterion lane does it (#1608).
 //!
-//! Drives a real `cargo`, so Bazel tags it `manual`: a test sandbox has no
-//! Cargo toolchain. It needs no network; the fixture has no dependencies.
+//! Drives a real `cargo`, because the defect is Cargo's own freshness
+//! decision. Under Cargo that is the `cargo` running the suite. Under Bazel the
+//! BUILD file hands the suite the Rust toolchain's own `cargo`, `rustc` and
+//! standard library as runfiles; see [`toolchain_cargo`]. It needs no network:
+//! the fixture has no dependencies.
 
 use {
     assert2::assert,
@@ -47,9 +50,46 @@ fn revision(dir: &Path, side: &str) {
     .unwrap();
 }
 
+/// The runfiles-relative paths Bazel passes in, resolved against the test's
+/// working directory, which is the runfiles root.
+fn runfile(relative: &str) -> PathBuf { std::env::current_dir().unwrap().join(relative) }
+
+/// The sysroot that holds the standard library among `stdlib`, Bazel's
+/// space-separated runfiles paths of its files. It is the directory above
+/// `lib/rustlib/`. `rules_rs` fetches `std` into a repository of its own, not
+/// beside `rustc`, so `rustc`'s default sysroot has no `std` to link.
+fn stdlib_sysroot(stdlib: &str) -> PathBuf {
+    let file = stdlib
+        .split_whitespace()
+        .find(|path| path.contains("/lib/rustlib/"))
+        .expect("the standard library runfiles include a file under lib/rustlib/");
+    let (sysroot, _) = file.split_once("/lib/rustlib/").unwrap();
+    runfile(sysroot)
+}
+
+/// Under Bazel, a `cargo` command that uses the toolchain's own `rustc` and
+/// standard library from the runfiles, with a scratch `CARGO_HOME`, because a
+/// test has no writable home. `None` outside Bazel.
+fn toolchain_cargo() -> Option<Command> {
+    let cargo = std::env::var("KRABKA_TEST_CARGO").ok()?;
+    let rustc = std::env::var("KRABKA_TEST_RUSTC").unwrap();
+    let stdlib = std::env::var("KRABKA_TEST_RUST_STDLIB").unwrap();
+    let mut command = Command::new(runfile(&cargo));
+    command
+        .env("RUSTC", runfile(&rustc))
+        .env(
+            "RUSTFLAGS",
+            format!("--sysroot={}", stdlib_sysroot(&stdlib).display()),
+        )
+        .env("CARGO_HOME", std::env::temp_dir().join("cargo-home"));
+    Some(command)
+}
+
 fn cargo(source: &Path, target: &Path, extra: &[&str]) -> Output {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let output = Command::new(cargo)
+    let output = toolchain_cargo()
+        .unwrap_or_else(|| {
+            Command::new(std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
+        })
         .current_dir(source)
         .env("CARGO_TARGET_DIR", target)
         .args(["bench", "--offline", "--bench", "latency"])

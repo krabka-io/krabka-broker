@@ -17,9 +17,20 @@ crate_binary(
 crate_tests(
     # `budget_tests` validates the checked-in contract with `include_str!`.
     compile_data = ["//packaging:performance/regression-contract.json"],
-    lib = "parse-benches",
     # `artifact_isolation_tests` builds and runs two fixture crates with a real
-    # `cargo`, which a Bazel test sandbox does not have. It runs under
-    # `cargo nextest run --workspace`, the `cargo` job in ci.yml.
-    manual = ["artifact_isolation_tests"],
+    # `cargo`: Cargo's freshness decision is what it tests. These are the Rust
+    # toolchain's own cargo, rustc, rustc libraries and standard library. The
+    # suite composes them into a working toolchain; the system `cc` links.
+    data = [
+        "@rules_rust//rust/toolchain:current_cargo_files",
+        "@rules_rust//rust/toolchain:current_rust_stdlib_files",
+        "@rules_rust//rust/toolchain:current_rustc_files",
+        "@rules_rust//rust/toolchain:current_rustc_lib_files",
+    ],
+    env = {
+        "KRABKA_TEST_CARGO": "$(rootpath @rules_rust//rust/toolchain:current_cargo_files)",
+        "KRABKA_TEST_RUSTC": "$(rootpath @rules_rust//rust/toolchain:current_rustc_files)",
+        "KRABKA_TEST_RUST_STDLIB": "$(rootpaths @rules_rust//rust/toolchain:current_rust_stdlib_files)",
+    },
+    lib = "parse-benches",
 )
