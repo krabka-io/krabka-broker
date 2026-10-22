@@ -10,17 +10,20 @@
 use crate::config::BrokerConfig;
 use {
     crate::{
+        blocking::BlockingError,
         delivery::DeliveryHandles,
         error::BrokerError,
         log_dir_status::LogDirRegistry,
-        partition::{SwapOutcome, WriterMessage},
+        partition::{
+            Partition, ProduceJob, ReplicatedBatch, SwapOutcome, WriterGate, WriterMessage,
+        },
         producer_state::ProducerState,
         replica_state::ReplicaState,
         wal::{OffsetSequencer, SharedWal},
     },
     arc_swap::ArcSwap,
     krabka_ids::PartitionIndex,
-    krabka_log::Log,
+    krabka_log::{BuiltCompaction, Log},
     std::{
         path::PathBuf,
         sync::{Arc, Mutex},
@@ -48,12 +51,15 @@ mod tests;
 pub(crate) use self::append::run_produce_append_batch;
 pub(crate) use self::storage::{flag_storage_failure, storage_failure_error};
 use self::{
-    compaction::handle_compact,
+    compaction::{BuildingCompaction, finish_compaction, start_compaction},
     mutations::{
         ReplicationState, ResetMutation, handle_follow_leader_log_start, handle_log_reset,
         handle_replicate, handle_trim,
     },
-    produce::{DisklessParts, ProduceGroup, ProduceSignals, ProduceStorage, handle_produce},
+    produce::{
+        DisklessParts, ProduceGroup, ProduceSignals, ProduceStorage, append_jobs, finish_group,
+        handle_produce,
+    },
     retention::handle_retention,
     storage::{StorageStatus, lock_log},
     swap::swap_future_log,
@@ -117,7 +123,84 @@ pub async fn run(
     .await;
 }
 
+/// The writer loop behind a [`WriterGate`] that admits no inline append:
+/// every append runs on the writer task.
+#[cfg(any(test, feature = "test-helpers"))]
 pub async fn run_with_sequencer(
+    identity: WriterIdentity,
+    storage: WriterStorage,
+    rx: mpsc::Receiver<WriterMessage>,
+    signals: WriterSignals,
+    services: WriterServices,
+    max_produce_group: usize,
+    sequencer: Option<Arc<dyn OffsetSequencer>>,
+) {
+    run_gated(identity, storage, rx, signals, services, WriterPolicy {
+        max_produce_group,
+        sequencer,
+        gate: WriterGate::shared(false),
+    })
+    .await;
+}
+
+/// How a writer groups produces, assigns offsets, and shares its log.
+pub struct WriterPolicy {
+    /// The most produce jobs one append drains from the channel.
+    pub max_produce_group: usize,
+    /// A diskless partition's offset sequencer.
+    pub sequencer: Option<Arc<dyn OffsetSequencer>>,
+    /// The gate that lets a produce append on its own task while this
+    /// writer is idle; see [`WriterGate`].
+    pub gate: Arc<WriterGate>,
+}
+
+/// Runs log maintenance for as long as it is due, and returns the delay until
+/// it is due again. The files a pass retires are deleted off the writer; see
+/// [`storage::delete_retired_files`]. A failed run backs off for
+/// [`storage::MAINTENANCE_RETRY`] while the writer keeps accepting control
+/// messages.
+async fn maintain_while_due(
+    log: &Arc<Mutex<Log>>,
+    gate: &WriterGate,
+    storage_status: StorageStatus<'_>,
+) -> Option<std::time::Duration> {
+    loop {
+        let delay = lock_log(log).maintenance_delay(std::time::SystemTime::now());
+        if delay != Some(std::time::Duration::ZERO) {
+            return delay;
+        }
+        // Maintenance mutates the log too, so it waits out an inline append.
+        let _busy = gate.writer_busy().await;
+        let maintenance_log = Arc::clone(log);
+        let result = storage::run_log_mutation(
+            move || {
+                lock_log(&maintenance_log)
+                    .maintain_deferring_deletions(std::time::SystemTime::now())
+                    .map_err(BrokerError::from)
+            },
+            "log maintenance task panicked",
+            storage_status,
+        )
+        .await;
+        match result {
+            Ok(due) => {
+                storage::delete_retired_files(
+                    due,
+                    log,
+                    storage_status.log_dir,
+                    storage_status.registry,
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%error, "log maintenance failed");
+                return Some(storage::MAINTENANCE_RETRY);
+            }
+        }
+    }
+}
+
+/// The partition's writer loop, under `policy`.
+pub async fn run_gated(
     WriterIdentity { topic, partition }: WriterIdentity,
     WriterStorage { log, log_dir }: WriterStorage,
     mut rx: mpsc::Receiver<WriterMessage>,
@@ -132,9 +215,13 @@ pub async fn run_with_sequencer(
         producer_state,
         wal,
     }: WriterServices,
-    max_produce_group: usize,
-    sequencer: Option<Arc<dyn OffsetSequencer>>,
+    policy: WriterPolicy,
 ) {
+    let WriterPolicy {
+        max_produce_group,
+        sequencer,
+        gate,
+    } = policy;
     let storage_status = StorageStatus {
         log_dir: &log_dir,
         registry: &log_dir_status,
@@ -152,42 +239,43 @@ pub async fn run_with_sequencer(
     // move task last asked. A future log must be cut to it before it may
     // replace the current log.
     let mut unreported_cut: Option<krabka_log::Offset> = None;
+    // The compaction pass whose build is running off the writer, if any; see
+    // `compaction`.
+    let mut compaction: Option<BuildingCompaction> = None;
+    let maintenance_storage = (&log, &log_dir, &log_dir_status);
     loop {
-        let mut delay = lock_log(&log).maintenance_delay(std::time::SystemTime::now());
-        if delay == Some(std::time::Duration::ZERO) {
-            let maintenance_log = Arc::clone(&log);
-            let result = storage::run_log_mutation(
-                move || {
-                    lock_log(&maintenance_log)
-                        .maintain_deferring_deletions(std::time::SystemTime::now())
-                        .map_err(BrokerError::from)
-                },
-                "log maintenance task panicked",
-                storage_status,
-            )
-            .await;
-            match result {
-                Ok(due) => {
-                    storage::delete_retired_files(due, &log, &log_dir, &log_dir_status);
-                    continue;
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "log maintenance failed");
-                    // Back off retries while still accepting control messages.
-                    delay = Some(storage::MAINTENANCE_RETRY);
-                }
-            }
-        }
+        // Disarmed while the deadline is computed, so a nudge that lands in
+        // between counts as earlier and leaves a wake-up for the select below;
+        // see `WriterGate::disarm`.
+        gate.disarm();
+        let delay = maintain_while_due(&log, &gate, storage_status).await;
+        gate.arm(delay);
         let msg = match pending.take() {
             Some(m) => m,
             None => match tokio::select! {
-                message = rx.recv() => message,
-                () = tokio::time::sleep(delay.unwrap_or(std::time::Duration::ZERO)), if delay.is_some() => continue,
+                message = std::future::poll_fn(|cx| gate.poll_recv(&mut rx, cx)) => Wake::Message(message),
+                () = tokio::time::sleep(delay.unwrap_or(std::time::Duration::ZERO)), if delay.is_some() => Wake::Again,
+                // An inline append brought the next maintenance forward.
+                () = gate.nudged() => Wake::Again,
+                built = building_pass(&mut compaction), if compaction.is_some() => Wake::Built(built),
             } {
-                Some(m) => m,
-                None => break, // channel closed: every sender dropped
+                Wake::Message(Some(m)) => m,
+                Wake::Message(None) => break, // channel closed: every sender dropped
+                Wake::Again => continue,
+                Wake::Built(built) => {
+                    let building = compaction.take().expect("a pass was building");
+                    // Installing mutates the log, so it waits out an inline
+                    // append as a message does.
+                    let _busy = gate.writer_busy().await;
+                    finish_compaction(maintenance_storage, building, built).await;
+                    publish_delivery(&log, &delivery);
+                    continue;
+                }
             },
         };
+        // Held through the message, so an inline produce never lands inside
+        // it; see `WriterGate`.
+        let _busy = gate.writer_busy().await;
         match msg {
             WriterMessage::Barrier { ack } => {
                 let _ = ack.send(());
@@ -245,17 +333,12 @@ pub async fn run_with_sequencer(
                 )
                 .await;
             }
-            WriterMessage::ReplicateVerbatim {
-                batch,
-                base_offset,
-                ack,
-            } => {
+            WriterMessage::ReplicateVerbatim { batches, ack } => {
                 mutations::handle_replicate_verbatim(
                     &log,
                     &log_dir,
                     &log_dir_status,
-                    batch,
-                    base_offset,
+                    batches,
                     ack,
                     &append_notify,
                 )
@@ -303,7 +386,12 @@ pub async fn run_with_sequencer(
                 handle_retention((&log, &log_dir, &log_dir_status), &replica_state, ack).await;
             }
             WriterMessage::Compact { ack } => {
-                handle_compact((&log, &log_dir, &log_dir_status), &replica_state, ack).await;
+                if compaction.is_some() {
+                    // A pass is already building; the log runs one at a time.
+                    let _ = ack.send(Ok(()));
+                } else {
+                    compaction = start_compaction(maintenance_storage, &replica_state, ack).await;
+                }
             }
             #[cfg(any(test, feature = "test-helpers"))]
             WriterMessage::TestSetLogStart { new_start, ack } => {
@@ -347,6 +435,35 @@ pub async fn run_with_sequencer(
         // leaving the mirror stale after the arms that do not append.
         publish_delivery(&log, &delivery);
     }
+    // The channel closed with a pass still building: finish it, as the writer
+    // would have finished a pass it ran inside the Compact message.
+    if let Some(mut building) = compaction {
+        let built = building.built().await;
+        let _busy = gate.writer_busy().await;
+        finish_compaction(maintenance_storage, building, built).await;
+    }
+}
+
+/// What woke the writer loop.
+enum Wake {
+    /// The channel's next message, or `None` once it closed.
+    Message(Option<WriterMessage>),
+    /// A maintenance deadline or a nudge: recompute and wait again.
+    Again,
+    /// The running compaction pass's build ended.
+    Built(Result<BuiltCompaction, BlockingError>),
+}
+
+/// The end of the running compaction pass's build. Polled only while one is
+/// building.
+async fn building_pass(
+    compaction: &mut Option<BuildingCompaction>,
+) -> Result<BuiltCompaction, BlockingError> {
+    compaction
+        .as_mut()
+        .expect("polled only while a pass is building")
+        .built()
+        .await
 }
 
 /// Make the log prefix ending at `leo` durable: sync the WAL of a diskless
@@ -380,6 +497,111 @@ async fn sync_durable(
         hw_advance_notify.notify_waiters();
     }
     Ok(())
+}
+
+/// Appends a follower's replicated batches on the calling task when
+/// `partition`'s writer is idle, as the writer's `ReplicateVerbatim` arm
+/// would have, and hands them back when the writer is busy or has messages
+/// waiting.
+pub(crate) async fn replicate_inline(
+    partition: &Partition,
+    batches: Vec<ReplicatedBatch>,
+    log_dir_status: &LogDirRegistry,
+) -> Result<Result<(), BrokerError>, Vec<ReplicatedBatch>> {
+    let Some(_busy) = partition.writer_gate.try_inline(partition) else {
+        return Err(batches);
+    };
+    let (ack, answer) = tokio::sync::oneshot::channel();
+    mutations::handle_replicate_verbatim(
+        &partition.log,
+        &partition.log_dir,
+        log_dir_status,
+        batches,
+        ack,
+        &partition.append_notify,
+    )
+    .await;
+    after_inline_mutation(partition);
+    Ok(answer.await.unwrap_or_else(|_| {
+        Err(BrokerError::Replication(
+            "inline replicate dropped its answer".into(),
+        ))
+    }))
+}
+
+/// Appends `job` on the calling task when `partition`'s writer is idle, as
+/// the writer itself would have, and hands it back when the writer is busy
+/// or has messages waiting, for the caller to queue.
+///
+/// The job's acknowledgement is usually answered before this returns, so the
+/// caller finds it ready instead of waiting on the writer task. What follows
+/// the append -- the high watermark, the acknowledgement, the wakeups -- has
+/// to happen once the records are in the log, even if the request that made
+/// the append goes away. So it is polled here once, which finishes it when
+/// nothing it locks is contended, and handed to a task of its own otherwise,
+/// never dropped half done.
+pub(crate) async fn produce_inline(
+    partition: &Partition,
+    job: ProduceJob,
+    log_dir_status: &LogDirRegistry,
+    producer_state: &Arc<ProducerState>,
+) -> Result<(), ProduceJob> {
+    let Some(busy) = partition.writer_gate.try_inline(partition) else {
+        return Err(job);
+    };
+    let mut busy = Some(busy);
+    let appended = append_jobs(
+        WriterPartition {
+            topic: &partition.topic,
+            partition: partition.index,
+        },
+        vec![job],
+        ProduceStorage {
+            log: &partition.log,
+            status: StorageStatus {
+                log_dir: &partition.log_dir,
+                registry: log_dir_status,
+            },
+            producer_state,
+        },
+        ProduceSignals {
+            append_notify: &partition.append_notify,
+            replica_state: &partition.replica_state,
+            hw_advance_notify: &partition.hw_advance_notify,
+        },
+        DisklessParts {
+            wal: None,
+            sequencer: None,
+        },
+    )
+    .await;
+    if let Some(appended) = appended {
+        let mut finish = Box::pin(finish_group(appended));
+        if futures_util::poll!(finish.as_mut()).is_pending() {
+            // The completion holds the gate until it ends, as the writer
+            // would hold its message: otherwise the writer could take a later
+            // command, such as a truncation, while the completion still acts
+            // on the log end it read before it.
+            let busy = busy.take();
+            tokio::spawn(async move {
+                finish.await;
+                drop(busy);
+            });
+        }
+    }
+    after_inline_mutation(partition);
+    drop(busy);
+    Ok(())
+}
+
+/// What the writer does after every message, and what it would have computed
+/// before its next one, for a mutation an inline append made in its place:
+/// refresh the delivery watermark, and bring the writer's next maintenance
+/// forward if the append made it due sooner.
+fn after_inline_mutation(partition: &Partition) {
+    publish_delivery(&partition.log, &partition.delivery);
+    let delay = lock_log(&partition.log).maintenance_delay(std::time::SystemTime::now());
+    partition.writer_gate.nudge_if_earlier(delay);
 }
 
 /// Refresh the partition's delivery watermark after a writer message, and

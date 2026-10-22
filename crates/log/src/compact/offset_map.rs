@@ -2,9 +2,10 @@
 //! over the sealed segments, before any rewrite starts.
 
 use {
-    super::{CleanedTransactionMetadata, batch_reader::read_all_batches, should_index_key},
+    super::{CleanedTransactionMetadata, batch_reader::group_batches, should_index_key},
     crate::{
-        error::LogError, record_limit::check_records_read, segment::Segment, txn_index::AbortedTxn,
+        error::LogError, record_limit::check_records_read, segment::SealedInput,
+        txn_index::AbortedTxn,
     },
     bytes::Bytes,
     krabka_ids::Offset,
@@ -38,42 +39,55 @@ use {
     err,
 )]
 pub fn build_offset_map(
-    segments: &[&Segment],
+    segments: &[SealedInput],
     aborted: Vec<AbortedTxn>,
     limit: Option<ByteSize>,
 ) -> Result<HashMap<Bytes, Offset>, LogError> {
-    // Keyed by `Bytes` (cheap refcounted clone of the record key) rather
-    // than `Vec<u8>` to avoid a heap copy of every key. Zero-length keys
-    // are legal in Kafka and dedup as a distinct "empty key" like any other.
+    // Zero-length keys are legal in Kafka and dedup as a distinct "empty
+    // key" like any other.
     let mut map: HashMap<Bytes, Offset> = HashMap::new();
     let mut txn_meta = CleanedTransactionMetadata::default();
     txn_meta.add_aborted_transactions(aborted);
-    for seg in segments {
-        for batch in read_all_batches(seg)? {
-            // Control batches (txn commit/abort markers) carry a control-type
-            // key that must NEVER enter the dedup map. Skip them entirely:
-            // indexing their key silently dropped all-but-newest markers and
-            // broke read_committed (the control-batch data-loss bug).
-            if batch.attributes.is_control_batch() {
-                txn_meta.on_control_batch_read(&batch)?;
+    for batch in group_batches(segments) {
+        let batch = batch?;
+        // Control batches (txn commit/abort markers) carry a control-type
+        // key that must NEVER enter the dedup map. Skip them entirely:
+        // indexing their key silently dropped all-but-newest markers and
+        // broke read_committed (the control-batch data-loss bug).
+        if batch.attributes.is_control_batch() {
+            txn_meta.on_control_batch_read(&batch)?;
+            continue;
+        }
+        if txn_meta.on_batch_read(&batch) {
+            continue;
+        }
+        check_records_read(&batch, batch.records.len(), limit)?;
+        for record in &batch.records {
+            if !should_index_key(record.key.as_deref(), false) {
                 continue;
             }
-            if txn_meta.on_batch_read(&batch) {
-                continue;
-            }
-            check_records_read(&batch, batch.records.len(), limit)?;
-            for record in &batch.records {
-                if !should_index_key(record.key.as_deref(), false) {
-                    continue;
-                }
-                let key_bytes = record.key.as_ref().expect("should_index_key checked Some");
-                let absolute = Offset(batch.base_offset + i64::from(record.offset_delta));
-                map.insert(key_bytes.clone(), absolute);
-            }
+            let key_bytes = record.key.as_ref().expect("should_index_key checked Some");
+            let absolute = Offset(batch.base_offset + i64::from(record.offset_delta));
+            insert_newest(&mut map, key_bytes, absolute);
         }
     }
     tracing::Span::current().record("keys", map.len());
     Ok(map)
+}
+
+/// Record `offset` as the newest for `key`.
+///
+/// A decoded record's key is a view into its batch's whole decompressed body,
+/// so storing it would keep that body alive for as long as the map lives. The
+/// map copies a key the first time it sees it, and later records of the same
+/// key only move its offset, so the map holds each distinct key once and no
+/// batch body.
+fn insert_newest(map: &mut HashMap<Bytes, Offset>, key: &Bytes, offset: Offset) {
+    if let Some(newest) = map.get_mut(key) {
+        *newest = offset;
+    } else {
+        map.insert(Bytes::copy_from_slice(key), offset);
+    }
 }
 
 #[cfg(test)]
@@ -82,9 +96,10 @@ mod tests {
         super::*,
         crate::{
             compact::test_support::{
-                control_batch, make_record, superseded_records, transactional_record,
+                control_batch, inputs, make_record, superseded_records, transactional_record,
                 write_sealed_batches, write_sealed_segment,
             },
+            segment::Segment,
             test_support::KeyValue,
         },
         bytes::Bytes,
@@ -94,7 +109,7 @@ mod tests {
     };
 
     fn offset_map_for(segments: &[&Segment], aborted: Vec<AbortedTxn>) -> HashMap<Bytes, Offset> {
-        build_offset_map(segments, aborted, None).unwrap()
+        build_offset_map(&inputs(segments), aborted, None).unwrap()
     }
 
     fn offset_map_of(records: Vec<krabka_protocol::records::Record>) -> HashMap<Bytes, Offset> {

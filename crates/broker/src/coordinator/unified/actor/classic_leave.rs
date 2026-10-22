@@ -205,7 +205,8 @@ fn resolve_consumer_classic_leave(
 /// (`ConsumerGroup.validateDeleteGroup`).
 ///
 /// The batch follows Kafka's `GroupCoordinatorShard.deleteGroups`. It starts
-/// with an `OffsetCommit` tombstone for each committed offset
+/// with an `OffsetCommit` tombstone for each committed offset, a commit still
+/// waiting for the high watermark included
 /// (`OffsetMetadataManager.deleteAllOffsets`), then one for each key that an
 /// open transaction wrote and that has no committed offset, and ends with the
 /// group tombstones: the k2 `GroupMetadata` tombstone of a classic group, or
@@ -249,8 +250,8 @@ async fn append_group_delete(
     now_ms: i64,
 ) -> Result<(), BrokerError> {
     let keys: Vec<(String, i32)> = group
-        .committed_offsets
-        .keys()
+        .latest_offsets()
+        .into_keys()
         .cloned()
         .chain(group.unresolved_txn_keys())
         .collect::<BTreeSet<_>>()

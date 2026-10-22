@@ -9,7 +9,7 @@ use {
         owned_decode::decode_owned_batch,
         topic_settings::{TimestampPolicy, TimestampWindow},
     },
-    crate::{codes, metrics::BrokerMetrics, time_util::now_ms},
+    crate::{codes, metrics::BrokerMetrics, partition::EncodedBatch, time_util::now_ms},
     bytes::{Bytes, BytesMut},
     krabka_compression::RecordDecompressionPolicy,
     krabka_protocol::{
@@ -72,6 +72,10 @@ pub(super) struct PreparedBatch {
     /// the verbatim path the writer stamps the leader epoch at append time. On
     /// the owned path the code below stamps it onto the owned batch.
     pub(super) source: PreparedSource,
+    /// The owned batch as the size gates last encoded it, kept so the second
+    /// gate and the writer reuse the bytes rather than encode again. Always
+    /// `None` on the verbatim path. [`Self::stored_len`] fills it.
+    pub(super) encoded: Option<EncodedBatch>,
 }
 
 #[derive(Debug)]
@@ -105,6 +109,7 @@ impl PreparedBatch {
             producer_epoch: header.producer_epoch,
             base_sequence: header.base_sequence,
             source: PreparedSource::Verbatim(bytes),
+            encoded: None,
         }
     }
 
@@ -159,6 +164,7 @@ impl PreparedBatch {
             producer_epoch: batch.producer_epoch,
             base_sequence: batch.base_sequence,
             source: PreparedSource::Owned(batch),
+            encoded: None,
         }
     }
 
@@ -166,7 +172,7 @@ impl PreparedBatch {
     /// bytes on the verbatim path, and the measure [`Self::stored_len`] takes
     /// on the owned one. What Kafka's `UnifiedLog.append` holds against the
     /// topic's `segment.bytes`.
-    pub(super) fn appended_len(&self, config: &krabka_log::LogConfig) -> usize {
+    pub(super) fn appended_len(&mut self, config: &krabka_log::LogConfig) -> usize {
         match &self.source {
             PreparedSource::Verbatim(bytes) => bytes.len(),
             PreparedSource::Owned(_) => self
@@ -198,37 +204,40 @@ impl PreparedBatch {
     /// `messageSizeMaybeChanged`, throwing the same `RecordTooLargeException`
     /// its pre-append check throws.
     ///
+    /// Only an encode can measure a compressed batch, so this encodes, and it
+    /// keeps the bytes in [`Self::encoded`]. A later call under the same codec
+    /// and level answers from them, and the writer appends them when the log's
+    /// config still asks for that codec and level. A call under another codec
+    /// or level, because the topic's config changed between the two gates,
+    /// encodes again and keeps the new bytes. The batch's own codec is set to
+    /// the target only for the encode, so the writer still applies whatever
+    /// `compression.type` is in force when it appends.
+    ///
     /// `None` also answers an encode this measurement cannot perform, because
     /// that is an encode the writer cannot perform either: the append fails on
     /// its own and reports its own error rather than borrowing this gate's.
     pub(super) fn stored_len(
-        &self,
+        &mut self,
         topic_compression: Option<krabka_compression::CompressionType>,
         config: Option<&krabka_log::LogConfig>,
     ) -> Option<usize> {
-        let PreparedSource::Owned(batch) = &self.source else {
+        let PreparedSource::Owned(batch) = &mut self.source else {
             return None;
         };
-        match topic_compression {
-            Some(target) if target != batch.attributes.compression() => {
-                let mut stored = batch.clone();
-                stored.attributes = stored.attributes.with_compression(target);
-                encoded_len(&stored, config)
-            }
-            _ => encoded_len(batch, config),
+        let codec = topic_compression.unwrap_or_else(|| batch.attributes.compression());
+        let level = config.and_then(|config| config.compression_level(codec));
+        if let Some(encoded) = &self.encoded
+            && encoded.encoded_with(codec, level)
+        {
+            return Some(encoded.len());
         }
+        let original = batch.attributes;
+        batch.attributes = original.with_compression(codec);
+        let encoded = EncodedBatch::encode(batch, level);
+        batch.attributes = original;
+        self.encoded = encoded.ok();
+        self.encoded.as_ref().map(EncodedBatch::len)
     }
-}
-
-/// Bytes that [`RecordBatch::encode`] writes, which for a compressed batch
-/// only an encode can answer.
-fn encoded_len(batch: &RecordBatch, config: Option<&krabka_log::LogConfig>) -> Option<usize> {
-    let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
-    let level = config.and_then(|config| config.compression_level(batch.attributes.compression()));
-    batch
-        .encode_with_compression_level(&mut buf, level)
-        .ok()
-        .map(|()| buf.len())
 }
 
 /// Decide the append shape for one partition's records and extract the header

@@ -54,6 +54,7 @@ use {
         },
         reconfig::ReconfigOutcome,
     },
+    applied_image::AppliedImage,
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
     krabka_ids::Offset,
     krabka_metadata::{
@@ -86,6 +87,7 @@ use {
 };
 
 mod activation;
+mod applied_image;
 mod apply;
 /// The KIP-630 `.checkpoint` artifacts under a node's metadata directory. It
 /// is public because a broker-only observer keeps its `__cluster_metadata`
@@ -124,6 +126,8 @@ pub use self::{
 mod test_support;
 #[cfg(test)]
 mod tests_activation;
+#[cfg(test)]
+mod tests_applied_image;
 #[cfg(test)]
 mod tests_apply;
 #[cfg(test)]
@@ -173,17 +177,16 @@ struct Engine {
     me: NodeId,
     core: QuorumStateMachine,
     log: KraftLog,
-    image: MetadataImage,
+    /// The applied [`MetadataImage`], which also publishes it to readers.
+    image: AppliedImage,
     peers: Arc<dyn PeerSender>,
-    /// Publishes the latest applied [`MetadataImage`] to readers.
-    image_tx: watch::Sender<Arc<MetadataImage>>,
     /// The offset of the last record of the newest applied batch or snapshot
     /// that carried a `FeatureLevelRecord`, or `-1` before the first. It is
     /// the finalized-features epoch of Kafka's `FeaturesPublisher`, which
     /// takes `lastContainedOffset` only from an image whose delta has a
     /// features delta.
     features_epoch: i64,
-    /// Publishes `features_epoch` with each image `image_tx` publishes.
+    /// Publishes `features_epoch` with each image `image` publishes.
     features_epoch_tx: watch::Sender<i64>,
     /// Publishes the current leader id (None while unknown / election running).
     leader_tx: watch::Sender<Option<NodeId>>,

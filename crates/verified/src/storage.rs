@@ -38,11 +38,11 @@ pub enum RemoteCacheAction {
     Reject,
     /// Preserve state for an exact retry or an already-absent tombstone.
     Noop,
-    /// Store the new readable state and rebuild the derived epoch index.
+    /// Store the new readable state and index it in the derived epoch index.
     StoreFinished,
-    /// Store a non-readable state and rebuild the index without it.
+    /// Store a non-readable state and drop it from the derived epoch index.
     StoreHidden,
-    /// Remove primary state and rebuild the index without it.
+    /// Remove primary state, and with it any epoch-index entries.
     Remove,
 }
 

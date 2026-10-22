@@ -3,18 +3,25 @@
 //! a replay can be slow or silent-but-open, and [`RacingAppendLog`] appends a
 //! record from inside `subscribe`, so a test can land another broker's flush
 //! in the window between establishing the subscription and reading the
-//! watermark. They compose: wrap one in the other.
+//! watermark. They compose: wrap one in the other. [`GroupAckLog`] delays the
+//! acknowledgment of each published group, records the groups, and fails the
+//! records a test names.
 
 use {
-    crate::{diskless::wal_index::WalFlushRecord, test_support::UnixMillis},
+    crate::{
+        diskless::wal_index::{WalFlushRecord, WalIndexKey},
+        test_support::UnixMillis,
+    },
     async_trait::async_trait,
     bytes::Bytes,
     futures_util::{FutureExt as _, StreamExt as _},
     krabka_ids::PartitionIndex,
     krabka_remote_storage_topic::{
-        AssignmentHandle, MetadataEventLog, MetadataEventStream, PartitionStart,
+        AssignmentHandle, KeyedEvent, MetadataEventLog, MetadataEventStream, MetadataLogError,
+        PartitionStart,
     },
     std::{
+        collections::HashSet,
         sync::{Arc, Mutex as StdMutex},
         time::Duration,
     },
@@ -127,6 +134,102 @@ impl MetadataEventLog for RacingAppendLog {
                 .expect("racing append");
         }
         self.inner.subscribe(assignment)
+    }
+}
+
+/// Acknowledges every group handed to `publish_keyed_group` after one shared
+/// delay, as a producer that pipelines a group does, and records the keys of
+/// each group in the order they were submitted.
+///
+/// A record whose key is failing is refused. The rest of its group still
+/// lands, as records bound for other metadata partitions can when one Produce
+/// request fails.
+pub(crate) struct GroupAckLog {
+    inner: Arc<dyn MetadataEventLog>,
+    ack_delay: Duration,
+    failing: StdMutex<HashSet<Bytes>>,
+    groups: StdMutex<Vec<Vec<WalIndexKey>>>,
+}
+
+#[bon::bon]
+impl GroupAckLog {
+    #[builder]
+    pub(crate) fn build(
+        inner: Arc<dyn MetadataEventLog>,
+        #[builder(default)] ack_delay: Duration,
+        #[builder(default)] failing: Vec<WalIndexKey>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            ack_delay,
+            failing: StdMutex::new(failing.into_iter().map(WalIndexKey::to_bytes).collect()),
+            groups: StdMutex::new(Vec::new()),
+        })
+    }
+
+    /// The range keys of every group submitted so far.
+    pub(crate) fn groups(&self) -> Vec<Vec<WalIndexKey>> {
+        self.groups
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Stop failing records, and forget the groups recorded so far.
+    pub(crate) fn heal(&self) {
+        self.failing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.groups
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+}
+
+#[krabka_macros::metadata_log_delegate(krabka_remote_storage_topic, keyed)]
+#[async_trait]
+impl MetadataEventLog for GroupAckLog {
+    async fn publish_keyed_group(
+        &self,
+        events: Vec<KeyedEvent>,
+    ) -> Result<Vec<i64>, MetadataLogError> {
+        self.groups
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(
+                events
+                    .iter()
+                    .map(|event| WalIndexKey::from_bytes(&event.key).expect("a range key"))
+                    .collect(),
+            );
+        tokio::time::sleep(self.ack_delay).await;
+        let mut offsets = Vec::with_capacity(events.len());
+        let mut failure = None;
+        for KeyedEvent {
+            partition,
+            key,
+            event,
+        } in events
+        {
+            let failing = self
+                .failing
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(&key);
+            if failing {
+                failure.get_or_insert_with(|| MetadataLogError::Publish("injected".into()));
+                continue;
+            }
+            match self.inner.publish_keyed(partition, key, event).await {
+                Ok(offset) => offsets.push(offset),
+                Err(error) => {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+        failure.map_or(Ok(offsets), Err)
     }
 }
 

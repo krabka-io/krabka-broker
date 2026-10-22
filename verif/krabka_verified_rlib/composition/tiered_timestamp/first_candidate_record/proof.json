@@ -1,0 +1,16 @@
+{
+  "profile": [],
+  "proofs": {
+    "Coma": {
+      "vc_closure0": { "prover": "alt-ergo", "time": 0.022 },
+      "vc_elim_Some": { "prover": "alt-ergo", "time": 0.023 },
+      "vc_first_candidate_record": { "prover": "z3", "time": 0.018 },
+      "vc_first_timestamp_index": { "prover": "alt-ergo", "time": 0.023 },
+      "vc_first_timestamp_record_index": {
+        "prover": "alt-ergo",
+        "time": 0.013
+      },
+      "vc_map_usize": { "prover": "alt-ergo", "time": 0.017 }
+    }
+  }
+}

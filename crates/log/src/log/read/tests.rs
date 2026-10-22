@@ -10,7 +10,8 @@ use {
         log::{
             RawRead,
             test_support::{
-                NO_LIMIT, TempLog, append_samples, sample_batch, test_batch_at, test_log,
+                NO_LIMIT, TempLog, append_keyed_samples, append_samples, compact_test_log,
+                compaction_ctx, sample_batch, set_segment_size, test_batch_at, test_log,
                 tiny_segments,
             },
         },
@@ -217,22 +218,24 @@ fn log_read_raw_desc_multi_segment_regions_equal_read_raw() {
 /// the zero-copy path a plaintext follower fetch takes.
 #[test]
 fn a_descriptor_read_never_skips_past_a_segment_its_budget_clipped() {
+    check_seam_reads(descriptor_bases, |bases| bases);
+}
+
+/// The base offset of every batch a descriptor read serves, read back from
+/// the regions it describes.
+#[krabka_macros::sendfile_cfg]
+fn descriptor_bases(log: &Log, offset: Offset, end: Offset, budget: ByteSize) -> Vec<i64> {
     use std::os::unix::fs::FileExt;
-    check_seam_reads(
-        |log, offset, end, budget| {
-            let mut wire = Vec::new();
-            for region in log.read_raw_desc(offset, end, budget).unwrap().regions {
-                let mut bytes = vec![0u8; region.len];
-                region
-                    .file
-                    .read_exact_at(&mut bytes, region.offset)
-                    .unwrap();
-                wire.extend_from_slice(&bytes);
-            }
-            batch_bases(&wire)
-        },
-        |bases| bases,
-    );
+    let mut wire = Vec::new();
+    for region in log.read_raw_desc(offset, end, budget).unwrap().regions {
+        let mut bytes = vec![0u8; region.len];
+        region
+            .file
+            .read_exact_at(&mut bytes, region.offset)
+            .unwrap();
+        wire.extend_from_slice(&bytes);
+    }
+    batch_bases(&wire)
 }
 
 /// The log of [`seam_log`], the directory that holds it, and the encoded size of
@@ -662,10 +665,197 @@ fn a_fetch_past_a_segment_never_blocks_on_it() {
     let (_dir, log) = six_segments_one_cold(|_| 0);
     let end = log.log_end_offset();
     let first = &log.segments[0];
+    let read_ahead_max = mebibytes(1);
     assert2::assert!(
         first
-            .fetch_would_block(Offset(0), end, mebibytes(1))
+            .read_raw_desc_if_cached(Offset(0), end, mebibytes(1), read_ahead_max)
             .unwrap()
+            .is_none()
     );
-    assert2::assert!(!first.fetch_would_block(end, end, mebibytes(1)).unwrap());
+    let past = first
+        .read_raw_desc_if_cached(end, end, mebibytes(1), read_ahead_max)
+        .unwrap()
+        .expect("a fetch past the segment is not blocked by it");
+    assert2::assert!(past.region.is_none());
+}
+
+/// The log of [`gapped_log`] and the directory that holds it.
+struct GappedLog {
+    dir: tempfile::TempDir,
+    log: Log,
+}
+
+/// The base offsets of the batches [`gapped_log`] still holds, in order. Every
+/// batch holds one record.
+const GAPPED_BASES: [i64; 9] = [2, 6, 7, 8, 9, 10, 11, 12, 13];
+
+/// A log whose sealed segments carry every boundary the read walk must find
+/// its first segment across, after compaction and retention:
+///
+/// | segment       | base | last | batches   | why                               |
+/// |---------------|------|------|-----------|-----------------------------------|
+/// | sealed 0      | 2    | 2    | 2         | retention deleted the one at 0    |
+/// | sealed 1      | 4    | 3    | none      | compaction emptied it             |
+/// | sealed 2      | 6    | 7    | 6, 7      | two batches                       |
+/// | sealed 3      | 8    | 9    | 8, 9      | two batches                       |
+/// | sealed 4      | 10   | 11   | 10, 11    | two batches                       |
+/// | sealed 5      | 12   | 12   | 12        |                                   |
+/// | active        | 13   | 13   | 13        |                                   |
+///
+/// Offsets 3 to 5 are a compacted gap: offset 3 sat at the end of the segment
+/// based at 2, so its last offset is below the next base less one, and the
+/// segment based at 4 is empty, so its last offset is below its own base.
+fn gapped_log() -> GappedLog {
+    let TempLog { dir, mut log } = compact_test_log();
+    // One batch per segment. Offsets 1, 3, 4 and 5 share a key with offset 9,
+    // so compaction removes them.
+    append_keyed_samples(&mut log, 14, |i| {
+        if [1, 3, 4, 5, 9].contains(&i) {
+            "dup".to_owned()
+        } else {
+            format!("k{i}")
+        }
+    });
+    // Compaction groups two one-batch segments into each rewritten segment.
+    set_segment_size(&mut log, bytes(150));
+    log.compact(&compaction_ctx()).unwrap();
+    // Retention: a `DeleteRecords` to offset 2, and the tick that deletes the
+    // segment wholly below it.
+    log.set_log_start_offset(Offset(2)).unwrap();
+    log.tick(std::time::SystemTime::now(), log.log_end_offset())
+        .unwrap();
+
+    let shape: Vec<(Offset, Offset)> = log
+        .segments
+        .iter()
+        .chain(log.active.as_ref())
+        .map(|segment| (segment.base_offset(), segment.last_offset()))
+        .collect();
+    assert2::assert!(
+        shape
+            == [(2, 2), (4, 3), (6, 7), (8, 9), (10, 11), (12, 12), (13, 13)]
+                .map(|(base, last)| (Offset(base), Offset(last)))
+    );
+    GappedLog { dir, log }
+}
+
+/// A budget that holds any one batch of [`gapped_log`] but no two of them:
+/// each is between 70 and 80 bytes.
+const ONE_BATCH: ByteSize = bytes(100);
+
+/// The base offsets a read from `offset` serves when its budget lets it read
+/// to the log end, or only the first batch when `one` is set.
+fn gapped_bases_from(offset: i64, one: bool) -> Vec<i64> {
+    let bases = GAPPED_BASES.into_iter().filter(|base| *base >= offset);
+    if one {
+        bases.take(1).collect()
+    } else {
+        bases.collect()
+    }
+}
+
+/// The first sealed segment a read starts in comes from a binary search, not
+/// a walk from the oldest segment, and lands where that walk would have
+/// stopped: on the first segment whose last offset reaches the fetch offset.
+///
+/// The table covers the retention boundary, a gap at the end of a segment, an
+/// empty segment, offsets inside multi-batch segments, and offsets that only
+/// the active segment or nothing at all can answer.
+#[test]
+fn the_first_segment_of_a_read_is_found_across_gaps_and_empty_segments() {
+    let GappedLog { dir: _dir, log } = gapped_log();
+    let sealed = log.segments.len();
+    let cases: [(&str, i64, usize); 13] = [
+        ("below the log start", 0, 0),
+        ("at the log start", 2, 0),
+        ("in the gap at the end of a segment", 3, 1),
+        ("in the gap at the base of an empty segment", 4, 2),
+        ("in the gap before a segment", 5, 2),
+        ("at a segment base", 6, 2),
+        ("inside a segment", 7, 2),
+        ("at the next segment base", 8, 3),
+        ("at a segment's last offset", 11, 4),
+        ("in the last sealed segment", 12, 5),
+        ("in the active segment", 13, sealed),
+        ("at the log end", 14, sealed),
+        ("past the log end", 99, sealed),
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    let mut linear = Vec::new();
+    for (label, offset, index) in cases {
+        let found = log.first_sealed_from(Offset(offset));
+        actual.push((label, found));
+        expected.push((label, index));
+        // The walk the search replaced: skip every sealed segment that ends
+        // before the offset.
+        let walked = log
+            .segments
+            .iter()
+            .position(|segment| segment.last_offset() >= Offset(offset))
+            .unwrap_or(sealed);
+        linear.push((label, walked));
+    }
+    check!(actual == expected);
+    check!(linear == expected);
+}
+
+/// Read [`gapped_log`] from every readable offset, under a budget that
+/// reaches the log end and under [`ONE_BATCH`], and check each read against
+/// the batches it must serve.
+fn check_gapped_reads<T: std::fmt::Debug + PartialEq>(
+    log: &Log,
+    read: impl Fn(&Log, Offset, Offset, ByteSize) -> T,
+    expect: impl Fn(Vec<i64>) -> T,
+) {
+    let end = log.log_end_offset();
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for offset in 2..=end.0 {
+        for (one, budget) in [(false, mebibytes(1)), (true, ONE_BATCH)] {
+            actual.push((offset, one, read(log, Offset(offset), end, budget)));
+            expected.push((offset, one, expect(gapped_bases_from(offset, one))));
+        }
+    }
+    check!(actual == expected);
+}
+
+/// Every read path, from every readable offset of [`gapped_log`], serves the
+/// batches at and after the offset in order across compacted gaps, an empty
+/// segment and the retention boundary: all of them under a budget that
+/// reaches the log end, and the first of them under a budget too small for
+/// a second batch.
+#[test]
+fn reads_from_every_offset_cross_gaps_empty_segments_and_seams() {
+    let GappedLog { dir: _dir, log } = gapped_log();
+    check_gapped_reads(
+        &log,
+        |log, offset, end, budget| {
+            let decoded: Vec<i64> = log
+                .read(offset, budget)
+                .unwrap()
+                .batches
+                .iter()
+                .map(|batch| batch.base_offset)
+                .collect();
+            let raw = batch_bases(&log.read_raw(offset, end, budget).unwrap().bytes);
+            (decoded, raw)
+        },
+        |bases| (bases.clone(), bases),
+    );
+
+    let below = log.read_raw(Offset(1), log.log_end_offset(), mebibytes(1));
+    check!(
+        matches!(below, Err(LogError::OffsetTooLow { .. })),
+        "below the retention boundary is refused, got {below:?}"
+    );
+}
+
+#[krabka_macros::sendfile_cfg]
+/// The descriptor twin of
+/// `reads_from_every_offset_cross_gaps_empty_segments_and_seams`.
+#[test]
+fn descriptor_reads_from_every_offset_cross_gaps_empty_segments_and_seams() {
+    let GappedLog { dir: _dir, log } = gapped_log();
+    check_gapped_reads(&log, descriptor_bases, |bases| bases);
 }

@@ -13,7 +13,7 @@ use {
         compact::{
             CleanedTransactionMetadata, RewriteOutput, RewriteRetention, build_offset_map,
             rewrite_segments,
-            test_support::{RETENTION, make_record, round_over, write_sealed_segment},
+            test_support::{RETENTION, inputs, make_record, round_over, write_sealed_segment},
         },
         error::LogError,
         io::{FileIo, IoTarget, LogIo},
@@ -181,12 +181,12 @@ fn compactable(dir: &Path, survivor_txnindex: bool) -> RewriteOutput {
             Some(b"v3"),
         )]));
         let segments = vec![&first, &second];
-        let map = build_offset_map(&segments, vec![], None).unwrap();
+        let map = build_offset_map(&inputs(&segments), vec![], None).unwrap();
         let mut txn = CleanedTransactionMetadata::default();
         rewrite_segments(
             &FileIo,
             dir,
-            &segments,
+            &inputs(&segments),
             &map,
             &mut txn,
             RewriteRetention {

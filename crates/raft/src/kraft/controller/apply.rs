@@ -23,8 +23,8 @@ impl Engine {
     /// Publish the applied image, then its finalized-features epoch. The
     /// order keeps a reader that takes the epoch first from seeing it run
     /// ahead of the features.
-    pub(super) fn publish_image(&self) {
-        let _ = self.image_tx.send(Arc::new(self.image.clone()));
+    pub(super) fn publish_image(&mut self) {
+        self.image.publish();
         self.features_epoch_tx.send_replace(self.features_epoch);
     }
 

@@ -5,6 +5,7 @@
 use {
     super::{
         CommitWaiter, Engine, KraftController,
+        applied_image::Overlay,
         offsets::{
             assigned_record_offset, hwm_reaches_waiter, submit_waiter_need_offset,
             validate_append_result,
@@ -41,7 +42,7 @@ impl Engine {
                 Some(RaftError::NotLeader {
                     current_leader: self.core.quorum_state().leader_id,
                 })
-            } else if !Arc::ptr_eq(expected, &self.image_tx.borrow()) {
+            } else if !Arc::ptr_eq(expected, &self.image.published()) {
                 Some(RaftError::StaleMetadataImage)
             } else if !self.uncommitted_tail_is_idle() {
                 Some(RaftError::UncommittedTail)
@@ -604,18 +605,23 @@ impl Engine {
         // offset is the base `append` will return.
         let assign_base = self.log.log_end_offset();
 
-        let mut scratch = self.image.clone();
+        // Both views are copy-on-write overlays of the applied image. Nothing
+        // reads them after the last record, so the last record is applied to
+        // neither, and a one-record batch, such as a diskless offset
+        // reservation, copies no image.
+        let mut scratch = self.image.overlay();
         // What a replica sees when it replays this batch: each value blob
         // decoded against the image the blobs before it produced. A blob that
         // does not decode here would be dropped by every replica, and a Kafka
         // replica would fail on it, so the batch is refused before it reaches
         // the log.
-        let mut replica_view = self.image.clone();
+        let mut replica_view = self.image.overlay();
         let mut result = SubmitChangeResult::default();
         let mut value_blobs: Vec<bytes::Bytes> = Vec::new();
         // The brokers whose registration this batch writes.
         let mut registration_nodes = Vec::new();
-        for r in records {
+        for (index, r) in records.iter().enumerate() {
+            let more_records = index + 1 < records.len();
             let rebased = rebase_partition_directories(&scratch, r);
             let r = rebased.as_ref().unwrap_or(r);
             // A new registration carries no epoch (-1) and is stamped with
@@ -709,7 +715,7 @@ impl Engine {
             }
             match to_kraft_values(r, &scratch) {
                 Ok(mut blobs) => {
-                    if let Err(e) = replay_value_blobs(&blobs, &mut replica_view) {
+                    if let Err(e) = replay_value_blobs(&blobs, &mut replica_view, more_records) {
                         let _ = reply.send(Err(e));
                         return;
                     }
@@ -720,7 +726,9 @@ impl Engine {
                     return;
                 }
             }
-            scratch.apply(r);
+            if more_records {
+                scratch.apply(r);
+            }
         }
 
         // Every record fanned out to nothing (e.g. an empty config clear): the
@@ -961,12 +969,19 @@ fn registered_at(
     registered
 }
 
-fn replay_value_blobs(blobs: &[bytes::Bytes], image: &mut MetadataImage) -> Result<(), RaftError> {
-    for blob in blobs {
+fn replay_value_blobs(
+    blobs: &[bytes::Bytes],
+    image: &mut Overlay<'_>,
+    more_blobs: bool,
+) -> Result<(), RaftError> {
+    for (index, blob) in blobs.iter().enumerate() {
         let decoded = from_kraft_value(blob, image).map_err(|e| {
             RaftError::ChangeRejected(format!("encoded record would not replay: {e}"))
         })?;
-        image.apply(&decoded);
+        // Nothing decodes against the image after the batch's last blob.
+        if more_blobs || index + 1 < blobs.len() {
+            image.apply(&decoded);
+        }
     }
     Ok(())
 }

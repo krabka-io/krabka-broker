@@ -23,6 +23,149 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ## [Unreleased]
 
+### Added
+
+- `krabka-log` gains `Log::prepare_compaction`, `CompactionJob::build` and
+  `Log::finish_compaction`, with `BuiltCompaction` and `CompactionOutcome`:
+  `Log::compact` in three steps, the middle one runnable without the log.
+  `Log::compact` runs all three and behaves as before, except that it does
+  nothing on a fenced log (#1639).
+- `packaging/k8s/profiles/krabka-io-uring.json`, a seccomp profile for the
+  reference StatefulSet. It is containerd v2.4.2's `RuntimeDefault` profile
+  plus the three io_uring system calls, which the default profiles of
+  containerd 2.x and CRI-O refuse. The StatefulSet keeps `RuntimeDefault`
+  and has the `Localhost` lines as a comment. [Deploy](docs/operations/deploy.md#seccomp-and-io_uring)
+  tells how to install the profile and how to see that the
+  `preallocate=true` writes use io_uring (#1582).
+- `krabka-log` gains `Log::fence`, `Log::append_may_block` and
+  `Log::written_since_open_from`, and `LogError` gains a `Fenced` variant. A
+  fenced log refuses every append with `LogError::Fenced`, which the broker
+  answers with `NOT_LEADER_OR_FOLLOWER`. The broker fences a partition's log
+  when it retires the partition, so an append that raced the retirement cannot
+  land after it. `LogError` is not `#[non_exhaustive]`, so an exhaustive
+  `match` on it outside this repository needs a new arm.
+
+### Changed
+
+- `ci.yml` runs on the merge queue's `merge_group` event, treated like a
+  pull request: lanes are scoped by path, the remote cache is read-only and
+  nextest waits for `main`. Each queued pull request is then tested on top of
+  `main` and of every pull request ahead of it, so two that pass alone can no
+  longer merge into a `main` that does not build, as #1624 and #1629 did.
+- Pull request CI runs fewer lanes, and a release requires a full run. Pull
+  requests no longer run `coverage`, `cargo nextest` or `benchmarks.yml`.
+  Pushes to `main` still run coverage and nextest. A pull request runs the
+  Cargo and wasm Clippy lanes only when it reaches the Rust build. It runs the
+  kind smoke test only when it changes `packaging/` or the cluster config, and
+  the Creusot proofs only when it changes their inputs. The nightly run always
+  runs the kind smoke test and the proofs. `release.yml` now refuses a commit
+  that has no green scheduled or dispatched `ci.yml` run.
+- The `ci` job's build and tests, the `coverage` run and the `cargo` Clippy
+  and nextest lane run on BuildBuddy remote runners when the run holds a
+  BuildBuddy API key. Each is a 16-core VM restored from a warm snapshot of
+  its own last run, so the GitHub runner no longer compiles the closure or
+  downloads test binaries. A run without a key, such as a fork's pull
+  request, runs the same script on the GitHub runner.
+- A produce batch the broker re-encodes (a topic whose `compression.type`
+  forces another codec, or a legacy `MessageSet` it up-converts) is encoded
+  once instead of three times. The `max.message.bytes` gate keeps the bytes
+  it measured, the `segment.bytes` gate measures those, and the writer
+  appends them when the codec and compression level in force under the log
+  lock are still the ones they were encoded with. A config change in between
+  encodes again under the new settings, as before. The stored bytes are
+  unchanged.
+- Log compaction holds one record batch at a time. The offset-map and rewrite
+  passes used to read and decode each sealed segment whole, the rewrite held
+  every decoded batch of its group at once, and the offset map kept each
+  batch's decompressed body alive through the keys it stored. A rewrite group
+  is bounded by `segment.bytes` on disk, so a compressed group could need many
+  times that in memory. The passes now stream each segment batch by batch, and
+  the map copies each distinct key once. In the measurements on #1613, a pass
+  over 256 MiB of gzip-expanded records raised the peak resident set by 1.4
+  MiB instead of 521 MiB. Damaged segments fail the pass with the same errors
+  as before (#1613).
+- Log compaction reads and rewrites a partition's sealed segments without
+  holding the partition's log mutex or its writer task, as Kafka's cleaner
+  does. The writer takes the mutex only to start the pass and to install its
+  output, and handles other messages while the pass builds, so produce,
+  replica appends and fetches of the partition no longer wait for the whole
+  pass. A pass whose input a truncation, retention or reset took
+  away meanwhile installs nothing and is not reported as a storage failure.
+  `Log::fence` and `Log::close` now stop a running pass and return once it
+  writes no more files, so a retired or moved partition's directory can be
+  deleted as before. A built pass that is never installed deletes its files. In the
+  measurements on #1639, the lock was held for 50 ms instead of 1.5 s during
+  a pass over 45 MiB of gzip records, and for 150 ms instead of 0.8 s over
+  256 compressed segments (#1639).
+- A produce append runs on the request's own task when it only writes to the
+  page cache. The partition writer task used to take every produce, so each
+  one paid two cross-thread wakes before its write. The request task now takes
+  the writer's gate, appends under the log lock and finishes the group, and
+  falls back to the writer task when the writer is busy, the lock is
+  contended, a flush policy is set, the append would roll a segment, or the
+  log has `preallocate`, whose `O_DIRECT` writes can wait. The same rule
+  places a follower's replica append and a fetch that reads only data this
+  broker wrote since it opened the log: work that stays in the page cache runs
+  inline, and work that may wait on the disk goes to the blocking pool.
+- A follower fetches from its leader over a dedicated link that hands the
+  response's record bytes to the replica append without copying them, instead
+  of through the general client connection.
+
+- A small fetch from the page cache looks its run up once. A fetch on a
+  `sendfile`-capable connection first describes its run of batches; when the
+  run is too short for `sendfile`, the broker used to read it with the
+  byte-copy path, which looked the same run up a second time: another offset
+  index floor, header scan and readahead hint under the log lock. It now
+  reads the regions the first walk found. Followers and consumers at the tail
+  of a log make this fetch on every round trip.
+- A wide fetch counts its bytes in linear time. Before each partition read the
+  read loop asks whether the response is still empty, and it used to answer by
+  summing every partition's bytes, so a fetch over `P` partitions did `P²`
+  additions. It now keeps a running total. On a 4-vCPU host, the read loop
+  over 10,000 entries took 21-23 ms instead of 32-34 ms (#1609).
+- Less work per request on the produce and fetch paths:
+  - Dispatch reads a Produce request's `acks` from its leading fields to
+    decide whether a response is owed, instead of decoding the request a
+    second time.
+  - A request body is read straight into the buffer, without first being
+    filled with zeros.
+  - A fetch response's small inline parts (the frame length, the header, the
+    envelope metadata and small record runs) go out in one write instead of
+    one syscall and one TCP segment each.
+  - A cluster with no client quota answers a request's quota lookup without
+    building the eight candidate entity keys.
+  - The log-directory health check every produce and fetch makes answers
+    without hashing the directory's path while every directory is online.
+- The partitions of one Produce request append at once, up to 16 at a time,
+  instead of one after another. An append that waits for a busy writer, a
+  segment roll or a diskless WAL no longer holds back the other partitions of
+  the request. Two entries for the same partition still append in request
+  order, and the response keeps the request's order (#1618).
+- A remote segment's lifecycle transition updates only that segment's entries
+  in the tiered-storage metadata manager's epoch index. Each finish, hide and
+  delete used to rebuild and sort the partition's whole index under the
+  manager-wide lock that offset lookups take, so the cost of one transition,
+  and the time a lookup could wait behind it, grew with the partition's
+  retained remote history. With 100,000 retained segments one lifecycle went
+  from about 36 ms to under 1 µs in the `remote_epoch_index` benchmark (#1616).
+- A controller serving a KIP-630 `FetchSnapshot` reads only the requested
+  chunk of the checkpoint. It used to read the whole file for every chunk, so
+  a transfer of a snapshot of size S in chunks of C read about
+  `S × ceil(S/C)` bytes on the controller engine, which other controller
+  requests wait behind. A checkpoint that retention deletes while it is
+  being served is still read through its open file.
+- The diskless flusher publishes a flush's `__diskless_wal_index` records in
+  groups instead of waiting for each record's acknowledgment before it sends
+  the next. A group holds one range of each partition in the object, up to
+  1,024 records, so a flush that spans many partitions waits about one round
+  trip per group instead of one per range. A partition's ranges still go one
+  group after another: the flusher resumes a partition after its highest
+  indexed range, so a later range that became durable before an earlier one
+  could have let the next flush skip the gap and trim it away. The records,
+  their keys and their partitions are unchanged. `MetadataEventLog` gains
+  `publish_keyed_group` and `KeyedEvent`; its default publishes one record at
+  a time (#1617).
+
 ### Fixed
 
 - Require `ClusterAction` for `PushTelemetry`, refuse both client-telemetry
@@ -30,6 +173,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   excessive OTLP metrics, and cap retained Prometheus client series globally
   and per client/instance. Disconnects now release an instance's series
   immediately (#1592).
+- The nightly criterion lane builds the reference and the candidate into
+  separate Cargo target directories, both before either is measured. With one
+  shared directory, Cargo could judge a candidate that changed only source as
+  fresh and run the reference's executable again under the candidate's
+  commit. `krabka-parse-benches executables` records each side's bench
+  executables by path and SHA-256. Every summary names the executables its pass
+  ran, checked against Cargo's `Running` lines and the recorded digests. The
+  verdict refuses a comparison whose sides share an executable path (#1608).
 - Store a produced `CreateTime` batch with its largest record timestamp as
   `max_timestamp`, as Kafka's `LogValidator` does, on the verbatim and the
   owned path. The producer's header value was kept, so an LZ4 batch with
@@ -50,6 +201,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   transactions as the data read resolves it. A finished segment nested inside
   the covering one made the abort lookup answer none while the read still
   served the batches (#1388).
+- Answer a by-timestamp `ListOffsets` from the first candidate segment only,
+  as Kafka 4.3.1 does: locally the first segment whose largest timestamp
+  reaches the target, remotely the first finished, lineage-admitted segment
+  whose max timestamp and end offset reach the target and the log start. When
+  that segment's matching records all sit below the log start, the answer is
+  `-1`/`-1`, where the seek went on to a later segment before. A remote
+  candidate at or above the first local segment's base is answered from the
+  local log, as Kafka's `findOffsetByTimestamp` does (#1388).
 
 ## [1.0.8] - 2026-10-20
 

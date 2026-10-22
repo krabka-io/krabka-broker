@@ -1,6 +1,9 @@
-//! Log compaction primitives. These are almost-pure helpers that work on
-//! [`Segment`] handles and the on-disk file layout. [`crate::Log::compact`]
-//! uses them.
+//! Log compaction primitives. These are almost-pure helpers that work on the
+//! open files of sealed segments ([`SealedInput`]) and the on-disk file
+//! layout, so a pass can run them without holding the log.
+//! [`crate::Log::compact`] uses them.
+//!
+//! [`SealedInput`]: crate::segment::SealedInput
 //!
 //! The algorithm makes a single pass over the **sealed** segment list, from
 //! oldest to newest. It builds a key-to-latest-offset map, then rewrites the

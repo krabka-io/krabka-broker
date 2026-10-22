@@ -26,10 +26,10 @@ const MAX_DEPTH: usize = 80;
 // pinned: it depends on dedupe timing across the BFS worker threads.
 pub(super) const PINNED_UNIQUE_STATES_INFLIGHT_FULL: usize = 7_969;
 pub(super) const PINNED_UNIQUE_STATES_RECORD_LOCK_LIMIT: usize = 1_521;
-pub(super) const PINNED_UNIQUE_STATES_FAILOVER: usize = 623;
-pub(super) const PINNED_UNIQUE_STATES_DEFERRAL: usize = 1_118;
+pub(super) const PINNED_UNIQUE_STATES_FAILOVER: usize = 1_257;
+pub(super) const PINNED_UNIQUE_STATES_DEFERRAL: usize = 2_222;
 pub(super) const PINNED_UNIQUE_STATES_DEFERRAL_WIDE: usize = 5_012;
-pub(super) const PINNED_UNIQUE_STATES_LOG_START_ADVANCE: usize = 6_477;
+pub(super) const PINNED_UNIQUE_STATES_LOG_START_ADVANCE: usize = 16_238;
 
 krabka_macros::model_runner! {
 

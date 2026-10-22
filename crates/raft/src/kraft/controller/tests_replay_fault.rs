@@ -302,7 +302,7 @@ fn a_controller_stops_on_a_committed_record_it_cannot_decode() {
             "{case}: the published fault"
         );
         if skip {
-            check!(engine.image == image_before, "{case}: nothing applied");
+            check!(*engine.image == image_before, "{case}: nothing applied");
         }
 
         let mut recovered = MetadataImage::new(uuid::Uuid::nil());
@@ -348,7 +348,7 @@ fn a_stopped_controller_applies_no_later_record() {
     engine.advance_and_apply(engine.log.log_end_offset());
 
     check!(engine.replay_fault == fault_for(&patched_topic_value(1, 99), bad_offset));
-    check!(engine.image == after_fault);
+    check!(*engine.image == after_fault);
     check!(engine.image.topic("t").is_none());
 }
 

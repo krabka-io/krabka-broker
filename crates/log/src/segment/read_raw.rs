@@ -126,12 +126,27 @@ impl Segment {
         limit_offset: Offset,
         operation: &str,
     ) -> Result<Option<u64>, LogError> {
+        self.raw_start_position_with(fetch_offset, limit_offset, operation, |pos, buf, len| {
+            self.read_log_range(pos, buf, len)
+        })
+    }
+
+    /// [`Segment::raw_start_position`] over the positional reads of
+    /// `read_range`.
+    pub(super) fn raw_start_position_with(
+        &self,
+        fetch_offset: Offset,
+        limit_offset: Offset,
+        operation: &str,
+        read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
+    ) -> Result<Option<u64>, LogError> {
         if fetch_offset > self.last_offset || fetch_offset >= limit_offset {
             return Ok(None);
         }
         let target_rel = u32::try_from((fetch_offset.0 - self.base_offset.0).max(0))
             .map_err(|_| LogError::Corrupt(format!("{operation} target offset out of range")))?;
-        self.read_start_position(target_rel).map(Some)
+        self.read_start_position_with(target_rel, read_range)
+            .map(Some)
     }
 
     /// [`Segment::read_raw`] under the log's configured read policy: the

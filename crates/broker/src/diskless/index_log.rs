@@ -2,13 +2,14 @@
 
 use {
     super::wal_index::{
-        WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexCache, WalIndexKey,
+        WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexCache, WalIndexEntry,
+        WalIndexKey,
     },
     crate::{error::BrokerError, metrics::BrokerMetrics},
     bytes::Bytes,
     futures_util::StreamExt,
     krabka_remote_storage::diskless::{REPLAY_FENCE_KEY, wal_index_key_version},
-    krabka_remote_storage_topic::{MetadataEventLog, PartitionStart},
+    krabka_remote_storage_topic::{KeyedEvent, MetadataEventLog, PartitionStart},
     std::{
         collections::HashMap,
         sync::{
@@ -288,28 +289,57 @@ impl DisklessIndexLog {
         .unwrap_or(false)
     }
 
+    /// Publish one keyed index record per range of `record`, and resolve to
+    /// the offset of the last range's record.
+    ///
+    /// Ranges of different data partitions are submitted together, at most
+    /// [`INDEX_PUBLISH_GROUP_MAX`] to a group, so a flush that spans many
+    /// partitions waits for one acknowledgment round trip per group rather
+    /// than one per range. Ranges of one data partition still go one group
+    /// after another, in record order: [`publication_waves`] says why.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a record cannot be encoded or published. Ranges
+    /// of earlier groups may then be published already, and for each data
+    /// partition they are a prefix of its ranges in `record`.
     pub(crate) async fn publish_flush(&self, record: &WalFlushRecord) -> Result<i64, BrokerError> {
-        let mut last_offset = -1;
-        for entry in &record.entries {
-            let key = WalIndexKey::from(entry).to_bytes();
-            let bytes = WalFlushRecord {
-                object_key: record.object_key.clone(),
-                format_version: record.format_version,
-                entries: vec![entry.clone()],
-            }
-            .to_bytes()
-            .map_err(BrokerError::Txn)?;
-            last_offset = self
-                .log
-                .publish_keyed(
-                    index_partition(&key, self.log.partition_count()),
+        let partitions = self.log.partition_count();
+        let events = record
+            .entries
+            .iter()
+            .map(|entry| {
+                let key = WalIndexKey::from(entry).to_bytes();
+                let event = WalFlushRecord {
+                    object_key: record.object_key.clone(),
+                    format_version: record.format_version,
+                    entries: vec![entry.clone()],
+                }
+                .to_bytes()
+                .map_err(BrokerError::Txn)?;
+                Ok(KeyedEvent {
+                    partition: index_partition(&key, partitions),
                     key,
-                    Some(bytes),
-                )
-                .await
-                .map_err(|error| BrokerError::Txn(format!("diskless index publish: {error}")))?;
+                    event: Some(event),
+                })
+            })
+            .collect::<Result<Vec<_>, BrokerError>>()?;
+        let mut offsets = vec![-1; events.len()];
+        for wave in publication_waves(&record.entries) {
+            for group in wave.chunks(INDEX_PUBLISH_GROUP_MAX) {
+                let published = self
+                    .log
+                    .publish_keyed_group(group.iter().map(|&index| events[index].clone()).collect())
+                    .await
+                    .map_err(|error| {
+                        BrokerError::Txn(format!("diskless index publish: {error}"))
+                    })?;
+                for (&index, offset) in group.iter().zip(published) {
+                    offsets[index] = offset;
+                }
+            }
         }
-        Ok(last_offset)
+        Ok(offsets.last().copied().unwrap_or(-1))
     }
 
     /// Publish one partition's `DeleteRecords` floor and wait until the
@@ -429,6 +459,42 @@ fn invalidate_projection(
     progress.send_modify(|progress| progress.invalid = true);
 }
 
+/// Most index records that [`DisklessIndexLog::publish_flush`] submits before
+/// it waits for their acknowledgments.
+///
+/// It bounds what one flush holds in the producer at a time. An index record
+/// is about a hundred bytes, so a full group stays far below the producer's
+/// buffer, and a flush of up to this many partitions takes one round trip.
+const INDEX_PUBLISH_GROUP_MAX: usize = 1024;
+
+/// Split a flush's ranges into waves, by index into `entries`. Wave `n` holds
+/// the `n`th range of every data partition, in record order.
+///
+/// A wave may be published all at once, but a data partition's next range
+/// waits for the wave before it to be acknowledged. The flusher resumes each
+/// partition at its [`WalIndexCache::flushed_frontier`], the end of the
+/// highest range the projection holds. A later range that became durable while
+/// an earlier one of the same partition did not, through a failed publish or a
+/// crash, would move that frontier past the gap. The next flush would then
+/// skip the gap's records, and the trim behind it would drop them for good.
+/// One partition's ranges therefore stay durable as a prefix, as they did when
+/// every range was published one at a time.
+fn publication_waves(entries: &[WalIndexEntry]) -> Vec<Vec<usize>> {
+    let mut next_wave: HashMap<(uuid::Uuid, i32), usize> = HashMap::new();
+    let mut waves: Vec<Vec<usize>> = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let wave = next_wave
+            .entry((entry.topic_id, entry.partition))
+            .or_default();
+        match waves.get_mut(*wave) {
+            Some(members) => members.push(index),
+            None => waves.push(vec![index]),
+        }
+        *wave += 1;
+    }
+    waves
+}
+
 fn index_partition(key: &[u8], partitions: i32) -> i32 {
     let hash = key.iter().copied().fold(0u32, |acc, byte| {
         acc.wrapping_mul(31).wrapping_add(u32::from(byte))
@@ -441,7 +507,7 @@ fn index_partition(key: &[u8], partitions: i32) -> i32 {
 mod tests {
     use {
         super::{
-            test_support::{PacedReplayLog, RacingAppendLog, ReplayPace},
+            test_support::{GroupAckLog, PacedReplayLog, RacingAppendLog, ReplayPace},
             *,
         },
         crate::{
@@ -883,6 +949,145 @@ mod tests {
         .await
         .unwrap();
         assert!(index.cache().lock().await.lookup(topic_id, 0, 2).is_some());
+    }
+
+    /// A one-byte range of `partition` in topic `topic`.
+    fn range(topic: u128, partition: i32, first_offset: i64, last_offset: i64) -> WalIndexEntry {
+        WalIndexEntry {
+            topic_id: Uuid::from_u128(topic),
+            partition,
+            first_offset,
+            last_offset,
+            byte_start: 0,
+            byte_len: 1,
+            max_timestamp_ms: 0,
+        }
+    }
+
+    #[test]
+    fn publication_waves_take_one_range_per_partition_in_record_order() {
+        struct Case {
+            name: &'static str,
+            entries: Vec<WalIndexEntry>,
+            waves: Vec<Vec<usize>>,
+        }
+        let cases = [
+            Case {
+                name: "empty",
+                entries: vec![],
+                waves: vec![],
+            },
+            Case {
+                name: "one partition stays serial",
+                entries: vec![range(7, 0, 0, 1), range(7, 0, 2, 3), range(7, 0, 4, 4)],
+                waves: vec![vec![0], vec![1], vec![2]],
+            },
+            Case {
+                name: "distinct partitions share one wave",
+                entries: vec![range(7, 0, 0, 1), range(7, 1, 0, 1), range(8, 0, 0, 1)],
+                waves: vec![vec![0, 1, 2]],
+            },
+            Case {
+                name: "interleaved partitions",
+                entries: mixed_flush().entries,
+                waves: vec![vec![0, 1, 3], vec![2, 4], vec![5]],
+            },
+        ];
+        for Case {
+            name,
+            entries,
+            waves,
+        } in cases
+        {
+            assert!(publication_waves(&entries) == waves, "{name}");
+        }
+    }
+
+    /// One object holding two ranges of partition 0, one of partition 1, and
+    /// three of partition 2, interleaved the way a flush may order them.
+    fn mixed_flush() -> WalFlushRecord {
+        WalFlushRecord {
+            object_key: "object-mixed".into(),
+            format_version: WalFlushRecord::FORMAT_VERSION,
+            entries: vec![
+                range(7, 0, 0, 1),
+                range(7, 1, 0, 0),
+                range(7, 0, 2, 3),
+                range(7, 2, 0, 4),
+                range(7, 2, 5, 6),
+                range(7, 2, 7, 7),
+            ],
+        }
+    }
+
+    fn keys(record: &WalFlushRecord, indexes: &[usize]) -> Vec<WalIndexKey> {
+        indexes
+            .iter()
+            .map(|&index| WalIndexKey::from(&record.entries[index]))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn flush_publishes_each_wave_as_one_group() {
+        let log = GroupAckLog::build()
+            .inner(InProcessMetadataEventLog::new(3))
+            .call();
+        let index = DisklessIndexLog::start(log.clone()).await.unwrap();
+        let record = mixed_flush();
+
+        index.publish_flush(&record).await.unwrap();
+
+        assert!(
+            log.groups()
+                == vec![
+                    keys(&record, &[0, 1, 3]),
+                    keys(&record, &[2, 4]),
+                    keys(&record, &[5]),
+                ]
+        );
+        assert!(
+            index
+                .wait_until_applied(&record, Duration::from_secs(1))
+                .await
+        );
+    }
+
+    /// A range of partition 2 fails in the second wave. The third wave, which
+    /// holds the range after it, is never submitted, so the partition's durable
+    /// ranges stay a prefix and a restarted projection resumes it at the gap
+    /// rather than past it. A retry of the same record fills the gap.
+    #[tokio::test]
+    async fn a_failed_wave_leaves_each_partition_a_durable_prefix() {
+        let inner = InProcessMetadataEventLog::new(3);
+        let record = mixed_flush();
+        let log = GroupAckLog::build()
+            .inner(inner.clone())
+            .failing(vec![WalIndexKey::from(&record.entries[4])])
+            .call();
+        let index = DisklessIndexLog::start(log.clone()).await.unwrap();
+        let topic_id = Uuid::from_u128(7);
+
+        let error = index.publish_flush(&record).await.unwrap_err();
+
+        assert!(error.to_string().contains("diskless index publish"));
+        assert!(log.groups() == vec![keys(&record, &[0, 1, 3]), keys(&record, &[2, 4])]);
+        let restarted = DisklessIndexLog::start(inner).await.unwrap();
+        assert!(restarted.wait_until_caught_up(Duration::from_secs(5)).await);
+        let frontiers = {
+            let cache = restarted.cache();
+            let cache = cache.lock().await;
+            [0, 1, 2].map(|partition| cache.flushed_frontier(topic_id, partition))
+        };
+        assert!(frontiers == [Some(4), Some(1), Some(5)]);
+
+        log.heal();
+        index.publish_flush(&record).await.unwrap();
+        assert!(
+            index
+                .wait_until_applied(&record, Duration::from_secs(1))
+                .await
+        );
+        assert!(index.cache().lock().await.flushed_frontier(topic_id, 2) == Some(8));
     }
 
     #[tokio::test]

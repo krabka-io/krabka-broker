@@ -111,16 +111,22 @@ pub enum GroupActorMessage {
     },
 
     // ── committed offsets (protocol-agnostic; on `Group.committed_offsets`) ──
-    /// Append one `OffsetCommit`'s records to `__consumer_offsets` and apply
-    /// them to the group, both inside the actor.
+    /// Append one `OffsetCommit`'s records to `__consumer_offsets` and stage
+    /// them in the group, inside the actor; publish them and reply once the
+    /// high watermark covers the write.
     ///
     /// The append cannot happen outside the mailbox. The KIP-211 sweep decides
-    /// what to tombstone from the in-memory map and appends its tombstones in
-    /// the same turn, so a commit that wrote its record first and queued the
-    /// in-memory update afterwards could have the sweep read the stale map,
-    /// tombstone the offset it had just acknowledged, and stop the actor
-    /// before the update was ever applied. One message keeps the two appends
-    /// in one order.
+    /// what to tombstone from the group's newest offsets and appends its
+    /// tombstones in the same turn, so a commit that wrote its record first and
+    /// queued the in-memory update afterwards could have the sweep read a
+    /// stale map, tombstone the offset it had just acknowledged, and stop the
+    /// actor before the update was ever applied. One message keeps the two
+    /// appends in one order.
+    ///
+    /// The wait for the high watermark is not part of the turn: the actor
+    /// serves other messages meanwhile, and `FetchOffsets` answers with the
+    /// offsets the group last acknowledged, as Kafka's `CoordinatorRuntime`
+    /// does. See `pending_commits`.
     CommitOffsets {
         batch: RecordBatch,
         entries: Vec<((String, i32), OffsetEntry)>,
@@ -146,6 +152,15 @@ pub enum GroupActorMessage {
     RemoveCommitted {
         keys: Vec<(String, i32)>,
         reply: oneshot::Sender<()>,
+    },
+    /// `OffsetDelete`'s write: tombstone each of `keys` that the group holds
+    /// a committed or an unresolved transactional offset for, then drop those
+    /// keys from the group, all in one turn. A key the group holds nothing
+    /// for writes nothing, and when no key needs a tombstone nothing is
+    /// appended. Replies with the append's error code when the write fails.
+    DeleteOffsets {
+        keys: Vec<(String, i32)>,
+        reply: oneshot::Sender<Result<(), ErrorCode>>,
     },
     /// KIP-211: tombstone every committed offset that has fallen out of
     /// retention, and the group with them when it keeps none. The sweep in
