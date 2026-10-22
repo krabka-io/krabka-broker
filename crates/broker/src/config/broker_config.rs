@@ -799,6 +799,14 @@ krabka_macros::broker_config! {
         /// tests do not compete for port allocation.
         pub metrics_listen_addr: Option<SocketAddr>,
 
+        /// Dedicated pprof administration listener. Profiling is disabled when
+        /// this is `None`; enabled listeners must be loopback-only and use the
+        /// bearer token stored in `profiling_auth_token_file`.
+        pub profiling_listen_addr: Option<SocketAddr>,
+
+        /// File containing the bearer token for the profiling listener.
+        pub profiling_auth_token_file: Option<PathBuf>,
+
         /// CPU and heap profiling endpoint policy.
         pub profiling: krabka_telemetry::profiling::ProfilingConfig,
 

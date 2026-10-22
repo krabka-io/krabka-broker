@@ -108,6 +108,8 @@ jsonpath-rust = { workspace = true }
 # synthesizing a SCRAM credential for token authentication
 # (`network::auth::synthesize_token_scram_credential`).
 base64.workspace = true
+# Constant-time bearer-token comparison on the profiling administration listener.
+subtle.workspace = true
 # Bounded decision cache for the OPA authorizer.
 lru.workspace = true
 num-traits.workspace = true

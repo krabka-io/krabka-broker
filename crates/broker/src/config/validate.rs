@@ -46,6 +46,28 @@ impl BrokerConfig {
             });
         }
         self.validate_log_io_policy()?;
+        match (self.profiling_listen_addr, &self.profiling_auth_token_file) {
+            (None, None) => {}
+            (None, Some(_)) => {
+                return Err(BrokerError::InvalidRuntimeConfig(
+                    "profiling_auth_token_file requires profiling_listen_addr".into(),
+                ));
+            }
+            (Some(_), None) => {
+                return Err(BrokerError::InvalidRuntimeConfig(
+                    "profiling_listen_addr requires profiling_auth_token_file".into(),
+                ));
+            }
+            (Some(address), Some(_)) if !address.ip().is_loopback() => {
+                return Err(BrokerError::InvalidRuntimeConfig(
+                    "profiling_listen_addr must use a loopback address".into(),
+                ));
+            }
+            (Some(_), Some(_)) => self
+                .profiling
+                .validate()
+                .map_err(BrokerError::InvalidRuntimeConfig)?,
+        }
         validate_audit_topic_name(&self.audit_topic)?;
         if self.roles.is_empty() {
             return Err(BrokerError::EmptyRoles);
@@ -334,6 +356,11 @@ impl BrokerConfig {
                 "metrics_listen_addr",
                 "the metrics server",
                 self.metrics_listen_addr.is_some(),
+            ),
+            (
+                "profiling_listen_addr",
+                "the profiling server",
+                self.profiling_listen_addr.is_some(),
             ),
             (
                 "client_metrics_otlp_endpoint",
@@ -647,11 +674,18 @@ mod tests {
 
     #[test]
     fn the_wasm_platform_refuses_the_subsystems_it_cannot_run() {
-        let cases: [SetsOne; 4] = [
+        let cases: [SetsOne; 5] = [
             SetsOne {
                 setting: "metrics_listen_addr",
                 set: |config| {
                     config.metrics_listen_addr = Some("127.0.0.1:9404".parse().unwrap());
+                },
+            },
+            SetsOne {
+                setting: "profiling_listen_addr",
+                set: |config| {
+                    config.profiling_listen_addr = Some("127.0.0.1:9406".parse().unwrap());
+                    config.profiling_auth_token_file = Some("/run/secrets/profiling".into());
                 },
             },
             SetsOne {
@@ -831,5 +865,22 @@ mod tests {
         let mut config = BrokerConfig::default();
         config.streams_group.max_size = 0;
         assert_invalid_runtime(&config, "streams group maximum size must be positive");
+    }
+
+    #[test]
+    fn profiling_is_disabled_by_default_and_requires_loopback_and_authentication() {
+        assert!(BrokerConfig::default().validate().is_ok());
+
+        let mut missing_token = BrokerConfig::default();
+        missing_token.profiling_listen_addr = Some("127.0.0.1:9406".parse().unwrap());
+        assert_invalid_runtime(
+            &missing_token,
+            "profiling_listen_addr requires profiling_auth_token_file",
+        );
+
+        let mut public = BrokerConfig::default();
+        public.profiling_listen_addr = Some("0.0.0.0:9406".parse().unwrap());
+        public.profiling_auth_token_file = Some("/run/secrets/profiling".into());
+        assert_invalid_runtime(&public, "profiling_listen_addr must use a loopback address");
     }
 }

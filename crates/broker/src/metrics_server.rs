@@ -23,20 +23,13 @@ use crate::http_server::spawn;
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use {crate::metrics::SharedRegistry, std::net::SocketAddr, tokio_util::sync::CancellationToken};
 
-/// Builds the router. It serves `/metrics` for Prometheus, and
-/// `/debug/pprof/{profile,heap}`. The CPU route is always present on Unix. The
-/// heap route needs a build with `--features heap-profiling`.
+/// Builds the public observability router. Profiling routes deliberately live
+/// on the separately configured, authenticated administration listener.
 #[cfg(not(target_family = "wasm"))]
-pub fn router(
-    registry: SharedRegistry,
-    profiling: krabka_telemetry::profiling::ProfilingConfig,
-) -> Result<Router, krabka_telemetry::profiling::ProfilingError> {
-    Ok(Router::new()
+pub fn router(registry: SharedRegistry) -> Router {
+    Router::new()
         .route("/metrics", get(metrics))
         .with_state(registry)
-        .merge(krabka_telemetry::profiling::pprof_router_with_config(
-            profiling,
-        )?))
 }
 
 /// Binds and serves until `shutdown` fires. It returns the bound address, so
@@ -47,13 +40,12 @@ pub fn router(
 pub(crate) async fn run(
     addr: SocketAddr,
     registry: SharedRegistry,
-    profiling: krabka_telemetry::profiling::ProfilingConfig,
     shutdown: CancellationToken,
-) -> Result<SocketAddr, krabka_telemetry::profiling::ProfilingError> {
+) -> std::io::Result<SocketAddr> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
     tracing::info!(%bound, "metrics server listening");
-    let app = router(registry, profiling)?;
+    let app = router(registry);
     spawn(listener, app, shutdown, |error| {
         tracing::warn!(error = %error, "metrics server error");
     });
@@ -66,16 +58,14 @@ pub(crate) async fn run(
 pub(crate) fn run(
     addr: SocketAddr,
     _registry: SharedRegistry,
-    _profiling: krabka_telemetry::profiling::ProfilingConfig,
     _shutdown: CancellationToken,
-) -> std::future::Ready<Result<SocketAddr, krabka_telemetry::profiling::ProfilingError>> {
+) -> std::future::Ready<std::io::Result<SocketAddr>> {
     std::future::ready(Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         format!(
             "cannot serve metrics on {addr}: the metrics server is unavailable on this platform"
         ),
-    )
-    .into()))
+    )))
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -111,11 +101,7 @@ mod tests {
     async fn metrics_route_returns_openmetrics() {
         let m = BrokerMetrics::new();
         m.record_produce(&Arc::from("t"), 42);
-        let app = router(
-            m.registry,
-            krabka_telemetry::profiling::ProfilingConfig::default(),
-        )
-        .unwrap();
+        let app = router(m.registry);
         let resp = app
             .oneshot(
                 Request::builder()
@@ -142,13 +128,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn router_rejects_invalid_profiling_policy() {
+    #[tokio::test]
+    async fn public_metrics_router_does_not_serve_profiling() {
         let m = BrokerMetrics::new();
-        let profiling = krabka_telemetry::profiling::ProfilingConfig {
-            profiling_cpu_default_duration: krabka_units::secs(61),
-            ..krabka_telemetry::profiling::ProfilingConfig::default()
-        };
-        assert!(router(m.registry, profiling).is_err());
+        for uri in ["/debug/pprof/profile", "/debug/pprof/heap"] {
+            let response = router(m.registry.clone())
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert!(response.status() == StatusCode::NOT_FOUND);
+        }
     }
 }

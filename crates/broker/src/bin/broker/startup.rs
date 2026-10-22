@@ -169,6 +169,7 @@ fn broker_config(
     let controller_addr = args.resolved_controller_listen_addr();
     let node_id = args.node_id()?;
     let metrics_listen_addr = parse_optional_listen_addr(&args.metrics_listen_addr)?;
+    let profiling_listen_addr = parse_optional_listen_addr(&args.profiling_listen_addr)?;
     let roles = if args.process_roles.is_empty() {
         None
     } else {
@@ -179,6 +180,7 @@ fn broker_config(
         controller_addr,
         node_id,
         metrics_listen_addr,
+        profiling_listen_addr,
         client_metrics_otlp_endpoint,
         client_metrics_otlp_protocol,
     );

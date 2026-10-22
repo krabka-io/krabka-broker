@@ -281,8 +281,9 @@ To add or remove brokers on an operator-managed pool, follow
 | :--- | :--- | :--- |
 | 9092 | Kafka client and inter-broker listener | `--listen-addr` (default `127.0.0.1:9092`). Under `--config-file` each `[[listeners]]` entry sets its own port. |
 | 9093 | KIP-595 controller listener | `--controller-listen-addr`, `KRABKA_CONTROLLER_LISTEN_ADDR`. By default `listen_addr` with the port set to 9093. Under `--config-file` the default binds all interfaces. It must equal the endpoint that `krabka format` recorded for the node. |
-| 9404 | Prometheus `/metrics` and `/debug/pprof` | `--metrics-listen-addr`, `KRABKA_METRICS_LISTEN_ADDR` (default `0.0.0.0:9404`). It binds all interfaces even when the Kafka listener binds only loopback. `none` disables it. |
+| 9404 | Prometheus `/metrics` | `--metrics-listen-addr`, `KRABKA_METRICS_LISTEN_ADDR` (default `0.0.0.0:9404`). It binds all interfaces even when the Kafka listener binds only loopback. `none` disables it. Profiling is never served here. |
 | 9405 | `/healthz` and `/readyz` probes | `--health-listen-addr`, `KRABKA_HEALTH_LISTEN_ADDR` (default `0.0.0.0:9405`). It binds all interfaces even when the Kafka listener binds only loopback. `none` disables them. |
+| operator-selected | Authenticated `/debug/pprof/profile` (and `/heap` in heap-profiling builds) | Disabled by default. Set `--profiling-listen-addr` to a loopback address and `--profiling-auth-token-file` to a root-readable token file. Send that token as `Authorization: Bearer …`. The listener rejects non-loopback binds, overlapping profiles, and starts less than one second apart. |
 
 Every broker in the cluster must reach every other broker's 9093. Clients
 need only the port of the listener they connect to: 9092 under
@@ -374,7 +375,10 @@ The binary takes a TOML file with `--config-file`. When the file is present,
 come from the file. Every other flag still applies and overrides the file's
 `[runtime]` value. Most flags also read an environment variable, named in
 `--help`; `KRABKA_CLUSTER_ID`, `KRABKA_PROCESS_ROLES` and
-`KRABKA_METRICS_LISTEN_ADDR` are the ones a container normally sets.
+`KRABKA_METRICS_LISTEN_ADDR` are the ones a container normally sets. Profiling
+is intentionally absent from the Kubernetes Service; when temporarily enabled,
+reach its loopback-only listener through an authenticated local sidecar or an
+operator-controlled port-forward, then remove the opt-in and token mount.
 `--listen-addr`, `--config-file`, `--print-config-schema`, `--log-dir` and
 `--broker-id` have no environment variable form.
 

@@ -12,6 +12,7 @@ use {
         error::BrokerError,
         metrics::BrokerMetrics,
         metrics_server::run,
+        profiling_server,
     },
     krabka_units::convert::TimeExt as _,
     std::sync::Arc,
@@ -33,22 +34,38 @@ pub(super) async fn start_observability(
             run(
                 address,
                 Arc::clone(&metrics.registry),
-                config.profiling.clone(),
                 shutdown.child_token(),
             )
             .await
-            .map_err(|error| match error {
-                krabka_telemetry::profiling::ProfilingError::Io(error) => {
-                    BrokerError::listener_bind("metrics", address, "--metrics-listen-addr")(error)
-                }
-                krabka_telemetry::profiling::ProfilingError::Config(error) => {
-                    BrokerError::InvalidRuntimeConfig(error)
-                }
-            })?,
+            .map_err(BrokerError::listener_bind(
+                "metrics",
+                address,
+                "--metrics-listen-addr",
+            ))?,
         )
     } else {
         None
     };
+    if let (Some(address), Some(token_file)) = (
+        config.profiling_listen_addr,
+        config.profiling_auth_token_file.as_deref(),
+    ) {
+        profiling_server::run(
+            address,
+            token_file,
+            config.profiling.clone(),
+            shutdown.child_token(),
+        )
+        .await
+        .map_err(|error| match error {
+            krabka_telemetry::profiling::ProfilingError::Io(error) => {
+                BrokerError::listener_bind("profiling", address, "--profiling-listen-addr")(error)
+            }
+            krabka_telemetry::profiling::ProfilingError::Config(error) => {
+                BrokerError::InvalidRuntimeConfig(error)
+            }
+        })?;
+    }
     let client_metrics = Arc::new(ClientMetrics::new(
         ClientMetricsManager::new(
             config.client_metrics_telemetry_max,
