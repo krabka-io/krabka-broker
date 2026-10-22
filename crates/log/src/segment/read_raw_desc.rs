@@ -26,8 +26,9 @@ const SMALL_BATCH_THRESHOLD: usize = 16 * 1024;
 const HEADER_SCAN_WINDOW: usize = 256 * 1024;
 
 impl Segment {
-    /// Whether describing this segment's run from `fetch_offset` would walk
-    /// bytes that are not in the page cache.
+    /// [`Segment::read_raw_desc_with_policy`] for a fetch that must not walk
+    /// bytes outside the page cache. `None` means the run is not cached, and
+    /// the fetch takes the byte-copy path instead.
     ///
     /// The walk reads each batch header with a small synchronous read under
     /// the log lock. On cached bytes those reads cost microseconds, and
@@ -41,27 +42,70 @@ impl Segment {
     /// a window whose first or last byte is not cached is read in one read
     /// by the byte-copy path.
     ///
+    /// The sparse-index lookup that finds the run's start position runs
+    /// once, and both the page-cache probe and the description use it. Off
+    /// an exact index entry that lookup scans header windows, so a second
+    /// lookup would read them again under the log lock.
+    ///
     /// # Errors
-    /// Returns an error when the offset lookup fails.
-    pub(crate) fn fetch_would_block(
+    /// Returns an error when log I/O fails, or a record or index is corrupt.
+    pub(crate) fn read_raw_desc_if_cached(
         &self,
         fetch_offset: Offset,
         limit_offset: Offset,
         max_size: ByteSize,
-    ) -> Result<bool, LogError> {
+        read_ahead_max: ByteSize,
+    ) -> Result<Option<RawSegmentDesc>, LogError> {
+        self.read_raw_desc_if_cached_with_reader(
+            fetch_offset,
+            limit_offset,
+            max_size,
+            read_ahead_max,
+            |pos, buf, len| self.read_log_range(pos, buf, len),
+        )
+    }
+
+    fn read_raw_desc_if_cached_with_reader(
+        &self,
+        fetch_offset: Offset,
+        limit_offset: Offset,
+        max_size: ByteSize,
+        read_ahead_max: ByteSize,
+        mut read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
+    ) -> Result<Option<RawSegmentDesc>, LogError> {
         if self.wrote_direct {
-            return Ok(true);
+            return Ok(None);
         }
-        let Some(start_pos) =
-            self.raw_start_position(fetch_offset, limit_offset, "read_raw_desc")?
+        let Some(start_pos) = self.raw_start_position_with(
+            fetch_offset,
+            limit_offset,
+            "read_raw_desc",
+            &mut read_range,
+        )?
         else {
-            return Ok(false);
+            return Ok(Some(RawSegmentDesc::empty()));
         };
+        if !self.run_is_cached(start_pos, max_size) {
+            return Ok(None);
+        }
+        self.describe_run(
+            start_pos,
+            fetch_offset,
+            limit_offset,
+            max_size,
+            read_ahead_max,
+            read_range,
+        )
+        .map(Some)
+    }
+
+    /// Whether the page cache holds both the first and the last byte of the
+    /// window a fetch from `start_pos` would walk.
+    fn run_is_cached(&self, start_pos: u64, max_size: ByteSize) -> bool {
         let window = (max_size.bytes_u64().max(HEADER_LEN as u64))
             .min(self.log_size.saturating_sub(start_pos));
         let last = start_pos + window.saturating_sub(1);
-        Ok(!self.io.is_cached(&self.log_file, start_pos)
-            || !self.io.is_cached(&self.log_file, last))
+        self.io.is_cached(&self.log_file, start_pos) && self.io.is_cached(&self.log_file, last)
     }
 
     /// Descriptor variant of [`Segment::read_raw`] for the zero-copy
@@ -99,7 +143,7 @@ impl Segment {
     /// [`Segment::read_raw_desc`] under the log's configured read policy: the
     /// readahead hint reaches at most `read_ahead_max` past the read's own
     /// window.
-    pub(crate) fn read_raw_desc_with_policy(
+    fn read_raw_desc_with_policy(
         &self,
         fetch_offset: Offset,
         limit_offset: Offset,
@@ -125,11 +169,6 @@ impl Segment {
         read_ahead_max: ByteSize,
         mut read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
     ) -> Result<RawSegmentDesc, LogError> {
-        let Some(start_pos) =
-            self.raw_start_position(fetch_offset, limit_offset, "read_raw_desc")?
-        else {
-            return Ok(RawSegmentDesc::empty());
-        };
         // The bytes of a segment that wrote through `O_DIRECT` are not in
         // the page cache: the newest are in its tail cache, and the rest are
         // only on the disk, sealed or not. Walking their batch headers here
@@ -142,7 +181,36 @@ impl Segment {
         if self.wrote_direct {
             return Ok(RawSegmentDesc::empty());
         }
+        let Some(start_pos) = self.raw_start_position_with(
+            fetch_offset,
+            limit_offset,
+            "read_raw_desc",
+            &mut read_range,
+        )?
+        else {
+            return Ok(RawSegmentDesc::empty());
+        };
+        self.describe_run(
+            start_pos,
+            fetch_offset,
+            limit_offset,
+            max_size,
+            read_ahead_max,
+            read_range,
+        )
+    }
 
+    /// Describe the run that starts at byte `start_pos`, which the sparse
+    /// index lookup for `fetch_offset` already resolved.
+    fn describe_run(
+        &self,
+        start_pos: u64,
+        fetch_offset: Offset,
+        limit_offset: Offset,
+        max_size: ByteSize,
+        read_ahead_max: ByteSize,
+        mut read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
+    ) -> Result<RawSegmentDesc, LogError> {
         // Scan bounded windows to find headers; keep the selected payload file-backed.
         let max_bytes = max_size.bytes_usize();
         let window =
@@ -200,6 +268,8 @@ mod tests {
     use {
         super::*,
         crate::{
+            config::{DEFAULT_INDEX_INTERVAL, DEFAULT_TIMESTAMP_SCAN_WINDOW},
+            io::LogIo,
             segment::test_support::{
                 DENSE_INDEX, TempSegment, recording_advice, test_batch_at, test_segment,
             },
@@ -208,6 +278,160 @@ mod tests {
         bytes::Bytes,
         krabka_units::prelude::{bytes, mebibytes},
     };
+
+    /// Every positional read a fetch makes, as `(position, length)`.
+    type Reads = Vec<(u64, usize)>;
+
+    /// A page cache that holds nothing, so every probe reports a miss.
+    #[derive(Debug)]
+    struct NothingCached;
+
+    impl LogIo for NothingCached {
+        fn is_cached(&self, _file: &std::fs::File, _offset: u64) -> bool { false }
+    }
+
+    /// Run the sendfile-path read of `seg` from `fetch_offset` and record
+    /// every positional read it makes, the sparse-index lookup included.
+    fn counted_read(
+        seg: &Segment,
+        fetch_offset: Offset,
+        limit_offset: Offset,
+    ) -> (Option<RawSegmentDesc>, Reads) {
+        let mut reads = Vec::new();
+        let desc = seg
+            .read_raw_desc_if_cached_with_reader(
+                fetch_offset,
+                limit_offset,
+                mebibytes(1),
+                DEFAULT_READ_AHEAD_MAX,
+                |pos, buf, len| {
+                    reads.push((pos, len));
+                    seg.read_log_range(pos, buf, len)
+                },
+            )
+            .unwrap();
+        (desc, reads)
+    }
+
+    /// The byte position the sparse index gives as a floor for `offset`.
+    fn index_floor(seg: &Segment, offset: Offset) -> u64 {
+        let rel = u32::try_from(offset.0 - seg.base_offset.0).unwrap();
+        seg.offset_index
+            .floor_entry(rel)
+            .map_or(0, |entry| u64::from(entry.position))
+    }
+
+    /// The sendfile path resolves a run's start position through the sparse
+    /// index once, and both the page-cache probe and the description use it.
+    /// Off an exact index entry the lookup reads a header-scan window, so
+    /// each case expects that window read once, followed by the
+    /// description's own header reads. The region always equals the bytes
+    /// `read_raw` returns for the same fetch.
+    #[test]
+    fn the_sendfile_read_looks_up_its_start_position_once() {
+        struct Case {
+            name: &'static str,
+            /// `(offset, payload bytes)` of each appended batch.
+            batches: Vec<(i64, usize)>,
+            fetch: i64,
+            /// Whether the fetch lands off an exact index entry, so the
+            /// lookup scans one header window from the index floor.
+            scans: bool,
+        }
+        let lookup_window = DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize();
+        let sparse = DEFAULT_INDEX_INTERVAL;
+        let cases = [
+            // The `descriptor_large_batch` benchmark: one unindexed 1 MiB
+            // batch, fetched from its first offset.
+            Case {
+                name: "first batch, one large batch",
+                batches: vec![(0, 1024 * 1024)],
+                fetch: 0,
+                scans: true,
+            },
+            Case {
+                name: "unindexed small batch behind an index entry",
+                batches: (0..2000).map(|off| (off, 100)).collect(),
+                fetch: 1001,
+                scans: true,
+            },
+            Case {
+                name: "exact index entry",
+                batches: (0..64).map(|off| (off, 32 * 1024)).collect(),
+                fetch: 37,
+                scans: false,
+            },
+            Case {
+                name: "fetch inside a compacted gap",
+                batches: vec![(0, 100), (5, 100), (10, 100)],
+                fetch: 3,
+                scans: true,
+            },
+        ];
+        for case in cases {
+            let TempSegment {
+                dir: _dir,
+                segment: mut seg,
+            } = test_segment();
+            for &(off, payload) in &case.batches {
+                let mut batch = test_batch_at(Offset(off));
+                batch.records[0].value = Some(Bytes::from(vec![0; payload]));
+                seg.append(&batch, sparse).unwrap();
+            }
+            let limit = Offset(case.batches.last().unwrap().0 + 1);
+            let fetch = Offset(case.fetch);
+            let raw = seg.read_raw(fetch, limit, mebibytes(1)).unwrap();
+            let start_pos = seg
+                .raw_start_position(fetch, limit, "test")
+                .unwrap()
+                .unwrap();
+            let floor = index_floor(&seg, fetch);
+            let mut expected = Vec::new();
+            if case.scans {
+                expected.push((floor, lookup_window));
+            }
+            expected.push((start_pos, HEADER_LEN));
+
+            let (desc, reads) = counted_read(&seg, fetch, limit);
+
+            let desc = desc.expect("a freshly written segment is in the page cache");
+            let region = desc.region.unwrap();
+            let name = case.name;
+            assert2::check!(reads[..expected.len()] == expected[..], "{name}");
+            assert2::check!(
+                reads.iter().filter(|read| read.1 == lookup_window).count()
+                    == usize::from(case.scans),
+                "{name}"
+            );
+            assert2::check!(desc.start_offset == raw.start_offset, "{name}");
+            assert2::check!(desc.last_offset == raw.last_offset, "{name}");
+            assert2::check!(region_bytes(&region) == raw.bytes.to_vec(), "{name}");
+        }
+    }
+
+    /// A run outside the page cache is not described, and the probe that
+    /// says so costs only the start-position lookup. A segment that wrote
+    /// through `O_DIRECT` is not described either, and is not read at all.
+    #[test]
+    fn the_sendfile_read_falls_back_without_describing_uncached_or_direct_runs() {
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = test_segment();
+        let mut batch = test_batch_at(Offset(0));
+        batch.records[0].value = Some(Bytes::from(vec![0; 1024 * 1024]));
+        seg.append(&batch, DEFAULT_INDEX_INTERVAL).unwrap();
+        seg.set_io(Arc::new(NothingCached));
+
+        let (desc, reads) = counted_read(&seg, Offset(0), Offset(1));
+        assert2::check!(desc.is_none());
+        assert2::check!(reads == vec![(0, DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize())]);
+
+        seg.wrote_direct = true;
+        let (desc, reads) = counted_read(&seg, Offset(0), Offset(1));
+        assert2::check!(desc.is_none());
+        assert2::check!(reads.is_empty());
+    }
 
     // `pread` a `FileRegion` into a fresh `Vec`. These are the bytes that the
     // broker's sendfile would transmit, and that its TLS pread-fallback would
@@ -248,6 +472,9 @@ mod tests {
                 let next_read = (1 + buffered_headers) * batch_len;
                 expected_reads.push(usize::try_from(seg.log_size).unwrap() - next_read);
             }
+            // The first batch has no index entry, so the start-position
+            // lookup reads one header-scan window before the walk begins.
+            expected_reads.insert(0, DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize());
             let limit = Offset(i64::try_from(payload_sizes.len()).unwrap());
             let mut reads = Vec::new();
             let desc = seg
