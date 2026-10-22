@@ -110,9 +110,18 @@ async fn settled_leader_epoch(
     epoch
 }
 
+/// Kafka's `COORDINATOR_NOT_AVAILABLE`, a retriable error.
+const COORDINATOR_NOT_AVAILABLE: i16 = 15;
+
 /// Joins `g1`, waits for its share state, and opens a share session with a
 /// fetch. With `latest` and no record above the high watermark, the fetch
 /// loads the share partition and acquires nothing.
+///
+/// The load reads the share state from the share coordinator. While the
+/// coordinator (re)loads its `__share_group_state` partition, after a start
+/// or a re-election, the read fails and the row answers
+/// `COORDINATOR_NOT_AVAILABLE` without caching the partition. A consumer
+/// retries that error, so the fetch is sent again until the load succeeds.
 async fn join_and_load(
     broker: &krabka_broker::BrokerHandle,
     client: &Client,
@@ -120,14 +129,17 @@ async fn join_and_load(
 ) -> String {
     let member = join(client, GROUP, "t").await.member;
     broker.wait_for_share_state_summary(GROUP, tid, 0).await;
-    let row = fetch_row(
-        client,
-        share_fetch_req()
-            .session(ShareSessionSetup::opening(&member, tid))
-            .call(),
-        FetchSessionMode::Initial,
-    )
-    .await;
+    let request = share_fetch_req()
+        .session(ShareSessionSetup::opening(&member, tid))
+        .call();
+    let mut row = fetch_row(client, request.clone(), FetchSessionMode::Initial).await;
+    for _ in 0..300 {
+        if row.error_code != COORDINATOR_NOT_AVAILABLE {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        row = fetch_row(client, request.clone(), FetchSessionMode::Initial).await;
+    }
     assert!(
         (row.error_code, row.acquired_records.is_empty()) == (NONE, true),
         "{row:?}"
