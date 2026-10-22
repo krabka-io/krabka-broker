@@ -8,11 +8,12 @@ use {
         compact::{
             build_offset_map,
             test_support::{
-                RETENTION, control_batch, make_record, rewrite_all, rewrite_with_map,
+                RETENTION, control_batch, inputs, make_record, rewrite_all, rewrite_with_map,
                 superseded_records, transactional_record, write_sealed_batches,
                 write_sealed_segment,
             },
         },
+        segment::Segment,
         test_support::{KeyValue, ProducerIdAndEpoch},
     },
     krabka_compression::CompressionType,
@@ -604,7 +605,7 @@ fn only_the_last_group_of_a_round_keeps_an_emptied_last_batch() {
         ProducerIdAndEpoch { id: -1, epoch: -1 },
         None,
     )]);
-    let map = build_offset_map(&[&first, &second], vec![], None).unwrap();
+    let map = build_offset_map(&inputs(&[&first, &second]), vec![], None).unwrap();
     let active = HashMap::new();
     let round = CleaningRound {
         active_producers: &active,

@@ -10,9 +10,14 @@
 //! - `replay`: rebuilding the partition from empty by replaying `retained`
 //!   add and finish events, as a metadata-topic consumer does on start-up.
 //! - `restore`: importing a snapshot dump of `retained` finished segments.
-//! - `lookup_idle` and `lookup_under_transitions`: one `(epoch, offset)`
-//!   lookup, alone and while another thread runs lifecycles on the same
-//!   partition behind the manager's mutex.
+//! - `lookup_idle`: one `(epoch, offset)` lookup.
+//!
+//! `ci.yml`'s nightly `bench` job compares every benchmark here against the
+//! previous commit, so each one must be stable from pass to pass on one host.
+//! A lookup racing a free-running writer thread is not: on the same code its
+//! mean swung by up to 1.7x between passes, with scheduling deciding how often
+//! the lookup waits. How long a lookup can wait behind a writer is the time
+//! one transition holds the manager's mutex, which `transition` measures.
 
 use {
     assert2::assert,
@@ -23,14 +28,7 @@ use {
         RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
         RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState, RlmmCacheDump, TopicIdPartition,
     },
-    std::{
-        collections::BTreeMap,
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
-        thread,
-    },
+    std::collections::BTreeMap,
     uuid::Uuid,
 };
 
@@ -205,32 +203,6 @@ fn lookup_latency(c: &mut Criterion) {
         group.bench_function(BenchmarkId::from_parameter(retained), |b| {
             b.iter(|| lookup(&manager, retained));
         });
-    }
-    group.finish();
-
-    let mut group = c.benchmark_group("remote_epoch_index/lookup_under_transitions");
-    group.sample_size(20);
-    for retained in RETAINED {
-        let manager = Arc::new(retained_manager(retained));
-        let stop = Arc::new(AtomicBool::new(false));
-        let writer = {
-            let manager = Arc::clone(&manager);
-            let stop = Arc::clone(&stop);
-            thread::spawn(move || {
-                let mut next = retained;
-                while !stop.load(Ordering::Relaxed) {
-                    lifecycle(&manager, next);
-                    next += 1;
-                }
-                next - retained
-            })
-        };
-        group.bench_function(BenchmarkId::from_parameter(retained), |b| {
-            b.iter(|| lookup(&manager, retained));
-        });
-        stop.store(true, Ordering::Relaxed);
-        let lifecycles = writer.join().expect("writer thread");
-        black_box(lifecycles);
     }
     group.finish();
 }

@@ -77,7 +77,7 @@ impl Segment {
         // would read at the end of the file, which answers as not cached, and
         // stop the walk before the later segments that hold the run.
         if window == 0 {
-            return Ok(false);
+            return true;
         }
         let last = start_pos + window.saturating_sub(1);
         self.io.is_cached(&self.log_file, start_pos) && self.io.is_cached(&self.log_file, last)
