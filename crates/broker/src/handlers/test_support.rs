@@ -520,15 +520,8 @@ pub(crate) fn cluster_acl(operation: krabka_metadata::AclOperation) -> krabka_me
         .call()
 }
 
-pub(crate) async fn start_allow_all_no_audit() -> StartedBroker {
-    start_broker_no_audit_with(|config| {
-        config.authorizer = Arc::new(AllowAllAuthorizer);
-    })
-    .await
-}
-
-/// Like [`start_allow_all_no_audit`], with the share-test broker session
-/// ([`tolerate_starved_heartbeats`]).
+/// Start a broker with every request allowed, audit logging off, and the
+/// share-test broker session ([`tolerate_starved_heartbeats`]).
 pub(crate) async fn start_share_allow_all_no_audit() -> StartedBroker {
     start_broker_no_audit_with(|config| {
         config.authorizer = Arc::new(AllowAllAuthorizer);
