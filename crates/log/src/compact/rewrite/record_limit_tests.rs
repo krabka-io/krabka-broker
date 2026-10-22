@@ -9,7 +9,9 @@ use {
     crate::{
         compact::{
             build_offset_map,
-            test_support::{RETENTION, control_batch, inputs, write_sealed_batches},
+            test_support::{
+                INDEX_INTERVAL, RETENTION, control_batch, inputs, write_sealed_batches,
+            },
         },
         error::LogError,
         io::FileIo,
@@ -20,7 +22,7 @@ use {
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::{Attributes, Record, RecordBatch},
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes},
-    std::collections::HashMap,
+    std::{collections::HashMap, sync::Arc},
 };
 
 const LIMIT: ByteSize = bytes(100);
@@ -138,7 +140,7 @@ fn the_passes_refuse_a_compressed_record_above_the_limit(
     let mut txn = CleanedTransactionMetadata::default();
     let active = HashMap::new();
     let rewritten = rewrite_segments(
-        &FileIo,
+        Arc::new(FileIo),
         dir.path(),
         &inputs(&segments),
         &unchecked,
@@ -151,6 +153,7 @@ fn the_passes_refuse_a_compressed_record_above_the_limit(
             active_producers: &active,
             upper_bound: Offset(1),
             max_decompressed_record: limit,
+            index_interval: INDEX_INTERVAL,
         },
     );
     assert2::check!(
@@ -218,7 +221,7 @@ fn an_aborted_batch_is_read_only_when_the_pass_keeps_it_empty(
         .into_iter()
         .collect();
     let rewritten = rewrite_segments(
-        &FileIo,
+        Arc::new(FileIo),
         dir.path(),
         &inputs(&segments),
         &map,
@@ -231,6 +234,7 @@ fn an_aborted_batch_is_read_only_when_the_pass_keeps_it_empty(
             active_producers: &active,
             upper_bound,
             max_decompressed_record: Some(LIMIT),
+            index_interval: INDEX_INTERVAL,
         },
     );
     assert2::check!(

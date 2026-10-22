@@ -204,7 +204,7 @@ impl CompactionJob {
             }
             txn_meta.add_aborted_transactions(std::mem::take(&mut group.aborted));
             let rewrite = rewrite_segments(
-                &*self.io,
+                Arc::clone(&self.io),
                 &self.dir,
                 inputs,
                 &offset_map,
@@ -216,6 +216,7 @@ impl CompactionJob {
                     // ends where the last consumed segment does.
                     upper_bound: self.upper_bound,
                     max_decompressed_record: self.record_limit,
+                    index_interval: self.index_interval,
                 },
             )?;
             rewrites.push(GroupRewrite {

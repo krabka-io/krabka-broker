@@ -103,15 +103,26 @@ pub(crate) fn retire_segment_files(
     Ok(tombstones)
 }
 
+/// When [`retire_files`] makes its renames durable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DirSync {
+    /// Sync the directory before returning.
+    Now,
+    /// Leave the sync to the caller, which syncs the directory once after a
+    /// run of retirements and before anything depends on them.
+    Deferred,
+}
+
 /// Retire a file set under unique names, so repeated compactions of the same
 /// base cannot replace a file still retained for readers. Failed retirement restores
-/// successful renames before returning the error.
+/// successful renames, and syncs the directory, before returning the error.
 pub(crate) fn retire_files(
     io: &dyn LogIo,
     dir: &Path,
     base: Offset,
     extensions: &[&str],
     retired: &mut Vec<std::path::PathBuf>,
+    sync: DirSync,
 ) -> Result<(), LogError> {
     static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -129,7 +140,9 @@ pub(crate) fn retire_files(
                 Err(error) => return Err(LogError::Io(error)),
             }
         }
-        io.sync_dir(dir)?;
+        if sync == DirSync::Now {
+            io.sync_dir(dir)?;
+        }
         Ok(())
     })();
     if let Err(error) = result {

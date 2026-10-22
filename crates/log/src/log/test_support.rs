@@ -216,6 +216,17 @@ pub fn compacting_segments() -> LogConfig {
 
 pub fn compact_test_log() -> TempLog { configured_test_log(compacting_segments()) }
 
+/// The `.cleaned` files in `dir`: a pass's output that was never promoted.
+pub fn cleaned_files(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".cleaned"))
+        .collect();
+    names.sort();
+    names
+}
+
 /// Change the roll and compaction grouping cap without changing other options.
 pub fn set_segment_size(log: &mut Log, size: ByteSize) {
     let mut config = log.config_snapshot();
