@@ -28,7 +28,9 @@ pub fn assemble(cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
             AuthzType::AllowAll => Arc::new(AllowAllAuthorizer),
             AuthzType::Simple => Arc::new(
                 SimpleAclAuthorizer::new(cfg.super_users.clone())
-                    .with_allow_everyone_if_no_acl_found(authorization.allow_everyone_if_no_acl_found),
+                    .with_allow_everyone_if_no_acl_found(
+                        authorization.allow_everyone_if_no_acl_found,
+                    ),
             ),
             #[cfg(target_family = "wasm")]
             AuthzType::Opa => {
@@ -40,9 +42,10 @@ pub fn assemble(cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
             AuthzType::Opa => {
                 use crate::authorizer::opa::OpaAuthorizer;
 
-                let opa = authorization.opa.as_ref().ok_or_else(|| {
-                    FileConfigError::MissingSection("[authorization.opa]".into())
-                })?;
+                let opa = authorization
+                    .opa
+                    .as_ref()
+                    .ok_or_else(|| FileConfigError::MissingSection("[authorization.opa]".into()))?;
                 Arc::new(
                     OpaAuthorizer::new(
                         cfg.super_users.clone(),
@@ -59,7 +62,10 @@ pub fn assemble(cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         cfg.authorization_config = None;
     }
     if let Some(sr) = cfg.schema_registry_config.as_ref() {
-        cfg.schema_validator = Some(Arc::new(schema_validator(sr, cfg.schema_registry_http_timeout)?));
+        cfg.schema_validator = Some(Arc::new(schema_validator(
+            sr,
+            cfg.schema_registry_http_timeout,
+        )?));
         cfg.schema_registry_config = None;
     }
     Ok(())
@@ -126,7 +132,6 @@ mod tests {
             file_config::FileConfig,
             test_support::{peer, sasl_principal},
         },
-        assert2::assert,
         krabka_metadata::{AclOperation, MetadataImage, ResourceType},
     };
 
@@ -147,12 +152,12 @@ mod tests {
         .unwrap();
         let mut cfg = BrokerConfig::default();
         file.apply_to(&mut cfg).unwrap();
-        assert!(cfg.schema_validator.is_none());
+        assert2::assert!(cfg.schema_validator.is_none());
         for _ in 0..2 {
             let error = assemble(&mut cfg).unwrap_err().to_string();
-            assert!(error.contains("failed to read basic_auth_password_path"));
-            assert!(cfg.schema_validator.is_none());
-            assert!(cfg.schema_registry_config.is_some());
+            assert2::assert!(error.contains("failed to read basic_auth_password_path"));
+            assert2::assert!(cfg.schema_validator.is_none());
+            assert2::assert!(cfg.schema_registry_config.is_some());
         }
     }
 
@@ -189,12 +194,12 @@ mod tests {
                 resource_name: "t",
                 operation: AclOperation::Read,
             };
-            assert!(cfg.authorizer.authorize(&image, &request) == want, "{name}");
+            assert2::assert!(cfg.authorizer.authorize(&image, &request) == want, "{name}");
         }
-        assert!(cfg.authorizer.is_configured());
+        assert2::assert!(cfg.authorizer.is_configured());
         let authorizer = cfg.authorizer.clone();
         assemble(&mut cfg).unwrap();
-        assert!(Arc::ptr_eq(&authorizer, &cfg.authorizer));
+        assert2::assert!(Arc::ptr_eq(&authorizer, &cfg.authorizer));
     }
 
     #[test]
@@ -216,7 +221,10 @@ mod tests {
         let authorizer = cfg.authorizer.clone();
         let validator = cfg.schema_validator.clone().unwrap();
         assemble(&mut cfg).unwrap();
-        assert!(Arc::ptr_eq(&authorizer, &cfg.authorizer));
-        assert!(Arc::ptr_eq(&validator, cfg.schema_validator.as_ref().unwrap()));
+        assert2::assert!(Arc::ptr_eq(&authorizer, &cfg.authorizer));
+        assert2::assert!(Arc::ptr_eq(
+            &validator,
+            cfg.schema_validator.as_ref().unwrap()
+        ));
     }
 }

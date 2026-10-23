@@ -49,9 +49,10 @@ pub(super) fn apply_config_tail(
             ));
             #[cfg(not(target_family = "wasm"))]
             {
-                let opa = authorization.opa.as_ref().ok_or_else(|| {
-                    FileConfigError::MissingSection("[authorization.opa]".into())
-                })?;
+                let opa = authorization
+                    .opa
+                    .as_ref()
+                    .ok_or_else(|| FileConfigError::MissingSection("[authorization.opa]".into()))?;
                 if opa.maximum_cache_size == 0 {
                     return Err(FileConfigError::OpaConfig("ZeroCache".into()));
                 }

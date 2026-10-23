@@ -200,7 +200,10 @@ super_users = ["User:admin"]
         )
         .unwrap();
         assert!(cfg.super_users == ["admin".to_owned()].into());
-        let authorization = cfg.authorization_config.expect("resolved authorization");
+        let authorization = cfg
+            .authorization_config
+            .as_ref()
+            .expect("resolved authorization");
         assert!(authorization.authz_type == AuthzType::Simple);
         assert!(!authorization.allow_everyone_if_no_acl_found);
         assert!(!cfg.authorizer.is_configured());
@@ -212,14 +215,14 @@ super_users = ["User:admin"]
         allow = { "allow_everyone_if_no_acl_found = true", true },
     )]
     fn allow_everyone_if_no_acl_found_is_resolved(setting: &str, expected: bool) {
-        let cfg = configured_unwrap_parse(&format!(
-            "[authorization]\ntype = \"simple\"\n{setting}\n"
-        ))
-        .unwrap();
+        let cfg =
+            configured_unwrap_parse(&format!("[authorization]\ntype = \"simple\"\n{setting}\n"))
+                .unwrap();
         assert!(
             cfg.authorization_config
                 .expect("resolved authorization")
-                .allow_everyone_if_no_acl_found == expected
+                .allow_everyone_if_no_acl_found
+                == expected
         );
     }
 
@@ -239,15 +242,19 @@ expire_after_ms = 60000
         )
         .unwrap();
         assert!(cfg.super_users == ["operator".to_owned()].into());
-        let authorization = cfg.authorization_config.expect("resolved authorization");
+        let authorization = cfg
+            .authorization_config
+            .as_ref()
+            .expect("resolved authorization");
         assert!(authorization.authz_type == AuthzType::Opa);
         assert!(
-            authorization.opa == Some(FileOpaConfig {
-                url: "http://opa.invalid:8181/v1/data/k/a".to_owned(),
-                allow_on_error: false,
-                maximum_cache_size: 100,
-                expire_after_ms: 60_000,
-            })
+            authorization.opa
+                == Some(FileOpaConfig {
+                    url: "http://opa.invalid:8181/v1/data/k/a".to_owned(),
+                    allow_on_error: false,
+                    maximum_cache_size: 100,
+                    expire_after_ms: 60_000,
+                })
         );
         assert!(!cfg.authorizer.is_configured());
         assert!(cfg.validate().is_ok());
