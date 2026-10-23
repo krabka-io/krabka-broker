@@ -130,8 +130,8 @@ fn has_live_ack_offsets(
 /// Kafka's `fetchSubMapForAcknowledgementBatch` checks before it looks at any
 /// offset. A singleton `acknowledge_types` applies that type across the whole
 /// range; otherwise each entry maps to one offset, starting at `first`. This
-/// function merges a run of the same type into one call, and stops at the
-/// first run that fails.
+/// function applies valid mixed types in one window pass. Invalid types use
+/// the sequential path to preserve the first failing offset's error code.
 ///
 /// The type `Renew` (4) renews the lock of its offsets and leaves their
 /// state as it is. The other types take their normal transition in the same
@@ -211,7 +211,19 @@ fn apply_one_ack(
                     .ok_or(codes::INVALID_REQUEST)
             }
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>();
+    let actions = match actions {
+        Ok(actions) => actions,
+        Err(_) => {
+            // Parsing every action first must not hide an earlier ownership
+            // error. The enclosing request rolls back these transitions on
+            // failure, just as it does for the normal mixed path.
+            for (offset, ack_type) in (first..=last).zip(types) {
+                apply(st, offset, offset, *ack_type)?;
+            }
+            return Ok(());
+        }
+    };
     st.acknowledge_mixed(member, Offset(first), Offset(last), &actions, max_attempts)
 }
 
@@ -447,6 +459,25 @@ mod tests {
             2,
         );
         compare_with_run_by_run(expiring, &expired_application, &[(0, 11, MIXED)]);
+    }
+
+    #[test]
+    fn invalid_later_action_preserves_earlier_ownership_error() {
+        let application = AckApplication {
+            member: "other",
+            now: Instant::now(),
+            renewal: Renewal {
+                requested: false,
+                enabled: true,
+                lock_duration: Duration::from_secs(30),
+            },
+            max_attempts: LIMIT,
+        };
+        for later_action in [99, ACK_RENEW] {
+            let mut types = [ACCEPT; 10];
+            types[9] = later_action;
+            compare_with_run_by_run(start(Setup::Acquired), &application, &[(0, 9, &types)]);
+        }
     }
 
     fn states(first: i64, last: i64, state: RecordState) -> Vec<(i64, RecordState)> {
