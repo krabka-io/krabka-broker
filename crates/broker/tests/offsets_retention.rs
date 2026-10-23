@@ -14,12 +14,12 @@ use {
         client::connect_owned,
         commit_partition_zero,
         configs::describe_resource,
-        create_topic_for_commits,
+        create_topic_for_commits, heartbeat_config,
         offsets::{offset_delete_partition, offset_delete_request, offset_delete_topic},
         standalone_broker,
     },
     assert2::{assert, check},
-    krabka_broker::{Broker, BrokerConfig, codes},
+    krabka_broker::{Broker, codes},
     krabka_client_core::Client,
     krabka_protocol::owned::{
         describe_configs_request::DescribeConfigsRequest,
@@ -135,7 +135,7 @@ async fn describe_configs_reports_the_retention_knobs() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn describe_configs_reports_a_named_knob_as_static() {
     let dir = tempfile::TempDir::new().unwrap();
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    let mut config = heartbeat_config(dir.path());
     // The same number Kafka defaults to, named explicitly.
     config.offsets_retention_override = Some(minutes(10_080));
     let broker = Broker::start(config).await.unwrap();
@@ -189,7 +189,7 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
     const TOPIC: &str = "orders";
 
     let dir = tempfile::TempDir::new().unwrap();
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    let mut config = heartbeat_config(dir.path());
     config.offsets_retention_check_interval_override = Some(millis(25));
     let broker = Broker::start(config).await.unwrap();
     broker.wait_until_group_coordinator_ready().await;
