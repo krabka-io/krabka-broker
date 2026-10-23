@@ -47,6 +47,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- Skip regex subscriber aggregation when a consumer heartbeat is inside the
+  minimum resolution refresh interval, including a retained regex subscription
+  (#1716).
 - Scheduled delivery checks over archived segments buffer bounded byte ranges
   instead of fetching each batch header separately, reducing remote requests for
   ListOffsets LATEST and retention scans (#1682).
