@@ -272,9 +272,9 @@ async fn capture_secured_at_inner(
             security.clone(),
             signing,
             CaptureDigests {
-                metadata_snapshot_sha256,
-                rlmm_snapshot_sha256,
-                group_offsets_sha256,
+                metadata_snapshot: metadata_snapshot_sha256,
+                rlmm_snapshot: rlmm_snapshot_sha256,
+                group_offsets: group_offsets_sha256,
             },
             events,
         )
@@ -387,9 +387,9 @@ fn checkpoint_note(bytes: &[u8], now_ms: u64) -> String {
 }
 
 struct CaptureDigests {
-    metadata_snapshot_sha256: Option<Sha256Digest>,
-    rlmm_snapshot_sha256: Option<Sha256Digest>,
-    group_offsets_sha256: Option<Sha256Digest>,
+    metadata_snapshot: Option<Sha256Digest>,
+    rlmm_snapshot: Option<Sha256Digest>,
+    group_offsets: Option<Sha256Digest>,
 }
 
 async fn capture_diskless_index(
@@ -459,9 +459,9 @@ async fn capture_diskless_index(
     let mut capture = capture_projection(log.clone(), &topics, now_ms())
         .await
         .map_err(BackupError::Integrity)?;
-    capture.metadata_snapshot_sha256 = digests.metadata_snapshot_sha256;
-    capture.rlmm_snapshot_sha256 = digests.rlmm_snapshot_sha256;
-    capture.group_offsets_sha256 = digests.group_offsets_sha256;
+    capture.metadata_snapshot_sha256 = digests.metadata_snapshot;
+    capture.rlmm_snapshot_sha256 = digests.rlmm_snapshot;
+    capture.group_offsets_sha256 = digests.group_offsets;
     log.shutdown().await;
     if let (Some(key_id), Some(key_path)) = (
         signing.worm_signing_key_id.as_ref(),
