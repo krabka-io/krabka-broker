@@ -19,8 +19,8 @@ use {
         list_s3_multipart_uploads,
     },
     krabka_remote_storage::{
-        ArchiveVerifyReport, ChainHead, PartitionVerifyReport, TrustedManifestKeys, VerifyDepth,
-        VerifyRequest, verify_archive,
+        ArchiveVerifyReport, ChainHead, PartitionVerifyReport, TrustedManifestKeys, VerifyBreak,
+        VerifyDepth, VerifyRequest, verify_archive,
     },
     std::{collections::BTreeSet, fmt::Write as _, path::PathBuf, process::ExitCode, sync::Arc},
 };
@@ -176,7 +176,7 @@ async fn run_verify(args: VerifyArgs) -> ExitCode {
                     .map_err(|error| error.to_string()),
                 None => Ok(Vec::new()),
             };
-            grade(&report, &args, uploads)
+            render_grade(&report, &grade(&report, &args, uploads))
         }
         Err(e) => {
             eprintln!("error: {e}");
@@ -238,32 +238,151 @@ fn open_store(args: &VerifyArgs) -> Result<OpenedStore, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Grades the report, prints the verdict, and returns the exit code.
-fn grade(
+/// The first decisive finding, in security-policy precedence order.
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict<'a> {
+    Tampered(&'a VerifyBreak),
+    HeadMismatch {
+        expected: ChainHead,
+        partition: Option<&'a PartitionVerifyReport>,
+    },
+    StrictOrphans,
+    Restarted(usize),
+    Untrusted {
+        unsigned: u64,
+        untrusted: u64,
+        no_trusted_key: bool,
+    },
+    UploadListingFailed(String),
+    IncompleteUploads(Vec<IncompleteMultipartUpload>),
+    Verified,
+}
+
+/// Orphan warnings accompany later verdicts, but never precede integrity or head failures.
+#[derive(Debug)]
+struct Grade<'a> {
+    verdict: Verdict<'a>,
+    orphans: Vec<&'a String>,
+}
+
+/// Selects a verdict without terminal or process side effects.
+fn grade<'a>(
+    report: &'a ArchiveVerifyReport,
+    args: &VerifyArgs,
+    uploads: Result<Vec<IncompleteMultipartUpload>, String>,
+) -> Grade<'a> {
+    let mut outcome = Grade {
+        verdict: Verdict::Verified,
+        orphans: Vec::new(),
+    };
+    if let Some(found) = report.first_break() {
+        outcome.verdict = Verdict::Tampered(found);
+        return outcome;
+    }
+    if let Some(expected) = args.expect_head {
+        let partition = tip_mismatch(report, expected);
+        if partition.is_some() || report.partitions.is_empty() {
+            outcome.verdict = Verdict::HeadMismatch {
+                expected,
+                partition,
+            };
+            return outcome;
+        }
+    }
+    outcome.orphans = report
+        .global_orphan_objects
+        .iter()
+        .chain(
+            report
+                .partitions
+                .iter()
+                .flat_map(|partition| partition.orphan_objects.iter()),
+        )
+        .collect();
+    outcome.verdict = if !outcome.orphans.is_empty() && args.grading.strict_orphans {
+        Verdict::StrictOrphans
+    } else {
+        grade_attestation(report, args, uploads)
+    };
+    outcome
+}
+
+/// Grades the remaining findings after integrity, pinned heads and strict orphans.
+fn grade_attestation<'a>(
+    report: &'a ArchiveVerifyReport,
+    args: &VerifyArgs,
+    uploads: Result<Vec<IncompleteMultipartUpload>, String>,
+) -> Verdict<'a> {
+    let restarts = report
+        .partitions
+        .iter()
+        .map(|partition| partition.epochs.len().saturating_sub(1))
+        .sum();
+    if restarts > 0 && !args.grading.allow_epoch_restarts {
+        return Verdict::Restarted(restarts);
+    }
+    let unsigned = total(report, |partition| partition.unsigned_manifests);
+    let untrusted = total(report, |partition| partition.untrusted_manifests);
+    if unsigned > 0 || untrusted > 0 {
+        return Verdict::Untrusted {
+            unsigned,
+            untrusted,
+            no_trusted_key: untrusted > 0 && args.public_key.is_empty(),
+        };
+    }
+    match scoped_uploads(report, args, uploads) {
+        Err(error) => Verdict::UploadListingFailed(error),
+        Ok(uploads) if !uploads.is_empty() => Verdict::IncompleteUploads(uploads),
+        Ok(_) => Verdict::Verified,
+    }
+}
+
+/// Applies the requested topic/partition scope to the upload listing.
+fn scoped_uploads(
     report: &ArchiveVerifyReport,
     args: &VerifyArgs,
     uploads: Result<Vec<IncompleteMultipartUpload>, String>,
-) -> ExitCode {
-    if let Some(found) = report.first_break() {
-        let seq = found
-            .seq
-            .map_or_else(|| "unknown".to_string(), |seq| seq.to_string());
-        eprintln!(
-            "TAMPER DETECTED at {} (seq {seq}): {}",
-            found.manifest_key, found.reason
-        );
-        for line in summary(report) {
-            eprintln!("{line}");
+) -> Result<Vec<IncompleteMultipartUpload>, String> {
+    uploads.map(|mut uploads| {
+        if args.topic.is_some() || args.partition.is_some() {
+            let dirs: Vec<&str> = report
+                .partitions
+                .iter()
+                .map(|partition| partition.partition_dir.as_str())
+                .collect();
+            uploads.retain(|upload| upload_in_partition(&upload.key, &dirs));
         }
-        return ExitCode::FAILURE;
-    }
+        uploads
+    })
+}
 
-    if let Some(expected) = args.expect_head {
-        // An archive with nothing left in it is the extreme of the same
-        // attack, so an empty report is a mismatch and not a pass.
-        let mismatch = tip_mismatch(report, expected);
-        if mismatch.is_some() || report.partitions.is_empty() {
-            let (name, tip) = mismatch.map_or_else(
+/// Presents the selected findings and maps the verdict to the CLI exit status.
+fn render_grade(report: &ArchiveVerifyReport, outcome: &Grade<'_>) -> ExitCode {
+    if !outcome.orphans.is_empty() {
+        report_orphans(
+            &outcome.orphans,
+            matches!(outcome.verdict, Verdict::StrictOrphans),
+        );
+    }
+    match &outcome.verdict {
+        Verdict::Tampered(found) => {
+            let seq = found
+                .seq
+                .map_or_else(|| "unknown".to_string(), |seq| seq.to_string());
+            eprintln!(
+                "TAMPER DETECTED at {} (seq {seq}): {}",
+                found.manifest_key, found.reason
+            );
+            for line in summary(report) {
+                eprintln!("{line}");
+            }
+        }
+
+        Verdict::HeadMismatch {
+            expected,
+            partition,
+        } => {
+            let (name, tip) = partition.map_or_else(
                 || ("(none found)".to_string(), "none".to_string()),
                 |partition| {
                     (
@@ -281,112 +400,77 @@ fn grade(
                  deletes the newest manifests, and the objects they name, leaves a shorter \
                  archive that verifies.",
             );
-            return ExitCode::FAILURE;
         }
-    }
-
-    let orphans: Vec<&String> = report
-        .global_orphan_objects
-        .iter()
-        .chain(
-            report
-                .partitions
-                .iter()
-                .flat_map(|partition| partition.orphan_objects.iter()),
-        )
-        .collect();
-    if !orphans.is_empty() {
-        report_orphans(&orphans, args.grading.strict_orphans);
-        if args.grading.strict_orphans {
-            return ExitCode::FAILURE;
-        }
-    }
-
-    let restarts: usize = report
-        .partitions
-        .iter()
-        .map(|partition| partition.epochs.len().saturating_sub(1))
-        .sum();
-    if restarts > 0 && !args.grading.allow_epoch_restarts {
-        eprintln!("INCOMPLETE ATTESTATION: chain restarted {restarts} time(s)");
-        eprintln!(
-            "  A restart happens when the broker could not read back its chain tip, so it began \
+        Verdict::StrictOrphans => {}
+        Verdict::Restarted(restarts) => {
+            eprintln!("INCOMPLETE ATTESTATION: chain restarted {restarts} time(s)");
+            eprintln!(
+                "  A restart happens when the broker could not read back its chain tip, so it began \
              a new epoch at genesis rather than silently continuing the old chain. Nothing binds \
              the manifests before a restart to the manifests after it, so the archive is \
              attested in pieces."
-        );
-        eprintln!(
-            "  Expected with the non-durable in-memory RLMM. The fix is a topic-backed \
+            );
+            eprintln!(
+                "  Expected with the non-durable in-memory RLMM. The fix is a topic-backed \
              `remote_log_metadata`, which survives a broker restart. Pass \
              --allow-epoch-restarts to accept the restarts instead."
-        );
-        return ExitCode::FAILURE;
-    }
-
-    let unsigned = total(report, |partition| partition.unsigned_manifests);
-    let untrusted = total(report, |partition| partition.untrusted_manifests);
-    if unsigned > 0 || untrusted > 0 {
-        eprintln!(
-            "INCOMPLETE ATTESTATION: {unsigned} manifest(s) unsigned, {untrusted} signed by an \
-             untrusted key"
-        );
-        if untrusted > 0 && args.public_key.is_empty() {
-            eprintln!(
-                "  No trusted key was given. Pass --key-id and --public-key to check the \
-                 signatures the archive carries."
             );
         }
-        return ExitCode::FAILURE;
-    }
-
-    let mut uploads = match uploads {
-        Ok(uploads) => uploads,
-        Err(error) => {
+        Verdict::Untrusted {
+            unsigned,
+            untrusted,
+            no_trusted_key,
+        } => {
+            eprintln!(
+                "INCOMPLETE ATTESTATION: {unsigned} manifest(s) unsigned, {untrusted} signed by an \
+             untrusted key"
+            );
+            if *no_trusted_key {
+                eprintln!(
+                    "  No trusted key was given. Pass --key-id and --public-key to check the \
+                 signatures the archive carries."
+                );
+            }
+        }
+        Verdict::UploadListingFailed(error) => {
             eprintln!("error: cannot list incomplete multipart uploads: {error}");
-            return ExitCode::FAILURE;
         }
-    };
-    if args.topic.is_some() || args.partition.is_some() {
-        let dirs: Vec<&str> = report
-            .partitions
-            .iter()
-            .map(|partition| partition.partition_dir.as_str())
-            .collect();
-        uploads.retain(|upload| upload_in_partition(&upload.key, &dirs));
-    }
-    if !uploads.is_empty() {
-        eprintln!(
-            "INCOMPLETE MULTIPART UPLOADS: {} upload(s) still hold parts",
-            uploads.len()
-        );
-        for upload in uploads.iter().take(ORPHANS_SHOWN) {
-            eprintln!("  {} ({})", upload.key, upload.upload_id);
+        Verdict::IncompleteUploads(uploads) => {
+            eprintln!(
+                "INCOMPLETE MULTIPART UPLOADS: {} upload(s) still hold parts",
+                uploads.len()
+            );
+            for upload in uploads.iter().take(ORPHANS_SHOWN) {
+                eprintln!("  {} ({})", upload.key, upload.upload_id);
+            }
         }
-        return ExitCode::FAILURE;
-    }
+        Verdict::Verified => {
+            // Carried by both verdicts below: a directory holding nothing but orphans
+            // reports no manifests, and calling that "empty" would contradict the
+            // objects just listed on stderr.
+            let noted = if outcome.orphans.is_empty() {
+                String::new()
+            } else {
+                format!(" ({} orphan object(s), see stderr)", outcome.orphans.len())
+            };
 
-    // Carried by both verdicts below: a directory holding nothing but orphans
-    // reports no manifests, and calling that "empty" would contradict the
-    // objects just listed on stderr.
-    let noted = if orphans.is_empty() {
-        String::new()
-    } else {
-        format!(" ({} orphan object(s), see stderr)", orphans.len())
-    };
+            if report.manifests() == 0 {
+                println!("OK: empty archive{noted}");
+                return ExitCode::SUCCESS;
+            }
+            println!(
+                "OK: {} manifests over {} partition(s), chain continuous, all signatures valid{noted}",
+                report.manifests(),
+                report.partitions.len()
+            );
+            for line in summary(report) {
+                println!("{line}");
+            }
 
-    if report.manifests() == 0 {
-        println!("OK: empty archive{noted}");
-        return ExitCode::SUCCESS;
+            return ExitCode::SUCCESS;
+        }
     }
-    println!(
-        "OK: {} manifests over {} partition(s), chain continuous, all signatures valid{noted}",
-        report.manifests(),
-        report.partitions.len()
-    );
-    for line in summary(report) {
-        println!("{line}");
-    }
-    ExitCode::SUCCESS
+    ExitCode::FAILURE
 }
 
 fn upload_in_partition(key: &str, partition_dirs: &[&str]) -> bool {
@@ -526,7 +610,11 @@ fn protection(report: &krabka_remote_storage::ObjectProtectionReport) -> String 
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert, krabka_remote_storage::VerifyBreak, std::process::ExitCode};
+    use {
+        super::*,
+        assert2::assert,
+        krabka_remote_storage::{EpochId, EpochSpan, ManifestSeq},
+    };
 
     fn args(topic: Option<&str>) -> VerifyArgs {
         VerifyArgs {
@@ -610,25 +698,123 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn multipart_findings_are_filtered_and_graded() {
+    #[yare::parameterized(
+        topic = { Some("orders"), None },
+        partition = { None, Some(0) },
+    )]
+    fn multipart_findings_are_filtered_and_graded(topic: Option<&str>, partition: Option<i32>) {
         let report = report(None);
+        let mut scoped_args = args(topic);
+        scoped_args.partition = partition;
 
         assert!(
             grade(
                 &report,
-                &args(Some("orders")),
+                &scoped_args,
                 Ok(vec![upload("archive/payments-0-id/segment.log")])
-            ) == ExitCode::SUCCESS
+            )
+            .verdict
+                == Verdict::Verified
         );
         assert!(
             grade(
                 &report,
-                &args(Some("orders")),
+                &scoped_args,
                 Ok(vec![upload("archive/orders-0-id/segment.log")])
-            ) == ExitCode::FAILURE
+            )
+            .verdict
+                == Verdict::IncompleteUploads(vec![upload("archive/orders-0-id/segment.log")])
         );
-        assert!(grade(&report, &args(None), Err("denied".into())) == ExitCode::FAILURE);
+        assert!(
+            grade(
+                &report,
+                &args(None),
+                Ok(vec![upload("archive/payments-0-id/segment.log")])
+            )
+            .verdict
+                == Verdict::IncompleteUploads(vec![upload("archive/payments-0-id/segment.log")])
+        );
+        assert!(
+            grade(&report, &scoped_args, Err("denied".into())).verdict
+                == Verdict::UploadListingFailed("denied".into())
+        );
+    }
+
+    #[yare::parameterized(
+        tampering_before_head = { 0 },
+        head_before_orphans = { 1 },
+        strict_orphans_before_restarts = { 2 },
+        restarts_before_trust = { 3 },
+        trust_before_upload_listing = { 4 },
+        upload_listing_error = { 5 },
+        incomplete_uploads = { 6 },
+        advisory_orphans_and_allowed_restarts = { 7 },
+    )]
+    fn verdict_precedence_is_explicit(stage: u8) {
+        // Each row retains all lower-priority findings. Dropping one finding
+        // must expose the next verdict rather than silently accepting the run.
+        let mut report = report((stage == 0).then(|| VerifyBreak {
+            manifest_key: "manifest".into(),
+            seq: None,
+            reason: "digest mismatch".into(),
+        }));
+        let mut args = args(None);
+        args.expect_head = (stage <= 1).then_some(ChainHead([1; 32]));
+        args.grading.strict_orphans = stage <= 2;
+        args.grading.allow_epoch_restarts = stage >= 4;
+        report.global_orphan_objects.push("global-orphan".into());
+        let partition = &mut report.partitions[0];
+        partition.orphan_objects.push("partition-orphan".into());
+        partition.epochs = vec![
+            EpochSpan {
+                epoch_id: EpochId(uuid::Uuid::nil()),
+                first_seq: ManifestSeq(0),
+                last_seq: ManifestSeq(0),
+                manifests: 1,
+                start_offset: 0,
+                end_offset: 1,
+                head: ChainHead([0; 32]),
+            };
+            2
+        ];
+        partition.unsigned_manifests = u64::from(stage <= 4);
+        partition.untrusted_manifests = u64::from(stage <= 4);
+        let uploads = if stage <= 5 {
+            Err("denied".into())
+        } else if stage == 6 {
+            Ok(vec![upload("archive/orders-0-id/segment.log")])
+        } else {
+            Ok(Vec::new())
+        };
+
+        let outcome = grade(&report, &args, uploads);
+        let expected = match stage {
+            0 => Verdict::Tampered(report.first_break().unwrap()),
+            1 => Verdict::HeadMismatch {
+                expected: ChainHead([1; 32]),
+                partition: Some(&report.partitions[0]),
+            },
+            2 => Verdict::StrictOrphans,
+            3 => Verdict::Restarted(1),
+            4 => Verdict::Untrusted {
+                unsigned: 1,
+                untrusted: 1,
+                no_trusted_key: true,
+            },
+            5 => Verdict::UploadListingFailed("denied".into()),
+            6 => Verdict::IncompleteUploads(vec![upload("archive/orders-0-id/segment.log")]),
+            _ => Verdict::Verified,
+        };
+        assert!(outcome.verdict == expected, "stage {stage}");
+        let expected_orphans = if stage <= 1 {
+            Vec::new()
+        } else {
+            vec![
+                &report.global_orphan_objects[0],
+                &report.partitions[0].orphan_objects[0],
+            ]
+        };
+        assert!(outcome.orphans == expected_orphans, "stage {stage}");
     }
 
     /// `--key-id` and `--public-key` pair by position. An unequal count has to
@@ -767,6 +953,6 @@ mod tests {
             reason: "digest mismatch".into(),
         }));
 
-        assert!(grade(&report, &args(None), Err("denied".into())) == ExitCode::FAILURE);
+        assert!(grade(&report, &args(None), Err("denied".into())).verdict != Verdict::Verified);
     }
 }

@@ -454,6 +454,40 @@ fn strict_orphans_grades_an_orphan_as_a_failure() {
     check!(result.stderr.contains("--strict-orphans was given"));
 }
 
+#[yare::parameterized(
+    advisory_orphans = { false },
+    strict_orphans = { true },
+)]
+fn orphan_reporting_preserves_restart_verdict_precedence(strict: bool) {
+    let fixture = Fixture::build().call();
+    let stray = fixture.add_orphan();
+    fixture.restart_chain();
+    let mut args = fixture.base_args();
+    if strict {
+        args.push("--strict-orphans".to_string());
+    }
+
+    let result = run(&args);
+
+    check_exit_code(&result, 1);
+    check!(result.stdout.is_empty());
+    check!(result.stderr.contains(&stray));
+    let orphan = result
+        .stderr
+        .find("ORPHAN OBJECTS")
+        .expect("orphans are reported");
+    let restart = result
+        .stderr
+        .find("INCOMPLETE ATTESTATION: chain restarted");
+    if strict {
+        check!(result.stderr.contains("--strict-orphans was given"));
+        check!(restart.is_none());
+    } else {
+        check!(result.stderr.contains("Not graded as a failure"));
+        check!(orphan < restart.expect("the restart is reported"));
+    }
+}
+
 #[test]
 fn an_empty_archive_verifies() {
     let root = TempDir::new().unwrap();
