@@ -48,6 +48,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 ### Changed
 
 - Remote timestamp seeks refine sparse indexes with bounded byte ranges instead of downloading the complete segment tail (#1662).
+- The RF3 regression contract is now `rf3-regression-v2`. It raises the
+  variance budget of records/s from 10% to 15%, and of p99 latency from 25% to
+  50%. The first measured run of `rf3-regression-v1` exceeded both, and
+  [Performance budget results](docs/operations/performance-budget-results.md#calibration)
+  records the calibration runs. Every materiality floor and spread multiplier
+  is unchanged (#1395).
 - The broker writes the log start offset that local retention moves to a
   partition's `log-start-offset-checkpoint` on a timer, instead of on every
   retention pass. The `[runtime]` key
