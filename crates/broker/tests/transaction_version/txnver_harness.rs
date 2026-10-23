@@ -10,6 +10,7 @@ use {
     crate::support::{
         client::connect_client,
         discovery::{coordinator_lookup_request, topic_metadata_request},
+        heartbeat_config,
         topics::TopicPartitionCount,
         transaction_wire::create_topic as create_transaction_topic,
     },
@@ -75,7 +76,7 @@ pub fn config(
     log_dir: std::path::PathBuf,
     bootstrap_mode: Option<krabka_broker::BootstrapMode>,
 ) -> krabka_broker::BrokerConfig {
-    let mut config = crate::support::heartbeat_config(log_dir);
+    let mut config = heartbeat_config(log_dir);
     config.transaction_state_num_partitions = 1;
     config.transaction_state_replication_factor = 1;
     if let Some(mode) = bootstrap_mode {
