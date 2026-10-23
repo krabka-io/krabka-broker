@@ -11,6 +11,7 @@ use {
         owned::fetch_request::{FetchTopic, ForgottenTopic},
         primitives::uuid::Uuid as WireUuid,
     },
+    std::collections::{HashMap, HashSet},
 };
 
 /// Pure core of the incremental-fetch session update (KIP-227). It drops
@@ -35,38 +36,80 @@ pub(crate) fn apply_incremental(
     forgotten: &[ForgottenTopic],
     topics: &[FetchTopic],
 ) {
+    let mut forgotten_names = HashSet::new();
+    let mut forgotten_ids = HashSet::new();
     for ft in forgotten {
-        partitions.retain(|k, _| {
-            let topic_match = (!ft.topic.is_empty() && k.topic_name == ft.topic)
-                || (ft.topic_id != WireUuid::ZERO && k.topic_id == ft.topic_id);
-            if !topic_match {
-                return true;
+        for &partition in &ft.partitions {
+            if !ft.topic.is_empty() {
+                forgotten_names.insert((ft.topic.clone(), partition));
             }
-            !ft.partitions.contains(&k.partition)
+            if ft.topic_id != WireUuid::ZERO {
+                forgotten_ids.insert((ft.topic_id, partition));
+            }
+        }
+    }
+    if !forgotten_names.is_empty() || !forgotten_ids.is_empty() {
+        partitions.retain(|k, _| {
+            !forgotten_names.contains(&(k.topic_name.clone(), k.partition))
+                && !forgotten_ids.contains(&(k.topic_id, k.partition))
         });
+    }
+    if topics.iter().all(|topic| topic.partitions.is_empty()) {
+        return;
+    }
+
+    // Keep the first position for each identity, matching the old ordered
+    // search even if malformed input has made the name and id aliases point at
+    // different cached keys.
+    let mut by_name = HashMap::with_capacity(partitions.len());
+    let mut by_id = HashMap::with_capacity(partitions.len());
+    for (index, key) in partitions.keys().enumerate() {
+        if !key.topic_name.is_empty() {
+            by_name
+                .entry((key.topic_name.clone(), key.partition))
+                .or_insert(index);
+        }
+        if key.topic_id != WireUuid::ZERO {
+            by_id.entry((key.topic_id, key.partition)).or_insert(index);
+        }
     }
 
     for t in topics {
         for fp in &t.partitions {
-            let existing_key = partitions
-                .keys()
-                .find(|k| {
-                    k.partition == fp.partition
-                        && ((!t.topic.is_empty() && k.topic_name == t.topic)
-                            || (t.topic_id != WireUuid::ZERO && k.topic_id == t.topic_id))
-                })
-                .cloned();
-            let key = existing_key.unwrap_or_else(|| FetchSessionKey {
-                topic_name: t.topic.clone(),
-                topic_id: t.topic_id,
-                partition: fp.partition,
-            });
+            let name_index = (!t.topic.is_empty())
+                .then(|| by_name.get(&(t.topic.clone(), fp.partition)).copied())
+                .flatten();
+            let id_index = (t.topic_id != WireUuid::ZERO)
+                .then(|| by_id.get(&(t.topic_id, fp.partition)).copied())
+                .flatten();
+            let existing_index = match (name_index, id_index) {
+                (Some(name), Some(id)) => Some(name.min(id)),
+                (name, id) => name.or(id),
+            };
+            let inserted = existing_index.is_none();
+            let key = existing_index
+                .and_then(|index| partitions.get_index(index).map(|(key, _)| key.clone()))
+                .unwrap_or_else(|| FetchSessionKey {
+                    topic_name: t.topic.clone(),
+                    topic_id: t.topic_id,
+                    partition: fp.partition,
+                });
+            let index = partitions.get_index_of(&key).unwrap_or(partitions.len());
             let entry = partitions.entry(key).or_default();
             entry.fetch_offset = fp.fetch_offset;
             entry.max_bytes = fp.partition_max_bytes;
             entry.current_leader_epoch = fp.current_leader_epoch;
             entry.last_fetched_epoch = fp.last_fetched_epoch;
             entry.log_start_offset = fp.log_start_offset;
+
+            if inserted {
+                if !t.topic.is_empty() {
+                    by_name.insert((t.topic.clone(), fp.partition), index);
+                }
+                if t.topic_id != WireUuid::ZERO {
+                    by_id.insert((t.topic_id, fp.partition), index);
+                }
+            }
         }
     }
 }
@@ -76,7 +119,21 @@ mod tests {
     use {
         super::*,
         crate::fetch_session::{CachedPartitionState, test_support::forgotten_topic},
+        krabka_protocol::owned::fetch_request::FetchPartition,
     };
+
+    fn fetch_topic(topic: &str, topic_id: WireUuid, partition: i32, max_bytes: i32) -> FetchTopic {
+        FetchTopic {
+            topic: topic.into(),
+            topic_id,
+            partitions: vec![FetchPartition {
+                partition,
+                partition_max_bytes: max_bytes,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
 
     #[yare::parameterized(
         topic_name = { WireUuid::ZERO, WireUuid::ZERO, false },
@@ -114,6 +171,75 @@ mod tests {
 
         assert2::assert!(!partitions.contains_key(&target));
         assert2::assert!(partitions.contains_key(&other));
+    }
+
+    #[test]
+    fn forget_precedes_merge_and_duplicate_updates_keep_order() {
+        let id = WireUuid([1; 16]);
+        let first = FetchSessionKey {
+            topic_name: "first".into(),
+            topic_id: id,
+            partition: 0,
+        };
+        let retained = FetchSessionKey {
+            topic_name: "retained".into(),
+            topic_id: WireUuid([2; 16]),
+            partition: 0,
+        };
+        let mut partitions = indexmap::indexmap! {
+            first.clone() => CachedPartitionState::default(),
+            retained.clone() => CachedPartitionState::default(),
+        };
+        let forgotten = vec![
+            forgotten_topic()
+                .topic("first".into())
+                .topic_id(WireUuid::ZERO)
+                .call(),
+        ];
+        let topics = vec![
+            fetch_topic("first", id, 0, 10),
+            fetch_topic("first", id, 0, 20),
+        ];
+
+        apply_incremental(&mut partitions, &forgotten, &topics);
+
+        let expected = vec![retained, first];
+        assert2::assert!(partitions.keys().cloned().collect::<Vec<_>>() == expected);
+        assert2::assert!(partitions[&expected[1]].max_bytes == 20);
+    }
+
+    #[test]
+    fn merge_uses_earliest_key_when_name_and_id_aliases_disagree() {
+        let requested_id = WireUuid([1; 16]);
+        let by_name = FetchSessionKey {
+            topic_name: "topic".into(),
+            topic_id: WireUuid([2; 16]),
+            partition: 0,
+        };
+        let by_id = FetchSessionKey {
+            topic_name: "other".into(),
+            topic_id: requested_id,
+            partition: 0,
+        };
+        for keys in [[by_name.clone(), by_id.clone()], [
+            by_id.clone(),
+            by_name.clone(),
+        ]] {
+            let mut partitions: SessionPartitions = keys
+                .iter()
+                .cloned()
+                .map(|key| (key, CachedPartitionState::default()))
+                .collect();
+            apply_incremental(&mut partitions, &[], &[fetch_topic(
+                "topic",
+                requested_id,
+                0,
+                42,
+            )]);
+            assert2::assert!(partitions[&keys[0]].max_bytes == 42);
+            assert2::assert!(partitions[&keys[1]].max_bytes == 0);
+            assert2::assert!(partitions.keys().cloned().collect::<Vec<_>>() == keys);
+        }
     }
 }
 
