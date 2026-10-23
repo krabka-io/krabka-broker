@@ -540,7 +540,6 @@ mod tests {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_with_extra_log_dir(&extra_dir)];
         };
-        let primary = broker.config.log_dir.clone();
         let hosted = host_orders(&broker);
         let valid = extra_dir.display().to_string();
         let unknown = "/krabka-missing-log-dir".to_string();
