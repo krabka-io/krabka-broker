@@ -6,7 +6,8 @@
 use {
     super::{
         AfterResponse, Reply,
-        response::{ResponseShape, ThrottledResponse, apply_request_quota, encode_response},
+        quota_accounting::apply_request_quota,
+        response::{ResponseShape, ThrottledResponse, encode_response, patch_response_throttle},
         session::principal_or_anonymous,
     },
     crate::{
@@ -74,17 +75,20 @@ pub(super) async fn registry_reply(
         // `max` rather than added. A handler that deferred its own charge
         // (`CreateTopics`, `CreatePartitions`, `DeleteTopics` with KIP-599)
         // has it resolved with the request quota in the same metrics call.
-        let handler_throttle = response.throttle;
-        response = apply_request_quota(
+        let delay = apply_request_quota(
             context.broker,
-            response.bytes,
             context.parsed,
-            ResponseShape::mirroring_request(context.parsed),
             context.auth,
             handler_time,
-            response.deferred_charge,
+            response.deferred_charge.take(),
         );
-        response.throttle = response.throttle.max(handler_throttle);
+        response.bytes = patch_response_throttle(
+            response.bytes,
+            context.parsed.api_key,
+            ResponseShape::mirroring_request(context.parsed),
+            delay,
+        );
+        response.throttle = response.throttle.max(delay);
     }
     Reply::Frame(response)
 }
