@@ -5,7 +5,7 @@
 
 use {
     crate::{
-        failover::{FaultConfig, FaultOutcome, FaultTask},
+        failover::{FaultConfig, FaultTask},
         hist,
         ids::{MessageCount, TimeOffsetMs, WallclockMs},
         numeric::{
@@ -395,17 +395,10 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     );
 
     let fault = failover_active.then(|| {
-        FaultTask::spawn(
-            scenario.failover.as_ref().expect("checked above"),
-            FaultConfig {
-                stack: cfg.stack,
-                namespace: cfg.namespace.clone(),
-                bootstrap: cfg.bootstrap.clone(),
-                topic: cfg.topic.clone(),
-                security: security.clone(),
-                dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
-                frame_max: cfg.client_frame_max,
-            },
+        start_fault(
+            &scenario,
+            &cfg,
+            security.clone(),
             t_start,
             kill_at_ms.clone(),
         )
@@ -419,18 +412,7 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     tokio::time::sleep_until(meas_end).await;
     stop.store(STATE_STOP, Ordering::SeqCst);
 
-    let fault_outcome = if let Some(fault) = fault {
-        Some(fault.stop().await)
-    } else {
-        None
-    };
-    if let Some(note) = fault_outcome.as_ref().and_then(FaultOutcome::note) {
-        notes.push(note);
-    }
-    let fault_at_ms = fault_outcome
-        .as_ref()
-        .and_then(FaultOutcome::killed_at_ms)
-        .unwrap_or_default();
+    let fault_at_ms = finish_fault(fault, &mut notes).await;
 
     // ── Join all tasks ──────────────────────────────────────────────────────
     let mut prod_hist = hist::new();
@@ -574,6 +556,40 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         samples,
         broker_samples,
     })
+}
+
+async fn finish_fault(fault: Option<FaultTask>, notes: &mut Vec<String>) -> u64 {
+    let Some(fault) = fault else {
+        return 0;
+    };
+    let outcome = fault.stop().await;
+    if let Some(note) = outcome.note() {
+        notes.push(note);
+    }
+    outcome.killed_at_ms().unwrap_or_default()
+}
+
+fn start_fault(
+    scenario: &Scenario,
+    cfg: &DriverConfig,
+    security: Option<ClientSecurity>,
+    started_at: Instant,
+    kill_at: Arc<AtomicU64>,
+) -> FaultTask {
+    FaultTask::spawn(
+        scenario.failover.as_ref().expect("checked above"),
+        FaultConfig {
+            stack: cfg.stack,
+            namespace: cfg.namespace.clone(),
+            bootstrap: cfg.bootstrap.clone(),
+            topic: cfg.topic.clone(),
+            security,
+            dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
+            frame_max: cfg.client_frame_max,
+        },
+        started_at,
+        kill_at,
+    )
 }
 
 fn client_security(cfg: &DriverConfig) -> Option<ClientSecurity> {

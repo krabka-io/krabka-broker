@@ -118,7 +118,7 @@ impl FaultTask {
         let target_leader = spec.target == "partition0_leader";
         let deadline = started_at + spec.kill_after.to_std();
         Self::schedule(deadline, async move {
-            execute_fault(
+            Box::pin(execute_fault(
                 target_leader,
                 try_client(),
                 partition0_leader_from_metadata(
@@ -132,7 +132,7 @@ impl FaultTask {
                     kill_broker_pod(&client, cfg.stack, &cfg.namespace, leader).await
                 },
                 kill_at,
-            )
+            ))
             .await
         })
     }
