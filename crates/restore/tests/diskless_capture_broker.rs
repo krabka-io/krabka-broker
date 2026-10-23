@@ -39,7 +39,7 @@ use {
         owned::init_producer_id_request::InitProducerIdRequest,
         records::{Attributes, Record, RecordBatch},
     },
-    krabka_remote_storage::diskless::{DisklessPartitionCapture, DisklessWalCapture},
+    krabka_remote_storage::diskless::capture::{DisklessPartitionCapture, DisklessWalCapture},
     krabka_restore::{Cli, restore},
     std::{
         collections::BTreeMap,

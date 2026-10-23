@@ -1,7 +1,10 @@
 //! Committed diskless-WAL index capture.
 
 use {
-    krabka_remote_storage::diskless::{DisklessWalCapture, REPLAY_FENCE_KEY, WalCaptureProjection},
+    krabka_remote_storage::diskless::{
+        capture::{DisklessWalCapture, WalCaptureProjection},
+        index::REPLAY_FENCE_KEY,
+    },
     krabka_remote_storage_topic::{MetadataEventLog, MetadataLogError},
     std::{collections::HashMap, sync::Arc, time::Duration},
     uuid::Uuid,
@@ -126,7 +129,9 @@ mod tests {
         async_trait::async_trait,
         bytes::Bytes,
         krabka_remote_storage::diskless::{
-            CapturedWalRange, DisklessPartitionCapture, WalFlushRecord, WalIndexEntry,
+            WalIndexEntry,
+            capture::{CapturedWalRange, DisklessPartitionCapture},
+            index::WalFlushRecord,
         },
         krabka_remote_storage_topic::{
             InProcessMetadataEventLog, MetadataEventRecord, RangeVisitor,

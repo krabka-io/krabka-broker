@@ -28,7 +28,7 @@ use {
     },
     krabka_client_core::security::ClientSecurity,
     krabka_raft::{deserialize_metadata_snapshot, metadata_snapshot_last_contained_log_timestamp},
-    krabka_remote_storage::{ObjectEntry, Sha256Digest},
+    krabka_remote_storage::{ObjectEntry, Sha256Digest, diskless::capture::DisklessWalCapture},
     krabka_remote_storage_topic::{KafkaMetadataEventLog, KafkaMetadataLogConfig},
     std::collections::{BTreeMap, BTreeSet},
 };
@@ -834,8 +834,7 @@ async fn verify_offsets_boundary(
     if let Some(problem) = artifact_problem(recorded, &bytes) {
         return Err(BackupError::Integrity(format!("capture {id}: {problem}")));
     }
-    let capture = krabka_remote_storage::diskless::DisklessWalCapture::from_slice(&bytes)
-        .map_err(BackupError::Integrity)?;
+    let capture = DisklessWalCapture::from_slice(&bytes).map_err(BackupError::Integrity)?;
     if capture.authentication.is_none() && !configured {
         return Ok(());
     }
@@ -1333,8 +1332,8 @@ mod tests {
         ];
         let offsets = offsets_json();
         let signer = FileEd25519Signer::from_pkcs8_bytes(PKCS8, "capture-key".into()).unwrap();
-        let mut capture = krabka_remote_storage::diskless::DisklessWalCapture {
-            format_version: krabka_remote_storage::diskless::DisklessWalCapture::FORMAT_VERSION,
+        let mut capture = DisklessWalCapture {
+            format_version: DisklessWalCapture::FORMAT_VERSION,
             captured_at_ms: 42,
             source_cutoffs: Vec::new(),
             partitions: Vec::new(),

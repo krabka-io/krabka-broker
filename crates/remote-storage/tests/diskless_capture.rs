@@ -2,12 +2,16 @@ use {
     assert2::check,
     krabka_audit::FileEd25519Signer,
     krabka_remote_storage::{
-        ObjectEntry, Sha256Digest, TrustedManifestKeys,
+        HexBytes, ObjectEntry, Sha256Digest, TrustedManifestKeys,
         diskless::{
-            CAPTURE_HEAD_NAME, CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture,
-            WalCaptureProjection, WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord,
-            WalIndexEntry, WalIndexKey,
+            WalIndexEntry,
+            capture::{
+                CAPTURE_HEAD_NAME, CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture,
+                WalCaptureProjection,
+            },
+            index::{WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexKey},
         },
+        manifest_head, manifest_signing_bytes, verify_manifest_signature,
     },
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
     std::collections::HashMap,
@@ -274,26 +278,76 @@ fn signer() -> CaptureSigner {
     CaptureSigner { signer, public }
 }
 
+fn wal_claim(bytes: &[u8]) -> ObjectEntry {
+    ObjectEntry {
+        suffix: ".ckwl".into(),
+        key: "diskless-wal/a.ckwl".into(),
+        size_bytes: bytes.len() as u64,
+        sha256: Sha256Digest::of(bytes),
+        e_tag: None,
+        version_id: None,
+        create_precondition: false,
+    }
+}
+
+#[yare::parameterized(
+    missing_object = { false, false, "signed WAL claims do not exactly cover capture references" },
+    duplicate_object = { false, true, "duplicate signed WAL claim `diskless-wal/a.ckwl`" },
+    missing_state = { true, false, "signed diskless capture-state claim is missing" },
+    duplicate_state = { true, true, "duplicate signed diskless capture-state claim" },
+)]
+fn signed_capture_rejects_missing_and_duplicate_claims(
+    state_claim: bool,
+    duplicate: bool,
+    expected_error: &str,
+) {
+    let CaptureSigner { signer, public } = signer();
+    let mut capture = signable_capture();
+    let claim = wal_claim(b"exact wal bytes");
+    let object_key = claim.key.clone();
+    capture.seal(vec![claim], &signer).unwrap();
+    let manifest = capture.authentication.as_mut().unwrap();
+    let claim_index = manifest
+        .body
+        .objects
+        .iter()
+        .position(|object| (object.key != object_key) == state_claim)
+        .unwrap();
+    if duplicate {
+        manifest
+            .body
+            .objects
+            .push(manifest.body.objects[claim_index].clone());
+    } else {
+        manifest.body.objects.remove(claim_index);
+    }
+    let head = manifest_head(&manifest.body);
+    let signature = manifest.signature.as_mut().unwrap();
+    let message = manifest_signing_bytes(
+        &signature.key_id,
+        manifest.body.chain.epoch_id,
+        manifest.body.chain.seq,
+        head,
+    );
+    signature.signature = HexBytes(signer.sign(&message));
+    check!(verify_manifest_signature(manifest, &public));
+    let trusted = TrustedManifestKeys::single("capture-key".into(), public);
+
+    check!(
+        capture
+            .authenticate(&trusted, Some(&head.to_string()))
+            .unwrap_err()
+            == expected_error
+    );
+}
+
 #[test]
 fn signed_capture_binds_state_objects_trust_and_external_head() {
     let CaptureSigner { signer, public } = signer();
     let mut capture = signable_capture();
     capture.rlmm_snapshot_sha256 = Some(Sha256Digest::of(b"rlmm snapshot"));
     let wal = b"exact wal bytes";
-    let head = capture
-        .seal(
-            vec![ObjectEntry {
-                suffix: ".ckwl".into(),
-                key: "diskless-wal/a.ckwl".into(),
-                size_bytes: wal.len() as u64,
-                sha256: Sha256Digest::of(wal),
-                e_tag: None,
-                version_id: None,
-                create_precondition: false,
-            }],
-            &signer,
-        )
-        .unwrap();
+    let head = capture.seal(vec![wal_claim(wal)], &signer).unwrap();
     let trusted = TrustedManifestKeys::single("capture-key".into(), public);
     let claims = capture
         .authenticate(&trusted, Some(&head.to_string()))
