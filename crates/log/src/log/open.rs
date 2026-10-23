@@ -453,8 +453,8 @@ impl Log {
             if krabka_verified::transaction_marker_closes(
                 is_abort,
                 is_commit,
-                self.pending.contains_key(&producer_id),
-            ) && let Some(first_offset) = self.pending.remove(&producer_id)
+                self.pending.contains_key(producer_id),
+            ) && let Some(first_offset) = self.pending.remove(producer_id)
             {
                 self.unreplicated.insert(
                     first_offset,
@@ -517,7 +517,7 @@ impl Log {
                     None => {
                         if batch.attributes.is_transactional()
                             && producer_id.get() >= 0
-                            && self.pending.contains_key(&producer_id)
+                            && self.pending.contains_key(producer_id)
                         {
                             self.pending_stamp_ranges
                                 .entry(producer_id)

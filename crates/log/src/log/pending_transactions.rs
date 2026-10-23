@@ -15,12 +15,12 @@ pub(super) struct PendingTransactions {
 }
 
 impl PendingTransactions {
-    pub(super) fn get(&self, producer: &ProducerId) -> Option<&Offset> {
-        self.producers.get(producer)
+    pub(super) fn get(&self, producer: ProducerId) -> Option<&Offset> {
+        self.producers.get(&producer)
     }
 
-    pub(super) fn contains_key(&self, producer: &ProducerId) -> bool {
-        self.producers.contains_key(producer)
+    pub(super) fn contains_key(&self, producer: ProducerId) -> bool {
+        self.producers.contains_key(&producer)
     }
 
     pub(super) fn is_empty(&self) -> bool { self.producers.is_empty() }
@@ -52,8 +52,8 @@ impl PendingTransactions {
         *self.starts.entry(start).or_default() += 1;
     }
 
-    pub(super) fn remove(&mut self, producer: &ProducerId) -> Option<Offset> {
-        let start = self.producers.remove(producer)?;
+    pub(super) fn remove(&mut self, producer: ProducerId) -> Option<Offset> {
+        let start = self.producers.remove(&producer)?;
         self.remove_start(start);
         Some(start)
     }
@@ -85,13 +85,13 @@ mod tests {
         pending.insert(ProducerId(1), Offset(3));
         pending.insert(ProducerId(2), Offset(3));
         pending.insert(ProducerId(3), Offset(9));
-        pending.remove(&ProducerId(1));
+        pending.remove(ProducerId(1));
         assert2::assert!(pending.bounds() == Some((Offset(3), Offset(9))));
         pending.insert(ProducerId(2), Offset(9));
         assert2::assert!(pending.bounds() == Some((Offset(9), Offset(9))));
-        pending.remove(&ProducerId(2));
+        pending.remove(ProducerId(2));
         assert2::assert!(pending.bounds() == Some((Offset(9), Offset(9))));
-        pending.remove(&ProducerId(3));
+        pending.remove(ProducerId(3));
         assert2::assert!(pending.bounds().is_none());
     }
 
@@ -116,7 +116,7 @@ mod tests {
                     oracle.entry(producer).or_insert(start);
                 }
                 4 | 5 => {
-                    assert2::assert!(indexed.remove(&producer) == oracle.remove(&producer));
+                    assert2::assert!(indexed.remove(producer) == oracle.remove(&producer));
                 }
                 _ if step % 97 == 0 => {
                     indexed.clear();

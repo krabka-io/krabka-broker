@@ -107,7 +107,7 @@ impl Log {
         let closes = krabka_verified::transaction_marker_closes(
             is_abort,
             is_commit,
-            self.pending.contains_key(&producer_id),
+            self.pending.contains_key(producer_id),
         );
         if (is_abort || is_commit)
             && producer_id.get() >= 0
@@ -116,7 +116,7 @@ impl Log {
             self.coordinator_epochs.insert(producer_id, epoch);
         }
         if closes && is_abort {
-            let pending_start = self.pending.get(&producer_id).map(|offset| offset.0);
+            let pending_start = self.pending.get(producer_id).map(|offset| offset.0);
             let Some((start, last)) = krabka_verified::aborted_transaction_interval(
                 pending_start,
                 last_offset.0,
@@ -174,7 +174,7 @@ impl Log {
         // writes succeed. A caller can then retry a marker whose log append
         // succeeded but whose index update failed.
         if closes {
-            if let Some(first_offset) = self.pending.remove(&producer_id) {
+            if let Some(first_offset) = self.pending.remove(producer_id) {
                 self.unreplicated.insert(first_offset, last_offset);
             }
             self.pending_stamp_ranges.remove(&producer_id);
