@@ -783,33 +783,44 @@ mod tests {
         );
     }
 
+    struct StoredReclaimer {
+        context: Arc<FlusherContext>,
+        cache: Arc<tokio::sync::Mutex<WalIndexCache>>,
+    }
+
+    async fn stored_reclaimer(object_key: &str, store: &Arc<dyn ObjectStore>) -> StoredReclaimer {
+        store
+            .put(&Path::from(object_key), PutPayload::from_static(b"object"))
+            .await
+            .unwrap();
+        let index = test_index_log().await;
+        let cache = index.cache();
+        let context = Arc::new(reclaimer_context(
+            MetadataImage::new(Uuid::nil()),
+            store,
+            index,
+        ));
+        StoredReclaimer { context, cache }
+    }
+
+    fn reclaim_in_background(context: &Arc<FlusherContext>) -> tokio::task::JoinHandle<()> {
+        let context = Arc::clone(context);
+        tokio::spawn(async move { Reclaimer::new(Duration::ZERO).sweep(&context).await })
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn slow_delete_does_not_stall_unrelated_lookup_or_replay() {
         const DELETE_DELAY: Duration = Duration::from_millis(250);
         let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        inner
-            .put(
-                &Path::from("diskless-wal/7/unreferenced.ckwl"),
-                PutPayload::from_static(b"object"),
-            )
-            .await
-            .unwrap();
         let delayed = Arc::new(FaultInjectingStore::new(
             inner,
             FaultPolicy::none().with(StoreOp::Delete, OpFault::stall(DELETE_DELAY)),
         ));
         let store: Arc<dyn ObjectStore> = delayed.clone();
-        let index = test_index_log().await;
-        let cache = index.cache();
-        let context = Arc::new(reclaimer_context(
-            MetadataImage::new(Uuid::nil()),
-            &store,
-            index.clone(),
-        ));
-        let sweep = tokio::spawn({
-            let context = Arc::clone(&context);
-            async move { Reclaimer::new(Duration::ZERO).sweep(&context).await }
-        });
+        let StoredReclaimer { context, cache } =
+            stored_reclaimer("diskless-wal/7/unreferenced.ckwl", &store).await;
+        let index = &context.index_log;
+        let sweep = reclaim_in_background(&context);
         tokio::time::timeout(Duration::from_secs(1), async {
             while delayed.attempts(StoreOp::Delete) == 0 {
                 tokio::task::yield_now().await;
@@ -854,23 +865,11 @@ mod tests {
         let topic_id = Uuid::from_u128(13);
         let object_key = "diskless-wal/7/referenced-again.ckwl";
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        store
-            .put(&Path::from(object_key), PutPayload::from_static(b"object"))
-            .await
-            .unwrap();
-        let index = test_index_log().await;
-        let cache = index.cache();
-        let context = Arc::new(reclaimer_context(
-            MetadataImage::new(Uuid::nil()),
-            &store,
-            index.clone(),
-        ));
+        let StoredReclaimer { context, cache } = stored_reclaimer(object_key, &store).await;
+        let index = &context.index_log;
 
         let fence = index.object_fence(object_key).await;
-        let sweep = tokio::spawn({
-            let context = Arc::clone(&context);
-            async move { Reclaimer::new(Duration::ZERO).sweep(&context).await }
-        });
+        let sweep = reclaim_in_background(&context);
         // Let the sweep snapshot this object as unreferenced and reach its
         // object fence before the replacement projection becomes visible.
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -890,19 +889,14 @@ mod tests {
         let topic_id = Uuid::from_u128(11);
         let object_key = "diskless-wal/7/deleted.ckwl";
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        store
-            .put(&Path::from(object_key), PutPayload::from_static(b"object"))
-            .await
-            .unwrap();
-        let index = test_index_log().await;
-        let cache = index.cache();
-        index
+        let StoredReclaimer { context, cache } = stored_reclaimer(object_key, &store).await;
+        context
+            .index_log
             .publish_flush(&three_record_flush(topic_id, object_key))
             .await
             .unwrap();
         wait_for_object(&cache, topic_id, object_key).await;
         let image = MetadataImage::new(Uuid::nil());
-        let context = reclaimer_context(image.clone(), &store, index);
 
         tombstone_deleted_topics(&context, &image).await.unwrap();
         Reclaimer::new(Duration::ZERO).sweep(&context).await;

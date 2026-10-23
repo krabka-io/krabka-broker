@@ -45,7 +45,7 @@ pub(crate) struct DisklessIndexLog {
     progress: watch::Receiver<ReplayProgress>,
     applied: watch::Receiver<u64>,
     valid: Arc<AtomicBool>,
-    object_fences: Arc<StdMutex<HashMap<String, Weak<Mutex<()>>>>>,
+    object_fences: Arc<StdMutex<ObjectFences>>,
 }
 
 impl DisklessIndexLog {
@@ -117,7 +117,7 @@ impl DisklessIndexLog {
 
         let pump_cache = cache.clone();
         let pump_valid = Arc::clone(&valid);
-        let object_fences = Arc::new(StdMutex::new(HashMap::new()));
+        let object_fences = Arc::new(StdMutex::new(ObjectFences::default()));
         let pump_object_fences = Arc::clone(&object_fences);
         tokio::spawn(async move {
             let mut delivered: HashMap<i32, u64> =
@@ -468,22 +468,40 @@ impl DisklessIndexLog {
     }
 }
 
+#[derive(Default)]
+struct ObjectFences {
+    entries: HashMap<String, Weak<Mutex<()>>>,
+    acquisitions_until_prune: usize,
+}
+
+impl ObjectFences {
+    fn get(&mut self, object_key: &str) -> Arc<Mutex<()>> {
+        if self.acquisitions_until_prune == 0 {
+            self.entries.retain(|_, fence| fence.strong_count() > 0);
+            self.entries.shrink_to(64);
+            // Amortize registry scans over at least its live size. Inactive
+            // object names then stay bounded without scanning on every append.
+            self.acquisitions_until_prune = self.entries.len().max(64);
+        }
+        self.acquisitions_until_prune -= 1;
+        if let Some(fence) = self.entries.get(object_key).and_then(Weak::upgrade) {
+            return fence;
+        }
+        let fence = Arc::new(Mutex::new(()));
+        self.entries
+            .insert(object_key.to_owned(), Arc::downgrade(&fence));
+        fence
+    }
+}
+
 async fn lock_object_fence(
-    fences: &StdMutex<HashMap<String, Weak<Mutex<()>>>>,
+    fences: &StdMutex<ObjectFences>,
     object_key: &str,
 ) -> OwnedMutexGuard<()> {
-    let fence = {
-        let mut fences = fences
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(fence) = fences.get(object_key).and_then(Weak::upgrade) {
-            fence
-        } else {
-            let fence = Arc::new(Mutex::new(()));
-            fences.insert(object_key.to_owned(), Arc::downgrade(&fence));
-            fence
-        }
-    };
+    let fence = fences
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(object_key);
     fence.lock_owned().await
 }
 
@@ -562,6 +580,27 @@ mod tests {
         tokio::time::timeout,
         uuid::Uuid,
     };
+
+    #[tokio::test]
+    async fn object_fences_retire_inactive_names_and_keep_live_guards() {
+        let fences = StdMutex::new(ObjectFences::default());
+        let held = lock_object_fence(&fences, "held").await;
+        for index in 0..100 {
+            let guard = lock_object_fence(&fences, &format!("object-{index}")).await;
+            assert!(fences.lock().unwrap().entries.len() <= 65);
+            drop(guard);
+        }
+        for _ in 0..64 {
+            drop(lock_object_fence(&fences, "hot").await);
+        }
+        assert!(fences.lock().unwrap().entries.len() == 2);
+        assert!(fences.lock().unwrap().entries["held"].strong_count() == 1);
+        drop(held);
+        for _ in 0..64 {
+            drop(lock_object_fence(&fences, "hot").await);
+        }
+        assert!(fences.lock().unwrap().entries.len() == 1);
+    }
 
     #[derive(Clone, Copy)]
     enum PublishOutcome {
