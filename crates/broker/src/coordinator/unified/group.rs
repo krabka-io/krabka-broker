@@ -175,29 +175,21 @@ impl CoordinatorGroup {
     /// A fresh, empty classic group.
     pub fn new_classic(group_id: impl Into<String>) -> Self {
         let group_id = group_id.into();
-        Self {
-            kind: GroupKind::Classic(ClassicState::new(group_id.clone())),
-            group_id,
-            committed_offsets: HashMap::new(),
-            pending_txn_offsets: HashMap::new(),
-            pending_txn_key_counts: HashMap::new(),
-            pending_commits: VecDeque::new(),
-            empty_since_ms: None,
-        }
+        Self::seeded(
+            group_id.clone(),
+            GroupKind::Classic(ClassicState::new(group_id)),
+            HashMap::new(),
+        )
     }
 
     /// A fresh, empty next-gen group, on the consumer protocol.
     pub fn new_consumer(group_id: impl Into<String>) -> Self {
         let group_id = group_id.into();
-        Self {
-            kind: GroupKind::Consumer(ConsumerState::new(group_id.clone())),
-            group_id,
-            committed_offsets: HashMap::new(),
-            pending_txn_offsets: HashMap::new(),
-            pending_txn_key_counts: HashMap::new(),
-            pending_commits: VecDeque::new(),
-            empty_since_ms: None,
-        }
+        Self::seeded(
+            group_id.clone(),
+            GroupKind::Consumer(ConsumerState::new(group_id)),
+            HashMap::new(),
+        )
     }
 
     /// A group rebuilt from state that already exists: a replayed or
