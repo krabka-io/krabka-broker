@@ -358,7 +358,7 @@ impl Engine {
             self.image.overlay(),
             assign_base,
             leader_epoch,
-            self.commit_waiters
+            &self.commit_waiters
                 .iter()
                 .flat_map(|waiter| &waiter.result.offset_reservations),
         ) {

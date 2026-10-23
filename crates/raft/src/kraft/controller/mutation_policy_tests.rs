@@ -221,7 +221,7 @@ fn preparation_stamps_each_registration_at_its_replay_offset() {
         image.overlay(),
         Offset(42),
         3,
-        std::iter::empty(),
+        &std::iter::empty(),
     )
     .unwrap();
     assert!(prepared.registration_nodes == vec![NodeId(7), NodeId(8)]);
@@ -263,7 +263,7 @@ fn preparation_reserves_after_pending_contiguous_ends_and_refuses_gaps() {
         image.overlay(),
         Offset(42),
         3,
-        pending.iter(),
+        &pending.iter(),
     )
     .unwrap();
     assert!(
@@ -283,7 +283,7 @@ fn preparation_reserves_after_pending_contiguous_ends_and_refuses_gaps() {
         image.overlay(),
         Offset(42),
         3,
-        pending.iter(),
+        &pending.iter(),
     );
     assert!(matches!(result, Err(RaftError::ChangeRejected(_))));
 }

@@ -308,7 +308,7 @@ pub(super) fn prepare_records<'a>(
     mut replica_view: Overlay<'_>,
     assign_base: Offset,
     leader_epoch: Epoch,
-    pending_reservations: impl Iterator<Item = &'a OffsetReservation> + Clone,
+    pending_reservations: &(impl Iterator<Item = &'a OffsetReservation> + Clone),
 ) -> Result<PreparedRecords, RaftError> {
     let mut result = SubmitChangeResult::default();
     let mut value_blobs: Vec<bytes::Bytes> = Vec::new();
@@ -367,7 +367,7 @@ pub(super) fn prepare_records<'a>(
             // but not committed into `scratch` yet. Fold their exact
             // contiguous ends so concurrent submissions cannot reuse the
             // same committed base.
-            for pending in pending_reservations
+            for pending in (*pending_reservations)
                 .clone()
                 .filter(|pending| pending.topic == r.topic && pending.partition == r.partition)
             {
