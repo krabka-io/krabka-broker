@@ -47,8 +47,6 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
-- Explicit stamp sources use direct ordered stamp-index searches and a tail
-  insertion path without rebuilding temporary coordinate arrays (#1720).
 - Scheduled delivery checks over archived segments buffer bounded byte ranges
   instead of fetching each batch header separately, reducing remote requests for
   ListOffsets LATEST and retention scans (#1682).
@@ -121,6 +119,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   lock are still the ones they were encoded with. A config change in between
   encodes again under the new settings, as before. The stored bytes are
   unchanged.
+- Explicit stamp sources use direct ordered stamp-index searches and a tail
+  insertion path without rebuilding temporary coordinate arrays (#1720).
 - Pending transaction stamp recovery starts at the earliest surviving open
   transaction, clamped to the local log floor, so reopening a log skips older
   unrelated record batches (#1677).
