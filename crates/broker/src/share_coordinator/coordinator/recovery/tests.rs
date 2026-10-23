@@ -7,26 +7,23 @@ use {
     crate::{
         codes,
         handlers::test_support::replicated_partition,
-        partition::Partition,
         partition_registry::PartitionRegistry,
-        partition_writer::{self, WriterServices},
         share_coordinator::{
             config::ShareCoordinatorConfig,
             coordinator::{
                 ShareStateError, Term, message,
                 persist::AppendError,
                 test_support::{
-                    CoordinatorWithRegistry, batch, coordinator, image_with_topic, lead_all,
-                    open_state_partition, open_state_partitions, share_write,
+                    CoordinatorWithRegistry, batch, coordinator, gated_state_partition,
+                    image_with_topic, lead_all, open_state_partition, open_state_partitions,
+                    share_write,
                 },
             },
             partitioner::partition_for_share_key,
             persistence::{StateBatch, encode_state_key},
         },
     },
-    arc_swap::ArcSwap,
     assert2::{assert, check},
-    krabka_log::{Log, LogConfig},
     krabka_metadata::MetadataImage,
     krabka_protocol::records::{Record, RecordBatch},
     tempfile::tempdir,
@@ -41,27 +38,7 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
         let dir = tempdir().unwrap();
         let registry = Arc::new(PartitionRegistry::new());
         let release_writer = Arc::new(tokio::sync::Notify::new());
-        let gate = Arc::clone(&release_writer);
-        let part = Arc::new(Partition::writer_fixture(
-            bootstrap::TOPIC,
-            Arc::new(std::sync::Mutex::new(
-                Log::open(dir.path(), LogConfig::default()).unwrap(),
-            )),
-            Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-            move |identity, storage, rx, signals| {
-                tokio::spawn(async move {
-                    gate.notified().await;
-                    partition_writer::run(
-                        identity,
-                        storage,
-                        rx,
-                        signals,
-                        WriterServices::default(),
-                    )
-                    .await;
-                })
-            },
-        ));
+        let part = gated_state_partition(dir.path(), &release_writer);
         registry.insert(
             bootstrap::TOPIC.into(),
             PartitionIndex(0),
