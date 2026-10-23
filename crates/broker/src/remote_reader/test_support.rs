@@ -127,10 +127,10 @@ impl CountingRsm {
 pub fn counted_reader(
     reader: &RemoteReader,
 ) -> (RemoteReader, Arc<std::sync::atomic::AtomicUsize>) {
-    let CountedRsm { rsm, index_fetches } = CountingRsm::counting(Arc::clone(&reader.rsm));
+    let counted = CountingRsm::counting(Arc::clone(&reader.rsm));
     (
-        RemoteReader::new(rsm, Arc::clone(&reader.rlmm)),
-        index_fetches,
+        RemoteReader::new(counted.rsm, Arc::clone(&reader.rlmm)),
+        counted.index_fetches,
     )
 }
 
