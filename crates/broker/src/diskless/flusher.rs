@@ -240,7 +240,7 @@ mod tests {
         krabka_metadata::{MetadataRecord, TopicRecord},
         krabka_object_store::fault::{FaultInjectingStore, FaultPolicy, OpFault, StoreOp},
         krabka_remote_storage_topic::MetadataEventLog,
-        krabka_units::ByteSize,
+        krabka_units::{ByteSize, convert::ByteSizeExt as _},
         object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path},
         std::time::{Duration, Instant},
         tempfile::tempdir,
