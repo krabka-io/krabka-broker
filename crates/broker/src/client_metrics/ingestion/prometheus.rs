@@ -206,7 +206,7 @@ fn sanitize_prometheus_label(label: &str) -> String {
 mod tests {
     use {
         super::*,
-        crate::handlers::push_telemetry::test_support::{gauge_metric, metrics_data, number_point},
+        crate::client_metrics::test_support::{gauge_metric, metrics_data, number_point},
         assert2::{assert, check},
         opentelemetry_proto::tonic::{
             common::v1::{AnyValue, InstrumentationScope, KeyValue, any_value},

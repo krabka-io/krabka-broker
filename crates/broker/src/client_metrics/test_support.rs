@@ -1,4 +1,4 @@
-//! Fixture builders shared by the `PushTelemetry` handler's test modules.
+//! OTLP fixtures shared by ingestion and wire-handler tests.
 //!
 //! Both the live-broker handler tests and the Prometheus flattening tests need
 //! the same minimal OTLP payload shapes, so the builders live here rather than
@@ -9,14 +9,14 @@ use opentelemetry_proto::tonic::metrics::v1::{
     number_data_point,
 };
 
-pub(super) fn number_point(value: number_data_point::Value) -> NumberDataPoint {
+pub(crate) fn number_point(value: number_data_point::Value) -> NumberDataPoint {
     NumberDataPoint {
         value: Some(value),
         ..Default::default()
     }
 }
 
-pub(super) fn metrics_data(metrics: Vec<Metric>) -> MetricsData {
+pub(crate) fn metrics_data(metrics: Vec<Metric>) -> MetricsData {
     MetricsData {
         resource_metrics: vec![ResourceMetrics {
             scope_metrics: vec![ScopeMetrics {
@@ -29,7 +29,7 @@ pub(super) fn metrics_data(metrics: Vec<Metric>) -> MetricsData {
 }
 
 /// A one-point gauge for the OTLP input fixtures; expected Prometheus output stays explicit.
-pub(super) fn gauge_metric(name: &str, value: number_data_point::Value) -> Metric {
+pub(crate) fn gauge_metric(name: &str, value: number_data_point::Value) -> Metric {
     Metric {
         name: name.into(),
         data: Some(metric::Data::Gauge(Gauge {

@@ -2,8 +2,7 @@
 //!
 //! The handler runs Kafka's push checks against the client's instance, which
 //! it builds from the current subscriptions when this broker holds none. It
-//! then decompresses and decodes the OTLP payload, and fans it out to the
-//! Prometheus and OTLP sinks.
+//! delegates accepted nonempty payloads to client-metrics ingestion.
 
 use {
     crate::{
@@ -11,35 +10,26 @@ use {
         broker::Broker,
         handlers::{ApiVersion, CorrelationId, DispatchResult, encode_response},
     },
-    krabka_compression::{CompressionError, CompressionType},
+    krabka_compression::CompressionType,
     krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::owned::{
         push_telemetry_request::PushTelemetryRequest,
         push_telemetry_response::PushTelemetryResponse,
     },
-    opentelemetry_proto::tonic::metrics::v1::MetricsData,
-    prost::Message as _,
     uuid::Uuid,
 };
 
-mod prometheus;
-
-#[cfg(test)]
-mod test_support;
 #[cfg(test)]
 mod tests;
 
-use {
-    self::prometheus::flatten_for_prometheus,
-    crate::{
-        api_catalog::{ClientMetricsReceiver, UnstableApiVersions},
-        client_metrics::{
-            config::ALL_METRICS,
-            manager::{PushCheck, PushDecision},
-        },
-        codes,
-        handlers::{acl_wire::CLUSTER_RESOURCE_NAME, context::TelemetryContext},
+use crate::{
+    api_catalog::{ClientMetricsReceiver, UnstableApiVersions},
+    client_metrics::{
+        ingestion::IngestionError,
+        manager::{PushCheck, PushDecision},
     },
+    codes,
+    handlers::{acl_wire::CLUSTER_RESOURCE_NAME, context::TelemetryContext},
 };
 
 /// Kafka's `CompressionType.forId`: the ids 0 to 4 and nothing else. The
@@ -119,52 +109,21 @@ crate::handlers::raw_request_handler!(
                 metrics: subscribed,
             } => {
                 let ct = codec.expect("authorize_push accepts only a supported codec");
-                // Kafka's exporter decompresses up to `telemetry.max.bytes`. A
-                // larger payload throws `TelemetryTooLargeException`, which 4.3.1
-                // answers with INVALID_RECORD like any other export failure, and
-                // which makes the Java client stop pushing telemetry. Trunk
-                // (KAFKA-21076) answers the retriable TELEMETRY_TOO_LARGE instead.
-                match krabka_compression::decompress(ct, &req.metrics, manager.telemetry_max()) {
-                    Ok(raw) => match MetricsData::decode(&raw[..]) {
-                        Ok(md)
-                            if md
-                                .resource_metrics
-                                .iter()
-                                .flat_map(|r| &r.scope_metrics)
-                                .flat_map(|s| &s.metrics)
-                                .all(|metric| {
-                                    subscribed.iter().any(|prefix| {
-                                        prefix == ALL_METRICS || metric.name.starts_with(prefix)
-                                    })
-                                }) =>
-                        {
-                            let instance_str = instance.to_string();
-                            match flatten_for_prometheus(&md, &instance_str, ctx.client_id) {
-                                Ok(points) => {
-                                    broker.client_metrics.prometheus.ingest(&points);
-                                    broker.client_metrics.otlp.forward(md, &instance_str);
-                                    codes::NONE
-                                }
-                                Err(()) => codes::INVALID_RECORD,
-                            }
-                        }
-                        Ok(_) => codes::INVALID_RECORD,
-                        Err(e) => {
-                            tracing::debug!(error = %e, "client-metrics OTLP decode failed");
-                            codes::INVALID_RECORD
-                        }
-                    },
-                    Err(CompressionError::TooLarge { limit })
-                        if unstable == UnstableApiVersions::Enabled =>
-                    {
-                        tracing::debug!(
-                            limit,
-                            "client-metrics payload decompresses past the limit"
-                        );
+                // Kafka 4.3.1 maps export failures, including oversized
+                // decompression, to INVALID_RECORD. Unstable versions use
+                // the retriable TELEMETRY_TOO_LARGE (KAFKA-21076).
+                match broker.client_metrics.ingest_payload(
+                    ct,
+                    &req.metrics,
+                    &subscribed,
+                    instance,
+                    ctx.client_id,
+                ) {
+                    Ok(()) => codes::NONE,
+                    Err(IngestionError::TooLarge) if unstable == UnstableApiVersions::Enabled => {
                         codes::TELEMETRY_TOO_LARGE
                     }
-                    Err(e) => {
-                        tracing::debug!(error = %e, "client-metrics decompress failed");
+                    Err(IngestionError::InvalidRecord | IngestionError::TooLarge) => {
                         codes::INVALID_RECORD
                     }
                 }
