@@ -37,6 +37,7 @@ mod direct_writes;
 mod faults;
 mod maintenance;
 mod open;
+mod pending_transactions;
 #[cfg(test)]
 mod preallocation;
 mod read;
@@ -187,7 +188,7 @@ pub struct Log {
     /// In-flight transactions: `producer_id` → first offset of this
     /// producer's currently-open txn. The log clears the entry when it
     /// applies a commit or abort marker for that `producer_id`.
-    pending: HashMap<ProducerId, Offset>,
+    pending: pending_transactions::PendingTransactions,
 
     /// KIP-890 verification state per producer, from the start of a
     /// transaction verification to the producer's next transactional append.

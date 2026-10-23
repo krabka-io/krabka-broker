@@ -20,7 +20,7 @@ use {
 };
 
 impl Log {
-    /// Recompute the first unstable offset from every open transaction and
+    /// Recompute the first unstable offset from the bounds of open transactions and
     /// every complete transaction whose marker is not below the high
     /// watermark yet.
     ///
@@ -28,13 +28,16 @@ impl Log {
     /// offset. With none, the offset advances to the exact log end. Every
     /// append path and recovery use this same selection.
     pub(super) fn refresh_lso(&mut self) -> Result<(), LogError> {
-        let starts: Vec<_> = self
-            .pending
-            .values()
-            .chain(self.unreplicated.keys().next())
-            .map(|offset| offset.0)
-            .collect();
         let log_end = self.log_end_offset();
+        // The ordered index tracks every mutation of the producer map. Its
+        // maximum preserves the scalar kernel's all-start corruption check;
+        // checking only the minimum would hide a later invalid start.
+        let (first, last) = self.pending.bounds().unwrap_or((log_end, log_end));
+        let completed = self
+            .unreplicated
+            .first_key_value()
+            .map_or(log_end, |(start, _)| *start);
+        let starts = [first.0, last.0, completed.0];
         self.lso = krabka_verified::first_unstable_offset(&starts, log_end.0)
             .map(Offset)
             .ok_or_else(|| {
@@ -536,5 +539,61 @@ mod tests {
         let error = log.refresh_lso().unwrap_err();
         assert2::assert!(let LogError::Corrupt(_) = error);
         assert2::assert!(log.lso() == Offset(0));
+    }
+
+    #[test]
+    fn a_nonminimal_pending_start_beyond_log_end_is_rejected() {
+        let TempLog { dir: _dir, mut log } = test_log();
+        log.pending.insert(ProducerId(1000), Offset(0));
+        log.pending.insert(ProducerId(2000), Offset(1));
+        assert2::assert!(let Err(LogError::Corrupt(_)) = log.refresh_lso());
+        assert2::assert!(log.lso() == Offset(0));
+    }
+
+    #[yare::parameterized(
+        hundred = { 100 },
+        thousand = { 1_000 },
+        ten_thousand = { 10_000 },
+    )]
+    fn unchanged_pending_frontier_survives_many_ordinary_appends(producers: i64) {
+        let TempLog { dir: _dir, mut log } = test_log();
+        log.append(&mut sample_batch(i32::try_from(producers).unwrap()))
+            .unwrap();
+        // Populate the producer lookup and its bounds once. A fixed count of
+        // extrema reaches the scalar validator on all 1,000 appends below,
+        // regardless of the producer map's length or allocated capacity.
+        for producer in 0..producers {
+            log.pending.insert(ProducerId(producer), Offset(producer));
+        }
+        for _ in 0..1_000 {
+            log.append(&mut sample_batch(1)).unwrap();
+            assert2::assert!(log.lso() == Offset(0));
+        }
+    }
+
+    #[test]
+    fn ordinary_appends_and_marker_release_match_the_scalar_frontier() {
+        let TempLog { dir: _dir, mut log } = test_log();
+        for producer in 0..100 {
+            append_transaction(&mut log, producer, 0, &["open"]);
+        }
+        for _ in 0..100 {
+            log.append(&mut sample_batch(1)).unwrap();
+            let starts: Vec<_> = log.pending.values().map(|offset| offset.0).collect();
+            assert2::assert!(
+                Some(log.lso().0)
+                    == krabka_verified::first_unstable_offset(&starts, log.log_end_offset().0)
+            );
+        }
+        for producer in 0..100 {
+            log.append(&mut commit_marker(producer, 0)).unwrap();
+            let end = log.log_end_offset();
+            assert2::assert!(log.last_stable_offset(Offset(end.0 - 1)) <= Offset(end.0 - 1));
+            log.release_replicated_transactions(end);
+            let starts: Vec<_> = log.pending.values().map(|offset| offset.0).collect();
+            assert2::assert!(
+                Some(log.lso().0) == krabka_verified::first_unstable_offset(&starts, end.0)
+            );
+        }
     }
 }

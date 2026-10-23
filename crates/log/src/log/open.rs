@@ -12,6 +12,7 @@ use {
             ControlBatchKind, TransactionMarkerFlags, batch_control_marker_coordinator_epoch,
             control_batch_kind, transaction_marker_flags,
         },
+        pending_transactions::PendingTransactions,
     },
     crate::{
         config::LogConfig,
@@ -235,7 +236,7 @@ impl Log {
             // dirty until the first pass says otherwise.
             clean_prefix_segments: 0,
             lso,
-            pending: HashMap::new(),
+            pending: PendingTransactions::default(),
             verification_states: HashMap::new(),
             unreplicated: BTreeMap::new(),
             pending_stamp_ranges: HashMap::new(),
@@ -467,8 +468,7 @@ impl Log {
             }
         } else if batch.attributes.is_transactional() {
             self.pending
-                .entry(producer_id)
-                .or_insert(Offset(batch.base_offset));
+                .insert_first(producer_id, Offset(batch.base_offset));
         }
         Ok(())
     }
