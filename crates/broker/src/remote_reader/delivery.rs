@@ -16,6 +16,11 @@ use {
     zerocopy::FromBytes as _,
 };
 
+/// Start small for the common early-pending answer, then amortize a long scan
+/// without ever retaining an unbounded part of the segment.
+const INITIAL_ACTIVATION_SCAN_WINDOW: u32 = 4 * 1024;
+const MAX_ACTIVATION_SCAN_WINDOW: u32 = 1024 * 1024;
+
 impl RemoteReader {
     /// The first pending archived offset below `local_start`, or `None` when
     /// the complete archive band is due and adds no cap to the local frontier.
@@ -89,6 +94,9 @@ pub(crate) fn segment_activation_frontier(
     let header_size = u32::try_from(HEADER_LEN).map_err(|_| invalid_header())?;
     let mut position = 0_u32;
     let mut last_offset = None;
+    let mut window = INITIAL_ACTIVATION_SCAN_WINDOW;
+    let mut buffered = Vec::new();
+    let mut buffer_start = 0_u32;
     while position < size {
         // Dropping the async caller (including a ListOffsets timeout) stops
         // further GETs after the one synchronous backend call already in flight.
@@ -97,12 +105,25 @@ pub(crate) fn segment_activation_frontier(
                 "archived activation scan cancelled".into(),
             ));
         }
-        let end = position
+        let header_end = position
             .checked_add(header_size)
             .filter(|end| *end <= size)
             .ok_or_else(invalid_header)?;
-        let bytes = rsm.fetch_log_segment(metadata, position, Some(end - 1))?;
-        let header = RecordBatchHeader::ref_from_bytes(&bytes).map_err(|_| invalid_header())?;
+        let buffer_end = buffer_start
+            .checked_add(u32::try_from(buffered.len()).map_err(|_| invalid_header())?)
+            .ok_or_else(invalid_header)?;
+        if position < buffer_start || header_end > buffer_end {
+            let end = position.saturating_add(window).min(size);
+            buffered = rsm.fetch_log_segment(metadata, position, Some(end - 1))?;
+            if buffered.len() != usize::try_from(end - position).map_err(|_| invalid_header())? {
+                return Err(invalid_header());
+            }
+            buffer_start = position;
+            window = window.saturating_mul(2).min(MAX_ACTIVATION_SCAN_WINDOW);
+        }
+        let cursor = usize::try_from(position - buffer_start).map_err(|_| invalid_header())?;
+        let header = RecordBatchHeader::ref_from_bytes(&buffered[cursor..cursor + HEADER_LEN])
+            .map_err(|_| invalid_header())?;
         let length = u32::try_from(header.batch_length.get())
             .ok()
             .and_then(|length| length.checked_add(12))
@@ -153,7 +174,7 @@ mod tests {
     use {
         super::*,
         crate::remote_reader::test_support::{
-            ReaderWithDir, empty_reader, sparse_remote_segment_reader, tp,
+            CountingRsm, ReaderWithDir, empty_reader, sparse_remote_segment_reader, tp,
         },
         assert2::assert,
         krabka_ids::LeaderEpoch,
@@ -171,7 +192,7 @@ mod tests {
         start: i64,
         end: i64,
         activation_ms: impl Fn(i64) -> i64,
-    ) {
+    ) -> RemoteLogSegmentMetadata {
         let source = tempfile::tempdir().unwrap();
         let mut bytes = bytes::BytesMut::new();
         let mut max_timestamp = i64::MIN;
@@ -226,6 +247,90 @@ mod tests {
                 broker_id: 1,
             })
             .unwrap();
+        metadata
+    }
+
+    #[test]
+    fn dense_activation_scans_use_bounded_range_windows() {
+        for batches in [16_i64, 1_024, 16_384] {
+            let (_remote, reader) = empty_reader();
+            let metadata = add_finished_archive(&reader, 0, batches - 1, |_| 1_000);
+            let counted = CountingRsm::counting(Arc::clone(&reader.rsm));
+
+            assert!(
+                segment_activation_frontier(
+                    counted.rsm.as_ref(),
+                    &metadata,
+                    Offset(batches - 1),
+                    millis(0),
+                    1_000,
+                    None,
+                )
+                .unwrap()
+                    == Offset(batches)
+            );
+            let fetches = counted.log_fetches.lock().unwrap();
+            assert!(fetches.len() <= 16, "{batches} batches: {fetches:?}");
+            assert!(fetches.iter().all(|(_, end, bytes)| {
+                end.is_some() && *bytes <= usize::try_from(MAX_ACTIVATION_SCAN_WINDOW).unwrap()
+            }));
+        }
+    }
+
+    #[test]
+    fn early_pending_activation_uses_one_small_range() {
+        let (_remote, reader) = empty_reader();
+        let metadata =
+            add_finished_archive(
+                &reader,
+                0,
+                1_023,
+                |offset| {
+                    if offset == 0 { 2_000 } else { 1_000 }
+                },
+            );
+        let counted = CountingRsm::counting(Arc::clone(&reader.rsm));
+
+        assert!(
+            segment_activation_frontier(
+                counted.rsm.as_ref(),
+                &metadata,
+                Offset(0),
+                millis(0),
+                1_000,
+                None,
+            )
+            .unwrap()
+                == Offset(0)
+        );
+        let fetches = counted.log_fetches.lock().unwrap();
+        assert!(fetches.len() == 1);
+        assert!(fetches[0].2 == usize::try_from(INITIAL_ACTIVATION_SCAN_WINDOW).unwrap());
+    }
+
+    #[test]
+    fn buffered_activation_scan_preserves_pending_frontiers() {
+        for (pending_from, minimum, expected) in
+            [(1, 0, 1), (1_023, 0, 1_023), (1_023, 1_024, 1_024)]
+        {
+            let (_remote, reader) = empty_reader();
+            let metadata = add_finished_archive(&reader, 0, 1_023, |offset| {
+                if offset >= pending_from { 2_000 } else { 1_000 }
+            });
+
+            assert!(
+                segment_activation_frontier(
+                    reader.rsm.as_ref(),
+                    &metadata,
+                    Offset(minimum),
+                    millis(0),
+                    1_000,
+                    None,
+                )
+                .unwrap()
+                    == Offset(expected)
+            );
+        }
     }
 
     #[tokio::test]
