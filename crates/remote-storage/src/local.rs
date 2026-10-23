@@ -14,7 +14,11 @@ use {
             partition_dir_name, segment_file_name, segment_suffixes,
         },
     },
-    std::{fs, path::PathBuf},
+    std::{
+        fs::{self, File},
+        io::{Read, Seek, SeekFrom},
+        path::PathBuf,
+    },
 };
 
 /// A [`RemoteStorageManager`] that keeps offloaded segments on a local
@@ -65,6 +69,44 @@ impl LocalTieredStorage {
     }
 }
 
+fn read_segment_range(
+    reader: &mut (impl Read + Seek),
+    segment_len: u64,
+    start_position: u32,
+    end_position: Option<u32>,
+) -> Result<Vec<u8>, RemoteStorageError> {
+    let start = u64::from(start_position);
+    if start > segment_len {
+        return Err(RemoteStorageError::InvalidArgument(format!(
+            "start_position {start} exceeds segment length {segment_len}"
+        )));
+    }
+    let end_exclusive = match end_position {
+        Some(end) => {
+            let end = u64::from(end);
+            if end < start {
+                return Err(RemoteStorageError::InvalidArgument(format!(
+                    "end_position {end} < start_position {start}"
+                )));
+            }
+            // `end` is inclusive; clamp to the segment length.
+            end.saturating_add(1).min(segment_len)
+        }
+        None => segment_len,
+    };
+    let requested_len = end_exclusive - start;
+    let capacity = usize::try_from(requested_len).map_err(|_| {
+        RemoteStorageError::InvalidArgument(format!(
+            "requested range length {requested_len} exceeds platform capacity"
+        ))
+    })?;
+
+    reader.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    reader.take(requested_len).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 impl RemoteStorageManager for LocalTieredStorage {
     #[krabka_macros::remote_operation]
     fn copy_log_segment_data(
@@ -101,28 +143,9 @@ impl RemoteStorageManager for LocalTieredStorage {
                 metadata.remote_log_segment_id().clone(),
             ));
         }
-        let bytes = fs::read(&path)?;
-        let len = bytes.len();
-        let start = usize::try_from(start_position).expect("u32 fits usize");
-        if start > len {
-            return Err(RemoteStorageError::InvalidArgument(format!(
-                "start_position {start} exceeds segment length {len}"
-            )));
-        }
-        let end_exclusive = match end_position {
-            Some(end) => {
-                let end = usize::try_from(end).expect("u32 fits usize");
-                if end < start {
-                    return Err(RemoteStorageError::InvalidArgument(format!(
-                        "end_position {end} < start_position {start}"
-                    )));
-                }
-                // `end` is inclusive; clamp to the segment length.
-                end.saturating_add(1).min(len)
-            }
-            None => len,
-        };
-        Ok(bytes[start..end_exclusive].to_vec())
+        let mut file = File::open(path)?;
+        let len = file.metadata()?.len();
+        read_segment_range(&mut file, len, start_position, end_position)
     }
 
     #[krabka_macros::remote_operation]
@@ -164,6 +187,7 @@ mod tests {
             TransactionIndex, check_sample_indexes, sample_data, sample_metadata as metadata,
         },
         assert2::{assert, check},
+        std::io,
     };
 
     /// A local tiered store, the directories around it, and one segment's metadata.
@@ -248,6 +272,76 @@ mod tests {
         // Inclusive [3, 3] is a valid single-byte range -> "3". (The guard is
         // `end < start`, not `<=`/`==`, so an equal start/end must succeed.)
         assert!(rsm.fetch_log_segment(&md, 3, Some(3)).unwrap() == b"3");
+    }
+
+    #[yare::parameterized(
+        start_past_eof = { 11, None, "invalid argument: start_position 11 exceeds segment length 10" },
+        inverted = { 6, Some(5), "invalid argument: end_position 5 < start_position 6" },
+    )]
+    fn invalid_fetch_ranges_retain_error_semantics(start: u32, end: Option<u32>, expected: &str) {
+        let LocalFixture {
+            remote: _remote,
+            source: _src,
+            store: rsm,
+            metadata: md,
+        } = copied_store(TransactionIndex::Omitted);
+
+        let error = rsm.fetch_log_segment(&md, start, end).unwrap_err();
+        check!(matches!(error, RemoteStorageError::InvalidArgument(_)));
+        check!(error.to_string() == expected);
+    }
+
+    struct CountingSegment {
+        len: u64,
+        position: u64,
+        bytes_read: u64,
+    }
+
+    impl Read for CountingSegment {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let remaining = self.len.saturating_sub(self.position);
+            let read_len =
+                usize::try_from(remaining.min(u64::try_from(buffer.len()).unwrap())).unwrap();
+            buffer[..read_len].fill(b'x');
+            self.position += u64::try_from(read_len).unwrap();
+            self.bytes_read += u64::try_from(read_len).unwrap();
+            Ok(read_len)
+        }
+    }
+
+    impl Seek for CountingSegment {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            let SeekFrom::Start(position) = position else {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "test reader supports absolute seeks only",
+                ));
+            };
+            self.position = position;
+            Ok(position)
+        }
+    }
+
+    #[yare::parameterized(
+        one_byte_of_one_mib = { 1_u64 << 20, 1_u32 },
+        sixty_four_kib_of_one_mib = { 1_u64 << 20, 1_u32 << 16 },
+        one_byte_of_sixty_four_mib = { 1_u64 << 26, 1_u32 },
+        sixty_four_kib_of_sixty_four_mib = { 1_u64 << 26, 1_u32 << 16 },
+    )]
+    fn bounded_fetch_reads_only_requested_bytes(segment_len: u64, requested_len: u32) {
+        let start = 17;
+        let end = start + requested_len - 1;
+        let mut segment = CountingSegment {
+            len: segment_len,
+            position: 0,
+            bytes_read: 0,
+        };
+
+        let bytes = read_segment_range(&mut segment, segment_len, start, Some(end)).unwrap();
+
+        check!(bytes == vec![b'x'; usize::try_from(requested_len).unwrap()]);
+        check!(segment.bytes_read == u64::from(requested_len));
+        check!(segment.position == u64::from(end) + 1);
     }
 
     #[test]
