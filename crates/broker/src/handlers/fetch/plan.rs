@@ -906,7 +906,7 @@ mod tests {
         },
         assert2::assert,
         krabka_ids::PartitionIndex,
-        krabka_log::{Log, LogConfig, Offset},
+        krabka_log::{Log, LogConfig},
         std::sync::Arc,
     };
 

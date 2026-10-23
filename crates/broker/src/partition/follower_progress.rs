@@ -160,7 +160,9 @@ mod tests {
             tokio::pin!(changed);
             changed.as_mut().enable();
 
-            let advanced = partition.record_follower_position(position, 2, Offset(2)).await;
+            let advanced = partition
+                .record_follower_position(position, 2, Offset(2))
+                .await;
             assert!(futures_util::poll!(changed.as_mut()).is_ready() == !epoch_moved);
             if epoch_moved {
                 assert!(*partition.replica_state.lock().await == before);
@@ -198,7 +200,7 @@ mod tests {
         expected_watermark: i64,
         expected_advance: bool,
     ) {
-        use krabka_raft::NodeId;
+        use {assert2::assert, krabka_raft::NodeId};
 
         let dir = tempfile::tempdir().unwrap();
         let partition = observation_partition(dir.path(), storage);
