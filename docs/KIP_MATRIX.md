@@ -12,7 +12,7 @@ against.
 ## KIP status
 
 Every row comes from `KIP_ANNOTATIONS` in
-[`api_catalog`](../crates/broker/src/api_catalog.rs), and two sources decide
+[`kip_catalog`](../crates/broker/src/kip_catalog.rs), and two sources decide
 which rows have to be there. The generator scans `crates/` for `KIP-<n>`
 mentions, except the crate CHANGELOGs, and fails when a KIP is named without a
 row here, so a compatibility claim cannot enter `src/` without evidence beside

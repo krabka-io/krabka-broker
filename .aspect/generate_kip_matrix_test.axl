@@ -868,6 +868,14 @@ def _test_image_legend(_ctx):
 def _test_render_page(_ctx):
     page = render_page("KIP", "LEGEND", "log-image", "LOG", "api-image", "API", "THROTTLE")
     check_eq("the title", page.splitlines()[0], "# Kafka KIP compatibility matrix")
+    check(
+        "Every row comes from `KIP_ANNOTATIONS` in\n[`kip_catalog`](../crates/broker/src/kip_catalog.rs)" in page,
+        "KIP claims link to the documentation catalog",
+    )
+    check(
+        "asserts krabka's against\n[`api_catalog`](../crates/broker/src/api_catalog.rs)" in page,
+        "advertised versions still link to the runtime catalog",
+    )
     check_eq("the page ends with the throttle rows", page.endswith("\nTHROTTLE\n"), True)
     for section in ["KIP", "LEGEND", "LOG", "API"]:
         check(page.find("\n" + section + "\n") >= 0, "the %s section is substituted" % section)

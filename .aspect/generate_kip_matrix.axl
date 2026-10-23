@@ -4,7 +4,7 @@ The page is one row per KIP that `docs/kip_inventory.md` lists or that any file
 under `crates/` names, followed by the JVM differential evidence: the on-disk
 log contract, the advertised `ApiVersions` table, and the KIP-219 throttle-echo
 divergences. Every column is read back out of the sources -- `KIP_ANNOTATIONS`
-in the API catalog, each crate's `BUILD.bazel` `docker` map, `//bazel/images`
+in the KIP catalog, each crate's `BUILD.bazel` `docker` map, `//bazel/images`
 and the digests `//MODULE.bazel` pins -- so a claim cannot enter the tree
 without the evidence beside it. CI regenerates the page and diffs it against
 the checked-in copy.
@@ -35,7 +35,7 @@ _MODULE = "MODULE.bazel"
 _API_VERSIONS = "crates/broker/tests/fixtures/api_versions/divergence.json"
 _API_VERSIONS_ORACLE = "crates/broker/tests/api_versions_differential/oracle.rs"
 _THROTTLE_AUDIT = "crates/broker/src/network/dispatch/throttle_audit.rs"
-_API_CATALOG = "crates/broker/src/api_catalog.rs"
+_KIP_CATALOG = "crates/broker/src/kip_catalog.rs"
 _INVENTORY = "docs/kip_inventory.md"
 _CRATES = "crates"
 _DEFAULT_OUTPUT = "docs/KIP_MATRIX.md"
@@ -493,7 +493,7 @@ def _field_at(body, name):
         at = found + 1
     fail("generate-kip-matrix: unbounded scan for field %s" % name)
 
-def annotation_string(body, name, source = _API_CATALOG):
+def annotation_string(body, name, source = _KIP_CATALOG):
     """The `name: "..."` field of an annotation body."""
     at = _field_at(body, name)
     found = _quoted(body, _skip_whitespace(body, at)) if at >= 0 else None
@@ -501,7 +501,7 @@ def annotation_string(body, name, source = _API_CATALOG):
         fail("KipAnnotation entry without a parsable `%s` in %s" % (name, source))
     return found.value
 
-def annotation_variant(body, name, enum, source = _API_CATALOG):
+def annotation_variant(body, name, enum, source = _KIP_CATALOG):
     """The variant of `name: Enum::Variant` in an annotation body."""
     at = _field_at(body, name)
     if at >= 0:
@@ -518,7 +518,7 @@ def annotation_variant(body, name, enum, source = _API_CATALOG):
                 return body[start:end]
     fail("KipAnnotation entry without a parsable `%s` in %s" % (name, source))
 
-def annotation_tests(body, source = _API_CATALOG):
+def annotation_tests(body, source = _KIP_CATALOG):
     """The paths of the `tests: &[...]` field of an annotation body."""
     at = _field_at(body, "tests")
     if at >= 0:
@@ -544,8 +544,8 @@ def _quoted_strings(text):
         at = entry.end
     fail("generate-kip-matrix: unbounded scan for quoted strings")
 
-def parse_annotations(catalog, source = _API_CATALOG):
-    """Read `KIP_ANNOTATIONS` out of the API catalog, one record per row."""
+def parse_annotations(catalog, source = _KIP_CATALOG):
+    """Read `KIP_ANNOTATIONS` out of the KIP catalog, one record per row."""
     start = catalog.find(_ANNOTATION_BEGIN)
     end = catalog.find(_ANNOTATION_END)
     if start < 0 or end < start:
@@ -1135,7 +1135,7 @@ against.
 ## KIP status
 
 Every row comes from `KIP_ANNOTATIONS` in
-[`api_catalog`](../crates/broker/src/api_catalog.rs), and two sources decide
+[`kip_catalog`](../crates/broker/src/kip_catalog.rs), and two sources decide
 which rows have to be there. The generator scans `crates/` for `KIP-<n>`
 mentions, except the crate CHANGELOGs, and fails when a KIP is named without a
 row here, so a compatibility claim cannot enter `src/` without evidence beside
@@ -1389,7 +1389,7 @@ def _kip_inventory(fs, root, catalog):
     for relative in walk(fs, root + "/" + _CRATES, relative_to = root):
         if relative.rsplit("/", 1)[-1] == "CHANGELOG.md":
             continue
-        if relative == _API_CATALOG:
+        if relative == _KIP_CATALOG:
             text = catalog_outside_annotations(catalog)
         else:
             text = fs.try_read_to_string(root + "/" + relative)
@@ -1416,7 +1416,7 @@ def _note_line_counts(fs, root, note, counts):
             counts[citation.path] = len(_read(fs, root, citation.path).splitlines())
     return counts
 
-def inventory_problem(listed, claimed, rows, catalog = _API_CATALOG, source = _INVENTORY):
+def inventory_problem(listed, claimed, rows, catalog = _KIP_CATALOG, source = _INVENTORY):
     """The complaint about the roster, the mentions and the rows disagreeing, or "".
 
     Four ways they can. A KIP named under `crates/` with no row is a claim with
@@ -1483,21 +1483,21 @@ def decision_row_problem(row, mixed_quorum, forwarding, citation):
 
 def _kip_rows(fs, root, pins, broker_build):
     """The per-KIP rows, and the image legend they refer to."""
-    catalog = _read(fs, root, _API_CATALOG)
+    catalog = _read(fs, root, _KIP_CATALOG)
     rows = parse_annotations(catalog)
     citation = _evidence(
         const_str_value(catalog, 'pub const OUT_OF_SCOPE_CITATION: &str = "'),
-        _API_CATALOG,
+        _KIP_CATALOG,
         'pub const OUT_OF_SCOPE_CITATION: &str = "..."',
     )
     mixed_quorum = _evidence(
         const_str_value(catalog, 'pub const MIXED_QUORUM_KEY: &str = "'),
-        _API_CATALOG,
+        _KIP_CATALOG,
         'pub const MIXED_QUORUM_KEY: &str = "..."',
     )
     forwarding = _evidence(
         const_str_value(catalog, 'pub const FORWARDING_KEY: &str = "'),
-        _API_CATALOG,
+        _KIP_CATALOG,
         'pub const FORWARDING_KEY: &str = "..."',
     )
 

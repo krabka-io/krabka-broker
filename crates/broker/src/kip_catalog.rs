@@ -1,0 +1,1428 @@
+//! Documentation catalog for the generated `docs/KIP_MATRIX.md`.
+//!
+//! [`KIP_ANNOTATIONS`] holds one [`KipAnnotation`] per KIP that any file under `crates/` names. `aspect generate-kip-matrix` parses that table as text, between the `BEGIN KIP_ANNOTATIONS` and `END KIP_ANNOTATIONS` marker comments. It fails when a KIP appears in `crates/` without a row here, when a row names a KIP that no file mentions, or when a row points at a module or test that does not exist.
+//!
+//! Keep each entry in the literal shape the existing ones use: the generator does not compile Rust. The runtime API table remains in [`super::api_catalog`].
+
+/// How far the broker takes one KIP.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KipStatus {
+    /// The KIP's behavior is in the tree and the listed tests establish it.
+    Implemented,
+    /// Part of the KIP is in the tree. `note` says which part is not.
+    Partial,
+    /// The KIP is deliberately not implemented. `note` cites the decision.
+    OutOfScope,
+}
+
+/// One row of the generated KIP matrix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KipAnnotation {
+    /// `KIP-<n>`, or a non-KIP key for a scope decision that has no KIP.
+    pub key: &'static str,
+    /// The Kafka behavior the row is about, in a few words.
+    pub claim: &'static str,
+    /// How far the tree takes it.
+    pub status: KipStatus,
+    /// The module that owns the behavior, as a path from the repository root.
+    pub module: &'static str,
+    /// The tests that establish the status, as `path` or `path::function`
+    /// from the repository root. A container-driven suite carries its Kafka
+    /// image into the matrix through its crate's `BUILD.bazel` `docker` map.
+    /// A `tests/librdkafka_conformance.rs::<function>` entry here is also what
+    /// puts the clients that test drives in the matrix's client column.
+    pub tests: &'static [&'static str],
+    /// What the status leaves out, or the citation for a scope decision.
+    pub note: &'static str,
+}
+
+/// The key of the row that records mixed JVM and Krabka controller quorums
+/// as out of scope. It is not a KIP, so the generator does not look for it in
+/// `crates/`.
+pub const MIXED_QUORUM_KEY: &str = "mixed-quorum";
+
+/// The KIP-590 forwarding row. Broker admin handlers build an `Envelope`
+/// carrying the client's identity before the active Krabka controller plans
+/// metadata-dependent operations. Interoperation with JVM controllers remains
+/// outside the mixed-quorum scope decision.
+pub const FORWARDING_KEY: &str = "KIP-590";
+
+/// Where the out-of-scope decision for mixed quorums and JVM-side forwarding
+/// is written down. The generator checks that this line still says so.
+pub const OUT_OF_SCOPE_CITATION: &str = "crates/raft/src/lib.rs:54";
+
+/// The per-KIP rows of `docs/KIP_MATRIX.md`, in ascending KIP order, with the
+/// non-KIP scope rows last.
+// BEGIN KIP_ANNOTATIONS
+pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
+    KipAnnotation {
+        key: "KIP-13",
+        claim: "Producer and consumer byte-rate quotas",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/quota/mod.rs",
+        tests: &[
+            "crates/broker/tests/client_quotas.rs",
+            "crates/broker/tests/client_quotas/throttling.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-32",
+        claim: "Message timestamps in the v1 message set and the v2 batch",
+        status: KipStatus::Implemented,
+        module: "crates/records-legacy/src/lib.rs",
+        tests: &[
+            "crates/log/tests/integration.rs::read_jvm_produced_log_dir",
+            "crates/log/tests/integration.rs::jvm_consumes_rust_written_log_dir",
+            "crates/broker/tests/legacy_fetch.rs",
+        ],
+        note: "The v0 and v1 message sets reach the wire only through `Fetch` v0-v3 and `Produce` v0-v2, which Kafka 4.x refuses and krabka serves only under the `[runtime]` key `legacy_request_versions_enable` (default off). Produce v3 and up still up-converts a legacy message set it carries.",
+    },
+    KipAnnotation {
+        key: "KIP-48",
+        claim: "Delegation tokens: create, renew, expire, describe and SCRAM token auth",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/create_delegation_token.rs",
+        tests: &[
+            "crates/broker/tests/delegation_tokens.rs",
+            "crates/broker/tests/jvm_acceptance_quotas/delegation_tokens.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-62",
+        claim: "Classic group state machine with the AwaitingSync stage",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/classic_state/group.rs",
+        tests: &[
+            "crates/broker/tests/group_protocol_negotiation.rs",
+            "crates/broker/tests/unit/consumer_group.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-73",
+        claim: "Replication throttling through the leader and follower throttle keys",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/throttle/mod.rs",
+        tests: &["crates/broker/tests/throttle.rs"],
+        note: "The measured throttled-replication rate is published as `krabka_broker_replication_throttled_bytes_out` and `krabka_broker_replication_throttled_bytes_in`, which stand for Kafka's `kafka.server:type=LeaderReplication,name=byte-rate` and its `FollowerReplication` twin, with `krabka_broker_replication_throttle_sleeps` for the reads the throttle held back. As in Kafka's `ReplicationQuotaManager`, the quota is checked before a read and the read's size is recorded after it. So an indivisible batch larger than the one-second burst replicates, and the later throttling pays back the overshoot, which is bounded by the 11 s replication quota window. A leader withholds the records of a throttled out-of-sync replica, and the empty row adds nothing toward `min_bytes`, so the follower's fetch parks for its `max_wait_ms`. A follower leaves a throttled partition out of its fetch round. Neither reports a `throttle_time_ms`, as in Kafka, so the byte-rate is what says whether the throttle is biting.",
+    },
+    KipAnnotation {
+        key: "KIP-74",
+        claim: "Fetch response size limits: max_bytes and partition_max_bytes",
+        status: KipStatus::Implemented,
+        module: "crates/log/src/log/read.rs",
+        tests: &[
+            "crates/log/src/log/read/tests.rs::a_read_never_skips_past_a_segment_its_budget_clipped",
+            "crates/log/src/log/read/tests.rs::a_descriptor_read_never_skips_past_a_segment_its_budget_clipped",
+            "crates/broker/tests/replication.rs::a_follower_that_catches_up_across_segments_copies_every_batch",
+        ],
+        note: "Only the first batch of a read can be larger than the budget, so a fetch always makes progress, and a read that the budget stops inside a segment does not go on into the next one.",
+    },
+    KipAnnotation {
+        key: "KIP-98",
+        claim: "Transactions and idempotent producers, with transactional-id expiry",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/txn/coordinator.rs",
+        tests: &[
+            "crates/broker/tests/transactions.rs",
+            "crates/broker/tests/transactions/txn_fencing.rs",
+            "crates/broker/tests/jvm_streams_app.rs",
+            "crates/broker/tests/jvm_connect_distributed.rs",
+            "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
+            "crates/broker/src/handlers/produce/producer_checks.rs::a_producer_with_no_state_on_a_never_appended_partition_starts_at_zero_under_trunk",
+        ],
+        note: "The idempotent-producer sequence check is Kafka 4.3.1's: a producer with no state may start at any sequence. Kafka trunk's KAFKA-15591 rule, which answers OUT_OF_ORDER_SEQUENCE_NUMBER to a non-zero first sequence from a producer with no state on a partition that has never held a record, applies only under `unstable.api.versions.enable`.",
+    },
+    KipAnnotation {
+        key: "KIP-101",
+        claim: "Leader-epoch based truncation for followers",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/replicator/truncation.rs",
+        tests: &[
+            "crates/broker/tests/leader_epoch.rs",
+            "crates/broker/tests/leader_epoch/epoch_diverge_leader.rs",
+            "crates/broker/tests/leader_epoch/epoch_fencing.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-107",
+        claim: "DeleteRecords admin request",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/delete_records.rs",
+        tests: &[
+            "crates/broker/tests/client_admin_delete_records.rs",
+            "crates/broker/tests/admin_handlers/admin_delete_records.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-108",
+        claim: "A create-topic policy refusing a topic with POLICY_VIOLATION",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/topic_policy.rs",
+        tests: &[
+            "crates/broker/src/topic_policy.rs",
+            "crates/broker/tests/admin_handlers/admin_topic_policy.rs",
+            "crates/broker/tests/topic_freeze/wire.rs",
+        ],
+        note: "The policy is the declared `[topic_policy]` rule set rather than a Java class named by `create.topic.policy.class.name`: a replication-factor floor, a partition ceiling, a `min.insync.replicas` floor, and required / forbidden config values. It runs where Kafka calls `CreateTopicPolicy.validate` — after config validation, before the records are generated — on validate-only requests too. A frozen topic answers with the same error 44.",
+    },
+    KipAnnotation {
+        key: "KIP-110",
+        claim: "Zstandard compression in the v2 record batch",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/fetch_downconvert.rs",
+        tests: &[
+            "crates/broker/tests/recompression.rs",
+            "crates/broker/tests/legacy_fetch.rs",
+        ],
+        note: "A zstd batch is re-compressed as snappy for a v0 or v1 fetch, because those formats never carried zstd. Those fetch versions are served only under `legacy_request_versions_enable`.",
+    },
+    KipAnnotation {
+        key: "KIP-112",
+        claim: "JBOD: a broker with an offline log directory stays registered",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/broker_heartbeat/failover.rs",
+        tests: &[
+            "crates/broker/tests/jbod_disk_failure.rs",
+            "crates/broker/tests/offline_replicas.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-113",
+        claim: "AlterReplicaLogDirs and DescribeLogDirs: replica moves between log directories",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/future_log.rs",
+        tests: &[
+            "crates/broker/tests/alter_replica_log_dirs.rs",
+            "crates/broker/tests/jbod.rs",
+            "crates/broker/tests/jvm_acceptance_quotas/log_dirs.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-124",
+        claim: "Request-rate quotas as a percentage of handler time",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/quota/request.rs",
+        tests: &[
+            "crates/broker/tests/client_quotas/throttling.rs",
+            "crates/broker/src/network/dispatch/tests/throttle_mute.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-133",
+        claim: "An alter-config policy refusing a topic config change with POLICY_VIOLATION",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/topic_policy.rs",
+        tests: &[
+            "crates/broker/src/handlers/alter_configs/topic_configs.rs",
+            "crates/broker/src/handlers/incremental_alter_configs/topic_scope.rs",
+            "crates/broker/tests/admin_handlers/admin_topic_policy.rs",
+        ],
+        note: "The same `[topic_policy]` rule set stands in for the class named by `alter.config.policy.class.name`. Both alter paths check the resolved post-change config map, as `AlterConfigPolicy.validate` does; its `RequestMetadata` carries no partition count and no replication factor, so those two rules apply to `CreateTopics` alone.",
+    },
+    KipAnnotation {
+        key: "KIP-207",
+        claim: "The high watermark a new leader reports may regress after an election",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_offsets/resolve.rs",
+        tests: &[
+            "crates/broker/src/data_path_model/model.rs",
+            "crates/broker/src/handlers/list_offsets/resolve.rs::offset_not_available_follows_partition_fetch_offset_for_timestamp",
+        ],
+        note: "The exhaustive data-path model checks durability without a watermark monotonicity assertion, which is what the KIP allows. ListOffsets fences a client lookup while the leader's epoch start is above its high watermark, as Partition.fetchOffsetForTimestamp does: OFFSET_NOT_AVAILABLE from v5, LEADER_NOT_AVAILABLE below.",
+    },
+    KipAnnotation {
+        key: "KIP-211",
+        claim: "Committed-offset retention measured from the group's last activity",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/retention.rs",
+        tests: &["crates/broker/tests/offsets_retention.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-219",
+        claim: "Respond first, then mute the channel for the throttle time",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/network/dispatch/response.rs",
+        tests: &[
+            "crates/broker/tests/client_quotas/throttling.rs",
+            "crates/broker/src/network/dispatch/throttle_audit.rs::throttle_echo_divergences_are_the_recorded_ones",
+        ],
+        note: "Every API a request quota can hold on the ordinary dispatch path reports the delay it was held for: the dispatch loop patches a leading `ThrottleTimeMs`, and `Produce`, `Fetch` and `ApiVersions` -- whose schemas bury the field behind an array -- charge the quota in the handler and set it on the typed response instead. The dispatch loop decodes and encodes again the other buried-field responses (the delegation-token APIs and `OffsetDelete`) to set the field. The throttle-echo section below lists the buried-field APIs and what each one's `RequestQuotaPolicy` costs.",
+    },
+    KipAnnotation {
+        key: "KIP-226",
+        claim: "DescribeConfigs reports the source of every value",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/describe_configs.rs",
+        tests: &[
+            "crates/broker/tests/jvm_acceptance_cli/configs.rs",
+            "crates/broker/tests/dynamic_broker_config.rs",
+            "crates/broker/tests/listener_tls_reconfig.rs",
+            "crates/broker/tests/dynamic_producer_and_group_config.rs",
+            "crates/broker/tests/dynamic_listeners.rs",
+        ],
+        note: "A broker resource is checked against Kafka 4.3.1's whole `KafkaConfig` key roster: a key that is not dynamic is refused, and every dynamic key is parsed and range-checked. A running broker applies these dynamic keys without a restart, per broker and then cluster-wide: the topic-default synonyms (`log.retention.ms`, `message.max.bytes`, `compression.type` and the rest of `DynamicLogConfig`), `min.insync.replicas`, `unclean.leader.election.enable` (cluster-wide only), the three replication throttle rates, `transaction.partition.verification.enable`, `producer.id.expiration.ms` (the producer-expiry sweep and the transaction-verification window), `remote.list.offsets.request.timeout.ms`, the tiered keys of `DynamicRemoteLogConfig` and `DynamicReplicationConfig` (`remote.log.manager.copy.max.bytes.per.second` and `remote.log.manager.fetch.max.bytes.per.second`, as KIP-956 says, `remote.fetch.max.wait.ms`, which bounds a fetch's cold reads as `DelayedRemoteFetch` does and answers an expired one with empty records, `remote.log.index.file.cache.total.size.bytes`, whose shrink evicts the index cache down to the new size, and `follower.fetch.last.tiered.offset.enable`, as KIP-1023 says), the three group assignment intervals `group.consumer.assignment.interval.ms`, `group.share.assignment.interval.ms` and `group.streams.assignment.interval.ms` (under a group's own override, and refused outside the group minimum and maximum with Kafka's `GroupCoordinatorConfig` message), `cordoned.log.dirs` (per broker only, as Kafka allows it), and the connection quotas of Kafka's `ConnectionQuotas`, which apply to the next connection accepted on a broker listener and on the controller listener: `max.connections` and `listener.name.<listener>.max.connections`, `max.connections.per.ip` and `max.connections.per.ip.overrides`, and `max.connection.creation.rate` and `listener.name.<listener>.max.connection.creation.rate`. As in Kafka, a listener's value falls back to the broker-wide one, the inter-broker listener of a broker with several listeners is exempt from the broker-wide cap and rate, an override host is resolved once when the value changes, off the accept path, a connection the peer's `ip` quota throttles is taken back off the broker-wide and listener rates, a `max.connections.per.ip` of 0 applies only beside overrides, and a cap or rate below 1 is refused and leaves the value in force before it. A connection over a cap is closed, where Kafka's acceptor waits for a slot under the broker-wide and listener caps. The keystore and truststore of an SSL or SASL_SSL broker listener, `listener.name.<listener>.ssl.keystore.*` and `listener.name.<listener>.ssl.truststore.*` set per broker, apply to the next handshake: the broker the alter is addressed to checks them as Kafka's `SslFactory.validateReconfiguration` does -- the stores load, and a new certificate keeps the DN and every SAN of the one served -- and answers `INVALID_REQUEST` with Kafka's message otherwise, and a store file is read again when it changes. krabka reads PEM stores with an unencrypted PKCS#8 key only, so a store type other than PEM, or `ssl.key.password`, is refused, and the controller listener's keys are stored without effect. A per-broker `listeners` and `listener.security.protocol.map` open and close data-plane listeners without a restart, as Kafka's `DynamicListenerConfig.reconfigure` does: a listener whose name is new is bound and served, one whose name is gone stops and closes its connections, and one whose name stays is left as it runs, and a stored `listeners` opens its listeners when the broker starts again. A new listener takes its SASL mechanisms from `listener.name.<listener>.sasl.enabled.mechanisms` or `sasl.enabled.mechanisms`, and its TLS stores from its `listener.name.<listener>.ssl.*` keys over the broker-wide TLS config; one the broker cannot serve -- a TLS listener without a broker-wide TLS config, PLAIN without credentials, GSSAPI without its config -- or cannot bind is logged and left closed, as Kafka's failed `addListeners` is, and opens when its endpoint changes. The inter-broker listener is exempt from the broker-wide connection cap and rate while more than one listener runs. The broker the alter is addressed to first checks the new listener config with Kafka's messages, as `KafkaConfig.validateValues` and `DynamicListenerConfig.validateReconfiguration` do: every listener has a protocol, names and ports differ, the advertised listeners and the controller listener's mapping stay, the inter-broker SASL mechanism stays enabled, and a listener that stays keeps its protocol and its own `listener.name.<listener>.` keys other than its SSL stores and connection quotas. A new listener is not registered with the controller, as Kafka registers none. As in Kafka, the SASL and Kerberos keys and `principal.builder.class` change no listener that is already open: a listener added later takes `sasl.enabled.mechanisms`, and krabka loads no JAAS login module or principal builder class, so `sasl.jaas.config`, the Kerberos and login-refresh keys and `principal.builder.class` are stored and reported only. Other dynamic keys are stored and reported and do not change how the broker runs: thread pool sizes, the log cleaner's own keys, every other `listener.name.<listener>.` override, the remote log manager's thread pools, `metric.reporters` and `config.providers`. A `CLASS` value is accepted without loading the class.",
+    },
+    KipAnnotation {
+        key: "KIP-227",
+        claim: "Incremental fetch sessions",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/fetch_session.rs",
+        tests: &["crates/broker/tests/fetch_session.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-255",
+        claim: "SASL/OAUTHBEARER",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/network/auth/oauthbearer.rs",
+        tests: &["crates/broker/tests/auth_handlers/oauthbearer.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-257",
+        claim: "Quota entities keyed by user, client id, or both",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/quota/lookup.rs",
+        tests: &[
+            "crates/broker/tests/client_quotas.rs",
+            "crates/broker/tests/tuple_quota_enforcement.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-279",
+        claim: "Leader-epoch truncation that converges after several leader changes",
+        status: KipStatus::Implemented,
+        module: "crates/log/src/leader_epoch_checkpoint/lookup.rs",
+        tests: &[
+            "crates/log/src/leader_epoch_model.rs",
+            "crates/broker/tests/leader_epoch.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-290",
+        claim: "Prefixed ACL patterns and the MATCH filter",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/acl_wire.rs",
+        tests: &["crates/broker/tests/acl_handlers.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-320",
+        claim: "Leader epochs in Fetch and ListOffsets, and OffsetForLeaderEpoch for consumers",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/offset_for_leader_epoch.rs",
+        tests: &[
+            "crates/broker/tests/jvm_kip320_divergence.rs",
+            "crates/broker/tests/jvm_kip320_divergence/wire_conformance.rs",
+            "crates/broker/tests/consumer_proactive_validation.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-345",
+        claim: "Static consumer-group membership",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/classic_state/membership.rs",
+        tests: &[
+            "crates/broker/tests/static_membership.rs",
+            "crates/broker/tests/jvm_acceptance_cli/console_groups.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-360",
+        claim: "Epoch bump when a transactional producer re-initialises",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/init_producer_id/transactional.rs",
+        tests: &[
+            "crates/broker/tests/transactions/txn_fencing.rs::init_producer_id_fences_a_stale_producer_identity",
+            "crates/broker/tests/jvm_acceptance_durability/transactional_eos.rs::transactional_console_producer_eos",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-368",
+        claim: "SASL re-authentication and session expiry",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/network/dispatch/session.rs",
+        tests: &[
+            "crates/broker/tests/auth_handlers/oauthbearer_sessions.rs",
+            "crates/broker/tests/auth_handlers/plain.rs::plain_session_capped_by_connections_max_reauth_then_closes",
+            "crates/broker/tests/auth_handlers/scram.rs::scram_session_capped_by_connections_max_reauth_then_closes",
+            "crates/broker/tests/jvm_acceptance_sasl/scram.rs::jvm_sasl_scram_sha512_in_band_reauth_under_max_reauth_window",
+        ],
+        note: "`connections.max.reauth.ms` bounds every mechanism, and PLAIN, SCRAM and GSSAPI all re-authenticate in band under it. GSSAPI carries no automated re-auth case, because the suite has no KDC.",
+    },
+    KipAnnotation {
+        key: "KIP-371",
+        claim: "`ssl.principal.mapping.rules` maps an mTLS Subject DN to a principal",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/network/auth/ssl_principal_mapper.rs",
+        tests: &[
+            "crates/broker/src/network/auth/ssl_principal_mapper.rs::kafka_documented_rules_map_the_subject_dn",
+            "crates/broker/src/file_config/listener.rs::apply_to_listener_parses_principal_mapping_rules",
+            "crates/broker/tests/jvm_acceptance_tls/mtls_principal_mapping.rs",
+        ],
+        note: "The rules are per listener, under `[listeners.tls_config]`. Kafka's broker-wide `ssl.principal.mapping.rules` and its `listener.name.<name>.` prefixed form are not read from `server_properties`. As in Kafka, the rules map the Subject DN on SSL listeners only, and patterns and replacements follow `java.util.regex`; a SASL_SSL listener takes its principal from the SASL exchange. The patterns are read as `java.util.regex` reads them through a rewrite for `fancy_regex`: `(?i)` folds ASCII case only, `(?iu)` folds by `Character.toLowerCase` of `Character.toUpperCase`, in a character class as well, the POSIX classes such as `Alpha` and `Punct` are ASCII unless `(?U)` is on, and a class with `&&` is the set `Pattern.clazz` builds, where an empty side of `&&` takes the operand before it. A backreference under a case flag compares the text of its group as Java's `CIBackRef` does, on a backtracking matcher of krabka's own that reads the rest of the pattern as the rewrite does: under `(?i)` by ASCII case only, so `(?i)(é)\\1` does not match `éÉ`, and under `(?iu)` by `Character.toLowerCase` of `Character.toUpperCase`, so `(?iu)(i)\\1` matches `iİ` and `iı`, and `(?iu)(s)\\1` matches `sſ`. It compares one code point for one, as JDK 21 and later do, where JDK 17 counted UTF-16 units and threw on some text outside the Basic Multilingual Plane. The same matcher takes five more constructs from Java where `fancy_regex` reads them otherwise: `\\R` gives back the `\\n` of `\\r\\n` when the rest of the pattern needs it, as `LineEnding` does, except under a quantifier, where Java takes the first way; a group that matched inside a look-around, an atomic group or a possessive quantifier keeps its text when the match backtracks out of it, and `Matcher.find` keeps it for the next start position; a backreference inside the group it refers to sees the text the group had before; a repeat of a group whose last iteration matches nothing keeps the groups that iteration set, as `Loop` does; and `\\G` matches where the last match ended, as `LastMatch` does, so after an empty match it matches no more.",
+    },
+    KipAnnotation {
+        key: "KIP-373",
+        claim: "Delegation tokens for other users: the `USER` resource type and the `CREATE_TOKENS` and `DESCRIBE_TOKENS` operations",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/create_delegation_token.rs",
+        tests: &[
+            "crates/broker/src/handlers/create_delegation_token/tests.rs::create_tokens_acl_admits_minting_for_that_owner_only",
+            "crates/broker/src/handlers/describe_delegation_token/tests.rs::describe_tokens_acl_on_the_owner_grants_all_of_their_tokens",
+            "crates/broker/src/handlers/acl_wire/binding_filter/tests.rs::exact_user_token_filter_matches_the_stored_binding",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-382",
+        claim: "MirrorMaker 2 replicates a Kafka cluster onto krabka",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/offset_commit.rs",
+        tests: &[
+            "crates/broker/tests/mirror_maker2.rs::mirror_maker2_migrates_a_kafka_cluster_onto_krabka",
+        ],
+        note: "The stock `connect-mirror-maker.sh` of `apache/kafka:4.3.1` mirrors a broker of that release onto krabka: records with their headers, MM2's compacted `heartbeats`, checkpoints and offset-syncs topics, a consumer group's translated position, and a `retention.ms` carried over by `sync.topic.configs`. `sync.topic.acls` is left at its default; because neither cluster in the suite has an authorizer, MM2 skips the sync at the source, and the target-side `CreateAcls` krabka would answer `SECURITY_DISABLED` is asserted directly. `docs/operations/migrate-from-kafka.md` is the cutover procedure. Kafka trunk's four newest topic keys (`remote.copy.lag.ms`, `remote.copy.lag.bytes`, `max.decompressed.message.bytes`, `errors.deadletterqueue.group.enable`) are unknown topic configs by default, as they are on 4.3.1, so a replay from a trunk cluster that sets one fails as it does against a 4.3.1 broker; `unstable.api.versions.enable` accepts and describes them. With the flag on, `remote.copy.lag.ms` and `remote.copy.lag.bytes` hold a sealed segment back from the remote tier (KIP-1241), and `max.decompressed.message.bytes` refuses a compressed record above it wherever the broker decompresses one, as trunk does: on produce with `INVALID_RECORD`; in log compaction, where it fails the pass and leaves the partition uncleanable until the limit changes, where trunk holds it until a broker restart; and in a by-timestamp or `MAX_TIMESTAMP` `ListOffsets` on the local log or the remote tier, which answers `INVALID_RECORD` for a record it has to read. Follower replication is not checked, as in trunk. `errors.deadletterqueue.topic.name`, `errors.deadletterqueue.copy.record.enable` and the three `*.assignor.offload.enable` group keys are accepted on a group with trunk's validation and stored, and nothing reads them yet.",
+    },
+    KipAnnotation {
+        key: "KIP-392",
+        claim: "Fetch from the closest replica",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/replica_selector.rs",
+        tests: &["crates/broker/tests/kip_392_fetch_from_follower.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-394",
+        claim: "JoinGroup member-id bootstrap with MEMBER_ID_REQUIRED",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/classic_ops/join.rs",
+        tests: &["crates/broker/tests/group_protocol_negotiation.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-405",
+        claim: "Tiered storage: remote segment copy, read, retention and metadata",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/remote_log_manager.rs",
+        tests: &[
+            "crates/broker/tests/jvm_acceptance_tiered.rs",
+            "crates/broker/tests/tiered_storage_multi_broker.rs",
+            "crates/remote-storage/tests/gcs_emulator.rs",
+            "crates/remote-storage/tests/jvm_tiered_storage.rs",
+            "crates/restore/tests/roundtrip.rs",
+            "crates/restore/tests/roundtrip/consume.rs",
+        ],
+        note: "The tier's traffic and lag are published per topic under the `krabka_broker_remote_*` names, which stand for Kafka's `BrokerTopicMetrics` `RemoteCopyBytesPerSec`, `RemoteFetchBytesPerSec`, the three `Remote*RequestsPerSec` and `Remote*ErrorsPerSec` meters, and the four `Remote*Lag*` gauges. The bounded reader pool and the on-disk index cache report `krabka_broker_remote_log_reader_task_queue_size`, `_avg_idle_percent` and `_fetch_duration_seconds` for Kafka's `RemoteLogManager` gauges, plus rejection and cache hit / miss counters Kafka has no counterpart for. The GCS lane of the evidence, `gcs_emulator.rs`, covers the native `[remote_storage.gcs]` backend's reads, deletes and WORM startup gate against an emulator; it does not cover a GCS copy, because `object_store` writes an object with the Cloud Storage XML API and no GCS emulator serves that PUT. The copy path is covered against MinIO and `InMemory` instead.",
+    },
+    KipAnnotation {
+        key: "KIP-412",
+        claim: "Dynamic broker log levels through the BROKER_LOGGER resource",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/incremental_alter_configs.rs",
+        tests: &[
+            "crates/broker/tests/jvm_broker_loggers.rs",
+            "crates/broker/tests/broker_logger_config.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-429",
+        claim: "Cooperative rebalance protocol negotiation in JoinGroup",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/classic_ops/join.rs",
+        tests: &[
+            "crates/broker/tests/group_protocol_negotiation.rs",
+            "crates/broker/tests/jvm_acceptance_cli/console_groups.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-430",
+        claim: "Authorized-operations bitfields in Metadata, DescribeGroups and DescribeCluster",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/authorized_operations.rs",
+        tests: &["crates/broker/tests/authorized_operations.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-447",
+        claim: "OffsetFetch require_stable and the UNSTABLE_OFFSET_COMMIT answer",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/offset_fetch/unstable.rs",
+        tests: &[
+            "crates/broker/tests/txn_offset_commit_materialize.rs",
+            "crates/broker/src/handlers/offset_fetch/tests.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-455",
+        claim: "AlterPartitionReassignments and ListPartitionReassignments",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/reassignment.rs",
+        tests: &[
+            "crates/broker/tests/partition_reassignment.rs",
+            "crates/broker/tests/jvm_acceptance_reassign.rs",
+            "crates/broker/tests/jvm_acceptance_reassign/cancel_gate.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-460",
+        claim: "ElectLeaders with unclean election, and automatic preferred-leader rebalance",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/leader_rebalance.rs",
+        tests: &[
+            "crates/broker/tests/elect_leaders.rs",
+            "crates/broker/tests/elect_leaders/auto_rebalance.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-464",
+        claim: "CreateTopics num_partitions and replication_factor -1 take the broker defaults",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/create_topics.rs",
+        tests: &["crates/broker/src/handlers/create_topics/tests.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-467",
+        claim: "Per-record error indices and messages in the Produce response",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/produce/schema.rs",
+        tests: &["crates/broker/tests/schema_validation/rejected.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-482",
+        claim: "Flexible versions and tagged fields, with the v2 request header",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/network/dispatch.rs",
+        tests: &[
+            "crates/broker/src/network/dispatch/tests.rs",
+            "crates/broker/tests/librdkafka_conformance.rs::round_trip_group_join_and_api_versions_with_kcat",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-496",
+        claim: "OffsetDelete for consumer groups",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/offset_delete.rs",
+        tests: &[
+            "crates/broker/tests/offset_delete.rs",
+            "crates/broker/tests/jvm_acceptance_cli/consumer_groups.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-500",
+        claim: "KRaft mode: broker heartbeats, fencing and controlled shutdown",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/broker_heartbeat.rs",
+        tests: &[
+            "crates/broker/tests/controlled_shutdown.rs",
+            "crates/broker/tests/advertised_controller_liveness.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-511",
+        claim: "Client software name and version in ApiVersions v3",
+        status: KipStatus::Implemented,
+        module: "crates/raft/src/server/api_versions/client_software.rs",
+        tests: &[
+            "crates/broker/tests/client_software_versions.rs",
+            "crates/broker/tests/librdkafka_conformance.rs::round_trip_group_join_and_api_versions_with_kcat",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-516",
+        claim: "Topic identifiers in Metadata, Produce, Fetch, offsets and DeleteTopics",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/topic_resolve.rs",
+        tests: &[
+            "crates/broker/tests/kip516_metadata.rs",
+            "crates/broker/tests/kip516_produce.rs",
+            "crates/broker/tests/kip516_fetch.rs",
+            "crates/broker/tests/kip516_offsets.rs",
+            "crates/broker/tests/kip516_delete_topics.rs",
+            "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-525",
+        claim: "CreateTopics v5 returns the created topic's configuration",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/create_topics.rs",
+        tests: &["crates/broker/tests/admin_handlers.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-534",
+        claim: "Compaction retains the last tombstone and transaction marker for a delay",
+        status: KipStatus::Implemented,
+        module: "crates/log/src/compact.rs",
+        tests: &[
+            "crates/log/src/compact/retention_fuzz.rs",
+            "crates/log/src/compact_model/pass.rs",
+            "crates/broker/tests/compaction.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-546",
+        claim: "DescribeClientQuotas and AlterClientQuotas",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/describe_client_quotas.rs",
+        tests: &[
+            "crates/broker/tests/client_quotas.rs",
+            "crates/broker/tests/jvm_acceptance_quotas/client_quotas.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-554",
+        claim: "SCRAM credentials through AlterUserScramCredentials and DescribeUserScramCredentials",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/alter_user_scram_credentials.rs",
+        tests: &[
+            "crates/broker/tests/describe_user_scram_credentials.rs",
+            "crates/broker/tests/auth_handlers/alter_scram.rs",
+            "crates/broker/tests/jvm_acceptance_sasl/scram.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-559",
+        claim: "protocol_type and protocol_name in JoinGroup v7 and SyncGroup v5",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/sync_group.rs",
+        tests: &["crates/broker/tests/kip559_l7_proxy_fields.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-584",
+        claim: "Feature versioning: UpdateFeatures and the finalized features in ApiVersions",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/update_features.rs",
+        tests: &[
+            "crates/broker/tests/feature_finalization.rs",
+            "crates/broker/tests/api_versions_features.rs",
+            "crates/broker/tests/jvm_features.rs",
+        ],
+        note: "The finalizable features are `metadata.version`, `group.version`, `transaction.version`, `share.version`, `streams.version`, `eligible.leader.replicas.version` and `kraft.version`, the last finalized by a KRaft control record rather than by `UpdateFeatures`. `metadata.version` is supported up to 4.3.1's latest production level, `4.3-IV0` (30), unless Kafka's `unstable.feature.versions.enable` is set, which raises it to trunk's `4.5-IV0` (34), Kafka's `latestTesting`, in `ApiVersions`, node registration, `UpdateFeatures` and `krabka format` alike.",
+    },
+    KipAnnotation {
+        key: "KIP-590",
+        claim: "Envelope: the controller listener serves a forwarded admin write",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/envelope.rs",
+        tests: &[
+            "crates/broker/tests/kip590_envelope.rs",
+            "crates/broker/tests/jvm_role_separated_admin.rs",
+        ],
+        note: "Metadata-dependent admin operations are forwarded in an Envelope carrying the client identity and planned on the active Krabka controller. JVM controller interoperation remains outside the compatibility target (crates/raft/src/lib.rs:54).",
+    },
+    KipAnnotation {
+        key: "KIP-595",
+        claim: "The KRaft controller quorum: Vote, BeginQuorumEpoch, EndQuorumEpoch, Fetch and DescribeQuorum",
+        status: KipStatus::Implemented,
+        module: "crates/kraft-core/src/core.rs",
+        tests: &[
+            "crates/raft/tests/kraft_sim.rs",
+            "crates/raft/tests/kraft_engine_sim.rs",
+            "crates/broker/tests/jvm_static_quorum_spike.rs",
+            "crates/broker/tests/admin_handlers/admin_describe_quorum.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-599",
+        claim: "Controller mutation quotas on CreateTopics, CreatePartitions and DeleteTopics",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/quota/controller_mutation.rs",
+        tests: &["crates/broker/tests/controller_mutation_quota.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-612",
+        claim: "Connection creation rate quotas per IP, per listener and per broker",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/broker/accept.rs",
+        tests: &[
+            "crates/broker/tests/ip_quotas.rs",
+            "crates/broker/tests/dynamic_broker_config.rs",
+        ],
+        note: "A connection from an `ip` entity over its `connection_creation_rate` client quota is held for the throttle time and closed, as Kafka's acceptor closes it with `ConnectionThrottledException`. Over the broker-wide `max.connection.creation.rate` or a listener's `listener.name.<listener>.max.connection.creation.rate`, the acceptor waits the throttle out, at most `quota.window.size.seconds`, and then accepts the connection. The node and listener rates are a generic cell rate algorithm with a burst of one second's worth of connections: it spaces connections at the configured rate as Kafka's `Rate` sensor does, but does not reproduce the sensor's sample windows, so the first burst Kafka admits is larger.",
+    },
+    KipAnnotation {
+        key: "KIP-630",
+        claim: "Metadata snapshots: the checkpoint file and FetchSnapshot",
+        status: KipStatus::Implemented,
+        module: "crates/raft/src/snapshot.rs",
+        tests: &[
+            "crates/raft/tests/snapshot.rs",
+            "crates/raft/tests/kraft_checkpoint_jvm.rs",
+            "crates/broker/tests/fetch_snapshot.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-631",
+        claim: "The KRaft metadata records and broker registration",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/broker_registration.rs",
+        tests: &[
+            "crates/raft/tests/kraft_checkpoint_jvm.rs",
+            "crates/broker/tests/unregister_broker.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-642",
+        claim: "Multi-node quorum reassignment in one operation",
+        status: KipStatus::OutOfScope,
+        module: "crates/raft/src/controller/membership.rs",
+        tests: &[],
+        note: "Voter changes go one node at a time through KIP-853. `change_membership` rejects a batch that adds or removes more than one voter.",
+    },
+    KipAnnotation {
+        key: "KIP-664",
+        claim: "DescribeProducers, DescribeTransactions and ListTransactions",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/describe_producers.rs",
+        tests: &[
+            "crates/broker/tests/describe_producers.rs",
+            "crates/broker/tests/list_describe_transactions.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-704",
+        claim: "AlterPartition's leader recovery state after an unclean election",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/alter_partition/isr_update.rs",
+        tests: &[
+            "crates/broker/src/handlers/alter_partition/isr_update.rs::error_response_matches_kafkas_default_fields",
+            "crates/broker/src/handlers/alter_partition/isr_update.rs::recovering_partition_cannot_expand_until_leader_reports_recovered",
+            "crates/broker/src/handlers/alter_partition/tests.rs",
+            "crates/broker/tests/leader_election.rs::unclean_failover_recovers_after_a_real_broker_restart",
+        ],
+        note: "Unclean election commits RECOVERING with the leader change. The controller fences illegal RECOVERED-to-RECOVERING transitions and multi-member ISR proposals that still report RECOVERING; the elected leader's next maintenance proposal reports RECOVERED. Recovery state is stored in standard KRaft partition metadata and survives replay and snapshot restore.",
+    },
+    KipAnnotation {
+        key: "KIP-714",
+        claim: "Client metrics push: GetTelemetrySubscriptions and PushTelemetry",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/client_metrics/mod.rs",
+        tests: &[
+            "crates/broker/tests/client_telemetry.rs",
+            "crates/broker/tests/client_metrics_config.rs",
+            "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
+        ],
+        note: "GetTelemetrySubscriptions (71) and PushTelemetry (72) are advertised only when the broker has a client-metrics receiver: the `[runtime]` key `client_metrics_enable`, or a configured `client_metrics_otlp_endpoint`, which implies it. The default is off, which is what a stock Kafka broker advertises when `metric.reporters` holds no `ClientTelemetry` implementation, so a modern Java or librdkafka client opens no telemetry handshake it has nowhere to push to. `api_catalog::ClientMetricsReceiver` names the gate and `BrokerConfig::client_metrics_receiver` reads it. Both handlers stay registered either way and answer a client that sends one anyway. A closed connection drops the instance it created, and an idle instance expires after the larger of one minute and three push intervals, as in Kafka. `PushTelemetry` follows Kafka 4.3.1 in two places where trunk has since changed: every push sets the instance's terminating flag, a rejected one included, and a payload that decompresses past `telemetry.max.bytes` is answered `INVALID_RECORD`. `unstable.api.versions.enable` selects trunk's behavior for both, which records the flag only for an accepted push (KAFKA-20898) and answers `TELEMETRY_TOO_LARGE` (KAFKA-21076). The `match` patterns of a subscription are `java.util.regex` patterns, compiled as the `ssl.principal.mapping.rules` patterns are: a backreference under a case flag compares as Java's `CIBackRef` does, `\\R` gives back the `\\n` of `\\r\\n` where Java's does, and a group keeps the text it matched in a look-around, an atomic group or a possessive quantifier, on the same backtracking matcher. A selector cannot hold `(?=` or `(?<=`, whose `=` Kafka splits the entry on.",
+    },
+    KipAnnotation {
+        key: "KIP-734",
+        claim: "ListOffsets MAX_TIMESTAMP",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_offsets/timestamp.rs",
+        tests: &["crates/broker/tests/list_offsets_isolation/timestamp_sentinels.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-768",
+        claim: "SASL/OAUTHBEARER against an OIDC provider's JWKS endpoint",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/oauth_jwks.rs",
+        tests: &[
+            "crates/broker/tests/auth_handlers/oauthbearer_tokens.rs::sasl_oauthbearer_signed_token_happy_path",
+            "crates/broker/src/oauth_jwks/refresher/tests.rs",
+            "crates/broker/src/oauth_jwks/fetch.rs::fetch_jwks_parses_served_keyset",
+            "crates/verified/src/jwks.rs::cache_requires_one_fresh_stable_generation",
+        ],
+        note: "The broker half of the KIP: `crates/broker/src/oauth_jwks/` GETs the provider's JWKS document over HTTP or HTTPS, parses it, and swaps the key set into the shared `JwksHandle` a `SignedJwsValidator` reads, so rotated keys are picked up with no restart. It refreshes on a cadence and on a validator's unknown-kid signal, rate-limits the on-demand path, keeps the previous key set when a fetch fails, and fences readers with the even/odd generation counter that crates/verified/src/jwks.rs:42 proves admission against; the same file's crates/verified/src/jwks.rs:84 keeps the on-demand limiter monotonic across a wall-clock rollback. Cache expiry, issuer and audience checks, the principal and groups claims, the `typ` check, clock skew, an operator-supplied `IdP` TLS trust bundle and the `use=enc` filter are configured from the `[oauthbearer]` TOML table rather than Kafka's `sasl.oauthbearer.*` JAAS options. The KIP's client half -- the login callback that retrieves a token with an OAuth `client_credentials` grant -- is a client concern and lives in `krabka-client-rs`, not in this repository.",
+    },
+    KipAnnotation {
+        key: "KIP-778",
+        claim: "metadata.version as a finalized feature that `krabka format` bootstraps",
+        status: KipStatus::Implemented,
+        module: "crates/format/src/format/features.rs",
+        tests: &[
+            "crates/format/tests/format_smoke.rs",
+            "crates/broker/tests/format_features.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-814",
+        claim: "A static leader that rejoins a stable group gets `skip_assignment` and keeps the current assignment",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/classic_ops/join.rs",
+        tests: &[
+            "crates/broker/tests/static_membership.rs::static_rejoin_preserves_assignment_and_generation",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-827",
+        claim: "DescribeLogDirs v4 reports total and usable bytes per directory",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/describe_log_dirs/dirs.rs",
+        tests: &["crates/broker/tests/jvm_acceptance_quotas/log_dirs.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-835",
+        claim: "The KRaft leader appends a NoOpRecord every metadata.max.idle.interval.ms",
+        status: KipStatus::Implemented,
+        module: "crates/raft/src/kraft/controller/idle.rs",
+        tests: &[
+            "crates/raft/src/kraft/controller/tests_cleaning.rs::a_leader_appends_kip835_no_ops_that_change_nothing",
+            "crates/raft/src/kraft/controller/tests_cleaning.rs::the_no_op_timer_runs_only_on_a_leader_with_an_interval",
+            "crates/raft/src/kraft/controller/tests_apply.rs::quorum_snapshot_timestamp_tracks_applied_not_newer_committed_records",
+            "crates/broker/src/metadata_observer/fetch.rs::apply_fetch_records_advances_data_batch_offset_and_publishes",
+            "crates/broker/src/metadata_observer.rs::pending_record_processing_time_tracks_average_and_max",
+            "crates/broker/src/broker/gauges.rs::applied_record_gauges_follow_kafka_units_and_initial_values",
+            "crates/broker/src/broker/gauges.rs::active_controller_lag_is_sample_time_minus_the_applied_append_time",
+        ],
+        note: "The NoOpRecord heartbeat is in the tree. Every role exports KIP-835's applied-record series with Kafka's units and initial values: metadata_last_applied_offset (last-applied-record-offset, LastAppliedRecordOffset), metadata_last_committed_offset (LastCommittedRecordOffset), metadata_last_applied_timestamp_ms (last-applied-record-timestamp, LastAppliedRecordTimestamp) and metadata_last_applied_lag_ms (last-applied-record-lag-ms, LastAppliedRecordLagMs), whose lag is the sample time minus the applied append time on the active controller too. metadata_load_error_count is metadata-load-error-count. pending_record_processing_time_us_avg and _max are the Mean and Max of MetadataBatchProcessingTimeUs. Not exported: metadata-apply-error-count and MetadataErrorCount, because applying a decoded record to the image cannot fail and a controller stops on a replay fault instead of counting it. The gauges refresh on the broker polling interval, not at scrape.",
+    },
+    KipAnnotation {
+        key: "KIP-841",
+        claim: "Unclean leader election when the ISR is empty and the topic allows it",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/leader_election.rs",
+        tests: &[
+            "crates/broker/tests/leader_election.rs",
+            "crates/broker/src/leader_election/scan/dead_broker_tests.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-848",
+        claim: "The next-generation consumer group protocol",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/consumer_state.rs",
+        tests: &[
+            "crates/broker/tests/consumer_group_next_gen.rs",
+            "crates/broker/tests/jvm_consumer_group_next_gen.rs",
+            "crates/broker/tests/group_version.rs",
+            "crates/broker/tests/jvm_acceptance_cli/consumer_groups.rs",
+            "crates/broker/tests/librdkafka_conformance.rs::next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x",
+        ],
+        note: "A `ConsumerGroupHeartbeat` whose `SubscribedTopicRegex` does not compile is answered `INVALID_REGULAR_EXPRESSION` (128) before any member record is written, and the member is not admitted, as Kafka does. The pattern is compiled with Rust `regex` in Unicode mode, which accepts RE2J's Unicode character classes; topic names are ASCII, so RE2J's ASCII-only perl classes cannot diverge on a match. An inline flag group naming a flag RE2J has no equivalent for (`x`, `u`, `R`) is rejected ahead of the compile with RE2J's own message, since `regex` would take it. The `re2j` wrapper translates RE2J's `\\Q...\\E` literal quoting, the escapes RE2J reads as literals, and its character-class and counted-repetition rules before compiling, while keeping Rust `regex`'s bounded non-backtracking matching. A repetition large enough to exceed `regex`'s compiled-size limit remains a narrow acceptance difference. No JVM-lane case covers the refusal: `KafkaConsumer.subscribe(Pattern)` and `kafka-console-consumer --include` compile the pattern locally with `java.util.regex`, so a stock JVM client never sends an invalid one to the broker. The group resolves each subscribed regex once for all its members, as Kafka's `TopicRegexResolver` does: against the metadata image, keeping the topics that the principal of the heartbeat that resolves it may `Describe`. It records the result as a `ConsumerGroupRegularExpression` record, so a coordinator failover restores the topics of every regex subscription without a heartbeat that carries the pattern. A heartbeat of any member resolves the patterns again when a member's pattern is not resolved yet, when a topic was created since the last resolution, or when the last one is older than `group.consumer.regex.refresh.interval.ms` (10 minutes), and never within 10 seconds of the last one. A change of the ACLs counts as a new topic here, where Kafka picks it up at the refresh interval. A group's `consumer.session.timeout.ms`, `consumer.heartbeat.interval.ms` and `consumer.assignment.interval.ms` are accepted, validated against the `group.consumer.min.*` and `group.consumer.max.*` bounds and stored by `AlterConfigs` and `IncrementalAlterConfigs` on a `GROUP` resource, as Kafka does, and the consumer coordinator applies them to that group over the broker's `group.consumer.*` values. A next target assignment waits for `consumer.assignment.interval.ms` (1 s by default) since the last one, as in Kafka's `canComputeNextTargetAssignment`.",
+    },
+    KipAnnotation {
+        key: "KIP-853",
+        claim: "Dynamic controller quorum: AddRaftVoter, RemoveRaftVoter, UpdateRaftVoter and auto-join",
+        status: KipStatus::Implemented,
+        module: "crates/raft/src/kraft/controller/reconfiguration.rs",
+        tests: &[
+            "crates/broker/tests/dynamic_voters.rs",
+            "crates/raft/tests/reconfig.rs",
+            "crates/broker/tests/jvm_features.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-858",
+        claim: "Directory identifiers: AssignReplicasToDirs and directory ids in heartbeats",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/assign_dirs.rs",
+        tests: &[
+            "crates/broker/tests/jbod_disk_failure.rs",
+            "crates/broker/tests/offline_replicas.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-860",
+        claim: "AlterPartitionReassignments refuses a replication-factor change unless the request allows it",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/alter_partition_reassignments/plan.rs",
+        tests: &[
+            "crates/broker/src/handlers/alter_partition_reassignments/plan.rs::the_replication_factor_check_counts_the_set_the_partition_is_headed_for",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-890",
+        claim: "Transactions v2: verify-only AddPartitionsToTxn and epoch bumps on completion",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/txn/version.rs",
+        tests: &[
+            "crates/broker/tests/transaction_version.rs",
+            "crates/broker/tests/transaction_version/txnver_verify_only.rs",
+        ],
+        note: "What a request may do follows its API version, as in Kafka, whatever `transaction.version` the cluster finalized: EndTxn v5 and AddPartitionsToTxn v4 and later are TV_2 and bump the epoch, and older versions and AddOffsetsToTxn are TV_0. The cluster level picks the `__transaction_state` value format and the rules of a server-initiated abort. Two answers follow Kafka trunk only under `unstable.api.versions.enable`: an EndTxn v5 commit at the pre-abort epoch after CompleteAbort answers PRODUCER_FENCED (KAFKA-20785, where 4.3.1 answers INVALID_TXN_STATE), and `LastProducerEpoch` (tag 4) is written to and read from `__transaction_state` (KAFKA-20357, where 4.3.1 keeps it in memory). A transactional offset commit records the topic id only from TxnOffsetCommit v6 and under that flag.",
+    },
+    KipAnnotation {
+        key: "KIP-903",
+        claim: "Broker epochs fence stale replicas in AlterPartition",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/alter_partition/isr_update.rs",
+        tests: &[
+            "crates/raft/src/kraft/controller/tests_broker_registration.rs",
+            "crates/broker/src/elr/tests.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-919",
+        claim: "Admin clients bootstrap from controllers: ControllerRegistration, DescribeCluster and UnregisterBroker",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/controller_admin.rs",
+        tests: &[
+            "crates/broker/tests/jvm_bootstrap_controller.rs",
+            "crates/broker/tests/client_admin_controller_bootstrap.rs",
+            "crates/broker/tests/unregister_broker.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-932",
+        claim: "Share groups: membership, ShareFetch, ShareAcknowledge, the share coordinator and admin offsets",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/share_partition/mod.rs",
+        tests: &[
+            "crates/broker/tests/share_groups.rs",
+            "crates/broker/tests/share_consume.rs",
+            "crates/broker/tests/share_admin_offsets.rs",
+            "crates/broker/tests/jvm_share_groups.rs",
+        ],
+        note: "Group-level configs are accepted, validated and stored for every key of Kafka 4.3.1's `GroupConfig`, by `AlterConfigs` and `IncrementalAlterConfigs` on a `GROUP` resource, as Kafka does. The share partitions apply `share.auto.offset.reset`, `share.record.lock.duration.ms`, `share.delivery.count.limit`, `share.partition.max.record.locks`, `share.isolation.level` and `share.renew.acknowledge.enable`. The share coordinator applies `share.session.timeout.ms`, `share.heartbeat.interval.ms` and `share.assignment.interval.ms` to that group over the broker's `group.share.*` values, and a next target assignment waits for the assignment interval (1 s by default) since the last one, as in Kafka's `canComputeNextTargetAssignment`.",
+    },
+    KipAnnotation {
+        key: "KIP-939",
+        claim: "Two-phase commit transactions with the KIP-939 timeout rules",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/txn/two_pc.rs",
+        tests: &[
+            "crates/broker/tests/transactions_2pc.rs",
+            "crates/broker/src/txn/two_pc_model.rs",
+        ],
+        note: "`InitProducerId` v6 is `latestVersionUnstable` in Kafka 4.3.1, so it is served only under `unstable.api.versions.enable`, and 2PC itself only under `transaction.two.phase.commit.enable`. `keepPreparedTxn` is answered UNSUPPORTED_VERSION, as 4.3.1's `TransactionCoordinator.handleInitProducerId` answers it, unless both switches are on; then krabka's prepared-transaction recovery serves it, which no Kafka release implements.",
+    },
+    KipAnnotation {
+        key: "KIP-950",
+        claim: "Tiered storage disablement: remote.log.copy.disable and remote.log.delete.on.disable",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/remote_log_manager.rs",
+        tests: &[
+            "crates/broker/src/config_keys/validation/tests.rs",
+            "crates/broker/tests/jvm_acceptance_tiered.rs",
+        ],
+        note: "`remote.storage.enable` going true -> false is refused unless `remote.log.delete.on.disable=true` comes with it, and the flip then erases the partition's remote segments and raises its log start offset to the local log start. `remote.log.copy.disable=true` is the read-only tier: no new copies, reads and remote retention unchanged. Under a WORM archive the cascade clears the partition's remote metadata and removes nothing from the archive, as a `DeleteTopics` cascade does.",
+    },
+    KipAnnotation {
+        key: "KIP-951",
+        claim: "Leader hints in the Produce and Fetch responses",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/produce/pipeline.rs",
+        tests: &[
+            "crates/broker/tests/produce_leader_gate.rs",
+            "crates/broker/tests/producer_leader_routing.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-956",
+        claim: "Tiered storage quotas on remote copy and remote fetch",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/remote_log_manager/quota.rs",
+        tests: &["crates/broker/tests/tiered_dynamic_remote_log.rs"],
+        note: "A remote log manager on each broker meters its segment copies against `remote.log.manager.copy.max.bytes.per.second` and its consumer cold reads against `remote.log.manager.fetch.max.bytes.per.second` with Kafka's `RLMQuotaManager`: a `SimpleRate` over 11 one-second samples, and the throttle time of `QuotaUtils.throttleTime`. A copy over the quota waits, at most a second at a time, before the next segment uploads; a consumer fetch over the quota skips its remote read and answers that partition with no error and empty records, as `ReplicaManager` does. A dynamic change of either rate applies to the next copy or fetch. The sample window keys are not read, so the window is always Kafka's default, Kafka's throttle-time sensors are not published, and a share fetch's tiered read is not metered.",
+    },
+    KipAnnotation {
+        key: "KIP-966",
+        claim: "Eligible leader replicas, unclean recovery and DescribeTopicPartitions",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/elr.rs",
+        tests: &[
+            "crates/broker/tests/unclean_recovery.rs",
+            "crates/broker/tests/describe_topic_partitions.rs",
+            "crates/broker/tests/jvm_acceptance_cli/elr_columns.rs",
+            "crates/broker/tests/jvm_features.rs",
+        ],
+        note: "ELR maintenance is gated on the `eligible.leader.replicas.version` feature, as Kafka gates it on `FeatureControlManager.isElrFeatureEnabled()`: at level 0 the controller publishes no eligible or last-known-eligible set, and a downgrade to 0 clears what an earlier level 1 published. The release default is level 1 from `metadata.version` 4.1-IV0, where `ELRV_1` bootstraps, and 0 below it; level 1 declares Kafka's KIP-1022 dependency on `metadata.version` at 4.0-IV1. ELR is carried by standard per-partition KRaft metadata and is consumed during JVM-compatible replay. The last-known ELR follows Kafka 4.3.1's `PartitionChangeBuilder` (`useLastKnownLeaderInBalancedRecovery` is always on): it holds the single last leader of a partition that has no leader and is empty otherwise, and when that leader returns it is elected as an unclean leader (`RECOVERING`, a singleton ISR) with no `unclean.leader.election.enable` or `unclean.recovery.strategy` consulted, unless an ELR member is there to lead cleanly first. krabka's partition record always names a leader, so a partition with no leader keeps its last leader in the record, marks it with that one-member last-known ELR, and `Metadata` and `DescribeTopicPartitions` report it as `leader = -1`; the election runs when a broker unfences (`handleBrokerUnfenced`). The operator election in `ElectLeaders` does not take the last-known rung.",
+    },
+    KipAnnotation {
+        key: "KIP-996",
+        claim: "Pre-vote before a KRaft election",
+        status: KipStatus::Implemented,
+        module: "crates/kraft-core/src/core/election.rs",
+        tests: &[
+            "crates/kraft-core/src/core/election/tests.rs",
+            "crates/raft/tests/kraft_engine_sim/failover.rs",
+            "crates/broker/tests/jvm_static_quorum_spike/contested_election.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1005",
+        claim: "ListOffsets LATEST_TIERED_TIMESTAMP",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_offsets/sentinels.rs",
+        tests: &["crates/broker/tests/list_offsets_isolation/timestamp_sentinels.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1022",
+        claim: "Feature flags with dependency checks at format and upgrade time",
+        status: KipStatus::Implemented,
+        module: "crates/format/src/format/features.rs",
+        tests: &[
+            "crates/broker/tests/format_features.rs",
+            "crates/broker/tests/jvm_features.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1023",
+        claim: "ListOffsets EARLIEST_PENDING_UPLOAD_TIMESTAMP, and a follower that starts at the last tiered offset",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_offsets/resolve.rs",
+        tests: &[
+            "crates/broker/tests/list_offsets_isolation/timestamp_sentinels.rs",
+            "crates/broker/tests/follower_fetch_last_tiered_offset.rs",
+        ],
+        note: "With `follower.fetch.last.tiered.offset.enable` set, per broker or cluster-wide and read for each decision, an empty follower of a tiered, uncompacted topic whose leader has records starts at the leader's earliest pending upload offset instead of its local log start, on `OFFSET_OUT_OF_RANGE` and on `OFFSET_MOVED_TO_TIERED_STORAGE`, as `AbstractFetcherThread.fetchOffsetAndTruncate` and `handleOffsetsMovedToTieredStorage` do. The follower does not build Kafka's remote log auxiliary state: its leader-epoch cache and producer state start empty at the restart offset, as krabka's other tiered restarts do.",
+    },
+    KipAnnotation {
+        key: "KIP-1038",
+        claim: "ListTransactions filters transactional ids by an RE2J-compiled pattern",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_transactions.rs",
+        tests: &[
+            "crates/broker/src/handlers/list_transactions.rs",
+            "crates/broker/src/re2j.rs",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1066",
+        claim: "cordoned.log.dirs: cordoned log directories take no new replica",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/cordoned_log_dirs.rs",
+        tests: &[
+            "crates/broker/src/cordoned_log_dirs.rs",
+            "crates/broker/src/handlers/broker_heartbeat/tests.rs::a_heartbeat_stores_its_cordoned_dirs_from_4_3_iv0",
+            "crates/broker/src/handlers/create_topics/placement/tests.rs::fully_cordoned_brokers_are_not_automatic_placement_candidates",
+            "crates/broker/src/handlers/incremental_alter_configs/broker_scope.rs",
+            "crates/broker/tests/alter_replica_log_dirs.rs",
+        ],
+        note: "Matches Kafka 4.3.1. A manual CreateTopics or CreatePartitions assignment, or an AlterPartitionReassignments target, that names a broker whose log directories are all cordoned is accepted, as a live `apache/kafka:4.3.1` accepts it: the `INVALID_REPLICA_ASSIGNMENT` refusal `The manual partition assignment includes broker N, but all its log directories are cordoned.` is KAFKA-20832, which is on Kafka trunk and the 4.3 branch after 4.3.1 only. The controller does not tell a forwarded write of `cordoned.log.dirs` from a direct one, so it does not apply Kafka's rule that a direct controller write may only remove entries.",
+    },
+    KipAnnotation {
+        key: "KIP-1071",
+        claim: "Streams groups: StreamsGroupHeartbeat and StreamsGroupDescribe",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/streams/mod.rs",
+        tests: &[
+            "crates/broker/tests/streams_groups.rs",
+            "crates/broker/tests/streams_classic_upgrade.rs",
+            "crates/broker/tests/jvm_streams_groups.rs",
+            "crates/broker/tests/jvm_streams_app.rs",
+        ],
+        note: "A group's `streams.*` overrides, `streams.initial.rebalance.delay.ms` and `streams.assignment.interval.ms` included, apply per group, and a key of another coordinator stored beside them leaves them intact.",
+    },
+    KipAnnotation {
+        key: "KIP-1073",
+        claim: "DescribeCluster hides fenced brokers from clients",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/describe_cluster.rs",
+        tests: &["crates/broker/tests/role_separation_observer.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1075",
+        claim: "A server-side timeout for remote ListOffsets work",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_offsets/remote.rs",
+        tests: &["crates/broker/src/config_keys/registry/tests.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1101",
+        claim: "The MetadataHash tagged field on the group-metadata records, and the streams partition-metadata record it retires",
+        status: KipStatus::OutOfScope,
+        module: "crates/broker/src/coordinator/unified/persistence_next_gen/epochs.rs",
+        tests: &[],
+        note: "The hash is how Kafka decides a group must rebalance because its subscribed topics changed shape. The consumer and share groups of krabka decide that from the metadata image instead and write the hash as 0, which is what Kafka writes for a group whose hash is unset, and Kafka's own reader accepts it. The streams group keeps Kafka's hash, because KIP-1071 configures the topology again when it changes, and writes it in its group metadata record. krabka keeps the streams partition-metadata snapshot this KIP retired, on the key version Kafka no longer assigns, where Kafka's serde skips it as an unknown type rather than mis-reading it.",
+    },
+    KipAnnotation {
+        key: "KIP-1142",
+        claim: "ListConfigResources",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/list_config_resources.rs",
+        tests: &["crates/broker/tests/admin_handlers/admin_listings.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1155",
+        claim: "A checkpoint at every metadata.version downgrade",
+        status: KipStatus::Implemented,
+        module: "crates/raft/src/kraft/controller/snapshotting.rs",
+        tests: &["crates/raft/src/kraft/controller/tests_downgrade.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1186",
+        claim: "kraft.version upgrade and the last-voter check that the Kafka 4.3 quorum tools drive",
+        status: KipStatus::Implemented,
+        module: "crates/raft/src/server/voter_admin.rs",
+        tests: &["crates/broker/tests/jvm_features.rs"],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1191",
+        claim: "Share-group dead-letter queue: a record that a member rejects, or that uses up the delivery count limit, is written to the group's dead-letter topic before it is archived",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/share_partition/dlq.rs",
+        tests: &[
+            "crates/broker/src/features.rs::share_version_two_is_advertised_only_under_unstable_feature_versions",
+            "crates/broker/src/handlers/update_features/preconditions.rs::share_version_two_needs_unstable_feature_versions",
+            "crates/format/src/format/features.rs::share_version_two_is_trunks_level",
+            "crates/broker/src/share_partition/state/dlq.rs",
+            "crates/broker/src/share_partition/dlq/record.rs",
+            "crates/broker/src/share_partition/dlq/validate.rs",
+            "crates/broker/src/share_partition/dlq/coalesce.rs",
+            "crates/broker/src/share_partition/dlq/writer.rs",
+            "crates/broker/src/metrics/share_dlq.rs",
+            "crates/broker/src/share_partition/manager/dead_letter.rs",
+            "crates/broker/tests/share_consume/dead_letter_queue.rs",
+        ],
+        note: "Kafka trunk's `share.version` 2, which a node supports only under `unstable.feature.versions.enable`; the topic key `errors.deadletterqueue.group.enable` and the group keys `errors.deadletterqueue.topic.name` and `errors.deadletterqueue.copy.record.enable` need `unstable.api.versions.enable` too, so trunk mode is both switches. At `share.version` 1, the level a default node runs, a group's dead-letter keys change nothing and a reject archives at once. A group with a topic name gets one record for each offset that is rejected or reaches `share.delivery.count.limit`, with Kafka's six `__dlq.errors.*` headers and, with `errors.deadletterqueue.copy.record.enable`, the source key and value. It is an acks=all produce to the leader of the topic partition that the source partition maps to, as Kafka's `ShareGroupDLQStateManager` sends it, over the inter-broker listener, and it retries five times from 1 s to 30 s. The writes of a broker share one connection to each destination leader, neighbouring runs with the same delivery count and cause are one write, and at most eight writes run at once. As in Kafka's `ShareGroupDLQStateManager`, the rounds of every write that waits for one destination leader go out in as few produce requests as `max.message.bytes` allows, across runs and partitions: one request is in flight to a leader, the rounds that arrive meanwhile go out together in the next, the rounds for one partition are one batch, and each write archives its run when the response holds the row for its own partition, and retries on its own. The eight writers are the most runs that share a request. The record is persisted as delivery state `ARCHIVING` (3) first and as `ARCHIVED` (4) when the write ends, whatever its result, and a leader that finds `ARCHIVING` after a restart writes the record again, as `SharePartition.initiateDLQAndArchive` and `maybeResumeDlqArchiving` do. The topic has to have `errors.deadletterqueue.group.enable=true`, a name that starts with `errors.deadletterqueue.topic.name.prefix` (default `dlq.`) and not with `__`, and a missing topic is created only when `errors.deadletterqueue.auto.create.topics.enable` is true. Both cluster keys are read from the dynamic broker config, per broker and then cluster-wide, and neither is in the `DescribeConfigs` key roster of a broker yet. The `DeadLetterQueue*` meters of Kafka's `ShareGroupMetrics` are exported for each group as the counters `krabka_broker_share_group_dlq_records_total` (`DeadLetterQueueRecordCount`), `krabka_broker_share_group_dlq_produce_requests_total` (`DeadLetterQueueTotalProduceRequestsPerSec`, one for each round of each write for each attempt, as Kafka counts it) and `krabka_broker_share_group_dlq_failed_produce_requests_total` (`DeadLetterQueueFailedProduceRequestsPerSec`), and `group.share.dlq.manager.class.name`, a JVM class name, has no counterpart. A copied record that the six headers and the batch header push over `max.message.bytes` is written with its headers alone, where trunk's writer sends it whole and loses it to `MESSAGE_TOO_LARGE`.",
+    },
+    KipAnnotation {
+        key: "KIP-1222",
+        claim: "Share acquisition lock renewal: the Renew acknowledge type and IsRenewAck on ShareFetch and ShareAcknowledge v2",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/share_fetch/acknowledge.rs",
+        tests: &[
+            "crates/broker/src/handlers/share_fetch/renew_tests.rs::renew_acknowledgements_renew_only_the_renew_offsets",
+            "crates/broker/src/handlers/share_fetch/renew_tests.rs::a_renew_fetch_answers_a_denied_topic_as_an_acknowledge_error",
+            "crates/broker/tests/share_consume/lock_lifetime.rs::renew_extends_lock_not_redelivered",
+        ],
+        note: "`share.renew.acknowledge.enable` (default true) is a `GroupConfig` key that `AlterConfigs` and `IncrementalAlterConfigs` accept on a `GROUP` resource and that the share partitions apply: a group that sets it to false answers a Renew acknowledgement with INVALID_RECORD_STATE, and a Renew type without IsRenewAck is INVALID_REQUEST.",
+    },
+    KipAnnotation {
+        key: "KIP-1241",
+        claim: "Delayed remote copy: remote.copy.lag.ms and remote.copy.lag.bytes hold a sealed segment back from the remote tier",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/remote_log_manager/copy.rs",
+        tests: &[
+            "crates/broker/src/remote_log_manager/copy.rs::a_sealed_segment_waits_out_its_copy_lag",
+            "crates/broker/src/remote_log_manager/copy.rs::a_derived_copy_lag_is_the_effective_local_retention",
+            "crates/broker/src/remote_log_manager.rs::tick_all_honours_the_remote_copy_lag_on_a_trunk_broker",
+        ],
+        note: "Kafka trunk's topic keys and their `log.remote.copy.lag.ms` and `log.remote.copy.lag.bytes` broker defaults, served only under `unstable.api.versions.enable`. By default they are unknown configs, as on 4.3.1, and a sealed segment is copied as soon as it is sealed. With the flag on, the copy pass stops at the first sealed segment that is neither old enough by its newest record nor far enough behind newer local data, as `RLMCopyTask.candidateLogSegments` does.",
+    },
+    KipAnnotation {
+        key: "KIP-1242",
+        claim: "ApiVersions v5 routing identity and REBOOTSTRAP_REQUIRED",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/api_versions.rs",
+        tests: &["crates/broker/src/handlers/api_versions/tests.rs"],
+        note: "Kafka trunk's ApiVersions v5, served only under `unstable.api.versions.enable`. By default both listeners serve 4.3.1's v0-v4 and answer v5 `UNSUPPORTED_VERSION` with that range, so REBOOTSTRAP_REQUIRED (129) is never sent. On a SASL listener the first ApiVersions, which arrives before authentication, is answered as Kafka's `SaslServerAuthenticator` answers it: `INVALID_REQUEST` for an invalid request and otherwise the table, with no routing check.",
+    },
+    KipAnnotation {
+        key: "KIP-1251",
+        claim: "OffsetCommit accepts an older member epoch for a partition assigned at or before that epoch",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/coordinator/unified/consumer_state/group.rs",
+        tests: &[
+            "crates/broker/src/handlers/offset_commit/group_validation_tests.rs::consumer_group_commit_follows_kip_1251",
+            "crates/broker/src/coordinator/unified/consumer_state/group.rs::offset_commit_follows_kafka_consumer_group_rule",
+        ],
+        note: "",
+    },
+    KipAnnotation {
+        key: "KIP-1263",
+        claim: "The AssignmentTimestamp tagged field on the target-assignment metadata records",
+        status: KipStatus::OutOfScope,
+        module: "crates/broker/src/coordinator/unified/persistence_next_gen/epochs.rs",
+        tests: &[],
+        note: "Kafka stamps each target assignment with the time it was computed, for its own assignment metrics. krabka does not measure assignment latency from the log, so it writes the tagged field's default of 0, which is what Kafka writes when it has no timestamp to record.",
+    },
+    KipAnnotation {
+        key: "KIP-1276",
+        claim: "CIDR-range ACL hosts (10.0.0.0/8, 2001:db8::/32) in CreateAcls and host matching",
+        status: KipStatus::Implemented,
+        module: "crates/authz/src/cidr.rs",
+        tests: &[
+            "crates/authz/src/cidr.rs",
+            "crates/authz/src/simple/matching.rs",
+            "crates/broker/src/handlers/create_acls/validate.rs",
+        ],
+        note: "Trunk behavior, behind `unstable.feature.versions.enable`. By default `CreateAcls` and the authorizer behave as Kafka 4.3.1 does: any host, an empty one or one containing `/` included, is stored and compared as text. Under the flag `CreateAcls` applies trunk's `validateHostPattern`, which accepts a CIDR host from `metadata.version` 4.4-IV1 (level 32) and answers UNSUPPORTED_VERSION below it, and the authorizer reads a stored host containing `/` as a range from that version.",
+    },
+    KipAnnotation {
+        key: "KIP-1312",
+        claim: "UnregisterController drops a controller registration",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/unregister_controller.rs",
+        tests: &[
+            "crates/broker/src/handlers/unregister_controller/tests.rs::refusals_follow_trunks_order",
+            "crates/broker/src/handlers/unregister_controller/tests.rs::handle_unregisters_a_registered_controller_as_trunk_does",
+            "crates/broker/tests/controller_admin_surface.rs::controller_listener_serves_unregister_controller",
+            "crates/broker/tests/unregister_controller_forward.rs",
+        ],
+        note: "Matches Kafka trunk: no Kafka release has api key 94. The controller listener answers it and a broker listener forwards it in an Envelope, as trunk's `ControllerApis` and `KafkaApis` do. It is advertised and accepted only under `unstable.api.versions.enable`; by default a request for key 94 closes the connection, as it does against a 4.3.1 broker or controller, and an Envelope carrying one is answered UNSUPPORTED_VERSION. It needs `metadata.version` 4.4-IV2 (level 33), which a node supports only under `unstable.feature.versions.enable`, and answers trunk's UNSUPPORTED_VERSION below it.",
+    },
+    KipAnnotation {
+        key: "KIP-1319",
+        claim: "TxnOffsetCommit v6: topics by id, GROUP_ID_NOT_FOUND and STALE_MEMBER_EPOCH",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/txn/handlers/txn_offset_commit.rs",
+        tests: &[
+            "crates/broker/src/txn/handlers/txn_offset_commit/integration_tests.rs::v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check",
+            "crates/broker/src/txn/handlers/txn_offset_commit/integration_tests.rs::v6_answers_group_id_not_found_where_older_versions_answer_illegal_generation",
+            "crates/broker/tests/transactions/txn_offset_commit_topic_ids.rs::send_offsets_to_transaction_commits_by_topic_id",
+        ],
+        note: "Kafka trunk's TxnOffsetCommit v6, which Kafka 4.3.1 predates, served only under `unstable.api.versions.enable`. By default the broker advertises and accepts 4.3.1's v0-v5.",
+    },
+    KipAnnotation {
+        key: "KIP-1331",
+        claim: "Streams topology descriptions: StreamsGroupHeartbeat, StreamsGroupDescribe v1 and StreamsGroupTopologyDescriptionUpdate",
+        status: KipStatus::Partial,
+        module: "crates/broker/src/coordinator/unified/streams/description.rs",
+        tests: &[
+            "crates/broker/src/coordinator/unified/streams/actor/tests.rs::heartbeat_response_carries_the_recovery_lag_at_version_1_only",
+            "crates/broker/src/handlers/streams_group_heartbeat.rs::handle_answers_v1_with_the_recovery_lag_and_no_topology_description_request",
+            "crates/broker/src/handlers/streams_group_describe/tests.rs::version_1_names_the_assignor_and_the_topology_description_status",
+            "crates/broker/src/coordinator/unified/streams/actor/tests.rs::a_member_missing_a_rack_aware_tag_gets_missing_client_tags_at_version_1",
+            "crates/broker/src/handlers/streams_group_topology_description_update/tests.rs::handle_answers_as_a_trunk_broker_without_a_plugin",
+            "crates/broker/src/handlers/streams_group_topology_description_update/tests.rs::handle_refuses_what_a_trunk_broker_with_a_plugin_refuses",
+            "crates/broker/src/coordinator/unified/streams/actor/description/tests.rs::one_member_of_a_group_is_asked_for_the_description",
+            "crates/broker/src/coordinator/unified/streams/actor/description/tests.rs::a_loaded_group_is_not_asked_for_a_stored_epoch",
+            "crates/broker/tests/streams_groups/streams_topology_description.rs::one_member_is_asked_and_its_push_is_described",
+            "crates/broker/tests/streams_groups/streams_topology_description.rs::a_deleted_and_recreated_group_is_asked_again",
+        ],
+        note: "Matches Kafka trunk, and served only under `unstable.api.versions.enable`: by default StreamsGroupHeartbeat and StreamsGroupDescribe are 4.3.1's v0, api key 93 is not advertised and closes the connection, and trunk's `streams.*` group keys are unknown group configs. Without `group.streams.topology.description.plugin.class`, as a Kafka broker runs by default, a heartbeat never sets TopologyDescriptionRequired, a describe that asks for the description answers NOT_STORED, and StreamsGroupTopologyDescriptionUpdate (93) answers UNSUPPORTED_VERSION with trunk's `The broker has no streams group topology description plugin configured.` once the streams protocol and group Read gates pass. krabka cannot load a JVM class, so the key accepts only Kafka's reference plugin, `org.apache.kafka.server.streams.InMemoryTopologyDescriptionPlugin`, which krabka builds in, and any other class stops the broker at startup. With that plugin, a version 1 heartbeat asks one member for the description under Kafka's back-off of 30 seconds that doubles to one hour. The broker keeps the pushed description in memory and its epoch in the `StoredDescriptionTopologyEpoch` of the group metadata record, a describe answers it as AVAILABLE, and DeleteGroups drops it. As with Kafka's in-memory plugin, a broker restart or a coordinator move loses the description but keeps the stored epoch, so the group is not asked again until its topology epoch changes. Kafka writes the UNCERTAIN epoch before it calls the plugin, and krabka, whose plugin stores in the same step, writes only the pushed epoch. The built-in plugin never fails, so `FailedDescriptionTopologyEpoch` stays -1 and there is no cleanup cycle for a plugin to retry. Heartbeat v1 carries MISSING_CLIENT_TAGS when a tag key named by the group's `streams.rack.aware.assignment.tags`, whose default is the broker's `group.streams.rack.aware.assignment.tags`, is missing from the member's client tags. DeleteGroups v3, which adds a per-group ErrorMessage, is trunk's too and is advertised only under the same flag. krabka never answers GROUP_DELETION_FAILED, since its plugin cannot fail a delete, so the message is always null.",
+    },
+    KipAnnotation {
+        key: "KIP-1357",
+        claim: "StreamsGroupDescribe v1 names the group's task assignor",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/handlers/streams_group_describe/render.rs",
+        tests: &[
+            "crates/broker/src/handlers/streams_group_describe/tests.rs::version_1_names_the_assignor_and_the_topology_description_status",
+        ],
+        note: "Kafka trunk's StreamsGroupDescribe v1, served only under `unstable.api.versions.enable`.",
+    },
+    KipAnnotation {
+        key: "SASL/GSSAPI",
+        claim: "SASL/Kerberos authentication",
+        status: KipStatus::Implemented,
+        module: "crates/broker/src/network/auth/gssapi.rs",
+        tests: &[
+            "crates/broker/tests/gssapi_e2e.rs",
+            "crates/broker/tests/auth_handlers/gssapi.rs",
+        ],
+        note: "Kerberos predates the KIP process (KAFKA-1686, Kafka 0.9), so no KIP number. Both suites run in the scheduled `container gssapi` CI job: the KDC fixture writes keytabs through a bind mount, so the lane is schedule and workflow_dispatch only.",
+    },
+    KipAnnotation {
+        key: "mixed-quorum",
+        claim: "A controller quorum with both JVM and Krabka voters",
+        status: KipStatus::OutOfScope,
+        module: "crates/raft/src/lib.rs",
+        tests: &[],
+        note: "Outside the raft crate's compatibility target: crates/raft/src/lib.rs:54.",
+    },
+];
+// END KIP_ANNOTATIONS
+
+#[cfg(test)]
+mod tests {
+    use {super::*, assert2::assert, std::collections::BTreeSet};
+
+    /// The KIP number of a `KIP-<n>` key, or `None` for a scope-only key.
+    fn kip_number(key: &str) -> Option<u32> { key.strip_prefix("KIP-")?.parse().ok() }
+
+    #[test]
+    fn kip_annotation_keys_are_unique_and_ordered() {
+        let keys: Vec<&str> = KIP_ANNOTATIONS.iter().map(|row| row.key).collect();
+        let unique: BTreeSet<&str> = keys.iter().copied().collect();
+        assert!(unique.len() == keys.len(), "duplicate keys in {keys:?}");
+
+        // KIP rows first, ascending; the scope-only rows after them.
+        let numbers: Vec<u32> = keys.iter().filter_map(|key| kip_number(key)).collect();
+        let mut sorted = numbers.clone();
+        sorted.sort_unstable();
+        assert!(numbers == sorted, "KIP rows are not in ascending order");
+        let first_scope_row = keys.iter().position(|key| kip_number(key).is_none());
+        if let Some(index) = first_scope_row {
+            assert!(
+                keys[index..].iter().all(|key| kip_number(key).is_none()),
+                "a KIP row follows a scope-only row in {keys:?}"
+            );
+        }
+        assert!(keys.contains(&MIXED_QUORUM_KEY));
+    }
+
+    /// Whether `path` is a Rust source file named from the repository root.
+    fn is_rust_source_path(path: &str) -> bool {
+        path.starts_with("crates/")
+            && std::path::Path::new(path).extension() == Some(std::ffi::OsStr::new("rs"))
+    }
+
+    struct AnnotationTest {
+        path: &'static str,
+        test: &'static str,
+    }
+
+    fn annotation_test_paths(
+        tests: &'static [&'static str],
+    ) -> impl Iterator<Item = AnnotationTest> {
+        tests.iter().map(|test| AnnotationTest {
+            path: test.split_once("::").map_or(*test, |(path, _)| path),
+            test,
+        })
+    }
+
+    #[test]
+    fn kip_annotation_rows_are_complete() {
+        for row in KIP_ANNOTATIONS {
+            assert!(!row.claim.is_empty(), "{} has no claim", row.key);
+            assert!(
+                is_rust_source_path(row.module),
+                "{} owner {} is not a Rust source path from the repository root",
+                row.key,
+                row.module
+            );
+            for AnnotationTest { path, test } in annotation_test_paths(row.tests) {
+                assert!(
+                    is_rust_source_path(path),
+                    "{} test {test} is not a Rust source path from the repository root",
+                    row.key
+                );
+            }
+            match row.status {
+                KipStatus::Implemented => {
+                    assert!(
+                        !row.tests.is_empty(),
+                        "{} is Implemented without a test",
+                        row.key
+                    );
+                }
+                KipStatus::Partial => {
+                    assert!(
+                        !row.tests.is_empty(),
+                        "{} is Partial without a test",
+                        row.key
+                    );
+                    assert!(
+                        !row.note.is_empty(),
+                        "{} is Partial without a note",
+                        row.key
+                    );
+                }
+                KipStatus::OutOfScope => {
+                    assert!(row.tests.is_empty(), "{} is OutOfScope with tests", row.key);
+                    assert!(
+                        !row.note.is_empty(),
+                        "{} is OutOfScope without a note",
+                        row.key
+                    );
+                }
+            }
+        }
+    }
+
+    /// Both rows that rest on the mixed-quorum decision cite it, and each
+    /// carries the status that decision leaves it with: the mixed-quorum row
+    /// is out of scope, and KIP-590 is served-only -- the controller listener
+    /// answers `Envelope`, and a broker-only node needs no forwarding path of
+    /// its own because it writes over the krabka-private `SubmitChange` RPC.
+    #[test]
+    fn mixed_quorum_and_forwarding_rows_cite_the_raft_decision() {
+        for key in [FORWARDING_KEY, MIXED_QUORUM_KEY] {
+            let row = KIP_ANNOTATIONS
+                .iter()
+                .find(|row| row.key == key)
+                .unwrap_or_else(|| panic!("{key} has no annotation"));
+            assert!(
+                row.note.contains(OUT_OF_SCOPE_CITATION),
+                "{key} does not cite {OUT_OF_SCOPE_CITATION}"
+            );
+        }
+        let mixed = KIP_ANNOTATIONS
+            .iter()
+            .find(|row| row.key == MIXED_QUORUM_KEY)
+            .expect("mixed-quorum row");
+        assert!(mixed.status == KipStatus::OutOfScope);
+
+        let forwarding = KIP_ANNOTATIONS
+            .iter()
+            .find(|row| row.key == FORWARDING_KEY)
+            .expect("KIP-590 row");
+        assert!(forwarding.status == KipStatus::Implemented);
+    }
+
+    /// Every module and test path an annotation names is a file in the tree.
+    ///
+    /// Cargo exports `CARGO_MANIFEST_DIR`, from which the repository root is
+    /// two levels up. Bazel stages no source tree for a unit test, so there
+    /// the check has nothing to look at and returns; `aspect generate-kip-matrix`
+    /// makes the same check in CI's docs job, against the checked-out tree,
+    /// and also checks that a `path::function` entry names a function the
+    /// file defines.
+    #[test]
+    fn kip_annotation_paths_exist() {
+        // A Bazel sandbox stages only this crate's sources, so the paths the
+        // rows cite in other crates are absent there even though the
+        // directory exists; `TEST_SRCDIR` is how Bazel announces itself. The
+        // generator in the docs CI job is the hermetic gate for these paths.
+        if std::env::var_os("TEST_SRCDIR").is_some() {
+            return;
+        }
+        let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") else {
+            return;
+        };
+        let root = std::path::Path::new(&manifest_dir).join("../..");
+        if !root.join("crates").is_dir() {
+            return;
+        }
+        for row in KIP_ANNOTATIONS {
+            assert!(
+                root.join(row.module).is_file(),
+                "{} owner {} is missing",
+                row.key,
+                row.module
+            );
+            for AnnotationTest { path, .. } in annotation_test_paths(row.tests) {
+                assert!(
+                    root.join(path).is_file(),
+                    "{} test {path} is missing",
+                    row.key
+                );
+            }
+        }
+        let (path, _) = OUT_OF_SCOPE_CITATION.split_once(':').expect("path:line");
+        assert!(
+            root.join(path).is_file(),
+            "{OUT_OF_SCOPE_CITATION} is missing"
+        );
+    }
+}

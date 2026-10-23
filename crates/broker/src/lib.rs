@@ -192,6 +192,7 @@ pub(crate) mod incarnation;
 pub(crate) mod internal_topics;
 pub(crate) mod isr_maintenance;
 pub(crate) mod kafka_hash;
+pub mod kip_catalog;
 pub(crate) mod lag;
 pub(crate) mod leader_election;
 pub mod leader_rebalance;
