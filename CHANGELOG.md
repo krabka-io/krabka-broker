@@ -47,6 +47,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- Bucket share coordinator background-job keys once per sweep across active
+  state partitions, refreshing a shard after load or membership changes (#1717).
 - Scheduled delivery checks over archived segments buffer bounded byte ranges
   instead of fetching each batch header separately, reducing remote requests for
   ListOffsets LATEST and retention scans (#1682).

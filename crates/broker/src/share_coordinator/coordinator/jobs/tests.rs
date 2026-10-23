@@ -11,16 +11,163 @@ use {
             image_with_topics, lead_all, logged_records, set_clock,
         },
         persistence::ShareSnapshotValue,
+        state::SharePartitionState,
     },
     assert2::{assert, check},
     krabka_log::Offset,
     krabka_metadata::{FeatureLevelRecord, MetadataRecord},
-    std::time::Duration,
+    std::{cell::Cell, time::Duration},
     tempfile::tempdir,
+    tokio::sync::Mutex,
 };
 
 const T1: uuid::Uuid = uuid::Uuid::from_bytes([61; 16]);
 const T2: uuid::Uuid = uuid::Uuid::from_bytes([62; 16]);
+
+/// Every key is inspected once for all active shards, including a deletion
+/// that matches no topic. Routing still uses the production UTF-16 rule.
+#[tokio::test]
+async fn job_keys_are_bucketed_once_per_sweep() {
+    for partitions in [1, 10, 50] {
+        let dir = tempdir().unwrap();
+        let ConfiguredCoordinator { coord, .. } =
+            configured_coordinator(dir.path(), ShareCoordinatorConfig {
+                state_topic_num_partitions: partitions,
+                ..ShareCoordinatorConfig::default()
+            });
+        lead_all(&coord).await;
+        let cell = Arc::new(Mutex::new(SharePartitionState::default()));
+        for index in 0..10_000 {
+            let topic = if index % 2 == 0 { T1 } else { T2 };
+            coord.state.insert(
+                (format!("group-{index}-\u{1f600}"), topic, index % 3),
+                Arc::clone(&cell),
+            );
+        }
+
+        for topic in [None, Some(T1), Some(uuid::Uuid::nil())] {
+            let visits = Cell::new(0);
+            let buckets = coord
+                .keys_by_active_partition(|topic_id| {
+                    visits.set(visits.get() + 1);
+                    topic.is_none_or(|topic| topic == *topic_id)
+                })
+                .await;
+            check!(visits.get() == 10_000, "{partitions} {topic:?}");
+            check!(buckets.len() == usize::try_from(partitions).unwrap());
+            let mut observed = Vec::new();
+            for bucket in &buckets {
+                check!(bucket.keys.windows(2).all(|keys| keys[0] < keys[1]));
+                for (group, topic_id, partition) in &bucket.keys {
+                    check!(
+                        coord.state_partition_for(group, topic_id, *partition)
+                            == bucket.term.partition
+                    );
+                }
+                observed.extend(bucket.keys.iter().cloned());
+            }
+            observed.sort_unstable();
+            let mut expected: Vec<ShareStateKey3> = coord
+                .state
+                .iter()
+                .filter(|entry| topic.is_none_or(|topic| topic == entry.key().1))
+                .map(|entry| entry.key().clone())
+                .collect();
+            expected.sort_unstable();
+            check!(observed == expected, "{partitions} {topic:?}");
+        }
+
+        // A shard that unloads is excluded even though its keys have not
+        // left memory yet. The remaining shards still get the same keys.
+        let inactive = PartitionIndex(0);
+        coord.leader_partitions.write().await.remove(&inactive);
+        let buckets = coord.keys_by_active_partition(|_| true).await;
+        check!(
+            buckets
+                .iter()
+                .all(|bucket| bucket.term.partition != inactive)
+        );
+        let observed: usize = buckets.iter().map(|bucket| bucket.keys.len()).sum();
+        let expected = coord
+            .state
+            .iter()
+            .filter(|entry| {
+                let (group, topic, partition) = entry.key();
+                coord.state_partition_for(group, topic, *partition) != inactive
+            })
+            .count();
+        check!(observed == expected, "{partitions}");
+    }
+}
+
+/// An unload/reload can keep the same leader epoch. Refreshing that shard's
+/// list includes newly replayed keys in a one-shot topic-deletion job.
+#[tokio::test]
+async fn collected_keys_do_not_authorize_a_new_load_generation() {
+    let dir = tempdir().unwrap();
+    let TwoKeys { coord, .. } = two_keys(dir.path(), ShareCoordinatorConfig::default()).await;
+    let buckets = coord.keys_by_active_partition(|_| true).await;
+    let bucket = buckets
+        .into_iter()
+        .find(|bucket| !bucket.keys.is_empty())
+        .unwrap();
+    {
+        let active = coord.active(bucket.term.partition).await.unwrap();
+        check!(bucket.still_active(&active));
+    }
+    let removed = bucket.keys[0].clone();
+    coord.state.remove(&removed);
+    let fresh = (0..)
+        .map(|index| (format!("replayed-{index}"), T1, 0))
+        .find(|(group, topic, partition)| {
+            coord.state_partition_for(group, topic, *partition) == bucket.term.partition
+        })
+        .unwrap();
+    coord.state.insert(
+        fresh.clone(),
+        Arc::new(Mutex::new(SharePartitionState::default())),
+    );
+    coord
+        .leader_partitions
+        .write()
+        .await
+        .get_mut(&bucket.term.partition)
+        .unwrap()
+        .generation += 1;
+    let active = coord.active(bucket.term.partition).await.unwrap();
+    check!(!bucket.still_active(&active));
+    let current = coord.current_partition_keys(bucket, &active, |_| true);
+    check!(current.contains(&fresh));
+    check!(!current.contains(&removed));
+}
+
+/// An initialize admitted before topic deletion can finish before the job
+/// obtains the operation guard, without changing the leadership generation.
+/// Its membership revision makes the job include that newly written key.
+#[tokio::test]
+async fn collected_keys_include_an_initialize_in_the_same_generation() {
+    let dir = tempdir().unwrap();
+    let TwoKeys { coord, .. } = two_keys(dir.path(), ShareCoordinatorConfig::default()).await;
+    let buckets = coord.keys_by_active_partition(|_| true).await;
+    let bucket = buckets
+        .into_iter()
+        .find(|bucket| !bucket.keys.is_empty())
+        .unwrap();
+    let fresh = (0..)
+        .map(|index| format!("initialized-{index}"))
+        .find(|group| coord.state_partition_for(group, &T1, 0) == bucket.term.partition)
+        .unwrap();
+    let image = image_with_topics(&[(T1, 1), (T2, 1)]);
+    coord
+        .initialize(&image, &fresh, T1, 0, 1, Offset(0))
+        .await
+        .unwrap();
+    let active = coord.active(bucket.term.partition).await.unwrap();
+    check!(bucket.still_active(&active));
+    check!(bucket.revision != coord.state_key_revision(active.term.partition));
+    let current = coord.current_partition_keys(bucket, &active, |topic_id| *topic_id == T1);
+    check!(current.contains(&(fresh, T1, 0)));
+}
 
 /// A coordinator and the manual clock that drives it.
 struct TwoKeys {
