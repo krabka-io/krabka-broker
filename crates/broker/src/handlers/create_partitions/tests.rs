@@ -283,8 +283,13 @@ async fn strict_create_partitions_rejects_after_quota_exhaustion() {
         handle: broker_handle,
         directory: _dir,
         broker,
-    } = start_partition_topic().name("metered").call().await;
-    seed_controller_quota(&broker_handle, 2.0).await;
+    } = start_partition_topic()
+        .name("metered")
+        .quota_window(krabka_units::secs(64))
+        .call()
+        .await;
+    // Keep the two-token burst without refilling a token during a runner stall.
+    seed_controller_quota(&broker_handle, 2.0 / 64.0).await;
     krabka_macros::request_test_identity! {
         bind(p, peer);
         user ["admin"];
@@ -317,7 +322,7 @@ async fn strict_create_partitions_rejects_after_quota_exhaustion() {
         ..Default::default()
     };
     assert!(rejected == expected);
-    check!(rejected.throttle_time_ms > 0 && rejected.throttle_time_ms <= 500);
+    check!(rejected.throttle_time_ms > 0 && rejected.throttle_time_ms <= 32_000);
     check!(
         broker_handle
             .controller_image_for_test()

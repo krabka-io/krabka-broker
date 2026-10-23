@@ -23,7 +23,6 @@ pub(super) async fn prepare_startup_transport(
     config: &BrokerConfig,
 ) -> Result<StartupTransport, BrokerError> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    config.validate()?;
     let tls_dynamic = config
         .tls_config
         .as_ref()

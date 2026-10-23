@@ -12,6 +12,7 @@ use {
             config::NextGenConfig, share::config::ShareGroupConfig,
             streams::config::StreamsGroupConfig,
         },
+        file_config::{FileAuthorizationConfig, FileSchemaRegistryConfig},
         network::auth::{GssapiConfig, SslPrincipalMapper},
         operator_keys::OperatorKeys,
         replica_selector::ReplicaSelectorKind,
@@ -611,12 +612,20 @@ krabka_macros::broker_config! {
         /// makes the ACL administration RPCs answer `SECURITY_DISABLED`.
         pub authorizer: std::sync::Arc<dyn Authorizer>,
 
+        /// Resolved authorization settings, assembled into a client at startup.
+        /// An absent section preserves a programmatically injected authorizer.
+        pub authorization_config: Option<FileAuthorizationConfig>,
+
         /// KFC-7 schema validator: the registry client and its cache, shared by
         /// every produce on this broker. Configured through `[schema_registry]` in
         /// `broker.toml`. `None` is the default and means no `[schema_registry]`
         /// section was configured, so a topic that turns `schema.validation.*` on
         /// has nothing to validate against.
         pub schema_validator: Option<std::sync::Arc<SchemaValidator>>,
+
+        /// Resolved registry settings; startup reads secrets and builds the client.
+        /// An absent section preserves a programmatically injected validator.
+        pub schema_registry_config: Option<FileSchemaRegistryConfig>,
 
         /// The operator key trust set, configured through the top-level
         /// `[[operator_keys]]` array in `broker.toml`.

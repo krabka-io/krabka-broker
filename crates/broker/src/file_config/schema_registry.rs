@@ -139,9 +139,8 @@ failopen = true
     }
 
     #[test]
-    fn schema_registry_section_builds_the_validator() {
-        // `schema-registry.invalid` deliberately does not resolve. No HTTP
-        // call is made here; the constructor only builds the client.
+    fn schema_registry_section_resolves_without_building_the_validator() {
+        // Resolution retains the scalar settings and acquires no HTTP client.
         let toml = r#"
 [schema_registry]
 url = "http://schema-registry.invalid:8081"
@@ -149,7 +148,8 @@ url = "http://schema-registry.invalid:8081"
         let cfg = configured(toml, "parse schema_registry section")
             .expect("apply schema_registry section");
 
-        assert!(cfg.schema_validator.is_some());
+        assert!(cfg.schema_registry_config.is_some());
+        assert!(cfg.schema_validator.is_none());
     }
 
     #[test]
@@ -170,10 +170,10 @@ basic_auth_username = "broker"
     }
 
     #[test]
-    fn schema_registry_basic_auth_reads_password_file() {
+    fn schema_registry_basic_auth_does_not_read_password_file() {
         let dir = tempfile::tempdir().unwrap();
         let password_path = dir.path().join("registry-password");
-        std::fs::write(&password_path, "secret\n").unwrap();
+        assert!(!password_path.exists());
         let cfg = configured_unwrap_parse(&format!(
             r#"
 [schema_registry]
@@ -185,7 +185,9 @@ basic_auth_password_path = "{}"
         ))
         .unwrap();
 
-        assert!(cfg.schema_validator.is_some());
+        assert!(cfg.schema_registry_config.is_some());
+        assert!(cfg.schema_validator.is_none());
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]
@@ -198,7 +200,7 @@ basic_auth_password_path = "{}"
     #[test]
     fn schema_registry_zero_cache_size_is_a_config_error() {
         // A zero-capacity LRU makes every record a cache miss, so
-        // `SchemaValidator::new` rejects it. The rejection must arrive as a
+        // resolution rejects it. The rejection must arrive as a
         // `FileConfigError`, not as a panic out of `NonZeroUsize`.
         let toml = r#"
 [schema_registry]

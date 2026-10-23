@@ -418,6 +418,7 @@ async fn state_survives_restart() {
         let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
             .await
             .unwrap();
+        broker.wait_until_share_coordinator_ready().await;
         let client = connect(&broker.listen_addr().to_string()).await;
         let tid = create_topic(&client, "survives-restart").await;
 

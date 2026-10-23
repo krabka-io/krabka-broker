@@ -218,6 +218,8 @@ impl Default for BrokerConfig {
             super_users: std::collections::HashSet::new(),
             authorizer: std::sync::Arc::new(AllowAllAuthorizer),
             schema_validator: None,
+            authorization_config: None,
+            schema_registry_config: None,
             operator_keys: OperatorKeys::default(),
             freeze: FreezeConfig::default(),
             break_glass: BreakGlassConfig::default(),

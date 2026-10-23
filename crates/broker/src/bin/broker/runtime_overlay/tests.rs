@@ -5,7 +5,17 @@ use {
     crate::test_support::env_guard,
     assert2::assert,
     clap::Parser,
+    krabka_broker::{
+        authorizer::{AuthorizationRequest, AuthorizationResult},
+        file_config::FileConfig,
+        security_clients::assemble,
+    },
+    krabka_metadata::{AclOperation, MetadataImage, ResourceType},
+    krabka_security::{AuthMethod, Principal},
     krabka_units::{convert::TimeExt as _, secs},
+    std::time::Duration,
+    uuid::Uuid,
+    wiremock::{Mock, MockServer, ResponseTemplate, matchers::method},
 };
 
 #[test]
@@ -564,4 +574,83 @@ fn check_default_runtime_overlay(config: &BrokerConfig, shutdown: krabka_units::
             config.offsets_topic_replication_factor,
         ) == (secs(30), secs(20), secs(30), 3, 3, 3)
     );
+}
+
+/// The HTTP client observes the resolved timeout, including an environment or
+/// command-line override of the file, rather than the earlier file value.
+#[tokio::test(flavor = "multi_thread")]
+async fn opa_client_uses_the_final_runtime_timeout() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "result": true }))
+                .set_delay(Duration::from_millis(500)),
+        )
+        .expect(4)
+        .mount(&server)
+        .await;
+
+    let cases = [
+        (
+            "100ms",
+            None,
+            Some("--opa-http-timeout=5s"),
+            AuthorizationResult::Allow,
+        ),
+        (
+            "5s",
+            None,
+            Some("--opa-http-timeout=100ms"),
+            AuthorizationResult::Deny,
+        ),
+        ("100ms", Some("5s"), None, AuthorizationResult::Allow),
+        (
+            "5s",
+            Some("5s"),
+            Some("--opa-http-timeout=100ms"),
+            AuthorizationResult::Deny,
+        ),
+    ];
+    for (file_timeout, environment, flag, expected) in cases {
+        let mut config = {
+            let _guard = env_guard();
+            temp_env::with_vars([("KRABKA_OPA_HTTP_TIMEOUT", environment)], || {
+                let file: FileConfig = toml::from_str(&format!(
+                    "[runtime]\nopa_http_timeout = {file_timeout:?}\n\
+                     [authorization]\ntype = \"opa\"\n\
+                     [authorization.opa]\nurl = {:?}\n",
+                    server.uri(),
+                ))
+                .expect("parse file policy");
+                let mut config = BrokerConfig::default();
+                file.apply_before_runtime_overlay(&mut config)
+                    .expect("resolve file policy");
+                let args = Args::try_parse_from(std::iter::once("krabka-broker").chain(flag))
+                    .expect("parse timeout override");
+                args.apply_runtime_to(&mut config, None)
+                    .expect("resolve final runtime policy");
+                config
+            })
+        };
+        assemble(&mut config).expect("assemble resolved security clients");
+        let principal = Principal {
+            name: "alice".to_owned(),
+            auth_method: AuthMethod::SaslPlain,
+            groups: Vec::new(),
+        };
+        let host = "127.0.0.1:9092".parse().expect("peer address");
+        let request = AuthorizationRequest {
+            principal: &principal,
+            host: &host,
+            resource_type: ResourceType::Topic,
+            resource_name: "orders",
+            operation: AclOperation::Read,
+        };
+        let image = MetadataImage::new(Uuid::nil());
+        assert!(
+            config.authorizer.authorize(&image, &request) == expected,
+            "file={file_timeout}, environment={environment:?}, flag={flag:?}"
+        );
+    }
 }

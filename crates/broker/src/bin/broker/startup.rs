@@ -12,6 +12,7 @@ use {
     krabka_broker::{
         Broker, BrokerConfig, BrokerError, BrokerHandle,
         file_config::FileConfig,
+        security_clients,
         telemetry::{OtlpProtocol, TelemetryGuard},
     },
     krabka_units::{Time, convert::TimeExt as _},
@@ -238,6 +239,7 @@ async fn run(
         mut config,
         controlled_shutdown_drain_timeout,
     } = broker_config(&mut args, file_config, client_metrics_otlp)?;
+    security_clients::assemble(&mut config)?;
     // The handle behind the `BROKER_LOGGER` config resource. It drives the
     // stdout layer that the telemetry setup installed, so `kafka-configs
     // --entity-type broker-loggers --alter` retargets the filter of the

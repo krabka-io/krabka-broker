@@ -110,7 +110,7 @@ pub fn config_schema() -> serde_json::Value {
     serde_json::to_value(schema).expect("FileConfig schema serializes")
 }
 
-/// Failures surfaced by [`FileConfig::apply_to`]. Each variant
+/// Failures surfaced by configuration resolution and startup assembly. Each variant
 /// corresponds to a specific misconfiguration the broker can diagnose
 /// at startup; the variants exist (rather than a single `String`
 /// fallthrough) so the binary entry point can log structured context.
