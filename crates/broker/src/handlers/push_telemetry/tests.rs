@@ -28,6 +28,7 @@ use {
     krabka_metadata::{ClientMetricsConfigRecord, MetadataRecord},
     krabka_protocol::{owned::push_telemetry_response, primitives::uuid::Uuid as ProtoUuid},
     opentelemetry_proto::tonic::metrics::v1::number_data_point,
+    prost::Message as _,
     std::sync::Arc,
     uuid::Uuid,
 };
