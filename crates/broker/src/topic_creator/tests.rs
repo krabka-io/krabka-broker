@@ -283,12 +283,14 @@ fn creator_over(controller: FakeMetadataSource, voters: Vec<(NodeId, String)>) -
     )
 }
 
-/// An address on which nothing listens.
-async fn closed_address() -> SocketAddr {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind a probe listener");
-    listener.local_addr().expect("probe address")
+/// Reserve an address without listening, so another parallel fixture cannot
+/// bind the supposedly closed endpoint and answer the request.
+fn closed_socket() -> tokio::net::TcpSocket {
+    let socket = tokio::net::TcpSocket::new_v4().expect("probe socket");
+    socket
+        .bind("127.0.0.1:0".parse().expect("loopback address"))
+        .expect("reserve a closed endpoint");
+    socket
 }
 
 /// `NodeToControllerRequestThread` keeps a request while it finds no
@@ -296,7 +298,7 @@ async fn closed_address() -> SocketAddr {
 /// once it is older than the retry timeout.
 #[tokio::test]
 async fn a_request_that_reaches_no_controller_times_out() {
-    let closed = closed_address().await;
+    let closed = closed_socket();
     let silent = FakeController::start(Script {
         answers: VecDeque::from([Answer::Silent]),
         create_topics_max: create_topics_request::LATEST_STABLE_VERSION,
@@ -312,7 +314,10 @@ async fn a_request_that_reaches_no_controller_times_out() {
         (
             "a controller that refuses the connection",
             Some(NodeId(1)),
-            vec![(NodeId(1), closed.to_string())],
+            vec![(
+                NodeId(1),
+                closed.local_addr().expect("probe address").to_string(),
+            )],
         ),
         ("a controller that never answers", Some(NodeId(1)), vec![(
             NodeId(1),

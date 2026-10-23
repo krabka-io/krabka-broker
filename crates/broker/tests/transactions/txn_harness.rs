@@ -130,6 +130,8 @@ pub fn boot_single_sasl(
 ) -> impl std::future::Future<Output = (BrokerHandle, String, TempDir)> {
     let dir = TempDir::new().unwrap();
     let mut cfg = sasl_plaintext_mechanisms(dir.path().to_path_buf(), vec![SaslMechanism::Plain]);
+    // Match the plaintext single-broker fixture's tolerance under parallel load.
+    cfg.heartbeat_timeout = krabka_units::secs(30);
     for (name, pass) in users {
         cfg.plain_credentials
             .insert((*name).to_string(), (*pass).to_string());
