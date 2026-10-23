@@ -52,7 +52,7 @@ pub(super) struct StaticMetadata {
     pub(super) input: ReconcileInput,
 }
 impl MetadataProvider for StaticMetadata {
-    fn snapshot(&self) -> ReconcileInput { self.input.clone() }
+    fn snapshot(&self) -> std::sync::Arc<ReconcileInput> { std::sync::Arc::new(self.input.clone()) }
 }
 
 /// A reconciler image containing one named topic with the supplied wire id.

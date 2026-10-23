@@ -176,12 +176,12 @@ struct ModelMetadata {
 }
 
 impl MetadataProvider for ModelMetadata {
-    fn snapshot(&self) -> ReconcileInput {
-        ReconcileInput {
+    fn snapshot(&self) -> std::sync::Arc<ReconcileInput> {
+        std::sync::Arc::new(ReconcileInput {
             topic_id_by_name: [(TOPIC_NAME.to_owned(), TOPIC)].into(),
             partitions_per_topic: [(TOPIC, self.partitions)].into(),
             ..Default::default()
-        }
+        })
     }
 }
 

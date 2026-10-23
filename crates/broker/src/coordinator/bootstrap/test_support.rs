@@ -85,9 +85,7 @@ pub(super) fn test_coordinator(
         krabka_raft::NodeId(1),
     ));
     default_coordinator(
-        Arc::new(ImageMetadataProvider {
-            controller: controller.clone(),
-        }),
+        Arc::new(ImageMetadataProvider::new(controller.clone())),
         offsets_log,
     )
 }

@@ -29,7 +29,7 @@ struct StaticMetadata {
     input: ReconcileInput,
 }
 impl MetadataProvider for StaticMetadata {
-    fn snapshot(&self) -> ReconcileInput { self.input.clone() }
+    fn snapshot(&self) -> std::sync::Arc<ReconcileInput> { std::sync::Arc::new(self.input.clone()) }
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]

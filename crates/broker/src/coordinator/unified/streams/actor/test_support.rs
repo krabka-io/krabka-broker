@@ -33,7 +33,9 @@ pub(super) fn undelayed() -> StreamsGroupConfig {
 struct EmptyMetadata;
 
 impl MetadataProvider for EmptyMetadata {
-    fn snapshot(&self) -> ReconcileInput { ReconcileInput::default() }
+    fn snapshot(&self) -> std::sync::Arc<ReconcileInput> {
+        std::sync::Arc::new(ReconcileInput::default())
+    }
 }
 
 /// A coordinator with no connected metadata source, retaining the supplied log ownership.

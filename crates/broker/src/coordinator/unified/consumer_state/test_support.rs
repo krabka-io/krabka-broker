@@ -59,8 +59,8 @@ pub(crate) struct NamedTopic {
 pub(crate) struct Topics(pub(crate) Vec<NamedTopic>);
 
 impl MetadataProvider for Topics {
-    fn snapshot(&self) -> ReconcileInput {
-        ReconcileInput {
+    fn snapshot(&self) -> std::sync::Arc<ReconcileInput> {
+        std::sync::Arc::new(ReconcileInput {
             topic_id_by_name: self
                 .0
                 .iter()
@@ -68,6 +68,6 @@ impl MetadataProvider for Topics {
                 .collect(),
             partitions_per_topic: self.0.iter().map(|topic| (topic.id, 2)).collect(),
             ..Default::default()
-        }
+        })
     }
 }

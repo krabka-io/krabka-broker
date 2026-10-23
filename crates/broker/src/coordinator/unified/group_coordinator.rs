@@ -301,8 +301,7 @@ mod tests {
             format!("{:?}", MetadataSourceHandle(source.clone())).contains("MetadataSourceHandle")
         );
         assert!(
-            format!("{:?}", ImageMetadataProvider { controller: source })
-                .contains("ImageMetadataProvider")
+            format!("{:?}", ImageMetadataProvider::new(source)).contains("ImageMetadataProvider")
         );
     }
 
