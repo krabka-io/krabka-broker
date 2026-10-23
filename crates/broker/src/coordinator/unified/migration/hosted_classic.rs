@@ -676,7 +676,9 @@ mod tests {
                         other.assigned_partitions.clear();
                         other.partitions_pending_revocation.clear();
                     }
-                    let previous_seen = Instant::now() - Duration::from_secs(60);
+                    let previous_seen = Instant::now()
+                        .checked_sub(Duration::from_secs(60))
+                        .expect("the fixture clock supports a minute before now");
                     state.members.get_mut("m").unwrap().last_seen = previous_seen;
 
                     check!(
