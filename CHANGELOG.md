@@ -116,6 +116,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   lock are still the ones they were encoded with. A config change in between
   encodes again under the new settings, as before. The stored bytes are
   unchanged.
+- Pending transaction stamp recovery starts at the earliest surviving open
+  transaction, clamped to the local log floor, so reopening a log skips older
+  unrelated record batches (#1677).
 - Log compaction holds one record batch at a time. The offset-map and rewrite
   passes used to read and decode each sealed segment whole, the rewrite held
   every decoded batch of its group at once, and the offset map kept each
