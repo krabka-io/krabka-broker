@@ -3,13 +3,17 @@
 use {
     super::*,
     crate::{
-        partition::Partition,
         partition_registry::PartitionRegistry,
-        partition_writer::{self, WriterServices},
-        share_coordinator::{bootstrap, config::ShareCoordinatorConfig, coordinator::LoadStatus},
+        share_coordinator::{
+            bootstrap,
+            config::ShareCoordinatorConfig,
+            coordinator::{
+                LoadStatus,
+                test_support::{await_load_status, gated_state_partition},
+            },
+        },
         test_support::metadata_partition_record,
     },
-    arc_swap::ArcSwap,
     assert2::assert,
     krabka_ids::PartitionIndex,
     krabka_metadata::{MetadataRecord, NodeId, TopicRecord},
@@ -35,39 +39,12 @@ fn ready_image() -> Arc<MetadataImage> {
     Arc::new(image)
 }
 
-async fn await_status(coordinator: &ShareCoordinator, expected: LoadStatus) {
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if coordinator.load_status(PartitionIndex(0)).await == Some(expected) {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("coordinator reaches expected status");
-}
-
 #[tokio::test]
 async fn waits_for_readiness_and_cancels_a_blocked_replay() {
     let dir = tempfile::tempdir().unwrap();
     let partitions = Arc::new(PartitionRegistry::new());
     let release_writer = Arc::new(tokio::sync::Notify::new());
-    let gate = Arc::clone(&release_writer);
-    let partition = Arc::new(Partition::writer_fixture(
-        bootstrap::TOPIC,
-        Arc::new(std::sync::Mutex::new(
-            krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap(),
-        )),
-        Arc::new(ArcSwap::from_pointee(dir.path().to_path_buf())),
-        move |identity, storage, rx, signals| {
-            tokio::spawn(async move {
-                gate.notified().await;
-                partition_writer::run(identity, storage, rx, signals, WriterServices::default())
-                    .await;
-            })
-        },
-    ));
+    let partition = gated_state_partition(dir.path(), &release_writer);
     partition
         .current_leader
         .store(1, std::sync::atomic::Ordering::Release);
@@ -103,7 +80,7 @@ async fn waits_for_readiness_and_cancels_a_blocked_replay() {
     ready.send_replace(Some(ready_image()));
     // Replay waits behind the writer's FIFO barrier. Keep that writer
     // blocked and prove shutdown does not wait for its release.
-    await_status(&coordinator, LoadStatus::Loading).await;
+    await_load_status(&coordinator, PartitionIndex(0), LoadStatus::Loading).await;
     shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(2), driver)
         .await
