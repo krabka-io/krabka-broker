@@ -108,6 +108,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   the broker and log suites.
 - Regular KRaft metadata checkpoints run in a background worker while the
   controller continues processing events (#1659).
+- Consumer and share coordinators reuse an immutable metadata projection on
+  repeated reads of the same controller image, avoiding full-cluster topic and
+  replica-rack copies on steady share heartbeats (#1679).
 - A produce batch the broker re-encodes (a topic whose `compression.type`
   forces another codec, or a legacy `MessageSet` it up-converts) is encoded
   once instead of three times. The `max.message.bytes` gate keeps the bytes

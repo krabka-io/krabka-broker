@@ -417,9 +417,7 @@ mod tests {
                 .build(),
         );
         let coordinator = default_coordinator(
-            Arc::new(ImageMetadataProvider {
-                controller: Arc::clone(&metadata),
-            }),
+            Arc::new(ImageMetadataProvider::new(Arc::clone(&metadata))),
             Arc::new(InMemoryOffsetsLog::default()),
         );
         let metrics = BrokerMetrics::new();
@@ -743,9 +741,9 @@ mod tests {
     #[test]
     fn a_stale_load_does_not_clear_the_newer_mark() {
         let coordinator = default_coordinator(
-            Arc::new(ImageMetadataProvider {
-                controller: Arc::new(FakeMetadataSource::builder().build()),
-            }),
+            Arc::new(ImageMetadataProvider::new(Arc::new(
+                FakeMetadataSource::builder().build(),
+            ))),
             Arc::new(InMemoryOffsetsLog::default()),
         );
         let stale = LoadGuard::begin(Arc::clone(&coordinator), PartitionIndex(3), LeaderEpoch(1));

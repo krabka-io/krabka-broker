@@ -187,12 +187,12 @@ mod tests {
     }
 
     impl MetadataProvider for Metadata {
-        fn snapshot(&self) -> ReconcileInput {
-            ReconcileInput {
+        fn snapshot(&self) -> std::sync::Arc<ReconcileInput> {
+            std::sync::Arc::new(ReconcileInput {
                 topic_id_by_name: [("t".to_owned(), self.topic)].into(),
                 partitions_per_topic: [(self.topic, self.partitions)].into(),
                 ..Default::default()
-            }
+            })
         }
     }
 

@@ -399,9 +399,7 @@ fn coordinator(metadata: Arc<dyn MetadataSource>) -> Arc<GroupCoordinator> {
     Arc::new(GroupCoordinator::new(
         NextGenConfig::default(),
         ShareGroupConfig::default(),
-        Arc::new(ImageMetadataProvider {
-            controller: metadata,
-        }),
+        Arc::new(ImageMetadataProvider::new(metadata)),
         Arc::new(InMemoryOffsetsLog::default()),
         StreamsGroupConfig::default(),
     ))

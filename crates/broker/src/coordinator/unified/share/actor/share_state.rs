@@ -143,7 +143,7 @@ pub(super) async fn cleanup_deleted_topics(
 /// for a coordinator that runs without a metadata source.
 pub(super) enum TopicImage {
     Image(std::sync::Arc<krabka_metadata::MetadataImage>),
-    Snapshot(ReconcileInput),
+    Snapshot(std::sync::Arc<ReconcileInput>),
 }
 
 impl TopicImage {
@@ -681,11 +681,11 @@ mod tests {
         let kept = Uuid([5; 16]);
         let gone = Uuid([6; 16]);
         let image = || {
-            TopicImage::Snapshot(ReconcileInput {
+            TopicImage::Snapshot(std::sync::Arc::new(ReconcileInput {
                 topic_id_by_name: HashMap::from([("kept".to_owned(), kept)]),
                 partitions_per_topic: HashMap::from([(kept, 2)]),
                 ..ReconcileInput::default()
-            })
+            }))
         };
         let rows = [
             Row {
@@ -698,7 +698,7 @@ mod tests {
             },
             Row {
                 name: "an unloaded image deletes nothing",
-                image: TopicImage::Snapshot(ReconcileInput::default()),
+                image: TopicImage::Snapshot(std::sync::Arc::new(ReconcileInput::default())),
                 initialized: HashSet::from([share_partition(kept, 0), share_partition(gone, 0)]),
                 initializing: vec![share_partition(kept, 1), share_partition(gone, 1)],
                 deleting: vec![gone],

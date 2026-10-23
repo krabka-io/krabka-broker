@@ -53,7 +53,7 @@ pub const TOPIC_NAME: &str = "t";
 pub struct ModelMetadata(ReconcileInput);
 
 impl MetadataProvider for ModelMetadata {
-    fn snapshot(&self) -> ReconcileInput { self.0.clone() }
+    fn snapshot(&self) -> std::sync::Arc<ReconcileInput> { std::sync::Arc::new(self.0.clone()) }
 }
 
 pub fn metadata(partitions: i32) -> ModelMetadata {

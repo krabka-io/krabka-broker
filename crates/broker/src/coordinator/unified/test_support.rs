@@ -104,7 +104,9 @@ pub(crate) fn make_coord_with_log() -> (Arc<GroupCoordinator>, Arc<InMemoryOffse
 #[derive(Debug)]
 pub(super) struct ImageMetadatalessProvider;
 impl MetadataProvider for ImageMetadatalessProvider {
-    fn snapshot(&self) -> reconciler::ReconcileInput { reconciler::ReconcileInput::default() }
+    fn snapshot(&self) -> std::sync::Arc<reconciler::ReconcileInput> {
+        std::sync::Arc::new(reconciler::ReconcileInput::default())
+    }
 }
 
 /// A metadata provider whose snapshot a test replaces, as the controller
@@ -123,8 +125,8 @@ impl SwitchableMetadata {
 }
 
 impl MetadataProvider for SwitchableMetadata {
-    fn snapshot(&self) -> reconciler::ReconcileInput {
-        self.0.lock().expect("metadata lock").clone()
+    fn snapshot(&self) -> std::sync::Arc<reconciler::ReconcileInput> {
+        std::sync::Arc::new(self.0.lock().expect("metadata lock").clone())
     }
 }
 

@@ -192,9 +192,7 @@ pub(super) async fn recover_storage_and_groups(
     let group_coordinator = Arc::new(GroupCoordinator::new(
         consumer_group,
         share_group,
-        Arc::new(ImageMetadataProvider {
-            controller: Arc::clone(controller),
-        }),
+        Arc::new(ImageMetadataProvider::new(Arc::clone(controller))),
         offsets_log,
         streams_group,
     ));
