@@ -179,7 +179,11 @@ pub fn producer_snapshot_stray(snapshots: &[i64], index: usize, segment_bases: &
 #[must_use]
 pub fn producer_snapshot_strays(snapshots: &[i64], segment_bases: &[i64]) -> Vec<bool> {
     let mut removed = Vec::with_capacity(snapshots.len());
-    let greatest_base = segment_bases.last().copied();
+    let greatest_base = if segment_bases.is_empty() {
+        None
+    } else {
+        Some(segment_bases[segment_bases.len() - 1])
+    };
     let mut base_index = 0usize;
     let mut snapshot_index = 0usize;
     #[invariant(snapshot_index@ <= snapshots@.len())]
@@ -206,10 +210,25 @@ pub fn producer_snapshot_strays(snapshots: &[i64], segment_bases: &[i64]) -> Vec
             base_index += 1;
         }
 
+        proof_assert!(base_index@ < segment_bases@.len() ==>
+            forall<j: Int> base_index@ <= j && j < segment_bases@.len()
+                ==> segment_bases@[base_index@]@ <= segment_bases@[j]@);
         let is_base = base_index < segment_bases.len() && segment_bases[base_index] == offset;
+        proof_assert!(is_base == is_segment_base(segment_bases@, offset@));
         let newest = offset == snapshots[snapshots.len() - 1];
-        let above_every_base = greatest_base.is_none_or(|base| offset > base);
+        proof_assert!(forall<j: Int> 0 <= j && j < snapshots@.len()
+            ==> snapshots@[j]@ <= snapshots@[snapshots@.len() - 1]@);
+        proof_assert!(newest == (forall<j: Int> 0 <= j && j < snapshots@.len()
+            ==> snapshots@[j]@ <= offset@));
+        let above_every_base = match greatest_base {
+            Some(base) => offset > base,
+            None => true,
+        };
+        proof_assert!(above_every_base == (forall<j: Int> 0 <= j && j < segment_bases@.len()
+            ==> segment_bases@[j]@ < offset@));
         removed.push(!(is_base || (newest && above_every_base)));
+        proof_assert!(snapshot_index@ + 1 < snapshots@.len()
+            ==> offset@ <= snapshots@[snapshot_index@ + 1]@);
         snapshot_index += 1;
     }
     removed

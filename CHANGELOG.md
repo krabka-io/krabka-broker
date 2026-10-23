@@ -47,9 +47,6 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
-- Producer snapshot cleanup classifies all snapshots in one ordered pass over
-  snapshot offsets and segment bases, preserving Kafka's newest-snapshot
-  exception without repeated full scans (#1676).
 
 - The RF3 regression contract is now `rf3-regression-v2`. It raises the
   variance budget of records/s from 10% to 15%, and of p99 latency from 25% to
@@ -72,6 +69,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   retry detection while retaining the index's first-occurrence scan order.
   Broker recovery no longer performs a quadratic scan of aborted transactions
   in each segment (#1663).
+- Producer snapshot cleanup classifies all snapshots in one ordered pass over
+  snapshot offsets and segment bases, preserving Kafka's newest-snapshot
+  exception without repeated full scans (#1676).
 - `ci.yml` runs on the merge queue's `merge_group` event, treated like a
   pull request: lanes are scoped by path, the remote cache is read-only and
   nextest waits for `main`. Each queued pull request is then tested on top of
