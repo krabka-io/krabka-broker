@@ -83,10 +83,9 @@ pub(crate) struct RequestContext<'a> {
 }
 
 /// Connection attributes a KIP-714 telemetry handler needs to match a
-/// client to a subscription. Telemetry RPCs are unauthenticated, so this
-/// carries no principal. It carries only the wire-derived and
-/// connection-derived fields.
+/// client to a subscription and authorize telemetry ingestion.
 pub(crate) struct TelemetryContext<'a> {
+    pub principal: &'a Principal,
     pub connection_id: &'a str,
     pub client_id: &'a str,
     pub peer: &'a std::net::SocketAddr,
@@ -255,6 +254,7 @@ impl<'a> RequestContext<'a> {
 
 impl<'a> TelemetryContext<'a> {
     pub(crate) fn new(
+        principal: &'a Principal,
         connection_id: &'a str,
         peer: &'a SocketAddr,
         client_id: &'a str,
@@ -262,6 +262,7 @@ impl<'a> TelemetryContext<'a> {
         software_version: &'a str,
     ) -> Self {
         Self {
+            principal,
             connection_id,
             client_id,
             peer,
@@ -377,8 +378,16 @@ mod tests {
     #[test]
     fn telemetry_context_new_preserves_client_identity_fields() {
         let peer = peer();
+        let principal = principal();
 
-        let ctx = TelemetryContext::new("connection-a", &peer, "client-a", "krabka-test", "1.2.3");
+        let ctx = TelemetryContext::new(
+            &principal,
+            "connection-a",
+            &peer,
+            "client-a",
+            "krabka-test",
+            "1.2.3",
+        );
 
         assert!(ctx.connection_id == "connection-a");
         assert!(ctx.peer == &peer);
@@ -421,8 +430,10 @@ mod tests {
                 "1.2.3.4",
             ),
         ];
+        let principal = principal();
         for (name, peer, expected) in rows {
-            let ctx = TelemetryContext::new("connection-a", &peer, "client-a", "sw", "1");
+            let ctx =
+                TelemetryContext::new(&principal, "connection-a", &peer, "client-a", "sw", "1");
             assert!(ctx.source_address() == expected, "row {name}");
         }
     }

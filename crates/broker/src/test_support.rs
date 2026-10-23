@@ -1790,17 +1790,19 @@ pub(crate) fn configure_single_partition_transactions(
 }
 
 /// Start an in-process broker over a fresh temp dir. It applies `configure` to
-/// the [`BrokerConfig::for_tests`] baseline before start.
+/// the [`BrokerConfig::for_tests`] baseline, with the
+/// [`SINGLE_BROKER_HEARTBEAT_TIMEOUT`] session, before start.
 ///
 /// Each handler passes a closure with exactly the config tweaks it needs, such
 /// as an authorizer to install, an `audit_enabled` toggle, or share and streams
-/// groups to enable. The returned [`tempfile::TempDir`] must outlive the
-/// broker.
+/// groups to enable. A test that wants a different session sets it there. The
+/// returned [`tempfile::TempDir`] must outlive the broker.
 pub(crate) fn start_broker_with(
     configure: impl FnOnce(&mut BrokerConfig),
 ) -> impl std::future::Future<Output = StartedBroker> {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
+    tolerate_starved_heartbeats(&mut cfg);
     configure(&mut cfg);
     Box::pin(async move {
         let handle = Broker::start(cfg).await.expect("start broker");
@@ -1925,24 +1927,28 @@ pub(crate) struct ShareBrokerSetup {
     pub support: ShareApiSupport,
 }
 
-/// The broker-session timeout of the brokers that the share tests start.
+/// The broker-session timeout of a broker that [`start_broker_with`] starts.
 ///
 /// [`BrokerConfig::for_tests`] gives a broker two seconds to heartbeat, so the
-/// failover tests see a dead broker fenced quickly. A share test runs one
-/// broker and never means it to be fenced. Under heavy parallel load,
-/// though, that broker can miss its own heartbeats for two seconds. The
-/// controller then fences it and elects it again at a new leader epoch, and
-/// a coordinator write in flight ends with `NOT_COORDINATOR`.
-pub(crate) const SHARE_TEST_HEARTBEAT_TIMEOUT: krabka_units::Time = krabka_units::secs(30);
+/// failover tests see a dead broker fenced quickly. A test that starts one
+/// broker has nothing to fail over to and never means it to be fenced. Under
+/// heavy parallel load, though, that broker can miss its own heartbeats for
+/// two seconds. The controller then fences it: a `CreateTopics` finds no
+/// broker to place a replica on and answers `INVALID_REPLICATION_FACTOR`, a
+/// wait for the next metadata image times out, and a coordinator write in
+/// flight ends with `NOT_COORDINATOR`.
+pub(crate) const SINGLE_BROKER_HEARTBEAT_TIMEOUT: krabka_units::Time = krabka_units::secs(30);
 
-/// Gives a share-test broker the [`SHARE_TEST_HEARTBEAT_TIMEOUT`] session.
+/// Gives a broker the [`SINGLE_BROKER_HEARTBEAT_TIMEOUT`] session.
+/// [`start_broker_with`] already applies it; this restates it for a caller
+/// that builds its configuration another way.
 pub(crate) fn tolerate_starved_heartbeats(cfg: &mut BrokerConfig) {
-    cfg.heartbeat_timeout = SHARE_TEST_HEARTBEAT_TIMEOUT;
+    cfg.heartbeat_timeout = SINGLE_BROKER_HEARTBEAT_TIMEOUT;
 }
 
 /// Like [`start_group_broker`], but it also waits until the share coordinator
 /// serves `__share_group_state`, and it gives the broker the
-/// [`SHARE_TEST_HEARTBEAT_TIMEOUT`] session. Disabled support then finalizes
+/// [`SINGLE_BROKER_HEARTBEAT_TIMEOUT`] session. Disabled support then finalizes
 /// `share.version` at 0, which turns the share-group APIs off.
 #[bon::builder]
 pub(crate) async fn start_share_broker(
@@ -3241,9 +3247,13 @@ pub(crate) fn sweep_registry_fixture() -> (tempfile::TempDir, Arc<PartitionRegis
 }
 
 /// Block on the blocking pool until a sweep has armed its one interval timer.
+///
+/// The bound is a hang guard only. The sweep before the timer runs on real
+/// threads, and a compaction sweep on a loaded runner has taken more than
+/// five seconds.
 pub(crate) async fn park_manual_timer(clock: &Arc<qubit_clock::ManualMonotonicClock>) -> bool {
     let waiters = Arc::clone(clock);
-    tokio::task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(5)))
+    tokio::task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(30)))
         .await
         .unwrap()
 }

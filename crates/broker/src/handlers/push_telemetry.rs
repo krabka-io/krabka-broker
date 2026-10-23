@@ -7,10 +7,12 @@
 
 use {
     crate::{
+        authorizer::{AuthorizationRequest, AuthorizationResult},
         broker::Broker,
         handlers::{ApiVersion, CorrelationId, DispatchResult, encode_response},
     },
     krabka_compression::{CompressionError, CompressionType},
+    krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::owned::{
         push_telemetry_request::PushTelemetryRequest,
         push_telemetry_response::PushTelemetryResponse,
@@ -30,10 +32,13 @@ mod tests;
 use {
     self::prometheus::flatten_for_prometheus,
     crate::{
-        api_catalog::UnstableApiVersions,
-        client_metrics::manager::{PushCheck, PushDecision},
+        api_catalog::{ClientMetricsReceiver, UnstableApiVersions},
+        client_metrics::{
+            config::ALL_METRICS,
+            manager::{PushCheck, PushDecision},
+        },
         codes,
-        handlers::context::TelemetryContext,
+        handlers::{acl_wire::CLUSTER_RESOURCE_NAME, context::TelemetryContext},
     },
 };
 
@@ -61,6 +66,15 @@ crate::handlers::raw_request_handler!(
     ctx,
     TelemetryContext,
     {
+        if broker.config.client_metrics_receiver() == ClientMetricsReceiver::Absent {
+            return encode_response(
+                &PushTelemetryResponse {
+                    error_code: codes::UNSUPPORTED_VERSION,
+                    ..Default::default()
+                },
+                version,
+            );
+        }
         let instance = Uuid::from_bytes(req.client_instance_id.0);
         let codec = compression_for_id(req.compression_type);
         let manager = &broker.client_metrics.manager;
@@ -68,6 +82,26 @@ crate::handlers::raw_request_handler!(
         let attrs = ctx.client_attributes(instance);
         let unstable = broker.config.features.unstable_api_versions;
         let image = broker.controller.current_image();
+        let authorized = broker
+            .config
+            .authorizer
+            .authorize(&*image, &AuthorizationRequest {
+                principal: ctx.principal,
+                host: ctx.peer,
+                resource_type: ResourceType::Cluster,
+                resource_name: CLUSTER_RESOURCE_NAME,
+                operation: AclOperation::ClusterAction,
+            })
+            == AuthorizationResult::Allow;
+        if !authorized {
+            return encode_response(
+                &PushTelemetryResponse {
+                    error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
+                    ..Default::default()
+                },
+                version,
+            );
+        }
         let decision = manager.authorize_push(&image, &attrs, PushCheck {
             subscription_id: req.subscription_id,
             terminating: req.terminating,
@@ -80,8 +114,10 @@ crate::handlers::raw_request_handler!(
         // quota raises it.
         let error_code = match decision {
             PushDecision::Reject { error_code } => error_code,
-            PushDecision::Accept if req.metrics.is_empty() => codes::NONE,
-            PushDecision::Accept => {
+            PushDecision::Accept { .. } if req.metrics.is_empty() => codes::NONE,
+            PushDecision::Accept {
+                metrics: subscribed,
+            } => {
                 let ct = codec.expect("authorize_push accepts only a supported codec");
                 // Kafka's exporter decompresses up to `telemetry.max.bytes`. A
                 // larger payload throws `TelemetryTooLargeException`, which 4.3.1
@@ -90,13 +126,29 @@ crate::handlers::raw_request_handler!(
                 // (KAFKA-21076) answers the retriable TELEMETRY_TOO_LARGE instead.
                 match krabka_compression::decompress(ct, &req.metrics, manager.telemetry_max()) {
                     Ok(raw) => match MetricsData::decode(&raw[..]) {
-                        Ok(md) => {
+                        Ok(md)
+                            if md
+                                .resource_metrics
+                                .iter()
+                                .flat_map(|r| &r.scope_metrics)
+                                .flat_map(|s| &s.metrics)
+                                .all(|metric| {
+                                    subscribed.iter().any(|prefix| {
+                                        prefix == ALL_METRICS || metric.name.starts_with(prefix)
+                                    })
+                                }) =>
+                        {
                             let instance_str = instance.to_string();
-                            let points = flatten_for_prometheus(&md, &instance_str, ctx.client_id);
-                            broker.client_metrics.prometheus.ingest(&points);
-                            broker.client_metrics.otlp.forward(md, &instance_str);
-                            codes::NONE
+                            match flatten_for_prometheus(&md, &instance_str, ctx.client_id) {
+                                Ok(points) => {
+                                    broker.client_metrics.prometheus.ingest(&points);
+                                    broker.client_metrics.otlp.forward(md, &instance_str);
+                                    codes::NONE
+                                }
+                                Err(()) => codes::INVALID_RECORD,
+                            }
                         }
+                        Ok(_) => codes::INVALID_RECORD,
                         Err(e) => {
                             tracing::debug!(error = %e, "client-metrics OTLP decode failed");
                             codes::INVALID_RECORD

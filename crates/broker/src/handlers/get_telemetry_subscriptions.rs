@@ -33,6 +33,17 @@ crate::handlers::raw_request_handler!(
     ctx,
     TelemetryContext,
     {
+        if broker.config.client_metrics_receiver()
+            == crate::api_catalog::ClientMetricsReceiver::Absent
+        {
+            return encode_response(
+                &GetTelemetrySubscriptionsResponse {
+                    error_code: crate::codes::UNSUPPORTED_VERSION,
+                    ..Default::default()
+                },
+                version,
+            );
+        }
         let attrs = ctx.client_attributes(Uuid::from_bytes(req.client_instance_id.0));
 
         let image = broker.controller.current_image();
@@ -91,10 +102,12 @@ mod tests {
     async fn get_answers_with_the_instance_id_and_throttles_without_delay() {
         krabka_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
-            boot [broker_fixture_support::start_broker_with(|_cfg| {})];
+            boot [broker_fixture_support::start_broker_with(|cfg| cfg.client_metrics_enable = true)];
         };
         let peer = peer();
+        let principal = broker_fixture_support::principal("telemetry-client");
         let ctx = TelemetryContext {
+            principal: &principal,
             connection_id: "connection-a",
             client_id: "client-a",
             peer: &peer,

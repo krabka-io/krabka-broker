@@ -22,6 +22,15 @@ pub(crate) enum PointValue {
 }
 
 impl PointValue {
+    /// The number of Prometheus series a scrape renders for this point: one
+    /// for a number, and each bucket plus `_sum` and `_count` for a histogram.
+    pub(super) fn series_count(&self) -> usize {
+        match self {
+            Self::Gauge(_) | Self::Counter(_) => 1,
+            Self::Histogram { buckets, .. } => buckets.len() + 2,
+        }
+    }
+
     pub(super) fn accumulate(&mut self, delta: &Self) -> bool {
         match (self, delta) {
             (Self::Gauge(total), Self::Gauge(value))

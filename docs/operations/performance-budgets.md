@@ -82,10 +82,12 @@ A correctness failure, a missing trial, or two consecutive rounds that ran the s
 
 | Metric | Materiality | Spread multiplier | Variance budget |
 | :--- | ---: | ---: | ---: |
-| records/s | 5% | 3 | 10% |
-| p99 latency | 10% | 3 | 25% |
+| records/s | 5% | 3 | 15% |
+| p99 latency | 10% | 3 | 50% |
 | CPU µs/record | 5% | 3 | 10% |
 | peak RSS | 10% | 3 | 10% |
+
+These are the budgets of `rf3-regression-v2`. The first contract, `rf3-regression-v1`, allowed a 10% spread for records/s and 25% for p99. Its first measured run exceeded both, so `rf3-regression-v2` raised them; [Performance budget results](performance-budget-results.md#calibration) gives the measurements.
 
 The contract runs five rounds. Throughput, CPU and memory are budgeted in every cell. p99 latency is budgeted only in the fixed-rate and idle-to-burst cells. In a saturating cell, p99 measures the producer's own queue, so it follows throughput and has no budget there. Every cell records p50, p95 and p99 latency.
 
@@ -99,7 +101,7 @@ The median and the MAD resist one outlier. The 2026 qualification run had one st
 
 ### Record the contract digest before the first trial
 
-A budget that someone can edit after the run does not limit anything. The harness copies the contract into the artifact directory and records its SHA-256 before it builds or starts anything. `assemble` refuses a copy that does not match that digest. `evaluate` gets the checked-in contract and refuses a record with a different digest. To change a budget, you change the contract file in a pull request and run the comparison again. The contract name contains a version (`rf3-regression-v1`), so a report always says which budgets judged it.
+A budget that someone can edit after the run does not limit anything. The harness copies the contract into the artifact directory and records its SHA-256 before it builds or starts anything. `assemble` refuses a copy that does not match that digest. `evaluate` gets the checked-in contract and refuses a record with a different digest. To change a budget, you change the contract file in a pull request and run the comparison again. The contract name contains a version (`rf3-regression-v2`), so a report always says which budgets judged it.
 
 ### Interleave whole clusters, and alternate the first side
 
@@ -151,9 +153,10 @@ cargo run -p krabka-parse-benches -- evaluate performance-record.json \
 
 - `packaging/performance/regression-contract.json` is the contract. `krabka-parse-benches check-contract` validates it and prints its digest. The crate's tests load it, so `bazel test //...` fails on an invalid contract.
 - `packaging/performance/qualify.sh` runs the trials. Its `full` and `smoke` modes are unchanged.
+- `packaging/performance/krabka.yaml` is the krabka cluster that both krabka sides run on: plaintext, three combined broker/controllers, 2 CPU, 2 GiB and a 100 GiB claim each. It is the `packaging/k8s` reference deployment as it stood before that deployment moved to TLS and a mounted config file, kept here so the measured setup does not change with the reference deployment. `packaging/performance/kafka.yaml` is the Kafka cluster.
 - `packaging/performance/BrokerPerformanceWorkload.java` takes an optional tenth argument, the idle seconds before the first send.
 - `krabka-parse-benches` holds the `contract`, `record`, `budget` and `render` modules beside the criterion lane.
-- The `benchmarks` workflow validates the contract when it or the crate changes. No CI runner can run the comparison itself, because it needs a dedicated host with a Kind cluster.
+- The `benchmarks` workflow validates the contract when it or the crate changes. A dispatch with `budget` set runs both comparisons, one after the other, on a 32-core cloud worker, and keeps each mode's artifact directory for 90 days. It measures the dispatched revision, so it calibrates the contract; candidate evidence comes from `qualification-profile.yml`.
 
 ## Kafka / KIP Compliance
 
@@ -163,4 +166,4 @@ The workload uses the Kafka 4.3.1 client jars from the pinned image for both sid
 
 `crates/parse-benches/tests/budget_tests.rs` tests the evaluator with tables. It covers: within budget, a material regression, a regression that does not gate against Kafka, a noisy change that is not material, excess variance in every mode, lost and duplicate records on either side, a failed trial, a missing trial, broken interleaving, a budget edited after the run, and structurally invalid records and contracts. It also writes a complete artifact directory in the harness layout as a recorded sample, then assembles, evaluates and renders it through the command-line entry points.
 
-What these tests do not prove: no comparison has run on the benchmark host. The cluster steps of `qualify.sh budget` are checked with `bash -n` only. The budget values come from earlier results, not from a calibration run of this contract. The first real run must confirm that each cell's spread is inside its variance budget on the benchmark host. If it is not, a pull request must change the contract before any result is published.
+What these tests do not prove: that the budgets fit a real host. The first real runs, of `rf3-regression-v1`, measured each cell's spread on the cloud worker. The first one exceeded two variance budgets, so this contract changed before any result was published, as the calibration rule requires: `rf3-regression-v2` sets each raised budget to about 1.25 times the largest spread measured, rounded up to a multiple of 5%. [Performance budget results](performance-budget-results.md#calibration) records those runs. A run of `rf3-regression-v2` that exceeds a variance budget changes the contract again, in a pull request, before its result is published.

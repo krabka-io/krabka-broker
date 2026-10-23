@@ -21,7 +21,7 @@ use {
         },
         test_support::{
             begin_controlled_shutdown, fence_remote_broker, make_witness, peer, principal,
-            seed_remote_broker,
+            seed_remote_broker, start_broker_no_audit_with,
         },
     },
     assert2::{assert, check},
@@ -31,15 +31,25 @@ use {
 };
 
 /// Commit the requested initial partition image before exposing this broker.
+///
+/// `quota_window` replaces the `controller_mutation_quota_window` of the
+/// `BrokerConfig::for_tests` baseline.
 #[bon::builder]
 async fn start_partition_topic(
     name: &str,
     #[builder(into, default = TopicPartitionCount(2))] partitions: TopicPartitionCount,
+    quota_window: Option<Time>,
 ) -> LiveBrokerFixture {
     let HandlerStartedBroker {
         broker: handle,
         dir: directory,
-    } = start_broker(Arc::new(AllowAllAuthorizer)).await;
+    } = start_broker_no_audit_with(|cfg| {
+        cfg.authorizer = Arc::new(AllowAllAuthorizer);
+        if let Some(window) = quota_window {
+            cfg.controller_mutation_quota_window = window;
+        }
+    })
+    .await;
     seed_topic()
         .handle(&handle)
         .name(name)
@@ -323,6 +333,13 @@ async fn strict_create_partitions_rejects_after_quota_exhaustion() {
 /// topic before the stale attempt reaches controller admission.
 #[tokio::test]
 async fn a_conflicting_growth_refunds_only_its_obsolete_partition_delta() {
+    // The bucket holds rate x window = 2 tokens, as at the baseline's 2/s over
+    // one second, but each token takes 32 s to refill. At 2/s, a runner that
+    // stalled half a second between the last two requests refilled the debt
+    // and the refused request went through. Both values are exact in binary,
+    // so the capacity is exactly 2.
+    const QUOTA_WINDOW: Time = krabka_units::secs(64);
+    const QUOTA_RATE: f64 = 2.0 / 64.0;
     for concurrent_count in [9, 10] {
         let LiveBrokerFixture {
             handle: broker_handle,
@@ -331,10 +348,11 @@ async fn a_conflicting_growth_refunds_only_its_obsolete_partition_delta() {
         } = start_partition_topic()
             .name("metered")
             .partitions(1)
+            .quota_window(QUOTA_WINDOW)
             .call()
             .await;
         krabka_macros::request_test_identity! { bind(p, peer); user ["admin"]; };
-        seed_controller_quota(&broker_handle, 2.0).await;
+        seed_controller_quota(&broker_handle, QUOTA_RATE).await;
         let ctx = test_context(&p, &peer);
         let stale = broker.controller.current_image();
         let quota = Mutex::new(ctx.controller_mutation_quota(&broker, &stale, true));
@@ -395,7 +413,8 @@ async fn a_conflicting_growth_refunds_only_its_obsolete_partition_delta() {
             .await;
             assert!(answer.results[0].error_code == expected);
             if expected == codes::THROTTLING_QUOTA_EXCEEDED {
-                assert!(answer.throttle_time_ms > 0 && answer.throttle_time_ms <= 500);
+                // At most one token of debt, which refills in 32 s.
+                assert!(answer.throttle_time_ms > 0 && answer.throttle_time_ms <= 32_000);
             }
         }
         broker_handle.shutdown().await;

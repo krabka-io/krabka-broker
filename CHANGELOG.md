@@ -47,6 +47,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- The RF3 regression contract is now `rf3-regression-v2`. It raises the
+  variance budget of records/s from 10% to 15%, and of p99 latency from 25% to
+  50%. The first measured run of `rf3-regression-v1` exceeded both, and
+  [Performance budget results](docs/operations/performance-budget-results.md#calibration)
+  records the calibration runs. Every materiality floor and spread multiplier
+  is unchanged (#1395).
 - The broker writes the log start offset that local retention moves to a
   partition's `log-start-offset-checkpoint` on a timer, instead of on every
   retention pass. The `[runtime]` key
@@ -211,6 +217,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- Require `ClusterAction` for `PushTelemetry`, refuse both client-telemetry
+  RPCs when no receiver is enabled, reject unsubscribed or structurally
+  excessive OTLP metrics, and cap retained Prometheus client series globally
+  and per client/instance. Disconnects now release an instance's series
+  immediately (#1592).
 - The nightly criterion lane builds the reference and the candidate into
   separate Cargo target directories, both before either is measured. With one
   shared directory, Cargo could judge a candidate that changed only source as
