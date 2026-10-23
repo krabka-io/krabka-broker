@@ -106,11 +106,7 @@ async fn job_keys_are_bucketed_once_per_sweep() {
 async fn collected_keys_do_not_authorize_a_new_load_generation() {
     let dir = tempdir().unwrap();
     let TwoKeys { coord, .. } = two_keys(dir.path(), ShareCoordinatorConfig::default()).await;
-    let buckets = coord.keys_by_active_partition(|_| true).await;
-    let bucket = buckets
-        .into_iter()
-        .find(|bucket| !bucket.keys.is_empty())
-        .unwrap();
+    let bucket = populated_bucket(&coord).await;
     {
         let active = coord.active(bucket.term.partition).await.unwrap();
         check!(bucket.still_active(&active));
@@ -148,11 +144,7 @@ async fn collected_keys_do_not_authorize_a_new_load_generation() {
 async fn collected_keys_include_an_initialize_in_the_same_generation() {
     let dir = tempdir().unwrap();
     let TwoKeys { coord, .. } = two_keys(dir.path(), ShareCoordinatorConfig::default()).await;
-    let buckets = coord.keys_by_active_partition(|_| true).await;
-    let bucket = buckets
-        .into_iter()
-        .find(|bucket| !bucket.keys.is_empty())
-        .unwrap();
+    let bucket = populated_bucket(&coord).await;
     let fresh = (0..)
         .map(|index| format!("initialized-{index}"))
         .find(|group| coord.state_partition_for(group, &T1, 0) == bucket.term.partition)
@@ -173,6 +165,16 @@ async fn collected_keys_include_an_initialize_in_the_same_generation() {
 struct TwoKeys {
     coord: Arc<ShareCoordinator>,
     clock: Arc<qubit_clock::ManualWallClock>,
+}
+
+/// The first populated shard in the two-key fixture, before a concurrent change.
+async fn populated_bucket(coord: &ShareCoordinator) -> PartitionKeys {
+    coord
+        .keys_by_active_partition(|_| true)
+        .await
+        .into_iter()
+        .find(|bucket| !bucket.keys.is_empty())
+        .expect("the two-key fixture has a populated active shard")
 }
 
 /// A coordinator with key A (`ga`, T1, 0) and key B (`gb`, T2, 0), both
