@@ -133,6 +133,7 @@ mod tests {
             test_support::{peer, sasl_principal},
         },
         krabka_metadata::{AclOperation, MetadataImage, ResourceType},
+        std::collections::HashSet,
     };
 
     #[yare::parameterized(
@@ -205,7 +206,7 @@ mod tests {
     #[test]
     fn absent_sections_preserve_injected_clients() {
         let mut cfg = BrokerConfig {
-            authorizer: Arc::new(SimpleAclAuthorizer::new(Default::default())),
+            authorizer: Arc::new(SimpleAclAuthorizer::new(HashSet::default())),
             schema_validator: Some(Arc::new(
                 SchemaValidator::new(
                     "http://registry.invalid".to_owned(),

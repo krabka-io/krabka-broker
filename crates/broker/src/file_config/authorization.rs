@@ -124,7 +124,6 @@ mod tests {
             file_config::{FileConfigError, test_support::configured_unwrap_parse},
             test_support::{peer, sasl_principal},
         },
-        assert2::assert,
         krabka_units::{Time, convert::TimeExt as _},
     };
 
@@ -155,8 +154,8 @@ super_users = ["User:admin", "User:ANONYMOUS", "operator"]
                 "operator".to_string(),
             ]
             .into();
-            assert!(cfg.super_users == expected, "{case}");
-            assert!(cfg.validate().is_ok(), "{case}");
+            assert2::assert!(cfg.super_users == expected, "{case}");
+            assert2::assert!(cfg.validate().is_ok(), "{case}");
         }
     }
 
@@ -169,7 +168,7 @@ super_users = ["operator", "admin"]
 
         let expected: std::collections::HashSet<String> =
             ["operator".to_string(), "admin".to_string()].into();
-        assert!(cfg.super_users == expected);
+        assert2::assert!(cfg.super_users == expected);
     }
     // `[authorization]` TOML section → `Arc<dyn Authorizer>`.
 
@@ -199,14 +198,14 @@ super_users = ["User:admin"]
 "#,
         )
         .unwrap();
-        assert!(cfg.super_users == ["admin".to_owned()].into());
+        assert2::assert!(cfg.super_users == ["admin".to_owned()].into());
         let authorization = cfg
             .authorization_config
             .as_ref()
             .expect("resolved authorization");
-        assert!(authorization.authz_type == AuthzType::Simple);
-        assert!(!authorization.allow_everyone_if_no_acl_found);
-        assert!(!cfg.authorizer.is_configured());
+        assert2::assert!(authorization.authz_type == AuthzType::Simple);
+        assert2::assert!(!authorization.allow_everyone_if_no_acl_found);
+        assert2::assert!(!cfg.authorizer.is_configured());
     }
 
     #[yare::parameterized(
@@ -218,7 +217,7 @@ super_users = ["User:admin"]
         let cfg =
             configured_unwrap_parse(&format!("[authorization]\ntype = \"simple\"\n{setting}\n"))
                 .unwrap();
-        assert!(
+        assert2::assert!(
             cfg.authorization_config
                 .expect("resolved authorization")
                 .allow_everyone_if_no_acl_found
@@ -241,13 +240,13 @@ expire_after_ms = 60000
 "#,
         )
         .unwrap();
-        assert!(cfg.super_users == ["operator".to_owned()].into());
+        assert2::assert!(cfg.super_users == ["operator".to_owned()].into());
         let authorization = cfg
             .authorization_config
             .as_ref()
             .expect("resolved authorization");
-        assert!(authorization.authz_type == AuthzType::Opa);
-        assert!(
+        assert2::assert!(authorization.authz_type == AuthzType::Opa);
+        assert2::assert!(
             authorization.opa
                 == Some(FileOpaConfig {
                     url: "http://opa.invalid:8181/v1/data/k/a".to_owned(),
@@ -256,15 +255,15 @@ expire_after_ms = 60000
                     expire_after_ms: 60_000,
                 })
         );
-        assert!(!cfg.authorizer.is_configured());
-        assert!(cfg.validate().is_ok());
+        assert2::assert!(!cfg.authorizer.is_configured());
+        assert2::assert!(cfg.validate().is_ok());
     }
 
     #[test]
     fn missing_opa_section_keeps_the_diagnostic() {
         let error = configured_unwrap_parse("[authorization]\ntype = \"opa\"\n")
             .expect_err("missing OPA section");
-        assert!(matches!(
+        assert2::assert!(matches!(
             error,
             FileConfigError::MissingSection(section)
                 if section == "[authorization.opa]"
@@ -281,7 +280,7 @@ expire_after_ms = 60000
             "[authorization]\ntype = \"opa\"\n[authorization.opa]\nurl = \"http://opa.invalid\"\n{setting}"
         ))
         .expect_err("invalid OPA scalar");
-        assert!(matches!(
+        assert2::assert!(matches!(
             error,
             FileConfigError::OpaConfig(message) if message == expected
         ));
@@ -296,7 +295,7 @@ maximum_cache_size = 100
 expire_after_ms = 60000
 "#;
         let opa: FileOpaConfig = toml::from_str(toml).unwrap();
-        assert!(!opa.allow_on_error, "allow_on_error must default to false");
+        assert2::assert!(!opa.allow_on_error, "allow_on_error must default to false");
 
         // And the built authorizer must Deny on OPA error (fail-closed).
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -320,7 +319,7 @@ expire_after_ms = 60000
             let p = test_principal("alice");
             let host = peer();
             let req = topic_read_request(&p, &host);
-            assert!(
+            assert2::assert!(
                 auth.authorize(&img, &req) == AuthorizationResult::Deny,
                 "OPA outage with default allow_on_error must fail closed (Deny)"
             );
@@ -333,8 +332,8 @@ url = "http://opa.invalid:8181/v1/data/k/a"
 "#;
         let opa: FileOpaConfig = toml::from_str(toml).unwrap();
 
-        assert!(opa.maximum_cache_size == 50_000);
-        assert!(opa.expire_after_ms == 3_600_000);
+        assert2::assert!(opa.maximum_cache_size == 50_000);
+        assert2::assert!(opa.expire_after_ms == 3_600_000);
     }
     #[test]
     fn authorization_section_absent_defaults_to_allow_all() {
@@ -349,6 +348,6 @@ url = "http://opa.invalid:8181/v1/data/k/a"
         let anyone = test_principal("anyone");
         let check_req = topic_read_request(&anyone, &peer_host);
         let auth_res = cfg.authorizer.authorize(&img, &check_req);
-        assert!(auth_res == AuthorizationResult::Allow);
+        assert2::assert!(auth_res == AuthorizationResult::Allow);
     }
 }
