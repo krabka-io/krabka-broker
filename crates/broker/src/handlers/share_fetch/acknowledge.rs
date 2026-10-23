@@ -190,6 +190,9 @@ fn apply_one_ack(
     if range_len != Some(types.len()) {
         return Err(codes::INVALID_REQUEST);
     }
+    if types.iter().all(|ack_type| *ack_type == types[0]) {
+        return apply(st, first, last, types[0]);
+    }
     let deadline = now + renewal.lock_duration;
     let actions = types
         .iter()
@@ -411,6 +414,11 @@ mod tests {
             max_attempts: 2,
         };
         compare_with_run_by_run(fragmented, &application, &[(0, 11, MIXED)]);
+        compare_with_run_by_run(start(Setup::Acquired), &application, &[(
+            0,
+            9,
+            &[ACCEPT; 10],
+        )]);
 
         let mut at_limit_with_dlq = start(Setup::AtTheLimit);
         at_limit_with_dlq.set_dlq_enabled(true);
