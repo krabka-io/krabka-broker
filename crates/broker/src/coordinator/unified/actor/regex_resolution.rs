@@ -652,7 +652,7 @@ mod tests {
         for row in rows {
             let mut state = group(&[("m1", Some("a.*")), ("m2", row.old)]);
             state.set_resolved_regex("a.*".into(), resolution(&["a1"], 5, NOW_MS - row.since_ms));
-            let pattern_lookup = table(&[entry("a.*", &["a1"]), entry("b.*", &["b1"])]);
+            let resolver = table(&[entry("a.*", &["a1"]), entry("b.*", &["b1"])]);
 
             let Ran { update, .. } = run(
                 &mut state,
@@ -693,7 +693,7 @@ mod tests {
             unresolved.subscribed_topic_regex = Some("b.*".to_owned());
             state.add_or_update_member(unresolved);
             state.set_resolved_regex("a.*".into(), resolution(&["a1"], 5, NOW_MS));
-            let resolver = table(&[entry("a.*", &["a1"]), entry("b.*", &["b1"])]);
+            let pattern_lookup = table(&[entry("a.*", &["a1"]), entry("b.*", &["b1"])]);
 
             for after_ms in [0, 9_999, 10_000] {
                 let mut records = Vec::new();
