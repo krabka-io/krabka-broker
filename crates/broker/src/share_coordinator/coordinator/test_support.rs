@@ -7,14 +7,15 @@
 //! builders live in one place instead of once per test module.
 
 use {
-    super::ShareCoordinator,
+    super::{LoadStatus, ShareCoordinator},
     crate::{
         broker::spawn_partition_with_replication_target,
         coordinator::test_support::single_replica_partition,
         log_dir::partition_dir,
         log_dir_status::LogDirRegistry,
-        partition::ReplicationTarget,
+        partition::{Partition, ReplicationTarget},
         partition_registry::PartitionRegistry,
+        partition_writer::{self, WriterServices},
         producer_state::ProducerState,
         share_coordinator::{
             bootstrap,
@@ -25,6 +26,7 @@ use {
             },
         },
     },
+    arc_swap::ArcSwap,
     assert2::assert,
     krabka_ids::PartitionIndex,
     krabka_log::{Log, LogConfig, Offset},
@@ -35,6 +37,52 @@ use {
         time::{Duration, UNIX_EPOCH},
     },
 };
+
+/// Wait until a state partition reaches the expected recovery status.
+pub(crate) async fn await_load_status(
+    coordinator: &ShareCoordinator,
+    partition: PartitionIndex,
+    expected: LoadStatus,
+) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if coordinator.load_status(partition).await == Some(expected) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("coordinator reaches expected load status");
+}
+
+/// Inject an indeterminate append and its normal recovery wakeup.
+pub(crate) fn mark_append_uncertain(coordinator: &ShareCoordinator, partition: PartitionIndex) {
+    coordinator.uncertain_appends.insert(partition, ());
+    coordinator.recovery_needed.notify_one();
+}
+
+/// Open a real state log whose writer waits for an explicit test release.
+pub(crate) fn gated_state_partition(
+    log_dir: &Path,
+    release_writer: &Arc<tokio::sync::Notify>,
+) -> Arc<Partition> {
+    let gate = Arc::clone(release_writer);
+    Arc::new(Partition::writer_fixture(
+        bootstrap::TOPIC,
+        Arc::new(std::sync::Mutex::new(
+            Log::open(log_dir, LogConfig::default()).unwrap(),
+        )),
+        Arc::new(ArcSwap::from_pointee(log_dir.to_path_buf())),
+        move |identity, storage, rx, signals| {
+            tokio::spawn(async move {
+                gate.notified().await;
+                partition_writer::run(identity, storage, rx, signals, WriterServices::default())
+                    .await;
+            })
+        },
+    ))
+}
 
 #[bon::builder]
 pub(crate) async fn assert_recovered_epoch_is_fenced(

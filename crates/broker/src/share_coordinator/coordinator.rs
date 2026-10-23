@@ -262,6 +262,11 @@ pub(crate) struct ScheduledLoads {
     tasks: Vec<JoinHandle<()>>,
 }
 
+impl ScheduledLoads {
+    /// Transfer replay tasks to the lifecycle driver for shutdown cancellation.
+    pub(crate) fn into_tasks(self) -> Vec<JoinHandle<()>> { self.tasks }
+}
+
 /// Per-broker share-state coordinator.
 ///
 /// `Broker::start` constructs the coordinator and shares it with the
@@ -350,7 +355,7 @@ impl ShareCoordinator {
     }
 
     /// Wait for an indeterminate append or a client retry to request a
-    /// bounded replay against the supervisor's current metadata image.
+    /// bounded replay against the coordinator driver's last ready metadata image.
     pub(crate) async fn recovery_requested(&self) { self.recovery_needed.notified().await; }
 
     /// Applies the leadership of `image` to the led partitions.

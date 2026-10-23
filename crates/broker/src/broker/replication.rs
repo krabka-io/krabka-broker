@@ -7,6 +7,7 @@ use {
     crate::{
         broker::DisklessRuntime,
         config::BrokerConfig,
+        coordinator_driver::CoordinatorDriver,
         log_dir_id::LogDirIds,
         log_dir_status::LogDirRegistry,
         metadata_source::MetadataSource,
@@ -20,7 +21,7 @@ use {
         txn::coordinator::TxnCoordinator,
     },
     std::sync::Arc,
-    tokio::task::JoinHandle,
+    tokio::{sync::watch, task::JoinHandle},
     tokio_util::sync::CancellationToken,
 };
 
@@ -32,8 +33,7 @@ pub(super) struct ReplicatorStorage<'a> {
     pub(super) diskless: &'a DisklessRuntime,
 }
 
-/// The transaction and share coordinators the replicator supervisor hands
-/// replicated records to.
+/// The transaction and share coordinators driven after replica readiness.
 #[derive(Clone, Copy)]
 pub(super) struct CoordinatorRefs<'a> {
     pub(super) txn_coordinator: &'a Arc<TxnCoordinator>,
@@ -59,7 +59,14 @@ pub(super) fn spawn_replicator_supervisor(
     storage: ReplicatorStorage<'_>,
 ) -> JoinHandle<()> {
     let protocol = config.inter_broker_listener_protocol();
-    ReplicatorSupervisor::new(ReplicatorSupervisorConfig {
+    let (coordinator_ready, ready) = watch::channel(None);
+    let coordinator_driver = CoordinatorDriver::new(
+        ready,
+        Some(Arc::clone(coordinators.txn_coordinator)),
+        Some(Arc::clone(coordinators.share_coordinator)),
+        runtime.shutdown.clone(),
+    );
+    let supervisor = ReplicatorSupervisor::new(ReplicatorSupervisorConfig {
         node_id: config.node_id,
         broker_id: config.broker_id,
         controller: Arc::clone(controller),
@@ -69,8 +76,7 @@ pub(super) fn spawn_replicator_supervisor(
         unstable_api_versions: config.features.unstable_api_versions,
         client_id: format!("krabka-broker-{}-replicator", config.broker_id),
         shutdown: runtime.shutdown.clone(),
-        txn_coordinator: Some(Arc::clone(coordinators.txn_coordinator)),
-        share_coordinator: Some(Arc::clone(coordinators.share_coordinator)),
+        coordinator_ready,
         inter_broker_client: Arc::clone(inter_broker_client),
         inter_broker_listener_protocol: protocol,
         inter_broker_server_name: config.inter_broker_server_name.clone(),
@@ -92,6 +98,11 @@ pub(super) fn spawn_replicator_supervisor(
         log_dir_ids: storage.log_dir_ids.clone(),
         hot_tail: Arc::clone(&storage.diskless.hot_tail),
         wal_shards: Arc::clone(&storage.diskless.wal_shards),
+    });
+    let replica_task = supervisor.spawn();
+    let coordinator_task = tokio::spawn(coordinator_driver.run());
+    // The broker's existing shutdown handle drains both independent drivers.
+    tokio::spawn(async move {
+        let _ = tokio::join!(replica_task, coordinator_task);
     })
-    .spawn()
 }
