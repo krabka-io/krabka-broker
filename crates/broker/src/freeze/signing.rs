@@ -62,7 +62,6 @@
 //! attacker which check they got past.
 
 pub use self::payload::{FreezeSigningInput, freeze_signing_input};
-
 pub(crate) use self::{
     canonical_bytes::freeze_signing_bytes,
     refusal::{SignatureRefusal, WireRefusal},

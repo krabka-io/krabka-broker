@@ -35,7 +35,6 @@ pub fn freeze_signing_input<'a>(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use {
