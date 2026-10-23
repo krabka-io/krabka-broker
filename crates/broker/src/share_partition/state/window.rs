@@ -362,6 +362,77 @@ mod tests {
     }
 
     #[test]
+    fn compaction_preserves_each_independent_metadata_boundary() {
+        #[derive(Clone, Copy)]
+        enum Boundary {
+            Equal,
+            Gap,
+            State,
+            Count,
+            Owner,
+            Deadline,
+            DeadlinePresence,
+        }
+        let now = Instant::now();
+        for boundary in [
+            Boundary::Equal,
+            Boundary::Gap,
+            Boundary::State,
+            Boundary::Count,
+            Boundary::Owner,
+            Boundary::Deadline,
+            Boundary::DeadlinePresence,
+        ] {
+            let mut left = InFlightBatch {
+                first_offset: Offset(0),
+                last_offset: Offset(0),
+                state: RecordState::Available,
+                delivery_count: 1,
+                acquired_by: None,
+                lock_deadline: None,
+            };
+            if matches!(
+                boundary,
+                Boundary::Owner | Boundary::Deadline | Boundary::DeadlinePresence
+            ) {
+                left.state = RecordState::Acquired;
+                left.acquired_by = Some("member".to_owned());
+                left.lock_deadline = Some(now);
+            }
+            let mut right = left.clone();
+            right.first_offset = Offset(1);
+            right.last_offset = Offset(1);
+            match boundary {
+                Boundary::Equal => {}
+                Boundary::Gap => {
+                    right.first_offset = Offset(2);
+                    right.last_offset = Offset(2);
+                }
+                Boundary::State => right.state = RecordState::Archived,
+                Boundary::Count => right.delivery_count = 2,
+                Boundary::Owner => right.acquired_by = Some("other".to_owned()),
+                Boundary::Deadline => right.lock_deadline = Some(now + Duration::from_secs(1)),
+                Boundary::DeadlinePresence => right.lock_deadline = None,
+            }
+            let mut state = AcquisitionState::new(Offset(0));
+            state.end_offset = right.last_offset + 1;
+            state.batches = vec![left, right];
+            let mut expected = state.clone();
+            expected.batches = old_coalesce(expected.batches);
+            state.coalesce();
+            assert!(state == expected);
+            assert!(
+                state.batches.len()
+                    == if matches!(boundary, Boundary::Equal) {
+                        1
+                    } else {
+                        2
+                    }
+            );
+        }
+    }
+
+    #[test]
     fn compaction_visits_each_fragment_once() {
         for runs in [100, 1_000, 2_000, 4_000] {
             let mut state = available_fragments(runs);
