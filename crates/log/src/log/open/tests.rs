@@ -8,8 +8,8 @@ use {
         ProducerBatchMetadata,
         io::FileIo,
         log::test_support::{
-            NO_LIMIT, TempLog, TransactionFields, append_samples, append_transaction,
-            check_contiguous_exports, commit_marker, install_stamps,
+            NO_LIMIT, TempLog, TransactionFields, abort_marker, append_samples, append_transaction,
+            barrier_marker, check_contiguous_exports, commit_marker, install_stamps,
             log_with_three_then_two_records, rolling_test_log, sample_batch,
             sample_batch_with_epoch, test_log, tiny_segments, transaction_fields,
             transactional_batch,
@@ -440,6 +440,113 @@ fn reopen_rebuilds_pending_transactions_and_lso() {
     );
 }
 
+/// This is operation-count evidence from a real log fixture, not an
+/// end-to-end timing claim. A snapshot at the log end makes producer replay do
+/// no work; pending-stamp recovery must decode only the suffix beginning at the
+/// earliest transaction that the snapshot says is still open.
+#[test]
+fn pending_stamp_recovery_visits_only_the_surviving_transaction_suffix() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = tiny_segments();
+    let suffix_bytes;
+    {
+        let mut log = Log::open(dir.path(), config.clone()).unwrap();
+        append_samples(&mut log, 16, 1);
+
+        let mut first_open = transactional_batch(1000, 4, &["first"]);
+        first_open.base_sequence = 0;
+        log.append(&mut first_open).unwrap(); // 16
+        let mut completed = transactional_batch(2000, 5, &["completed"]);
+        completed.base_sequence = 0;
+        log.append(&mut completed).unwrap(); // 17
+        log.append(&mut commit_marker(2000, 5)).unwrap(); // 18
+        let mut second_open = transactional_batch(1000, 4, &["second"]);
+        second_open.base_sequence = 1;
+        log.append(&mut second_open).unwrap(); // 19
+        let mut other_open = transactional_batch(3000, 6, &["other"]);
+        other_open.base_sequence = 0;
+        log.append(&mut other_open).unwrap(); // 20
+        let mut barrier = barrier_marker().call();
+        log.append(&mut barrier).unwrap(); // 21
+
+        suffix_bytes = [
+            &first_open,
+            &completed,
+            &commit_marker(2000, 5),
+            &second_open,
+            &other_open,
+            &barrier,
+        ]
+        .into_iter()
+        .map(RecordBatch::encoded_len)
+        .sum::<usize>();
+        assert!(log.pending_transaction_start(ProducerId(1000)) == Some(Offset(16)));
+        assert!(log.pending_transaction_start(ProducerId(3000)) == Some(Offset(20)));
+        assert!(
+            log.producer_state_snapshot()
+                .iter()
+                .find(|entry| entry.producer_id == 1000)
+                .unwrap()
+                .current_txn_first_offset
+                == Some(Offset(16))
+        );
+        let snapshot = producer_snapshot::path(dir.path(), log.log_end_offset());
+        if snapshot.exists() {
+            std::fs::remove_file(snapshot).unwrap();
+        }
+        log.close();
+    }
+
+    let mut reopened = Log::open(dir.path(), config).unwrap();
+    let stats = reopened.rebuild_pending_stamp_ranges().unwrap();
+    check!(
+        stats
+            == PendingStampRecoveryStats {
+                batches: 6,
+                bytes: suffix_bytes
+            }
+    );
+    check!(reopened.lso() == Offset(16));
+    check!(
+        reopened.pending_stamp_ranges.get(&ProducerId(1000))
+            == Some(&vec![
+                OffsetRange {
+                    first: Offset(16),
+                    last: Offset(16),
+                },
+                OffsetRange {
+                    first: Offset(19),
+                    last: Offset(19),
+                },
+            ])
+    );
+    check!(
+        reopened.pending_stamp_ranges.get(&ProducerId(3000))
+            == Some(&vec![OffsetRange {
+                first: Offset(20),
+                last: Offset(20),
+            }])
+    );
+    check!(
+        !reopened
+            .pending_stamp_ranges
+            .contains_key(&ProducerId(2000))
+    );
+
+    install_stamps(&mut reopened, 70, 1);
+    reopened.append(&mut commit_marker(1000, 4)).unwrap();
+    reopened.append(&mut abort_marker(3000, 6)).unwrap();
+    for offset in 0..16 {
+        check!(reopened.stamp_for_offset(Offset(offset)) == None);
+    }
+    check!(reopened.stamp_for_offset(Offset(16)) == Some(70));
+    check!(reopened.stamp_for_offset(Offset(17)) == None);
+    check!(reopened.stamp_for_offset(Offset(18)) == None);
+    check!(reopened.stamp_for_offset(Offset(19)) == Some(70));
+    check!(reopened.stamp_for_offset(Offset(20)) == None);
+    check!(reopened.stamp_for_offset(Offset(21)) == None);
+}
+
 #[test]
 fn reopen_does_not_treat_non_transactional_producer_data_as_pending() {
     let dir = tempfile::tempdir().unwrap();
@@ -453,6 +560,29 @@ fn reopen_does_not_treat_non_transactional_producer_data_as_pending() {
     let reopened = open_log(dir.path());
     check!(reopened.pending_transaction_start(ProducerId(42)) == None);
     check!(reopened.lso() == reopened.log_end_offset());
+}
+
+#[test]
+fn pending_stamp_recovery_keeps_a_batch_covering_the_local_floor() {
+    let TempLog { dir, mut log } = test_log();
+    let mut batch = transactional_batch(1000, 4, &["first", "second", "third"]);
+    batch.base_sequence = 0;
+    log.append(&mut batch).unwrap();
+    let _ = log.trim_to_offset(Offset(1)).unwrap();
+    log.close();
+
+    let mut reopened = open_log(dir.path());
+    check!(reopened.local_log_start_offset() == Offset(1));
+    check!(reopened.pending_transaction_start(ProducerId(1000)) == Some(Offset(0)));
+    let stats = reopened.rebuild_pending_stamp_ranges().unwrap();
+    check!(stats.batches == 1);
+    check!(
+        reopened.pending_stamp_ranges.get(&ProducerId(1000))
+            == Some(&vec![OffsetRange {
+                first: Offset(0),
+                last: Offset(2),
+            }])
+    );
 }
 
 /// On reopen, each recovered sealed segment's `last_offset` is set to
