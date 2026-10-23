@@ -180,6 +180,7 @@ mod features;
 pub mod fetch_session;
 pub mod file_config;
 pub(crate) mod freeze;
+pub use freeze::signing::{FreezeSigningInput, freeze_signing_input};
 pub(crate) mod future_log;
 mod handlers;
 pub mod health;

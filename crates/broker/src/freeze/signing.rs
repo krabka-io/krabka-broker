@@ -61,6 +61,7 @@
 //! failed and the code does not, because a code that separates them tells an
 //! attacker which check they got past.
 
+pub use self::payload::{FreezeSigningInput, freeze_signing_input};
 pub(crate) use self::{
     canonical_bytes::freeze_signing_bytes,
     refusal::{SignatureRefusal, WireRefusal},
@@ -68,6 +69,7 @@ pub(crate) use self::{
 };
 
 mod canonical_bytes;
+mod payload;
 mod refusal;
 mod verify;
 

@@ -9,7 +9,7 @@
 
 use {
     crate::support::OperatorKey,
-    krabka_broker::operator_keys::freeze_signing_input,
+    krabka_broker::{FreezeSigningInput, freeze_signing_input},
     krabka_protocol::{
         krabka::freeze::{DescribedTopicFreeze, SetTopicFreezeRequest},
         primitives::uuid::Uuid as WireUuid,
@@ -30,7 +30,7 @@ const FREEZE_DOMAIN: &[u8] = b"krabka-topic-freeze-v1\0";
 /// behind a `u32` big-endian length. The length prefixes are what stop a scope
 /// of `"a"` with a reason of `"bc"` from signing the same bytes as a scope of
 /// `"ab"` with a reason of `"c"`.
-fn signing_bytes(input: &krabka_broker::operator_keys::FreezeSigningInput<'_>) -> Vec<u8> {
+fn signing_bytes(input: &FreezeSigningInput<'_>) -> Vec<u8> {
     fn put(bytes: &mut Vec<u8>, field: &[u8]) {
         let len = u32::try_from(field.len()).expect("a field inside u32");
         bytes.extend_from_slice(&len.to_be_bytes());
@@ -67,7 +67,7 @@ pub(super) struct SignedFreeze<'a> {
 /// and only the `key_id` and the detached signature go on the wire.
 pub(super) fn signed_request(signed: &SignedFreeze<'_>) -> SetTopicFreezeRequest {
     let proposal_id = *signed.proposal_id.as_bytes();
-    let bytes = signing_bytes(&krabka_broker::operator_keys::FreezeSigningInput {
+    let bytes = signing_bytes(&FreezeSigningInput {
         cluster_id: signed.cluster_id,
         pattern_type: signed.pattern_type,
         scope: signed.scope,
