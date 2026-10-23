@@ -25,6 +25,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Added
 
+- Backup library operations return structured reports with capture notes, unreadable manifests, verification progress, and offset commit summaries. The CLI renders the existing text from these reports (#1710).
+
 - `krabka-log` gains `Log::prepare_compaction`, `CompactionJob::build` and
   `Log::finish_compaction`, with `BuiltCompaction` and `CompactionOutcome`:
   `Log::compact` in three steps, the middle one runnable without the log.

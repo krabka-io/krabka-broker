@@ -49,6 +49,8 @@
 //! `krabka-guard`, `krabka-barrier` and `krabka-format` are: a test that spawns
 //! the binary needs a Cargo working tree to build it from, and a Bazel test
 //! sandbox has none. Tests call [`run_from_args`] in process instead.
+//!
+//! The operations in [`mod@run`] return an [`OperationReport`] with an outcome and ordered diagnostics, including progress before an error. They do not print. [`run()`] renders those diagnostics for the CLI.
 
 use clap::Parser as _;
 
@@ -60,11 +62,13 @@ pub mod diskless;
 pub mod error;
 pub mod manifest;
 pub mod offsets;
+pub mod report;
 pub mod run;
 
 pub use self::{
     cli::{Cli, Command},
     error::{BackupError, EXIT_BAD_ARGUMENT, EXIT_CLUSTER, EXIT_INTEGRITY, EXIT_UNREADABLE},
+    report::{BackupEvent, OperationReport},
 };
 
 krabka_macros::parsed_cli_entrypoint!({
@@ -85,17 +89,18 @@ pub async fn run(cli: Cli) -> i32 {
             security,
             signing,
             archive,
-        } => run::capture_configured(
-            log_dir.as_deref(),
-            bootstrap_server.as_deref(),
-            security,
-            signing,
-            archive,
-        )
-        .await
-        .map(|_| ()),
-        Command::List { archive } => run::list(archive).await.map(|_| ()),
-        Command::Verify { capture, archive } => run::verify(capture, archive).await,
+        } => render_report(
+            run::capture_configured(
+                log_dir.as_deref(),
+                bootstrap_server.as_deref(),
+                security,
+                signing,
+                archive,
+            )
+            .await,
+        ),
+        Command::List { archive } => render_report(run::list(archive).await),
+        Command::Verify { capture, archive } => render_report(run::verify(capture, archive).await),
         Command::RestoreOffsets {
             capture,
             bootstrap_server,
@@ -103,16 +108,17 @@ pub async fn run(cli: Cli) -> i32 {
             dry_run,
             trust,
             archive,
-        } => run::restore_offsets_configured(
-            capture,
-            bootstrap_server,
-            security,
-            trust,
-            *dry_run,
-            archive,
-        )
-        .await
-        .map(|_| ()),
+        } => render_report(
+            run::restore_offsets_configured(
+                capture,
+                bootstrap_server,
+                security,
+                trust,
+                *dry_run,
+                archive,
+            )
+            .await,
+        ),
     };
     match outcome {
         Ok(()) => 0,
@@ -121,6 +127,12 @@ pub async fn run(cli: Cli) -> i32 {
             error.exit_code()
         }
     }
+}
+
+fn render_report<T>(report: OperationReport<T>) -> Result<(), BackupError> {
+    report::render(&report.events, &mut std::io::stdout().lock())
+        .expect("failed printing to stdout");
+    report.result.map(|_| ())
 }
 
 #[cfg(test)]
