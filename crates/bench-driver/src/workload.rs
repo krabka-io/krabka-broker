@@ -5,7 +5,7 @@
 
 use {
     crate::{
-        failover::{kill_broker_pod, partition0_leader_from_metadata, try_client},
+        failover::{FaultConfig, FaultTask},
         hist,
         ids::{MessageCount, TimeOffsetMs, WallclockMs},
         numeric::{
@@ -368,7 +368,7 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     let first_ack_unix_ms = Arc::new(AtomicU64::new(0));
     // The one marker every producer reads to learn that the broker is gone.
     // It stays zero until the delete succeeds, so it is created before the
-    // producers start and not beside `spawn_failover`.
+    // producers start and not beside the fault task.
     let kill_at_ms = Arc::new(AtomicU64::new(0));
 
     spawn_producers(
@@ -394,14 +394,15 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         &stop,
     );
 
-    spawn_failover(
-        failover_active,
-        &scenario,
-        &cfg,
-        security.clone(),
-        t_start,
-        kill_at_ms.clone(),
-    );
+    let fault = failover_active.then(|| {
+        start_fault(
+            &scenario,
+            &cfg,
+            security.clone(),
+            t_start,
+            kill_at_ms.clone(),
+        )
+    });
 
     let warmup_end = t_start + scenario.warmup.to_std();
     tokio::time::sleep_until(warmup_end).await;
@@ -410,6 +411,8 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     let meas_end = warmup_end + scenario.duration.to_std();
     tokio::time::sleep_until(meas_end).await;
     stop.store(STATE_STOP, Ordering::SeqCst);
+
+    let fault_at_ms = finish_fault(fault, &mut notes).await;
 
     // ── Join all tasks ──────────────────────────────────────────────────────
     let mut prod_hist = hist::new();
@@ -513,7 +516,7 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     } = finalize_timing(
         failover_active,
         FailoverStamps {
-            kill_at_ms: kill_at_ms.load(Ordering::SeqCst),
+            kill_at_ms: fault_at_ms,
             recovery_at_ms: earliest_recovery_ms,
             dropped: prod_dropped,
             latency_spike_max: max_spike,
@@ -524,7 +527,7 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
     note_missing_disturbance(
         failover_active,
         disturbance.as_ref(),
-        kill_at_ms.load(Ordering::SeqCst),
+        fault_at_ms,
         &mut notes,
     );
 
@@ -553,6 +556,40 @@ pub async fn run(scenario: Scenario, cfg: DriverConfig) -> Result<RunOutput> {
         samples,
         broker_samples,
     })
+}
+
+async fn finish_fault(fault: Option<FaultTask>, notes: &mut Vec<String>) -> u64 {
+    let Some(fault) = fault else {
+        return 0;
+    };
+    let outcome = fault.stop().await;
+    if let Some(note) = outcome.note() {
+        notes.push(note);
+    }
+    outcome.killed_at_ms().unwrap_or_default()
+}
+
+fn start_fault(
+    scenario: &Scenario,
+    cfg: &DriverConfig,
+    security: Option<ClientSecurity>,
+    started_at: Instant,
+    kill_at: Arc<AtomicU64>,
+) -> FaultTask {
+    FaultTask::spawn(
+        scenario.failover.as_ref().expect("checked above"),
+        FaultConfig {
+            stack: cfg.stack,
+            namespace: cfg.namespace.clone(),
+            bootstrap: cfg.bootstrap.clone(),
+            topic: cfg.topic.clone(),
+            security,
+            dispatch_queue_capacity: cfg.client_dispatch_queue_capacity,
+            frame_max: cfg.client_frame_max,
+        },
+        started_at,
+        kill_at,
+    )
 }
 
 fn client_security(cfg: &DriverConfig) -> Option<ClientSecurity> {
@@ -875,71 +912,6 @@ async fn capture_resources(
         resource,
         broker_samples,
     }
-}
-
-fn spawn_failover(
-    active: bool,
-    scenario: &Scenario,
-    cfg: &DriverConfig,
-    security: Option<ClientSecurity>,
-    started_at: Instant,
-    kill_at: Arc<AtomicU64>,
-) {
-    if !active {
-        return;
-    }
-    let spec = scenario.failover.clone().expect("checked above");
-    let stack = cfg.stack;
-    let namespace = cfg.namespace.clone();
-    let bootstrap = cfg.bootstrap.clone();
-    let topic = cfg.topic.clone();
-    let dispatch_queue_capacity = cfg.client_dispatch_queue_capacity;
-    let frame_max = cfg.client_frame_max;
-    tokio::spawn(async move {
-        tokio::time::sleep_until(started_at + spec.kill_after.to_std()).await;
-        let client = match try_client().await {
-            Ok(client) => client,
-            Err(error) => {
-                warn!(%error, "failover: in-cluster client unavailable");
-                return;
-            }
-        };
-        let leader_id = if spec.target == "partition0_leader" {
-            match partition0_leader_from_metadata(
-                &bootstrap,
-                &topic,
-                security,
-                dispatch_queue_capacity,
-                frame_max,
-            )
-            .await
-            {
-                Ok(id) => Some(id),
-                Err(error) => {
-                    warn!(%error, "failover: leader lookup failed; using first broker pod");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        match kill_broker_pod(&client, stack, &namespace, leader_id).await {
-            Ok(name) => {
-                // The marker goes up only now. Everything above it -- client
-                // discovery, the leader lookup, the delete itself -- can fail,
-                // and a marker published before them would make a producer
-                // error that had nothing to do with a kill look like the kill.
-                // A run whose delete failed leaves the marker at zero, and
-                // `finalize_timing` then records no disturbance at all.
-                kill_at.store(
-                    nonnegative_i64_to_u64(Utc::now().timestamp_millis()),
-                    Ordering::SeqCst,
-                );
-                info!(pod = %name, "failover: killed broker");
-            }
-            Err(error) => warn!(%error, "failover: broker kill failed"),
-        }
-    });
 }
 
 const STATE_RUN: u8 = 0; // warmup phase, record-but-discard
