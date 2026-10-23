@@ -248,6 +248,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- The benchmark driver cancels and joins pending failover faults when measurement ends, and reports client discovery, target fallback, and deletion outcomes. A fault scheduled after the run cannot delete a broker pod (#1701).
+
 - Require `ClusterAction` for `PushTelemetry`, refuse both client-telemetry
   RPCs when no receiver is enabled, reject unsubscribed or structurally
   excessive OTLP metrics, and cap retained Prometheus client series globally
