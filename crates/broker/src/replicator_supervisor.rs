@@ -24,13 +24,14 @@ use crate::share_coordinator::coordinator::test_support::assert_recovered_epoch_
 use {
     dashmap::DashMap,
     krabka_log::LogConfig,
+    krabka_metadata::MetadataImage,
     krabka_raft::NodeId,
     std::{
         collections::HashMap,
         path::PathBuf,
         sync::{Arc, Mutex},
     },
-    tokio::task::JoinHandle,
+    tokio::{sync::watch, task::JoinHandle},
     tokio_util::sync::CancellationToken,
 };
 mod desired_sets;
@@ -66,9 +67,7 @@ use {
         partition_registry::PartitionRegistry,
         producer_state::ProducerState,
         replicator::{FollowedPartitions, ReplicationConnectionConfig},
-        share_coordinator::coordinator::ShareCoordinator,
         throttle::ThrottleState,
-        txn::coordinator::TxnCoordinator,
         wal::quorum::registry::{ShardId, WalShardRegistry},
     },
 };
@@ -142,11 +141,8 @@ pub(crate) struct ReplicatorSupervisor {
     wal_tasks: DashMap<ShardId, WalFollowerTask>,
     wal_task_targets: DashMap<ShardId, WalFollowerSpec>,
     shutdown: CancellationToken,
-    txn_coordinator: Option<Arc<TxnCoordinator>>,
-    /// KIP-932 share coordinator. Each reconcile refreshes its view of
-    /// locally-led `__share_group_state` partitions, the same as for the
-    /// txn coordinator.
-    share_coordinator: Option<Arc<ShareCoordinator>>,
+    /// Images whose local materialization and leadership transitions completed.
+    coordinator_ready: watch::Sender<Option<Arc<MetadataImage>>>,
     /// Shared outbound dialer. It uses TLS and SASL when configured, and raw
     /// TCP otherwise. Each spawned replicator clones this Arc.
     inter_broker_client: Arc<InterBrokerClient>,
@@ -210,8 +206,7 @@ pub(crate) struct ReplicatorSupervisorConfig {
     pub unstable_api_versions: UnstableApiVersions,
     pub client_id: String,
     pub shutdown: CancellationToken,
-    pub txn_coordinator: Option<Arc<TxnCoordinator>>,
-    pub share_coordinator: Option<Arc<ShareCoordinator>>,
+    pub coordinator_ready: watch::Sender<Option<Arc<MetadataImage>>>,
     pub inter_broker_client: Arc<InterBrokerClient>,
     pub inter_broker_listener_protocol: krabka_security::ListenerProtocol,
     pub inter_broker_server_name: String,
@@ -258,8 +253,7 @@ impl ReplicatorSupervisor {
             unstable_api_versions,
             client_id,
             shutdown,
-            txn_coordinator,
-            share_coordinator,
+            coordinator_ready,
             inter_broker_client,
             inter_broker_listener_protocol,
             inter_broker_server_name,
@@ -306,8 +300,7 @@ impl ReplicatorSupervisor {
             wal_tasks: DashMap::new(),
             wal_task_targets: DashMap::new(),
             shutdown,
-            txn_coordinator,
-            share_coordinator,
+            coordinator_ready,
             inter_broker_client,
             inter_broker_listener_protocol,
             inter_broker_server_name,
@@ -332,7 +325,7 @@ impl ReplicatorSupervisor {
     pub(crate) async fn run(self) {
         let mut rx = self.controller.watch_image();
         let mut first_reconcile = true;
-        'reconciles: loop {
+        loop {
             let image = rx.borrow().clone();
             if first_reconcile {
                 self.reconcile(&image).await;
@@ -344,29 +337,11 @@ impl ReplicatorSupervisor {
                     () = self.reconcile(&image) => {}
                 }
             }
-            loop {
-                tokio::select! {
-                    () = self.shutdown.cancelled() => break 'reconciles,
-                    res = rx.changed() => {
-                        if res.is_err() {
-                            break 'reconciles;
-                        }
+            tokio::select! {
+                () = self.shutdown.cancelled() => break,
+                res = rx.changed() => {
+                    if res.is_err() {
                         break;
-                    }
-                    () = async {
-                        match &self.share_coordinator {
-                            Some(coordinator) => coordinator.recovery_requested().await,
-                            None => std::future::pending().await,
-                        }
-                    } => {
-                        // A lost append reply must recover on the state
-                        // coordinator even if its metadata image is unchanged.
-                        // Refresh only the coordinator: a full reconcile can
-                        // enqueue configuration work behind the blocked writer.
-                        if let Some(coordinator) = &self.share_coordinator {
-                            let image = rx.borrow().clone();
-                            drop(coordinator.refresh_leader_partitions(&image).await);
-                        }
                     }
                 }
             }
@@ -406,6 +381,7 @@ mod tests {
         super::*,
         crate::{
             codes,
+            coordinator_driver::CoordinatorDriver,
             replicator_supervisor::test_support::{
                 broker_record, image_with, partition_record, supervisor_fixture, topic_record,
             },
@@ -413,7 +389,8 @@ mod tests {
                 bootstrap,
                 config::ShareCoordinatorConfig,
                 coordinator::{
-                    LoadStatus, ShareStateError, message, test_support::image_with_topic,
+                    LoadStatus, ShareCoordinator, ShareStateError, message,
+                    test_support::image_with_topic,
                 },
             },
         },
@@ -449,7 +426,7 @@ mod tests {
                 .replicas(vec![NodeId(2)])
                 .call(),
         ]);
-        let (mut supervisor, partitions, _reporter, _dir) = supervisor_fixture(image);
+        let (supervisor, partitions, _reporter, _dir) = supervisor_fixture(image);
         let coordinator = Arc::new(ShareCoordinator::new(
             krabka_metadata::NodeId(2),
             Arc::clone(&partitions),
@@ -459,7 +436,13 @@ mod tests {
                 ..Default::default()
             },
         ));
-        supervisor.share_coordinator = Some(Arc::clone(&coordinator));
+        let driver = CoordinatorDriver::new(
+            supervisor.coordinator_ready.subscribe(),
+            None,
+            Some(Arc::clone(&coordinator)),
+            supervisor.shutdown.clone(),
+        );
+        let driver_task = tokio::spawn(driver.run());
         let shutdown = supervisor.shutdown.clone();
         let metadata = supervisor.controller.watch_image();
         let task = supervisor.spawn();
@@ -505,6 +488,7 @@ mod tests {
         assert!(!metadata.has_changed().unwrap());
         shutdown.cancel();
         task.await.unwrap();
+        driver_task.await.unwrap();
         let writer = partition.take_writer_handle().unwrap();
         writer.abort();
         let _ = writer.await;

@@ -401,3 +401,32 @@ async fn a_bad_record_loads_the_transactions_before_it_and_serves_them() {
         check!(view == *expected, "{name}");
     }
 }
+
+#[tokio::test]
+async fn readiness_refresh_waits_for_the_installed_local_leader_epoch() {
+    let dir = TempDir::new().expect("tempdir");
+    let partitions = super::super::test_support::state_registry(dir.path());
+    let coordinator = coordinator(NodeId(1), &partitions);
+    let image = image(NodeId(1), krabka_metadata::LeaderEpoch(7));
+
+    coordinator
+        .refresh_ready_leader_partitions(&image)
+        .await
+        .finished()
+        .await;
+    assert!(coordinator.load_status(P0).await == Some(LoadStatus::Pending));
+
+    let partition = partitions.get(bootstrap::TOPIC, P0).unwrap();
+    partition
+        .current_leader
+        .store(1, std::sync::atomic::Ordering::Release);
+    partition
+        .current_leader_epoch
+        .store(7, std::sync::atomic::Ordering::Release);
+    coordinator
+        .refresh_ready_leader_partitions(&image)
+        .await
+        .finished()
+        .await;
+    assert!(coordinator.load_status(P0).await == Some(LoadStatus::Loaded));
+}

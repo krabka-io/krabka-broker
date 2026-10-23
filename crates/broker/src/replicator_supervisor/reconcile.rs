@@ -110,21 +110,11 @@ impl ReplicatorSupervisor {
 
         self.reconcile_fetchers(image);
 
-        // 3. Refresh the txn coordinator's view of locally-led
-        //    __transaction_state partitions. Cheap (Arc clone + lock).
-        if let Some(coord) = &self.txn_coordinator {
-            // The loads run in the background. The reconcile loop does not
-            // wait for them.
-            drop(coord.refresh_leader_partitions(image).await);
-        }
-
-        // 3b. Apply the leadership of __share_group_state partitions to the
-        //     share coordinator (KIP-932). A newly led partition loads its
-        //     log in a background task, and a lost one drops its state. The
-        //     reconcile does not wait for the loads.
-        if let Some(coord) = &self.share_coordinator {
-            drop(coord.refresh_leader_partitions(image).await);
-        }
+        // Publish readiness only after materialization, WAL promotion, and
+        // local leadership installation. The coordinator driver consumes this
+        // handoff independently of replica reconciliation and dir reporting.
+        self.coordinator_ready
+            .send_replace(Some(std::sync::Arc::new(image.clone())));
 
         // 4. KIP-858: report any (topic, partition) whose owning log-dir UUID
         //    has changed since the last successful report (first materialization

@@ -38,6 +38,11 @@ pub(crate) struct ScheduledLoads {
     tasks: Vec<JoinHandle<()>>,
 }
 
+impl ScheduledLoads {
+    /// Transfer replay tasks to the lifecycle driver for shutdown cancellation.
+    pub(crate) fn into_tasks(self) -> Vec<JoinHandle<()>> { self.tasks }
+}
+
 impl TxnCoordinator {
     /// Applies the `__transaction_state` leadership of `image`, and starts the
     /// loads that it asks for.
@@ -54,13 +59,52 @@ impl TxnCoordinator {
         self: &Arc<Self>,
         image: &MetadataImage,
     ) -> ScheduledLoads {
+        self.refresh_with_readiness(image, false).await
+    }
+
+    /// Applies a reconciled image, loading only after local promotion installed
+    /// its leader epoch. A failed promotion keeps that partition pending while
+    /// resignations and other partitions continue to advance.
+    pub(crate) async fn refresh_ready_leader_partitions(
+        self: &Arc<Self>,
+        image: &MetadataImage,
+    ) -> ScheduledLoads {
+        self.refresh_with_readiness(image, true).await
+    }
+
+    async fn refresh_with_readiness(
+        self: &Arc<Self>,
+        image: &MetadataImage,
+        require_ready: bool,
+    ) -> ScheduledLoads {
+        let is_local = |partition: PartitionIndex| {
+            if !require_ready {
+                return self.is_local(partition);
+            }
+            let Some(record) = image.partition(bootstrap::TOPIC, partition.get()) else {
+                // A missing topic uses locality to distinguish an old image
+                // from a deletion, rather than to schedule a new load.
+                return self.is_local(partition);
+            };
+            self.partitions
+                .get(bootstrap::TOPIC, partition)
+                .is_some_and(|local| {
+                    local
+                        .current_leader
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        == self.node_id.0
+                        && local
+                            .current_leader_epoch
+                            .load(std::sync::atomic::Ordering::Acquire)
+                            == record.leader_epoch.0
+                })
+        };
         // Most refreshes change nothing. Check that under the read guard, so
         // a refresh does not wait for the appends that publish.
         let unchanged = {
             let leaders = self.leader_partitions.read().await;
             let mut probe = leaders.clone();
-            leadership::apply_image(&mut probe, self.node_id, image, |p| self.is_local(p), || 0)
-                .is_empty()
+            leadership::apply_image(&mut probe, self.node_id, image, is_local, || 0).is_empty()
                 && probe == *leaders
         };
         if unchanged {
@@ -68,16 +112,11 @@ impl TxnCoordinator {
         }
         let changes = {
             let mut leaders = self.leader_partitions.write().await;
-            let changes = leadership::apply_image(
-                &mut leaders,
-                self.node_id,
-                image,
-                |p| self.is_local(p),
-                || {
+            let changes =
+                leadership::apply_image(&mut leaders, self.node_id, image, is_local, || {
                     self.next_generation
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                },
-            );
+                });
             // Drop the old transactions while the write guard holds, so no
             // publication sees a half-dropped partition.
             for partition in &changes.unload {
@@ -110,12 +149,13 @@ impl TxnCoordinator {
     }
 
     /// Loads every `__transaction_state` partition that `image` says this
-    /// broker leads, and waits for the loads. `Broker::start` calls it.
+    /// broker leads, and waits for the loads in recovery tests.
     ///
     /// # Errors
     ///
     /// Returns [`BrokerError::Txn`] naming the partitions whose load failed.
     /// Those partitions answer `NOT_COORDINATOR` until the next election.
+    #[cfg(test)]
     #[tracing::instrument(name = "txn_coordinator_recover", level = "info", skip_all, err)]
     pub(crate) async fn recover(
         self: &Arc<Self>,

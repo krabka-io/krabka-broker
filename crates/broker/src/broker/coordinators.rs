@@ -1,7 +1,7 @@
 //! Transaction, share, and barrier coordinator bring-up. Each coordinator is
-//! constructed, given its inter-broker marker transport, and recovered from the
-//! current metadata image here, so the startup sequence sees one call instead
-//! of three near-identical construct-configure-recover blocks.
+//! constructed and given its inter-broker marker transport here. Transaction
+//! and share recovery starts only after the replica readiness handoff; barrier
+//! recovery retains its existing startup lifecycle.
 
 use {
     super::inter_broker_listener_protocol,
@@ -81,9 +81,6 @@ pub(super) async fn start_coordinators(
         Arc::clone(group_coordinator),
     );
     let txn_coordinator = Arc::new(txn_coordinator);
-    if let Err(error) = txn_coordinator.recover(&controller.current_image()).await {
-        tracing::warn!(%error, "transaction coordinator recovery error");
-    }
     let mut share_coordinator_config = (*config.share_coordinator).clone();
     share_coordinator_config.load_buffer_size = config.share_coordinator_load_buffer_size;
     // Kafka trunk's newer `ShareCoordinatorShard` rules are what
@@ -97,9 +94,6 @@ pub(super) async fn start_coordinators(
         Arc::clone(partitions),
         share_coordinator_config,
     ));
-    if let Err(error) = share_coordinator.recover(&controller.current_image()).await {
-        tracing::warn!(%error, "share coordinator recovery error");
-    }
     let share_persister = Arc::new(SharePersister::new(
         config.node_id,
         Arc::clone(&share_coordinator),

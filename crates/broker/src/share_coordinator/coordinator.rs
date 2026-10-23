@@ -256,10 +256,19 @@ pub(super) struct Active<'a> {
 /// call started.
 ///
 /// A caller that does not wait drops this value. The tasks run on.
-#[derive(Debug, Default, krabka_macros::ScheduledLoads)]
-#[scheduled_loads(failure_message = "__share_group_state load task failed")]
+#[derive(Debug, Default)]
+#[cfg_attr(test, derive(krabka_macros::ScheduledLoads))]
+#[cfg_attr(
+    test,
+    scheduled_loads(failure_message = "__share_group_state load task failed")
+)]
 pub(crate) struct ScheduledLoads {
     tasks: Vec<JoinHandle<()>>,
+}
+
+impl ScheduledLoads {
+    /// Transfer replay tasks to the lifecycle driver for shutdown cancellation.
+    pub(crate) fn into_tasks(self) -> Vec<JoinHandle<()>> { self.tasks }
 }
 
 /// Per-broker share-state coordinator.
@@ -330,7 +339,7 @@ impl ShareCoordinator {
     fn now_ms(&self) -> i64 { epoch_millis(self.wall_clock.now()) }
 
     /// Wait for an indeterminate append or a client retry to request a
-    /// bounded replay against the supervisor's current metadata image.
+    /// bounded replay against the coordinator driver's last ready metadata image.
     pub(crate) async fn recovery_requested(&self) { self.recovery_needed.notified().await; }
 
     /// Applies the leadership of `image` to the led partitions.

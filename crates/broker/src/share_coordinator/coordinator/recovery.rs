@@ -41,11 +41,11 @@ use {
 impl ShareCoordinator {
     crate::task_util::recover_after_refresh! {
         this,
+        #[cfg(test)]
         /// Applies the leadership of `image` and waits until every load that it
         /// started has ended.
         ///
-        /// `Broker::start` calls this method, so the partitions that this broker
-        /// leads at start serve requests as soon as the broker is up.
+        /// Recovery tests use this helper to wait for replay completion.
         ///
         /// # Errors
         ///
