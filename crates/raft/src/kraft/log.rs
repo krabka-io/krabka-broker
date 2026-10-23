@@ -1002,6 +1002,10 @@ mod tests {
         let LogInDir { mut log, dir } = four_committed_segments();
         let pruned_at = SystemTime::now();
         log.prune_to(Offset(2)).expect("prune");
+        // Retirement timestamps are sampled during pruning, which can take
+        // more than a second on a loaded runner. Advance from its completion
+        // so the simulated reap is past every segment's deletion deadline.
+        let after_prune_at = SystemTime::now();
         let after_prune = retired(dir.path());
         check!(
             after_prune
@@ -1014,7 +1018,7 @@ mod tests {
             ("inside the delay", pruned_at, after_prune.clone()),
             (
                 "past the delay",
-                pruned_at + std::time::Duration::from_secs(61),
+                after_prune_at + std::time::Duration::from_secs(61),
                 Vec::new(),
             ),
         ] {
