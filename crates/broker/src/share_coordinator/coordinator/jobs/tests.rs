@@ -113,7 +113,7 @@ async fn collected_keys_do_not_authorize_a_new_load_generation() {
     }
     let removed = bucket.keys[0].clone();
     coord.state.remove(&removed);
-    let fresh = (0..)
+    let fresh = (0..10_000)
         .map(|index| (format!("replayed-{index}"), T1, 0))
         .find(|(group, topic, partition)| {
             coord.state_partition_for(group, topic, *partition) == bucket.term.partition
@@ -145,7 +145,7 @@ async fn collected_keys_include_an_initialize_in_the_same_generation() {
     let dir = tempdir().unwrap();
     let TwoKeys { coord, .. } = two_keys(dir.path(), ShareCoordinatorConfig::default()).await;
     let bucket = populated_bucket(&coord).await;
-    let fresh = (0..)
+    let fresh = (0..10_000)
         .map(|index| format!("initialized-{index}"))
         .find(|group| coord.state_partition_for(group, &T1, 0) == bucket.term.partition)
         .unwrap();
