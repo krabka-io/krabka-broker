@@ -15,7 +15,7 @@ use {
         shutdown_cluster,
     },
     assert2::{assert, check},
-    krabka_broker::{BrokerConfig, BrokerHandle},
+    krabka_broker::{BrokerConfig, BrokerHandle, NodeId},
     krabka_client_core::Client,
     krabka_protocol::owned::{
         share_group_heartbeat_request::ShareGroupHeartbeatRequest,
@@ -28,6 +28,7 @@ use {
 mod support;
 
 const GROUP: &str = "share-move";
+const OFFSETS_TOPIC: &str = "__consumer_offsets";
 const KEY_TYPE_GROUP: i8 = 0;
 const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
 const COORDINATOR_NOT_AVAILABLE: i16 = 15;
@@ -134,6 +135,16 @@ async fn a_join_that_does_not_commit_is_not_answered() {
     let lookup_cli = client(&cluster[0].0).await;
     let coordinator = coordinator_of(&lookup_cli, None).await;
     lookup_cli.close();
+    // FindCoordinator exposes metadata leadership before the local runtime
+    // has necessarily installed its ISR. The stopped follower must belong to
+    // the full, installed ISR for this fault to prevent the join from committing.
+    let coordinator_handle = &cluster[position_of(&cluster, coordinator)].0;
+    coordinator_handle
+        .wait_until_isr_len(OFFSETS_TOPIC, 0, cluster.len())
+        .await;
+    coordinator_handle
+        .wait_until_local_partition_leader(OFFSETS_TOPIC, 0, NodeId(coordinator))
+        .await;
     let stopped_dir = crash_follower(&mut cluster, coordinator).await;
 
     let member = client(&cluster[position_of(&cluster, coordinator)].0).await;
