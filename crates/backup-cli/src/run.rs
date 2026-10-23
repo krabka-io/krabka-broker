@@ -956,8 +956,8 @@ async fn read_manifest(store: &Archive, id: &str) -> Result<Manifest, BackupErro
 mod tests {
     use {
         super::{
-            BackupError, CAPTURE_ROOT, DISKLESS_WAL_INDEX, FileEd25519Signer, GROUP_OFFSETS,
-            MANIFEST, MAX_SNAPSHOT_BYTES, METADATA_CHECKPOINT, RLMM_SNAPSHOT,
+            BackupError, CAPTURE_ROOT, DISKLESS_WAL_INDEX, DisklessWalCapture, FileEd25519Signer,
+            GROUP_OFFSETS, MANIFEST, MAX_SNAPSHOT_BYTES, METADATA_CHECKPOINT, RLMM_SNAPSHOT,
             RLMM_SNAPSHOT_RELATIVE, Sha256Digest, artifact_byte_limit, capture, check_capture_size,
             checkpoint_note, list, newest_metadata_checkpoint, restore_offsets, upload_capped,
             verify, verify_offsets_boundary,
