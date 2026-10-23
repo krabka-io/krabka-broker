@@ -47,7 +47,6 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
-- Remote read-committed fetches skip transaction-index requests when segment metadata declares the index empty (#1661).
 - The RF3 regression contract is now `rf3-regression-v2`. It raises the
   variance budget of records/s from 10% to 15%, and of p99 latency from 25% to
   50%. The first measured run of `rf3-regression-v1` exceeded both, and
@@ -198,6 +197,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   and the time a lookup could wait behind it, grew with the partition's
   retained remote history. With 100,000 retained segments one lifecycle went
   from about 36 ms to under 1 µs in the `remote_epoch_index` benchmark (#1616).
+- Remote read-committed fetches skip transaction-index requests when segment
+  metadata declares the index empty (#1661).
 - A controller serving a KIP-630 `FetchSnapshot` reads only the requested
   chunk of the checkpoint. It used to read the whole file for every chunk, so
   a transfer of a snapshot of size S in chunks of C read about
