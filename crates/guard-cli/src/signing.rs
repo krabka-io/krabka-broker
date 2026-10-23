@@ -49,7 +49,7 @@
 //! outside the signed bytes on purpose: every approver signs the same payload,
 //! and a payload that grew with each approval could never verify twice.
 
-pub use krabka_broker::operator_keys::FreezeSigningInput;
+pub use krabka_broker::FreezeSigningInput;
 use {krabka_audit::FileEd25519Signer, std::path::Path};
 
 /// Domain separator for a freeze record signature (KFC-9).
