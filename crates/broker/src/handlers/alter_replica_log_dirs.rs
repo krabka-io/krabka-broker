@@ -252,7 +252,7 @@ mod tests {
         },
         assert2::assert,
         krabka_protocol::owned::alter_replica_log_dirs_request::{
-            AlterReplicaLogDir, AlterReplicaLogDirTopic,
+            AlterReplicaLogDir, AlterReplicaLogDirTopic, MAX_VERSION, MIN_VERSION,
         },
         krabka_security::SaslMechanism,
         std::sync::Arc,
@@ -498,7 +498,7 @@ mod tests {
         };
         let target_entries = std::fs::read_dir(&extra_dir).expect("target dir").count();
         for auth in [authed("alice"), ConnectionAuth::Anonymous] {
-            for version in 0..=2 {
+            for version in MIN_VERSION..=MAX_VERSION {
                 let bytes = handle(
                     &broker,
                     version,
