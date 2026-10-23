@@ -234,9 +234,11 @@ that records its artifact replaces them.
 
 ### Not measured
 
-- **The RF3 regression budgets.** The contract `rf3-regression-v1` is checked
-  in, and [#1395](https://github.com/krabka-io/krabka-broker/issues/1395) has
-  no run of it on the benchmark host yet. Its budgets are not calibrated.
+- **The RF3 regression budgets.** The contract `rf3-regression-v2` is checked
+  in, with budgets calibrated from two runs of `rf3-regression-v1`. No run of
+  `rf3-regression-v2` has published a result yet
+  ([#1395](https://github.com/krabka-io/krabka-broker/issues/1395),
+  [Performance budget results](performance-budget-results.md)).
 - **TLS, SASL, tiered and diskless throughput.** No run above used
   authentication, encryption, a remote tier or the diskless WAL.
 - **Sustained load.** The 72-hour soak has not run.
