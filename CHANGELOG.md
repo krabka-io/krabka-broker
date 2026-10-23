@@ -47,8 +47,6 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
-- User/client quota lookup constructs keys only for enabled levels up to the
-  first matching rate, retaining Kafka's precedence and sensor keys (#1718).
 - Scheduled delivery checks over archived segments buffer bounded byte ranges
   instead of fetching each batch header separately, reducing remote requests for
   ListOffsets LATEST and retention scans (#1682).
@@ -198,6 +196,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   additions. It now keeps a running total. On a 4-vCPU host, the read loop
   over 10,000 entries took 21-23 ms instead of 32-34 ms (#1609).
 - OffsetFetch projects only the requested committed and pending group offsets instead of copying unrelated entries (#1656).
+- User/client quota lookup constructs keys only for enabled levels up to the
+  first matching rate, retaining Kafka's precedence and sensor keys (#1718).
 - Less work per request on the produce and fetch paths:
   - Dispatch reads a Produce request's `acks` from its leading fields to
     decide whether a response is owed, instead of decoding the request a
