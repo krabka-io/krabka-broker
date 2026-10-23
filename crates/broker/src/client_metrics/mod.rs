@@ -3,9 +3,12 @@
 //! sinks.
 
 pub(crate) mod config;
+pub(crate) mod ingestion;
 pub(crate) mod manager;
 pub(crate) mod otlp_sink;
 pub(crate) mod prometheus_sink;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub(crate) use manager::ClientMetricsManager;
 use {
     self::{otlp_sink::OtlpForwarder, prometheus_sink::ClientMetricsCollector},

@@ -17,8 +17,8 @@ use {
                 ClientAttributes, SubscriptionDecision, compute_subscription,
                 subscription_id as compute_subscription_id,
             },
+            test_support::{gauge_metric, metrics_data},
         },
-        handlers::push_telemetry::test_support::{gauge_metric, metrics_data},
         test_support::{
             self as broker_fixture_support, DenyAll, KafkaErrorCode, peer, start_broker_with,
         },
@@ -28,6 +28,7 @@ use {
     krabka_metadata::{ClientMetricsConfigRecord, MetadataRecord},
     krabka_protocol::{owned::push_telemetry_response, primitives::uuid::Uuid as ProtoUuid},
     opentelemetry_proto::tonic::metrics::v1::number_data_point,
+    prost::Message as _,
     std::sync::Arc,
     uuid::Uuid,
 };
