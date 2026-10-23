@@ -390,7 +390,7 @@ mod tests {
                 config::ShareCoordinatorConfig,
                 coordinator::{
                     LoadStatus, ShareCoordinator, ShareStateError, message,
-                    test_support::image_with_topic,
+                    test_support::{await_load_status, image_with_topic},
                 },
             },
         },
@@ -399,19 +399,6 @@ mod tests {
         krabka_log::Offset,
         std::time::Duration,
     };
-
-    async fn await_share_status(coordinator: &ShareCoordinator, expected: LoadStatus) {
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                if coordinator.load_status(PartitionIndex(0)).await == Some(expected) {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("share recovery reaches the expected status");
-    }
 
     /// The remote state coordinator receives no metadata update when its
     /// accepted append outlives an RPC. Its supervisor must recover on the
@@ -446,7 +433,7 @@ mod tests {
         let shutdown = supervisor.shutdown.clone();
         let metadata = supervisor.controller.watch_image();
         let task = supervisor.spawn();
-        await_share_status(&coordinator, LoadStatus::Active).await;
+        await_load_status(&coordinator, PartitionIndex(0), LoadStatus::Active).await;
         let partition = partitions.get(bootstrap::TOPIC, PartitionIndex(0)).unwrap();
 
         // The real writer retains this accepted append while its reply waits
@@ -464,8 +451,8 @@ mod tests {
                 })
         );
         // No RPC or metadata refresh triggers this first recovery attempt.
-        await_share_status(&coordinator, LoadStatus::Loading).await;
-        await_share_status(&coordinator, LoadStatus::Pending).await;
+        await_load_status(&coordinator, PartitionIndex(0), LoadStatus::Loading).await;
+        await_load_status(&coordinator, PartitionIndex(0), LoadStatus::Pending).await;
         assert!(!metadata.has_changed().unwrap());
 
         drop(hw);
@@ -478,7 +465,7 @@ mod tests {
                     message: message::COORDINATOR_LOAD_IN_PROGRESS,
                 })
         );
-        await_share_status(&coordinator, LoadStatus::Active).await;
+        await_load_status(&coordinator, PartitionIndex(0), LoadStatus::Active).await;
         assert_recovered_epoch_is_fenced()
             .coordinator(&coordinator)
             .topic_image(&topic_image)
