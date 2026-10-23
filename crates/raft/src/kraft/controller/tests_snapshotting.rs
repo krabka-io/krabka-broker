@@ -550,12 +550,14 @@ async fn a_submitted_change_stamps_its_checkpoint_with_the_append_wall_clock() {
     }
     let after = KraftController::wall_clock_ms();
 
+    // A committed submit publishes its image before the background checkpoint
+    // finishes. Shutdown joins that writer before inspecting the durable file.
+    ctrl.shutdown().await;
     let bytes = load_latest_checkpoint(dir.path())
         .expect("scan checkpoints")
         .expect("a checkpoint exists");
     let stamped = snapshot_header_timestamp(&bytes);
     assert2::assert!(before <= stamped && stamped <= after, "{stamped}");
-    ctrl.shutdown().await;
 }
 
 /// A reader that counts the bytes it hands out, to show what a chunk read
