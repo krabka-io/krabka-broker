@@ -255,7 +255,7 @@ mod tests {
     use {
         super::{EpochLineage, RemoteReader},
         crate::remote_reader::test_support::{
-            CountingRsm, ReaderFixture, ReaderWithDir, TierSegment,
+            CountedRsm, CountingRsm, ReaderFixture, ReaderWithDir, TierSegment,
             append_time_remote_segment_reader, compressed_remote_segment_reader,
             divergent_tier_reader, reader_fixture, single_batch_tier_segment as segment,
             sparse_remote_segment_reader, sparse_remote_segment_reader_with_max_timestamp,
@@ -680,6 +680,19 @@ mod tests {
         batch
     }
 
+    fn counted_timestamp_reader(
+        batches: Vec<krabka_protocol::records::RecordBatch>,
+    ) -> (ReaderWithDir, CountedRsm) {
+        let ReaderWithDir { reader, dir } = tier_reader(&[TierSegment {
+            batches,
+            epochs: maplit::btreemap! {krabka_ids::LeaderEpoch(0) => 0},
+            unknown_max_timestamp: false,
+        }]);
+        let counted = CountingRsm::counting(Arc::clone(&reader.rsm));
+        let reader = RemoteReader::new(Arc::clone(&counted.rsm) as _, Arc::clone(&reader.rlmm));
+        (ReaderWithDir { reader, dir }, counted)
+    }
+
     /// #1662: an answer in the first range costs one fixed window regardless
     /// of the sealed segment's tail. These are bytes actually returned by the
     /// RSM, rather than an estimate from the requested bounds.
@@ -693,13 +706,7 @@ mod tests {
                     padded_batch(i64::from(offset), 200 + i64::from(offset), 64 * 1024)
                 }),
             );
-            let ReaderWithDir { reader, dir } = tier_reader(&[TierSegment {
-                batches,
-                epochs: maplit::btreemap! {krabka_ids::LeaderEpoch(0) => 0},
-                unknown_max_timestamp: false,
-            }]);
-            let counted = CountingRsm::counting(Arc::clone(&reader.rsm));
-            let reader = RemoteReader::new(counted.rsm, Arc::clone(&reader.rlmm));
+            let (ReaderWithDir { reader, dir }, counted) = counted_timestamp_reader(batches);
             let found = reader
                 .offset_for_timestamp(&tp(), 100, 0, None, &EpochLineage::unknown(), None)
                 .await
@@ -720,16 +727,10 @@ mod tests {
     #[tokio::test]
     async fn timestamp_ranges_complete_crossing_and_oversized_batches() {
         for (name, first_value_len) in [("crossing", 40 * 1024), ("oversized", 96 * 1024)] {
-            let ReaderWithDir { reader, dir } = tier_reader(&[TierSegment {
-                batches: vec![
-                    padded_batch(0, 100, first_value_len),
-                    padded_batch(1, 200, 40 * 1024),
-                ],
-                epochs: maplit::btreemap! {krabka_ids::LeaderEpoch(0) => 0},
-                unknown_max_timestamp: false,
-            }]);
-            let counted = CountingRsm::counting(Arc::clone(&reader.rsm));
-            let reader = RemoteReader::new(counted.rsm, Arc::clone(&reader.rlmm));
+            let (ReaderWithDir { reader, dir }, counted) = counted_timestamp_reader(vec![
+                padded_batch(0, 100, first_value_len),
+                padded_batch(1, 200, 40 * 1024),
+            ]);
             let found = reader
                 .offset_for_timestamp(&tp(), 150, 0, None, &EpochLineage::unknown(), None)
                 .await

@@ -21,7 +21,10 @@ use {
         TopicIdPartition,
     },
     krabka_units::convert::ByteSizeExt as _,
-    std::{fmt::Write as _, sync::Arc},
+    std::{
+        fmt::Write as _,
+        sync::{Arc, Mutex},
+    },
     uuid::Uuid,
 };
 
@@ -93,11 +96,14 @@ fn write_test_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path
     path
 }
 
+/// The requested bounds and returned byte count of each log-object read.
+pub type LogFetches = Arc<Mutex<Vec<(u32, Option<u32>, usize)>>>;
+
 /// A [`CountingRsm`] and the counter of the index objects it downloaded.
 pub struct CountedRsm {
     pub rsm: Arc<CountingRsm>,
     pub index_fetches: Arc<std::sync::atomic::AtomicUsize>,
-    pub log_fetches: Arc<std::sync::Mutex<Vec<(u32, Option<u32>, usize)>>>,
+    pub log_fetches: LogFetches,
 }
 
 /// A [`RemoteStorageManager`] that counts the index objects it downloads and
@@ -109,7 +115,7 @@ pub struct CountedRsm {
 pub struct CountingRsm {
     inner: Arc<dyn RemoteStorageManager>,
     index_fetches: Arc<std::sync::atomic::AtomicUsize>,
-    log_fetches: Arc<std::sync::Mutex<Vec<(u32, Option<u32>, usize)>>>,
+    log_fetches: LogFetches,
 }
 
 impl CountingRsm {
