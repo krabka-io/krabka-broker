@@ -47,6 +47,7 @@ enum Wake {
     ParkedFetch,
     Noop,
     Clean,
+    SnapshotComplete(Result<super::snapshotting::SnapshotJobCompletion, tokio::task::JoinError>),
 }
 
 impl Engine {
@@ -82,6 +83,12 @@ impl Engine {
             let noop_sleep = sleep_until_opt(self.noop_at);
             let clean_sleep = tokio::time::sleep_until(self.clean_at);
             let shutdown_sleep = sleep_until_opt(shutdown_at);
+            let snapshot_complete = async {
+                match self.snapshot_job.as_mut() {
+                    Some(job) => job.await,
+                    None => std::future::pending().await,
+                }
+            };
             tokio::pin!(election_sleep);
             tokio::pin!(fetch_sleep);
             tokio::pin!(check_quorum_sleep);
@@ -89,6 +96,7 @@ impl Engine {
             tokio::pin!(noop_sleep);
             tokio::pin!(clean_sleep);
             tokio::pin!(shutdown_sleep);
+            tokio::pin!(snapshot_complete);
 
             // A shutting-down replica starts no election of its own: Kafka's
             // poll loop keeps a resigned or unattached voter where it is, and
@@ -128,6 +136,7 @@ impl Engine {
                 () = &mut parked_fetch_sleep => Wake::ParkedFetch,
                 () = &mut noop_sleep => Wake::Noop,
                 () = &mut clean_sleep => Wake::Clean,
+                result = &mut snapshot_complete => Wake::SnapshotComplete(result),
             };
             self.run_turn(wake, shutting_down);
             // A write to the metadata log directory that failed this turn
@@ -170,6 +179,11 @@ impl Engine {
                 }
                 held.push(command);
             }
+        }
+        // A blocking checkpoint cannot be cancelled by dropping its handle.
+        // Join it before releasing the directory for a replacement controller.
+        if let Some(job) = self.snapshot_job.take() {
+            self.finish_snapshot_job(job.await);
         }
         // Fail any parked submitters so callers don't hang on shutdown.
         for w in self.commit_waiters.drain(..) {
@@ -216,6 +230,7 @@ impl Engine {
                     tracing::error!(?error, "kraft: metadata log cleaning failed");
                 }
             }
+            Wake::SnapshotComplete(result) => self.finish_snapshot_job(result),
         }
     }
 

@@ -24,8 +24,39 @@ use {
     krabka_ids::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord},
     krabka_units::prelude::{ByteSizeExt as _, TimeExt as _},
-    std::sync::Arc,
+    std::{path::Path, sync::Arc, time::Duration},
 };
+
+/// Everything a regular checkpoint completion needs. In particular, none of
+/// these values is read from the mutable engine after the worker finishes.
+pub(super) struct SnapshotJobCompletion {
+    end_offset: Offset,
+    last_contained_ts: i64,
+    bytes_at_start: u64,
+    result: Result<(), RaftError>,
+}
+
+fn write_regular_snapshot(
+    data_dir: &Path,
+    image: &MetadataImage,
+    end_offset: Offset,
+    epoch: i32,
+    last_contained_ts: i64,
+    delay: Duration,
+    bytes_at_start: u64,
+) -> SnapshotJobCompletion {
+    if !delay.is_zero() {
+        std::thread::sleep(delay);
+    }
+    let result = SnapshotWriter::serialize(image, last_contained_ts)
+        .and_then(|bytes| write_checkpoint(data_dir, end_offset.0, epoch, &bytes));
+    SnapshotJobCompletion {
+        end_offset,
+        last_contained_ts,
+        bytes_at_start,
+        result,
+    }
+}
 
 impl Engine {
     /// (Every voter, KIP-630) once the committed offset has advanced past the
@@ -44,7 +75,7 @@ impl Engine {
         fields(node = self.me.0, epoch = self.core.quorum_state().leader_epoch, hwm = tracing::field::Empty)
     )]
     pub fn maybe_snapshot(&mut self) {
-        if self.downgrade_snapshot_pending.is_some() {
+        if self.downgrade_snapshot_pending.is_some() || self.snapshot_job.is_some() {
             return;
         }
         let hwm = self.log.hwm();
@@ -62,8 +93,64 @@ impl Engine {
             return;
         }
         tracing::Span::current().record("hwm", hwm.0);
-        if let Err(error) = self.write_snapshot_and_clean() {
+        let end_offset = hwm;
+        let epoch = i32::try_from(self.core.quorum_state().leader_epoch).unwrap_or(i32::MAX);
+        let last_contained_ts = self.last_contained_ts(end_offset);
+        // Applying a committed change publishes its exact image. Holding this
+        // Arc pins that boundary without copying or borrowing engine state.
+        let image = Arc::clone(&self.image.published());
+        let data_dir = self.data_dir.clone();
+        let bytes_at_start = self.bytes_since_snapshot;
+        #[cfg(test)]
+        let delay = self.snapshot_write_delay;
+        #[cfg(not(test))]
+        let delay = Duration::ZERO;
+        self.snapshot_job = Some(tokio::task::spawn_blocking(move || {
+            write_regular_snapshot(
+                &data_dir,
+                &image,
+                end_offset,
+                epoch,
+                last_contained_ts,
+                delay,
+                bytes_at_start,
+            )
+        }));
+    }
+
+    pub(super) fn finish_snapshot_job(
+        &mut self,
+        joined: Result<SnapshotJobCompletion, tokio::task::JoinError>,
+    ) {
+        self.snapshot_job = None;
+        let completion = match joined {
+            Ok(completion) => completion,
+            Err(error) => {
+                tracing::error!(?error, "kraft: snapshot worker failed");
+                return;
+            }
+        };
+        if let Err(error) = completion.result {
             tracing::error!(?error, "kraft: snapshot/clean failed");
+            return;
+        }
+        // A fetched/mandatory snapshot may have installed a newer boundary
+        // while this immutable regular job was on disk. Its checkpoint stays
+        // valid, but it must not move the engine's snapshot accounting back.
+        if completion.end_offset < self.last_snapshot_end_offset {
+            retain_recent_checkpoints(&self.data_dir);
+            return;
+        }
+        self.last_snapshot_end_offset = completion.end_offset;
+        self.last_snapshot_timestamp_ms = completion.last_contained_ts;
+        self.last_snapshot_at_ms = self.now().0;
+        // Records may have committed while the snapshot was written. Account
+        // only for that suffix rather than erasing its byte trigger.
+        self.bytes_since_snapshot = self
+            .bytes_since_snapshot
+            .saturating_sub(completion.bytes_at_start);
+        if let Err(error) = self.maybe_clean() {
+            tracing::error!(?error, "kraft: post-snapshot cleaning failed");
         }
     }
 
@@ -178,6 +265,13 @@ impl Engine {
     }
 
     pub fn retry_pending_downgrade_snapshot(&mut self) {
+        // The regular worker owns checkpoint I/O in this directory until its
+        // completion is observed. Avoid colliding temporary files; its pinned
+        // pre-downgrade artifact is harmless and the mandatory downgrade runs
+        // on the very next engine turn.
+        if self.snapshot_job.is_some() {
+            return;
+        }
         while self.downgrade_snapshot_pending.is_some() {
             if let Err(error) = self.write_downgrade_snapshot_and_prune() {
                 // A committed record that does not replay stops the
@@ -197,6 +291,11 @@ impl Engine {
     }
 
     pub fn write_snapshot_checkpoint(&self, bytes: &[u8]) -> Result<Offset, RaftError> {
+        if self.snapshot_job.is_some() {
+            return Err(RaftError::ChangeRejected(
+                "regular metadata snapshot is still being written".into(),
+            ));
+        }
         let end_offset = self.log.hwm();
         let epoch = i32::try_from(self.core.quorum_state().leader_epoch).unwrap_or(i32::MAX);
         write_checkpoint(&self.data_dir, end_offset.0, epoch, bytes)?;
@@ -229,6 +328,11 @@ impl Engine {
         err
     )]
     pub fn do_trigger_snapshot(&mut self) -> Result<(), RaftError> {
+        if self.snapshot_job.is_some() {
+            return Err(RaftError::ChangeRejected(
+                "regular metadata snapshot is still being written".into(),
+            ));
+        }
         if self.downgrade_snapshot_pending.is_some() {
             return Err(RaftError::ChangeRejected(
                 "mandatory metadata downgrade snapshot is pending".into(),

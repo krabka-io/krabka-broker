@@ -421,6 +421,11 @@ impl Engine {
         id: SnapshotId,
         bytes: &[u8],
     ) -> Result<(), RaftError> {
+        if self.snapshot_job.is_some() {
+            return Err(RaftError::ChangeRejected(
+                "regular metadata snapshot is still being written".into(),
+            ));
+        }
         // `end_offset` is the snapshot id's raw offset (wire / checkpoint-filename
         // boundary); wrap into the log offset domain where it addresses the log.
         let (end_offset, epoch) = id;

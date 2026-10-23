@@ -3,8 +3,9 @@
 use {
     crate::support::{
         client::{connect_client, create_topic_with},
-        registered_cluster,
+        start_n_node_customized_with_retry,
         topics::{CreateTopicSetup, TopicPartitionCount},
+        wait_for_all_brokers_registered,
     },
     assert2::assert,
     krabka_broker::{BrokerConfig, BrokerHandle},
@@ -176,7 +177,16 @@ pub async fn start_leader_routing_cluster(
     Uuid,
     i32,
 ) {
-    let cluster = registered_cluster(3).await;
+    // These routing cases keep every rf=1 leader alive. Parallel suites can
+    // starve heartbeats beyond the 2-second test default and fence a healthy
+    // broker, making its sole replicas unavailable for an unrelated reason.
+    let cluster = start_n_node_customized_with_retry(
+        3,
+        |_, config| config.heartbeat_timeout = krabka_units::secs(30),
+        "leader routing",
+    )
+    .await;
+    wait_for_all_brokers_registered(&cluster, 3).await;
     let bootstrap = cluster[0].1.listen_addr.to_string();
     let admin = connect_client(bootstrap.clone(), None).await;
     let n_partitions = 6;

@@ -366,6 +366,8 @@ pub fn build_engine_only(
             pending_record_processing_time_us_max: 0,
             last_snapshot_at_ms: 0,
             bytes_since_snapshot: 0,
+            snapshot_job: None,
+            snapshot_write_delay: Duration::ZERO,
             downgrade_snapshot_pending: None,
             downgrade_snapshot_failures_remaining: 0,
             snapshot_fetch: None,
