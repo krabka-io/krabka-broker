@@ -123,6 +123,17 @@ impl CountingRsm {
     }
 }
 
+/// Rebuilds `reader` over a counting RSM, retaining its metadata view.
+pub fn counted_reader(
+    reader: &RemoteReader,
+) -> (RemoteReader, Arc<std::sync::atomic::AtomicUsize>) {
+    let counted = CountingRsm::counting(Arc::clone(&reader.rsm));
+    (
+        RemoteReader::new(counted.rsm, Arc::clone(&reader.rlmm)),
+        counted.index_fetches,
+    )
+}
+
 impl RemoteStorageManager for CountingRsm {
     fn copy_log_segment_data(
         &self,
@@ -616,7 +627,8 @@ fn copy_log_to_reader(log: &Log, remote_dir: &std::path::Path) -> RemoteReader {
                 epochs.clone(),
             ),
         )
-        .unwrap();
+        .unwrap()
+        .with_txn_index_empty(ex.transaction_index_path.is_none());
         rlmm.add_remote_log_segment_metadata(md.clone()).unwrap();
         // Render the leader-epoch checkpoint the same way the copy path
         // does so `fetch_index(LeaderEpoch)` returns real bytes.
@@ -699,6 +711,20 @@ pub fn reader_with_abort_in_segments_of(
 /// that shadows its host in the RLMM's floor-by-start lookup for every offset
 /// of the host above `end`.
 pub fn nest_finished_segment(reader: &RemoteReader, start: i64, end: i64) {
+    nest_finished_segment_with_empty_flag(reader, start, end, false);
+}
+
+/// Registers a finished segment which authoritatively has no transaction index.
+pub fn nest_finished_segment_with_txn_index_empty(reader: &RemoteReader, start: i64, end: i64) {
+    nest_finished_segment_with_empty_flag(reader, start, end, true);
+}
+
+fn nest_finished_segment_with_empty_flag(
+    reader: &RemoteReader,
+    start: i64,
+    end: i64,
+    txn_index_empty: bool,
+) {
     let id = krabka_remote_storage::RemoteLogSegmentId::new(tp(), Uuid::new_v4());
     let md = RemoteLogSegmentMetadata::new(
         id.clone(),
@@ -713,7 +739,8 @@ pub fn nest_finished_segment(reader: &RemoteReader, start: i64, end: i64) {
             maplit::btreemap! {LeaderEpoch(0_i32) => start},
         ),
     )
-    .unwrap();
+    .unwrap()
+    .with_txn_index_empty(txn_index_empty);
     reader.rlmm.add_remote_log_segment_metadata(md).unwrap();
     reader
         .rlmm
