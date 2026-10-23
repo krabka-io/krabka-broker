@@ -76,8 +76,8 @@ async fn try_delete_topic(client: &Client, name: &str) -> Result<i16, ClientErro
 ///
 /// `KafkaAdminClient` sends `DeleteTopics` to the controller that `Metadata`
 /// names. In `KRaft` mode that is any live broker, and just after a failover it
-/// can still be the broker that stopped. The client retries two failures: a
-/// row that answers `NOT_CONTROLLER`, and a connection that fails. For both, it
+/// can still be the broker that stopped. The client retries rows that answer
+/// `NOT_CONTROLLER` or `REQUEST_TIMED_OUT`, and connections that fail. For each, it
 /// reads `Metadata` again and retries the call. It waits `retry.backoff.ms`
 /// before the first retry and doubles the wait up to `retry.backoff.max.ms`. It
 /// stops when `default.api.timeout.ms` passes. Any other code is final, so this
@@ -87,8 +87,10 @@ pub(super) async fn delete_topic_as_admin_client(bootstrap: &Client, name: &str)
     let mut backoff = RETRY_BACKOFF;
     loop {
         let failure = match delete_through_controller(bootstrap, name).await {
-            Ok(code) if code != codes::NOT_CONTROLLER => return code,
-            Ok(_) => "NOT_CONTROLLER".to_owned(),
+            Ok(code) if !matches!(code, codes::NOT_CONTROLLER | codes::REQUEST_TIMED_OUT) => {
+                return code;
+            }
+            Ok(code) => format!("error code {code}"),
             Err(error) => error.to_string(),
         };
         assert!(

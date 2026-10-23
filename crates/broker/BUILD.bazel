@@ -133,6 +133,8 @@ crate_tests(
     # failure: three brokers, the group coordinator killed behind a cut relay,
     # and a bounded deadline for a survivor to lead `__consumer_offsets-0`,
     # load it and serve both groups again.
+    #
+    # `steady_state_reclaim` needs uncontended cores for 100ms reclamation sampling.
     cpu_heavy = [
         "compaction",
         "controller_failover",
@@ -143,6 +145,7 @@ crate_tests(
         "ip_quotas",
         "leader_election",
         "sharegroup_backlog",
+        "steady_state_reclaim",
         "stretch_cluster",
         "tiered_storage_multi_broker",
     ],
