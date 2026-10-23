@@ -12,7 +12,7 @@ use {
             unified::{
                 GroupSeed,
                 classic_state::OffsetEntry,
-                group::{CoordinatorGroup, GroupOffsets, OffsetFetchMember},
+                group::{CoordinatorGroup, GroupOffsets, OffsetFetchMember, OffsetFetchSelection},
                 regex_resolver::TopicRegexResolver,
             },
         },
@@ -147,6 +147,7 @@ pub enum GroupActorMessage {
     /// code when it refuses the fetch.
     FetchOffsetsForMember {
         member: OffsetFetchMember,
+        selection: OffsetFetchSelection,
         reply: oneshot::Sender<Result<GroupOffsets, ErrorCode>>,
     },
     RemoveCommitted {

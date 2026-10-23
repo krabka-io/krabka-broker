@@ -4,7 +4,8 @@
 //! overlap the offsets it returns. Abort markers can live in later segments,
 //! so this module scans the finished remote tail's `.txnindex` objects and
 //! keeps entries overlapping the requested range. A segment owning no abort
-//! marker has no index object; those missing optional objects are skipped.
+//! marker has no index object; metadata which identifies those segments is
+//! used to avoid requesting the missing optional objects.
 
 use {
     super::{AbortedTxnEntry, RemoteReader},
@@ -51,6 +52,11 @@ impl RemoteReader {
         // ponytail: scan the finished tail for later abort markers; use trusted
         // LSO hints to stop earlier if cold-Fetch profiling requires it.
         for segment in segments {
+            // `true` is authoritative. Older metadata defaults to `false`, so
+            // it retains the compatibility fetch and error behaviour below.
+            if segment.txn_index_empty() {
+                continue;
+            }
             let bytes = match self
                 .fetch_index_blocking(segment, IndexType::Transaction)
                 .await
@@ -80,10 +86,12 @@ mod tests {
     use {
         super::*,
         crate::remote_reader::test_support::{
-            ReaderFixture, empty_reader, nest_finished_segment, populated_reader_with_abort,
+            ReaderFixture, counted_reader, empty_reader, nest_finished_segment,
+            nest_finished_segment_with_txn_index_empty, populated_reader_with_abort,
             reader_fixture, reader_with_abort_in_segments_of, tp,
         },
         assert2::assert,
+        std::{sync::atomic::Ordering, time::Instant},
     };
 
     #[tokio::test]
@@ -175,6 +183,66 @@ mod tests {
             got.is_empty(),
             "segment with no .txnindex yields an empty list, not an error"
         );
+    }
+
+    #[tokio::test]
+    async fn marked_empty_segments_never_fetch_an_index_on_repeated_reads() {
+        for segment_count in [1_i64, 10, 100, 1_000] {
+            let (_remote_dir, reader) = empty_reader();
+            for offset in 0..segment_count {
+                nest_finished_segment_with_txn_index_empty(&reader, offset, offset);
+            }
+            let (reader, index_fetches) = counted_reader(&reader);
+            let started = Instant::now();
+            for _ in 0..2 {
+                let got = reader
+                    .aborted_transactions(&tp(), LeaderEpoch(0), 0, segment_count - 1)
+                    .await
+                    .expect("marked-empty metadata is sufficient");
+                assert!(got.is_empty());
+            }
+            let elapsed = started.elapsed();
+            assert!(index_fetches.load(Ordering::Relaxed) == 0);
+            eprintln!(
+                "marked-empty scan: segments={segment_count}, reads=2, index_requests=0, elapsed={elapsed:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_later_non_empty_segment_still_supplies_its_abort() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let remote_dir = tempfile::tempdir().unwrap();
+        let (reader, _log, (start, last, producer_id)) =
+            populated_reader_with_abort(log_dir.path(), remote_dir.path());
+        nest_finished_segment_with_txn_index_empty(&reader, start - 1, start - 1);
+        let (reader, index_fetches) = counted_reader(&reader);
+
+        let got = reader
+            .aborted_transactions(&tp(), LeaderEpoch(0), start - 1, last)
+            .await
+            .expect("the later transaction index is read");
+
+        assert!(got.iter().any(|entry| entry.producer_id == producer_id));
+        // The marked-empty prefix and empty suffixes make no requests; only
+        // the real transaction index is fetched.
+        assert!(index_fetches.load(Ordering::Relaxed) == 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_false_metadata_keeps_fetching_a_missing_optional_index() {
+        let (_remote_dir, reader) = empty_reader();
+        nest_finished_segment(&reader, 0, 0); // the metadata default is false
+        let (reader, index_fetches) = counted_reader(&reader);
+
+        for expected_fetches in 1..=2 {
+            let got = reader
+                .aborted_transactions(&tp(), LeaderEpoch(0), 0, 0)
+                .await
+                .expect("a missing optional index remains a successful empty result");
+            assert!(got.is_empty());
+            assert!(index_fetches.load(Ordering::Relaxed) == expected_fetches);
+        }
     }
 
     #[tokio::test]

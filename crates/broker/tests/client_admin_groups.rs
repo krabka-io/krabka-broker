@@ -39,7 +39,23 @@ async fn lists_groups_and_committed_offsets() {
         .build()
         .await
         .unwrap();
-    let _ = consumer.poll(krabka_units::secs(2)).await.unwrap();
+    // A timed-out poll can be empty while the group is still joining. Commit
+    // only after the produced record has actually advanced the position.
+    let records = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let records = consumer.poll(krabka_units::millis(500)).await.unwrap();
+            if !records.is_empty() {
+                break records;
+            }
+        }
+    })
+    .await
+    .expect("the group must receive its produced record before committing");
+    assert2::assert!(records.len() == 1);
+    assert2::assert!(records[0].topic == "t1");
+    assert2::assert!(records[0].partition == 0);
+    assert2::assert!(records[0].offset == 0);
+    assert2::assert!(records[0].value.as_deref() == Some(b"v".as_slice()));
     consumer.commit_sync().await.unwrap();
 
     let groups = admin

@@ -18,7 +18,7 @@ use {
         broker::Broker,
         coordinator::unified::{
             actor::GroupActorMessage,
-            group::{GroupOffsets, OffsetEntry, OffsetFetchMember},
+            group::{GroupOffsets, OffsetEntry, OffsetFetchMember, OffsetFetchSelection},
             streams::actor::validate_streams_group_offset_fetch,
         },
         task_util::ask,
@@ -43,6 +43,7 @@ pub(super) async fn fetch_offsets(
     group_id: &str,
     member_id: Option<&str>,
     member_epoch: i32,
+    selection: OffsetFetchSelection,
 ) -> Result<GroupOffsets, i16> {
     let names_member = member_id.is_some() || member_epoch >= 0;
     if names_member
@@ -61,6 +62,7 @@ pub(super) async fn fetch_offsets(
                 member_id: member_id.map(str::to_string),
                 member_epoch,
             },
+            selection,
             reply,
         }
     })

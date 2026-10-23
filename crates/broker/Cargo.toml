@@ -267,6 +267,7 @@ wiremock = "0.6"
 # a criterion `main` baseline it carries between runs. `krabka-log` declares
 # the same dependency for `benches/log.rs`.
 criterion = { version = "5.0.2", package = "codspeed-criterion-compat" }
+stats_alloc = "0.1.10"
 
 # The produce hot path: `prepare_batch`'s verbatim-versus-owned decision and
 # the log append behind it, over the record shapes a real producer sends.
@@ -311,4 +312,10 @@ harness = false
 # per-offset-alternating dispositions over contiguous and fragmented windows.
 [[bench]]
 name = "share_acknowledge"
+harness = false
+
+# OffsetFetch's synchronous group-actor projection, including allocation
+# counts for fixed request widths as retained group state grows.
+[[bench]]
+name = "offset_fetch"
 harness = false

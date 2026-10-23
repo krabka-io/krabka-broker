@@ -17,8 +17,11 @@ use {
         unstable,
     },
     crate::{
-        authorizer::AuthorizationResult, broker::Broker, codes,
-        coordinator::unified::group::GroupOffsets, handlers::RequestContext,
+        authorizer::AuthorizationResult,
+        broker::Broker,
+        codes,
+        coordinator::unified::group::{GroupOffsets, OffsetFetchSelection},
+        handlers::RequestContext,
     },
     krabka_protocol::owned::{
         offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopic},
@@ -56,7 +59,23 @@ pub(super) async fn handle_legacy(
     // group with no offsets and creates nothing. The legacy shape carries no
     // member fields, and Kafka validates it as a fetch with no member id and
     // epoch -1, which every group accepts.
-    let offsets = fetch_offsets(broker, &req.group_id, None, -1)
+    let selection = req
+        .topics
+        .as_deref()
+        .map_or(OffsetFetchSelection::All, |topics| {
+            OffsetFetchSelection::Keys(
+                topics
+                    .iter()
+                    .flat_map(|topic| {
+                        topic
+                            .partition_indexes
+                            .iter()
+                            .map(|&partition| (topic.name.clone(), partition))
+                    })
+                    .collect(),
+            )
+        });
+    let offsets = fetch_offsets(broker, &req.group_id, None, -1, selection)
         .await
         .unwrap_or_default();
 

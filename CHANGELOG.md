@@ -172,6 +172,7 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   summing every partition's bytes, so a fetch over `P` partitions did `P²`
   additions. It now keeps a running total. On a 4-vCPU host, the read loop
   over 10,000 entries took 21-23 ms instead of 32-34 ms (#1609).
+- OffsetFetch projects only the requested committed and pending group offsets instead of copying unrelated entries (#1656).
 - Less work per request on the produce and fetch paths:
   - Dispatch reads a Produce request's `acks` from its leading fields to
     decide whether a response is owed, instead of decoding the request a
@@ -199,6 +200,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   and the time a lookup could wait behind it, grew with the partition's
   retained remote history. With 100,000 retained segments one lifecycle went
   from about 36 ms to under 1 µs in the `remote_epoch_index` benchmark (#1616).
+- Remote read-committed fetches skip transaction-index requests when segment
+  metadata declares the index empty (#1661).
 - A controller serving a KIP-630 `FetchSnapshot` reads only the requested
   chunk of the checkpoint. It used to read the whole file for every chunk, so
   a transfer of a snapshot of size S in chunks of C read about
@@ -216,6 +219,7 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   their keys and their partitions are unchanged. `MetadataEventLog` gains
   `publish_keyed_group` and `KeyedEvent`; its default publishes one record at
   a time (#1617).
+- Diskless WAL trimming and object reclamation release the shared projection mutex before waiting on storage I/O (#1658).
 
 ### Fixed
 

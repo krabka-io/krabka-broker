@@ -74,6 +74,10 @@ pub struct CoordinatorGroup {
     /// Grouping by producer is what lets one producer's marker resolve its own
     /// keys while another producer's in-flight transaction keeps its own.
     pending_txn_offsets: HashMap<i64, ProducerTxnOffsets>,
+    /// Number of producers whose open transaction holds each key. This is an
+    /// in-memory lookup index only; producer-key sets remain the source of
+    /// truth persisted/replayed by the existing paths.
+    pending_txn_key_counts: HashMap<(String, i32), usize>,
     /// `OffsetCommit` writes that are in the offsets log but that the high
     /// watermark has not covered yet, in log order.
     ///
@@ -86,6 +90,17 @@ pub struct CoordinatorGroup {
     /// deletion) reads both through
     /// [`latest_offsets`](Self::latest_offsets).
     pending_commits: VecDeque<PendingCommit>,
+}
+
+/// The offset keys an `OffsetFetch` asks the group actor to project.
+///
+/// `All` is reserved for Kafka's null-topics fetch-all sentinel.  An explicit
+/// (including empty) topic list uses `Keys`, so a narrow request never clones
+/// unrelated group state while it owns the actor turn.
+#[derive(Debug)]
+pub enum OffsetFetchSelection {
+    All,
+    Keys(HashSet<(String, i32)>),
 }
 
 /// One `OffsetCommit` write in the offsets log that is not committed yet.
@@ -160,27 +175,21 @@ impl CoordinatorGroup {
     /// A fresh, empty classic group.
     pub fn new_classic(group_id: impl Into<String>) -> Self {
         let group_id = group_id.into();
-        Self {
-            kind: GroupKind::Classic(ClassicState::new(group_id.clone())),
-            group_id,
-            committed_offsets: HashMap::new(),
-            pending_txn_offsets: HashMap::new(),
-            pending_commits: VecDeque::new(),
-            empty_since_ms: None,
-        }
+        Self::seeded(
+            group_id.clone(),
+            GroupKind::Classic(ClassicState::new(group_id)),
+            HashMap::new(),
+        )
     }
 
     /// A fresh, empty next-gen group, on the consumer protocol.
     pub fn new_consumer(group_id: impl Into<String>) -> Self {
         let group_id = group_id.into();
-        Self {
-            kind: GroupKind::Consumer(ConsumerState::new(group_id.clone())),
-            group_id,
-            committed_offsets: HashMap::new(),
-            pending_txn_offsets: HashMap::new(),
-            pending_commits: VecDeque::new(),
-            empty_since_ms: None,
-        }
+        Self::seeded(
+            group_id.clone(),
+            GroupKind::Consumer(ConsumerState::new(group_id)),
+            HashMap::new(),
+        )
     }
 
     /// A group rebuilt from state that already exists: a replayed or
@@ -197,6 +206,7 @@ impl CoordinatorGroup {
             kind,
             committed_offsets,
             pending_txn_offsets: HashMap::new(),
+            pending_txn_key_counts: HashMap::new(),
             pending_commits: VecDeque::new(),
             empty_since_ms: None,
         }
@@ -288,7 +298,11 @@ impl CoordinatorGroup {
         if written_at <= entry.resolved_through {
             return;
         }
-        entry.keys.extend(keys);
+        for key in keys {
+            if entry.keys.insert(key.clone()) {
+                *self.pending_txn_key_counts.entry(key).or_default() += 1;
+            }
+        }
     }
 
     /// Reserves `keys` for a `TxnOffsetCommit` of `producer_id` that is about
@@ -331,7 +345,9 @@ impl CoordinatorGroup {
     /// publishes nothing.
     pub fn resolve_pending_txn_offsets(&mut self, producer_id: i64, resolved_through: i64) {
         let entry = self.pending_txn_offsets.entry(producer_id).or_default();
-        entry.keys.clear();
+        for key in entry.keys.drain() {
+            decrement_key_count(&mut self.pending_txn_key_counts, &key);
+        }
         entry.resolved_through = entry.resolved_through.max(resolved_through);
     }
 
@@ -344,7 +360,9 @@ impl CoordinatorGroup {
         self.remove_committed(keys);
         for key in keys {
             for producer in self.pending_txn_offsets.values_mut() {
-                producer.keys.remove(key);
+                if producer.keys.remove(key) {
+                    decrement_key_count(&mut self.pending_txn_key_counts, key);
+                }
             }
         }
     }
@@ -497,9 +515,36 @@ impl CoordinatorGroup {
 
     /// The group's offset state for an `OffsetFetch` that names `member`, or
     /// the error code of [`validate_offset_fetch`](Self::validate_offset_fetch).
-    pub fn offsets_for_member(&self, member: &OffsetFetchMember) -> Result<GroupOffsets, i16> {
+    pub fn offsets_for_member(
+        &self,
+        member: &OffsetFetchMember,
+        selection: &OffsetFetchSelection,
+    ) -> Result<GroupOffsets, i16> {
         self.validate_offset_fetch(member.member_id.as_deref(), member.member_epoch)
-            .map(|()| self.offsets())
+            .map(|()| self.selected_offsets(selection))
+    }
+
+    fn selected_offsets(&self, selection: &OffsetFetchSelection) -> GroupOffsets {
+        let OffsetFetchSelection::Keys(keys) = selection else {
+            return self.offsets();
+        };
+        let committed = keys
+            .iter()
+            .filter_map(|key| {
+                self.committed_offsets
+                    .get_key_value(key)
+                    .map(|(key, entry)| (key.clone(), entry.clone()))
+            })
+            .collect();
+        let pending_txn = keys
+            .iter()
+            .filter(|key| self.pending_txn_key_counts.contains_key(*key))
+            .cloned()
+            .collect();
+        GroupOffsets {
+            committed,
+            pending_txn,
+        }
     }
 
     /// The group's offset state for `OffsetFetch`, with every open
@@ -512,6 +557,15 @@ impl CoordinatorGroup {
                 .values()
                 .flat_map(|producer| producer.keys.iter().cloned())
                 .collect(),
+        }
+    }
+}
+
+fn decrement_key_count(counts: &mut HashMap<(String, i32), usize>, key: &(String, i32)) {
+    if let Some(count) = counts.get_mut(key) {
+        *count -= 1;
+        if *count == 0 {
+            counts.remove(key);
         }
     }
 }
@@ -705,6 +759,52 @@ mod tests {
 
         g.resolve_pending_txn_offsets(9, 13);
         check!(g.offsets().pending_txn.is_empty());
+    }
+
+    #[test]
+    fn selected_offsets_exclude_unrequested_committed_and_transactional_state() {
+        let mut group = CoordinatorGroup::new_classic("g");
+        group.committed_offsets.extend([
+            (("wanted".to_string(), 1), offset_entry(11)),
+            (("other".to_string(), 2), offset_entry(22)),
+        ]);
+        group.add_pending_txn_offsets(7, 1, [("wanted".to_string(), 1)]);
+        group.add_pending_txn_offsets(9, 1, [("wanted".to_string(), 1)]);
+        group.add_pending_txn_offsets(8, 1, [("other".to_string(), 2)]);
+        let member = OffsetFetchMember {
+            member_id: None,
+            member_epoch: -1,
+        };
+
+        let selected = group
+            .offsets_for_member(
+                &member,
+                &OffsetFetchSelection::Keys(HashSet::from([
+                    ("wanted".to_string(), 1),
+                    ("missing".to_string(), 3),
+                ])),
+            )
+            .unwrap();
+        check!(
+            selected.committed.keys().cloned().collect::<HashSet<_>>()
+                == HashSet::from([("wanted".to_string(), 1)])
+        );
+        check!(selected.pending_txn == HashSet::from([("wanted".to_string(), 1)]));
+
+        group.resolve_pending_txn_offsets(7, 2);
+        let still_pending = group
+            .offsets_for_member(
+                &member,
+                &OffsetFetchSelection::Keys(HashSet::from([("wanted".to_string(), 1)])),
+            )
+            .unwrap();
+        check!(still_pending.pending_txn == HashSet::from([("wanted".to_string(), 1)]));
+
+        let all = group
+            .offsets_for_member(&member, &OffsetFetchSelection::All)
+            .unwrap();
+        check!(all.committed.len() == 2);
+        check!(all.pending_txn.len() == 2);
     }
 
     /// `TxnOffsetCommit` marks its keys only after the append is durable, so
