@@ -207,6 +207,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   unreleased target partitions, avoiding repeated assignment-vector scans
   (#1719).
 - OffsetFetch projects only the requested committed and pending group offsets instead of copying unrelated entries (#1656).
+- User/client quota lookup constructs keys only for enabled levels up to the
+  first matching rate, retaining Kafka's precedence and sensor keys (#1718).
 - Less work per request on the produce and fetch paths:
   - Dispatch reads a Produce request's `acks` from its leading fields to
     decide whether a response is owed, instead of decoding the request a
