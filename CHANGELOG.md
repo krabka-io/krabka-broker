@@ -248,13 +248,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
-- The benchmark driver cancels and joins pending failover faults when measurement ends, and reports client discovery, target fallback, and deletion outcomes. A fault scheduled after the run cannot delete a broker pod (#1701).
-
 - Require `ClusterAction` for `PushTelemetry`, refuse both client-telemetry
   RPCs when no receiver is enabled, reject unsubscribed or structurally
   excessive OTLP metrics, and cap retained Prometheus client series globally
   and per client/instance. Disconnects now release an instance's series
   immediately (#1592).
+- The benchmark driver cancels and joins pending failover faults when measurement ends, and reports client discovery, target fallback, and deletion outcomes. A fault scheduled after the run cannot delete a broker pod (#1701).
 - The nightly criterion lane builds the reference and the candidate into
   separate Cargo target directories, both before either is measured. With one
   shared directory, Cargo could judge a candidate that changed only source as
