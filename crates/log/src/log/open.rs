@@ -57,7 +57,7 @@ pub(super) struct PendingStampRecoveryStats {
 impl PendingStampRecoveryStats {
     fn record(&mut self, batch: &RecordBatch) {
         #[cfg(not(test))]
-        let _ = batch;
+        let _ = (self, batch);
         #[cfg(test)]
         {
             self.batches = self.batches.saturating_add(1);
