@@ -11,7 +11,7 @@ use {
     super::{AckType, AcquisitionState, RecordState, clamp_i32, dlq::DlqCause, window::give_back},
     crate::codes::{INVALID_RECORD_STATE, INVALID_REQUEST},
     krabka_log::Offset,
-    std::time::Instant,
+    std::{iter::Peekable, ops::Range, time::Instant},
 };
 
 /// One per-offset operation in a mixed acknowledgement batch.
@@ -21,6 +21,17 @@ pub enum AckAction {
     Disposition(AckType),
     /// Extend the acquisition lock to this deadline.
     Renew { deadline: Instant },
+}
+
+fn next_action_run(
+    actions: &mut Peekable<impl Iterator<Item = AckAction>>,
+) -> Option<(AckAction, usize)> {
+    let action = actions.next()?;
+    let mut count = 1;
+    while actions.next_if(|candidate| *candidate == action).is_some() {
+        count += 1;
+    }
+    Some((action, count))
 }
 
 impl AcquisitionState {
@@ -43,12 +54,36 @@ impl AcquisitionState {
         actions: &[AckAction],
         max_attempts: i16,
     ) -> Result<(), i16> {
+        self.acknowledge_mixed_with(
+            member,
+            first,
+            last,
+            actions.len(),
+            |live| actions[live].iter().copied(),
+            max_attempts,
+        )
+    }
+
+    /// Creates an action stream for only the live input range, after checking
+    /// ownership. Completed-prefix actions are never converted or stored.
+    ///
+    /// # Errors
+    /// Returns the same range and ownership errors as [`Self::acknowledge_mixed`].
+    pub(crate) fn acknowledge_mixed_with<I: ExactSizeIterator<Item = AckAction>>(
+        &mut self,
+        member: &str,
+        first: Offset,
+        last: Offset,
+        action_count: usize,
+        actions: impl FnOnce(Range<usize>) -> I,
+        max_attempts: i16,
+    ) -> Result<(), i16> {
         let range_len = last
             .0
             .checked_sub(first.0)
             .and_then(|len| len.checked_add(1))
             .and_then(|len| usize::try_from(len).ok());
-        if range_len != Some(actions.len()) {
+        if range_len != Some(action_count) {
             return Err(INVALID_REQUEST);
         }
         let Some(bounds) = self.ack_bounds(first, last)? else {
@@ -57,17 +92,22 @@ impl AcquisitionState {
         if !self.range_acquired_by(member, bounds.first, bounds.last) {
             return Err(INVALID_RECORD_STATE);
         }
+        let completed_prefix =
+            usize::try_from(bounds.first.0 - first.0).map_err(|_| INVALID_REQUEST)?;
+        let actions = actions(completed_prefix..action_count);
+        if actions.len() != action_count - completed_prefix {
+            return Err(INVALID_REQUEST);
+        }
 
         let old_batches = std::mem::take(&mut self.batches);
-        let mut batches = Vec::with_capacity(old_batches.len().saturating_add(actions.len()));
+        let mut batches = Vec::with_capacity(old_batches.len());
         let mut archive = super::dlq::ArchiveSink {
             dlq_enabled: self.dlq_enabled,
             delivery_complete_count: &mut self.delivery_complete_count,
             pending_dlq: &mut self.pending_dlq,
         };
-        let mut action_index =
-            usize::try_from(bounds.first.0 - first.0).map_err(|_| INVALID_REQUEST)?;
-        let mut action_run_end = action_index;
+        let mut actions = actions.peekable();
+        let mut action_run = next_action_run(&mut actions);
 
         for batch in old_batches {
             if batch.last_offset < bounds.first || batch.first_offset > bounds.last {
@@ -83,14 +123,7 @@ impl AcquisitionState {
             let mut offset = batch.first_offset.max(bounds.first);
             let batch_last = batch.last_offset.min(bounds.last);
             while offset <= batch_last {
-                let action = actions[action_index];
-                if action_index == action_run_end {
-                    action_run_end += actions[action_run_end..]
-                        .iter()
-                        .take_while(|candidate| **candidate == action)
-                        .count();
-                }
-                let same = action_run_end - action_index;
+                let (action, same) = action_run.expect("the acquired range has validated actions");
                 let run_last = Offset(
                     offset
                         .0
@@ -123,8 +156,13 @@ impl AcquisitionState {
                     AckAction::Renew { deadline } => run.lock_deadline = Some(deadline),
                 }
                 batches.push(run);
-                let consumed = usize::try_from(run_last.0 - offset.0 + 1).unwrap_or(actions.len());
-                action_index += consumed;
+                let consumed = usize::try_from(run_last.0 - offset.0 + 1)
+                    .expect("the action run length fits usize");
+                action_run = if consumed == same {
+                    next_action_run(&mut actions)
+                } else {
+                    Some((action, same - consumed))
+                };
                 offset = run_last + 1;
             }
 
@@ -214,7 +252,46 @@ mod tests {
             test_support::{LOCK, acquired_state, t0},
         },
         assert2::assert,
+        std::cell::Cell,
     };
+
+    #[test]
+    fn mixed_actions_materialize_only_the_owned_live_suffix() {
+        const PREFIX: usize = 1_000_000;
+        let first_live = Offset(i64::try_from(PREFIX).unwrap());
+        let mut state = AcquisitionState::new(first_live);
+        state.materialize(first_live + 3, 100);
+        state.acquire("m1", 3, Offset(i64::MAX), t0(), LOCK, 5);
+        let materialized = Cell::new(0);
+        let counter = &materialized;
+        let factories_called = Cell::new(0);
+        let actions = |live: Range<usize>| {
+            factories_called.set(factories_called.get() + 1);
+            live.map(move |index| {
+                counter.set(counter.get() + 1);
+                AckAction::Disposition(if index.is_multiple_of(2) {
+                    AckType::Release
+                } else {
+                    AckType::Accept
+                })
+            })
+        };
+        let before = state.clone();
+        let last = first_live + 2;
+        assert!(
+            state.acknowledge_mixed_with("other", Offset(0), last, PREFIX + 3, actions, 5)
+                == Err(INVALID_RECORD_STATE)
+        );
+        assert!(factories_called.get() == 0 && materialized.get() == 0 && state == before);
+
+        state
+            .acknowledge_mixed_with("m1", Offset(0), last, PREFIX + 3, actions, 5)
+            .unwrap();
+        assert!(factories_called.get() == 1);
+        assert!(materialized.get() == 3);
+        assert!(state.batches.len() == 3 && state.batches.capacity() <= 4);
+        assert!(state.start_offset == first_live);
+    }
 
     #[test]
     fn acquire_then_accept_advances_spso() {

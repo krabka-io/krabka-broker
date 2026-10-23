@@ -124,6 +124,22 @@ fn has_live_ack_offsets(
     Ok(state.ack_bounds(Offset(first), Offset(last))?.is_some())
 }
 
+fn apply_ack_runs(
+    state: &mut AcquisitionState,
+    first: i64,
+    types: &[i8],
+    mut apply: impl FnMut(&mut AcquisitionState, i64, i64, i8) -> Result<(), i16>,
+) -> Result<(), i16> {
+    let mut run_first = first;
+    for run in types.chunk_by(|left, right| left == right) {
+        let run_last =
+            run_first + i64::try_from(run.len() - 1).expect("validated run length fits i64");
+        apply(state, run_first, run_last, run[0])?;
+        run_first = run_last.saturating_add(1);
+    }
+    Ok(())
+}
+
 /// Applies one acknowledgement batch to the state machine.
 ///
 /// The batch as a whole must lie inside the records that were handed out, as
@@ -193,42 +209,55 @@ fn apply_one_ack(
     if types.iter().all(|ack_type| *ack_type == types[0]) {
         return apply(st, first, last, types[0]);
     }
-    let deadline = now + renewal.lock_duration;
-    let actions = types
-        .iter()
-        .map(|ack_type| {
-            if *ack_type == ACK_RENEW {
-                if !renewal.requested {
-                    return Err(codes::INVALID_REQUEST);
-                }
-                if !renewal.enabled {
-                    return Err(codes::INVALID_RECORD_STATE);
-                }
-                Ok(AckAction::Renew { deadline })
-            } else {
-                AckType::from_i8(*ack_type)
-                    .map(AckAction::Disposition)
-                    .ok_or(codes::INVALID_REQUEST)
-            }
-        })
-        .collect::<Result<Vec<_>, _>>();
-    let Ok(actions) = actions else {
+    let valid_actions = types.iter().all(|ack_type| {
+        AckType::from_i8(*ack_type).is_some()
+            || (*ack_type == ACK_RENEW && renewal.requested && renewal.enabled)
+    });
+    if !valid_actions {
         // Parsing every action first must not hide an earlier ownership
         // error. The enclosing request rolls back these transitions on
         // failure, just as it does for the normal mixed path.
-        for (offset, ack_type) in (first..=last).zip(types) {
-            apply(st, offset, offset, *ack_type)?;
-        }
-        return Ok(());
-    };
-    st.acknowledge_mixed(member, Offset(first), Offset(last), &actions, max_attempts)
+        return apply_ack_runs(st, first, types, apply);
+    }
+    let deadline = now + renewal.lock_duration;
+    // The factory receives only the owned live suffix. Slice the request before
+    // mapping, so skipped prefix actions need no conversion or storage.
+    let result = st.acknowledge_mixed_with(
+        member,
+        Offset(first),
+        Offset(last),
+        types.len(),
+        |live| {
+            types[live].iter().map(|ack_type| {
+                if *ack_type == ACK_RENEW {
+                    AckAction::Renew { deadline }
+                } else {
+                    AckAction::Disposition(
+                        AckType::from_i8(*ack_type)
+                            .expect("all acknowledgement actions were validated"),
+                    )
+                }
+            })
+        },
+        max_attempts,
+    );
+    if result == Err(codes::INVALID_RECORD_STATE) {
+        // An earlier Accept run can advance the SPSO over settled islands,
+        // making later runs valid even when the initial range is not all
+        // acquired. The fast path rejects before invoking its factory or
+        // changing state; preserve the sequential ordering in that case.
+        return apply_ack_runs(st, first, types, apply);
+    }
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use {
         super::*,
-        crate::share_partition::state::{AcquisitionState, RecordState},
+        crate::share_partition::state::{
+            AcquisitionState, RecordState, test_support::canonical_state,
+        },
         assert2::assert,
     };
 
@@ -392,6 +421,13 @@ mod tests {
         let mut expected = state;
         let actual_code = apply_acknowledgements(&mut actual, application, batches.iter().copied());
         let expected_code = apply_by_runs(&mut expected, application, batches);
+        // Renew can leave adjacent equal batches split in the sequential
+        // implementation. Compare complete canonical state on success;
+        // errors still require exact representation equality for rollback.
+        if actual_code == codes::NONE && expected_code == codes::NONE {
+            actual = canonical_state(actual);
+            expected = canonical_state(expected);
+        }
         assert!((actual_code, actual) == (expected_code, expected));
     }
 
@@ -422,7 +458,12 @@ mod tests {
             },
             max_attempts: 2,
         };
-        compare_with_run_by_run(fragmented, &application, &[(0, 11, MIXED)]);
+        compare_with_run_by_run(fragmented.clone(), &application, &[(0, 11, MIXED)]);
+        let mut across_boundaries = [ACCEPT; 12];
+        across_boundaries[0] = RELEASE;
+        across_boundaries[10] = ACK_RENEW;
+        across_boundaries[11] = RELEASE;
+        compare_with_run_by_run(fragmented, &application, &[(0, 11, &across_boundaries)]);
         compare_with_run_by_run(start(Setup::Acquired), &application, &[(
             0,
             9,
@@ -440,6 +481,17 @@ mod tests {
             (0, 9, &MIXED[..10]),
             (10, 12, &[ACCEPT]),
         ]);
+
+        let mut settled_island = start(Setup::Acquired);
+        settled_island
+            .acknowledge("member", Offset(2), Offset(3), AckType::Accept, LIMIT)
+            .unwrap();
+        for first_action in [ACCEPT, RELEASE] {
+            let mut types = [ACCEPT; 10];
+            types[..2].fill(first_action);
+            types[2..4].fill(RELEASE);
+            compare_with_run_by_run(settled_island.clone(), &application, &[(0, 9, &types)]);
+        }
 
         let expired_application = AckApplication {
             now: acquired_at + Duration::from_secs(60),
@@ -473,7 +525,109 @@ mod tests {
         for later_action in [99, ACK_RENEW] {
             let mut types = [ACCEPT; 10];
             types[9] = later_action;
-            compare_with_run_by_run(start(Setup::Acquired), &application, &[(0, 9, &types)]);
+            for member in ["member", "other"] {
+                let application = AckApplication {
+                    member,
+                    ..application
+                };
+                compare_with_run_by_run(start(Setup::Acquired), &application, &[(0, 9, &types)]);
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_completed_prefix_preserves_live_transitions_and_validation() {
+        const PREFIX: usize = 100_000;
+        let first_live = Offset(i64::try_from(PREFIX).unwrap());
+        let now = Instant::now();
+        let mut state = AcquisitionState::new(first_live);
+        state.materialize(first_live + 3, 100);
+        state.acquire(
+            "member",
+            3,
+            Offset(i64::MAX),
+            now,
+            Duration::from_secs(30),
+            LIMIT,
+        );
+        let application = AckApplication {
+            member: "member",
+            now,
+            renewal: Renewal {
+                requested: true,
+                enabled: true,
+                lock_duration: Duration::from_secs(45),
+            },
+            max_attempts: LIMIT,
+        };
+        let last = first_live.0 + 2;
+        let mut types = vec![RELEASE; PREFIX + 3];
+        types[PREFIX + 1] = ACCEPT;
+        types[PREFIX + 2] = ACK_RENEW;
+        compare_with_run_by_run(state.clone(), &application, &[(0, last, &types)]);
+
+        // A completed prefix is skipped for mutation, but its invalid types
+        // still have the same validation outcome as the sequential algorithm.
+        types[0] = 99;
+        compare_with_run_by_run(state, &application, &[(0, last, &types)]);
+    }
+
+    #[test]
+    fn mixed_small_windows_match_the_sequential_state_machine_exhaustively() {
+        const STATE_KINDS: usize = 5;
+        const ACTIONS: [i8; 6] = [ACCEPT, RELEASE, 3, 0, ACK_RENEW, 99];
+        let acquired_at = Instant::now();
+        let application = AckApplication {
+            member: "member",
+            now: acquired_at + Duration::from_secs(10),
+            renewal: Renewal {
+                requested: true,
+                enabled: true,
+                lock_duration: Duration::from_secs(45),
+            },
+            max_attempts: LIMIT,
+        };
+        for mut encoded_state in 0..STATE_KINDS.pow(3) {
+            // Every three-offset combination of owned, other-owned, accepted,
+            // archived and available records, including completed islands.
+            let mut kinds = [0; 3];
+            for kind in &mut kinds {
+                *kind = encoded_state % STATE_KINDS;
+                encoded_state /= STATE_KINDS;
+            }
+            let mut state = AcquisitionState::new(Offset(0));
+            state.materialize(Offset(3), 100);
+            for (index, kind) in kinds.iter().enumerate() {
+                let owner = if *kind == 1 { "other" } else { "member" };
+                state.acquire(
+                    owner,
+                    1,
+                    Offset(i64::MAX),
+                    acquired_at + Duration::from_millis(u64::try_from(index).unwrap()),
+                    Duration::from_secs(30),
+                    LIMIT,
+                );
+            }
+            for (index, kind) in kinds.iter().enumerate() {
+                let disposition = match kind {
+                    2 => AckType::Accept,
+                    3 => AckType::Gap,
+                    4 => AckType::Release,
+                    _ => continue,
+                };
+                let offset = Offset(i64::try_from(index).unwrap());
+                state
+                    .acknowledge("member", offset, offset, disposition, LIMIT)
+                    .unwrap();
+            }
+            for mut encoded_actions in 0..ACTIONS.len().pow(3) {
+                let mut types = [0; 3];
+                for action in &mut types {
+                    *action = ACTIONS[encoded_actions % ACTIONS.len()];
+                    encoded_actions /= ACTIONS.len();
+                }
+                compare_with_run_by_run(state.clone(), &application, &[(0, 2, &types)]);
+            }
         }
     }
 

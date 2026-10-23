@@ -103,3 +103,11 @@ pub(crate) fn dlq_range(
         cause: setup.cause,
     }
 }
+
+/// Normalize representation for successful transition comparisons. Adjacent
+/// batches merge only when every non-bound field matches, preserving every
+/// per-offset value and all global state, including pending DLQ work.
+pub(crate) fn canonical_state(mut state: super::AcquisitionState) -> super::AcquisitionState {
+    state.coalesce();
+    state
+}
