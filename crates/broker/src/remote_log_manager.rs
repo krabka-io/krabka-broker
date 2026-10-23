@@ -75,6 +75,7 @@ mod copy;
 mod copy_segment;
 mod delete;
 mod delivery;
+pub(crate) mod dynamic_config;
 mod leader_epoch;
 mod local_retention;
 pub(crate) mod quota;

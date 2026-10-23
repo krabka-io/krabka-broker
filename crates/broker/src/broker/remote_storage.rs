@@ -13,7 +13,8 @@ use {
         partition_registry::PartitionRegistry,
         remote_log_manager::{
             ArchiveMode, RemoteLogManagerConfig, RemoteLogManagerContext, SweepConcurrency,
-            quota::{self, RemoteLogQuotas, WatchedIndexCache},
+            dynamic_config::{self, WatchedIndexCache},
+            quota::RemoteLogQuotas,
             run,
         },
         remote_reader::{ReaderPool, RemoteReader, RemoteReaderLimits},
@@ -159,15 +160,15 @@ pub(super) fn start_remote_storage(
         cache: Arc::clone(&index_cache),
         static_size: config.remote_index_cache_size.bytes_u64(),
     };
-    quota::apply_image(
+    dynamic_config::apply_image(
         &controller.current_image(),
         config.node_id,
-        &quota::DynamicRemoteLogTargets {
+        &dynamic_config::DynamicRemoteLogTargets {
             quotas,
             index_cache: Some((&watched_cache.cache, watched_cache.static_size)),
         },
     );
-    tokio::spawn(quota::run(
+    tokio::spawn(dynamic_config::run(
         controller.watch_image(),
         config.node_id,
         Arc::clone(quotas),
