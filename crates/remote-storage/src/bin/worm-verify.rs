@@ -707,7 +707,7 @@ mod tests {
         let mut scoped_args = args(topic);
         scoped_args.partition = partition;
 
-        assert!(
+        assert2::assert!(
             grade(
                 &report,
                 &scoped_args,
@@ -716,7 +716,7 @@ mod tests {
             .verdict
                 == Verdict::Verified
         );
-        assert!(
+        assert2::assert!(
             grade(
                 &report,
                 &scoped_args,
@@ -725,7 +725,7 @@ mod tests {
             .verdict
                 == Verdict::IncompleteUploads(vec![upload("archive/orders-0-id/segment.log")])
         );
-        assert!(
+        assert2::assert!(
             grade(
                 &report,
                 &args(None),
@@ -734,7 +734,7 @@ mod tests {
             .verdict
                 == Verdict::IncompleteUploads(vec![upload("archive/payments-0-id/segment.log")])
         );
-        assert!(
+        assert2::assert!(
             grade(&report, &scoped_args, Err("denied".into())).verdict
                 == Verdict::UploadListingFailed("denied".into())
         );
@@ -805,7 +805,7 @@ mod tests {
             6 => Verdict::IncompleteUploads(vec![upload("archive/orders-0-id/segment.log")]),
             _ => Verdict::Verified,
         };
-        assert!(outcome.verdict == expected, "stage {stage}");
+        assert2::assert!(outcome.verdict == expected, "stage {stage}");
         let expected_orphans = if stage <= 1 {
             Vec::new()
         } else {
@@ -814,7 +814,7 @@ mod tests {
                 &report.partitions[0].orphan_objects[0],
             ]
         };
-        assert!(outcome.orphans == expected_orphans, "stage {stage}");
+        assert2::assert!(outcome.orphans == expected_orphans, "stage {stage}");
     }
 
     /// `--key-id` and `--public-key` pair by position. An unequal count has to
