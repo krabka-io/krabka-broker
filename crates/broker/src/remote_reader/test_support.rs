@@ -21,7 +21,10 @@ use {
         TopicIdPartition,
     },
     krabka_units::convert::ByteSizeExt as _,
-    std::{fmt::Write as _, sync::Arc},
+    std::{
+        fmt::Write as _,
+        sync::{Arc, Mutex},
+    },
     uuid::Uuid,
 };
 
@@ -93,10 +96,14 @@ fn write_test_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path
     path
 }
 
+/// The requested bounds and returned byte count of each log-object read.
+pub type LogFetches = Arc<Mutex<Vec<(u32, Option<u32>, usize)>>>;
+
 /// A [`CountingRsm`] and the counter of the index objects it downloaded.
 pub struct CountedRsm {
     pub rsm: Arc<CountingRsm>,
     pub index_fetches: Arc<std::sync::atomic::AtomicUsize>,
+    pub log_fetches: LogFetches,
 }
 
 /// A [`RemoteStorageManager`] that counts the index objects it downloads and
@@ -108,17 +115,21 @@ pub struct CountedRsm {
 pub struct CountingRsm {
     inner: Arc<dyn RemoteStorageManager>,
     index_fetches: Arc<std::sync::atomic::AtomicUsize>,
+    log_fetches: LogFetches,
 }
 
 impl CountingRsm {
     pub fn counting(inner: Arc<dyn RemoteStorageManager>) -> CountedRsm {
         let index_fetches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let log_fetches = Arc::new(std::sync::Mutex::new(Vec::new()));
         CountedRsm {
             rsm: Arc::new(Self {
                 inner,
                 index_fetches: Arc::clone(&index_fetches),
+                log_fetches: Arc::clone(&log_fetches),
             }),
             index_fetches,
+            log_fetches,
         }
     }
 }
@@ -149,8 +160,14 @@ impl RemoteStorageManager for CountingRsm {
         start_position: u32,
         end_position: Option<u32>,
     ) -> Result<Vec<u8>, RemoteStorageError> {
-        self.inner
-            .fetch_log_segment(metadata, start_position, end_position)
+        let bytes = self
+            .inner
+            .fetch_log_segment(metadata, start_position, end_position)?;
+        self.log_fetches
+            .lock()
+            .unwrap()
+            .push((start_position, end_position, bytes.len()));
+        Ok(bytes)
     }
 
     fn fetch_index(
@@ -196,6 +213,7 @@ pub fn caching_sparse_remote_segment_reader() -> CachingReader {
     let CountedRsm {
         rsm: counting,
         index_fetches,
+        log_fetches: _,
     } = CountingRsm::counting(Arc::clone(&reader.rsm));
     let log_dir = tempfile::tempdir().unwrap();
     let cache = krabka_remote_storage::RemoteIndexCache::new(

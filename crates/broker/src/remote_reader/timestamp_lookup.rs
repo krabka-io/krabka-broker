@@ -8,12 +8,19 @@
 
 use {
     super::{RemoteReader, lineage::EpochLineage},
+    krabka_protocol::records::HEADER_LEN,
     krabka_remote_storage::{
         IndexType, LogOffset, RemoteLogSegmentMetadata, RemoteLogSegmentState, RemoteStorageError,
         TimestampMs, TopicIdPartition, first_record_at_or_after_timestamp, parse_offset_index,
         parse_time_index, position_for_relative_offset, relative_offset_floor_for_timestamp,
     },
 };
+
+/// Start small for an early answer, then amortize round trips when the sparse
+/// index floor precedes a long timestamp plateau. Windows double to a fixed
+/// cap; a crossing batch is completed with one adjacent range.
+const TIMESTAMP_SCAN_WINDOW: u32 = 64 * 1024;
+const MAX_TIMESTAMP_SCAN_WINDOW: u32 = 16 * 1024 * 1024;
 
 impl RemoteReader {
     /// Answers a by-timestamp seek from the first candidate remote segment,
@@ -102,42 +109,154 @@ impl RemoteReader {
             );
             let start_position =
                 position_for_relative_offset(parse_offset_index(&offset_index_bytes)?, scan_rel);
-            // ponytail: one tail read keeps the scan exact; switch to bounded,
-            // batch-aligned windows only if remote segment profiling requires it.
-            let data = self
-                .fetch_log_blocking(metadata.clone(), start_position, None)
+            let (found, reaches_target) = self
+                .scan_timestamp_ranges(
+                    &metadata,
+                    start_position,
+                    metadata.start_offset().max(minimum_offset),
+                    target_timestamp,
+                    max_record_body,
+                )
                 .await?;
-            // The time index names the last offset of the batch that set each
-            // running maximum, and the offset index turns that into the
-            // position of a batch at or before it. The records that follow
-            // that position are all candidates, the ones before the named
-            // offset inside that batch included: Kafka's
-            // `RemoteLogManager.lookupTimestamp` filters on the log start
-            // offset only, never on the time index's offset.
-            let found = first_record_at_or_after_timestamp(
-                &data,
-                metadata.start_offset().max(minimum_offset),
-                target_timestamp,
-                max_record_body,
-            )?;
             if found.is_some()
                 || metadata.max_timestamp_ms() != UNKNOWN_MAX_TIMESTAMP
-                // Whether the segment's records reach the target at all, below
-                // the floor too: its largest timestamp does exactly then. As
-                // with the local maximum, the measurement takes no limit.
-                || first_record_at_or_after_timestamp(
-                    &data,
-                    metadata.start_offset(),
-                    target_timestamp,
-                    None,
-                )?
-                .is_some()
+                || reaches_target
             {
                 return Ok(found);
             }
         }
         Ok(None)
     }
+
+    /// Scans complete batches from bounded, adjacent ranges. The sparse index
+    /// position is batch-aligned. If the regular window cuts through a batch,
+    /// only that batch's declared remainder is fetched before decoding it.
+    async fn scan_timestamp_ranges(
+        &self,
+        metadata: &RemoteLogSegmentMetadata,
+        start_position: u32,
+        floor_offset: LogOffset,
+        target_timestamp: TimestampMs,
+        max_record_body: Option<usize>,
+    ) -> Result<(Option<(LogOffset, TimestampMs)>, bool), RemoteStorageError> {
+        let segment_size = u32::try_from(metadata.segment_size_in_bytes())
+            .map_err(|_| corrupt_timestamp_log("negative remote segment size"))?;
+        if start_position > segment_size || (segment_size != 0 && start_position == segment_size) {
+            return Err(corrupt_timestamp_log("offset index exceeds remote segment"));
+        }
+        let header_len = u32::try_from(HEADER_LEN).expect("record header length fits u32");
+        let mut window = TIMESTAMP_SCAN_WINDOW;
+        let mut position = start_position;
+        let mut buffered = Vec::new();
+        let mut cursor = 0_usize;
+        let mut reaches_target = false;
+
+        while position < segment_size {
+            if cursor == buffered.len() {
+                // Release the previous allocation before allocating the next
+                // range, including a completed oversized batch.
+                drop(std::mem::take(&mut buffered));
+                cursor = 0;
+                let end = position.saturating_add(window).min(segment_size);
+                buffered = self
+                    .fetch_log_blocking(metadata.clone(), position, Some(end - 1))
+                    .await?;
+                if buffered.len() != usize::try_from(end - position).expect("u32 fits usize") {
+                    return Err(corrupt_timestamp_log("invalid remote range length"));
+                }
+                window = window.saturating_mul(2).min(MAX_TIMESTAMP_SCAN_WINDOW);
+            }
+
+            let available = u32::try_from(buffered.len() - cursor)
+                .map_err(|_| corrupt_timestamp_log("remote range is too large"))?;
+            if available < header_len {
+                if segment_size - position < header_len {
+                    return Err(corrupt_timestamp_log("truncated remote record header"));
+                }
+                let missing = header_len - available;
+                append_range(self, metadata, &mut buffered, position + available, missing).await?;
+            }
+            let header = &buffered[cursor..cursor + HEADER_LEN];
+            let declared = i32::from_be_bytes(header[8..12].try_into().expect("four bytes"));
+            let batch_len = u32::try_from(declared)
+                .ok()
+                .and_then(|length| length.checked_add(12))
+                .filter(|length| *length >= header_len)
+                .ok_or_else(|| corrupt_timestamp_log("invalid record batch length"))?;
+            if position
+                .checked_add(batch_len)
+                .is_none_or(|end| end > segment_size)
+            {
+                return Err(corrupt_timestamp_log("record batch exceeds remote segment"));
+            }
+            let available = u32::try_from(buffered.len() - cursor)
+                .map_err(|_| corrupt_timestamp_log("remote range is too large"))?;
+            if available < batch_len {
+                append_range(
+                    self,
+                    metadata,
+                    &mut buffered,
+                    position + available,
+                    batch_len - available,
+                )
+                .await?;
+            }
+            let end = cursor + usize::try_from(batch_len).expect("u32 fits usize");
+            let batch = &buffered[cursor..end];
+            let found = first_record_at_or_after_timestamp(
+                batch,
+                floor_offset,
+                target_timestamp,
+                max_record_body,
+            )?;
+            if let Some(found) = found {
+                return Ok((Some(found), true));
+            }
+            if metadata.max_timestamp_ms() == UNKNOWN_MAX_TIMESTAMP
+                && !reaches_target
+                && floor_offset > metadata.start_offset()
+            {
+                reaches_target = first_record_at_or_after_timestamp(
+                    batch,
+                    metadata.start_offset(),
+                    target_timestamp,
+                    None,
+                )?
+                .is_some();
+            }
+            position += batch_len;
+            cursor = end;
+        }
+        Ok((None, reaches_target))
+    }
+}
+
+async fn append_range(
+    reader: &RemoteReader,
+    metadata: &RemoteLogSegmentMetadata,
+    buffer: &mut Vec<u8>,
+    start: u32,
+    length: u32,
+) -> Result<(), RemoteStorageError> {
+    let end = start
+        .checked_add(length)
+        .and_then(|end| end.checked_sub(1))
+        .ok_or_else(|| corrupt_timestamp_log("remote range overflow"))?;
+    let bytes = reader
+        .fetch_log_blocking(metadata.clone(), start, Some(end))
+        .await?;
+    if bytes.len() != usize::try_from(length).expect("u32 fits usize") {
+        return Err(corrupt_timestamp_log("short remote range"));
+    }
+    buffer.extend_from_slice(&bytes);
+    Ok(())
+}
+
+fn corrupt_timestamp_log(message: &'static str) -> RemoteStorageError {
+    RemoteStorageError::Io(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        message,
+    ))
 }
 
 /// The persisted unknown-max sentinel for a sealed segment opened without a
@@ -147,15 +266,21 @@ const UNKNOWN_MAX_TIMESTAMP: TimestampMs = -1;
 #[cfg(test)]
 mod tests {
     use {
-        super::{EpochLineage, RemoteReader},
+        super::{EpochLineage, MAX_TIMESTAMP_SCAN_WINDOW, RemoteReader},
         crate::remote_reader::test_support::{
-            ReaderFixture, ReaderWithDir, append_time_remote_segment_reader,
-            compressed_remote_segment_reader, divergent_tier_reader, reader_fixture,
-            single_batch_tier_segment as segment, sparse_remote_segment_reader,
-            sparse_remote_segment_reader_with_max_timestamp, tier_reader, tp,
-            unordered_timestamps_remote_segment_reader,
+            CountedRsm, CountingRsm, ReaderFixture, ReaderWithDir, TierSegment,
+            append_time_remote_segment_reader, compressed_remote_segment_reader,
+            divergent_tier_reader, reader_fixture, single_batch_tier_segment as segment,
+            sparse_remote_segment_reader, sparse_remote_segment_reader_with_max_timestamp,
+            tier_reader, tp, unordered_timestamps_remote_segment_reader,
         },
         assert2::assert,
+        bytes::Bytes,
+        krabka_protocol::records::RecordBatch,
+        krabka_remote_storage::{
+            RemoteStorageError, RemoteStorageManager, partition_dir_name, segment_file_name,
+        },
+        std::sync::Arc,
     };
 
     /// One seek of [`a_seek_answers_from_the_first_candidate_segment_only`].
@@ -542,8 +667,6 @@ mod tests {
         limit: Option<usize>,
         expected: Result<Option<(i64, i64)>, usize>,
     ) {
-        use krabka_remote_storage::RemoteStorageError;
-
         let ReaderWithDir {
             reader,
             dir: _remote_dir,
@@ -560,5 +683,166 @@ mod tests {
             Err(other) => panic!("unexpected error: {other}"),
         };
         assert2::assert!(actual == expected);
+    }
+
+    fn padded_batch(base: i64, timestamp: i64, value_len: usize) -> RecordBatch {
+        let mut batch = segment(base, &[timestamp], 0, false).batches.remove(0);
+        batch.records[0].value = Some(Bytes::from(vec![b'x'; value_len]));
+        batch
+    }
+
+    fn counted_timestamp_reader(
+        batches: Vec<RecordBatch>,
+        unknown_max_timestamp: bool,
+    ) -> (ReaderWithDir, CountedRsm) {
+        let ReaderWithDir { reader, dir } = tier_reader(&[TierSegment {
+            batches,
+            epochs: maplit::btreemap! {krabka_ids::LeaderEpoch(0) => 0},
+            unknown_max_timestamp,
+        }]);
+        let counted = CountingRsm::counting(Arc::clone(&reader.rsm));
+        let rsm: Arc<dyn RemoteStorageManager> = counted.rsm.clone();
+        let reader = RemoteReader::new(rsm, Arc::clone(&reader.rlmm));
+        (ReaderWithDir { reader, dir }, counted)
+    }
+
+    /// #1662: an answer in the first range costs one fixed window regardless
+    /// of the sealed segment's tail. These are bytes actually returned by the
+    /// RSM, rather than an estimate from the requested bounds.
+    #[tokio::test]
+    async fn an_early_timestamp_answer_does_not_download_the_segment_tail() {
+        let mut transferred = Vec::new();
+        for tail_batches in [16, 64] {
+            let mut batches = vec![padded_batch(0, 100, 32)];
+            batches.extend(
+                (1..=tail_batches).map(|offset| {
+                    padded_batch(i64::from(offset), 200 + i64::from(offset), 64 * 1024)
+                }),
+            );
+            let (ReaderWithDir { reader, dir }, counted) = counted_timestamp_reader(batches, false);
+            let found = reader
+                .offset_for_timestamp(&tp(), 100, 0, None, &EpochLineage::unknown(), None)
+                .await
+                .unwrap();
+            assert!(found == Some((0, 100)));
+            let ranges = counted.log_fetches.lock().unwrap();
+            assert!(ranges.len() == 1);
+            assert!(ranges[0].1.is_some(), "the log GET must be bounded");
+            transferred.push((tail_batches, ranges[0].2));
+            drop(dir);
+        }
+        assert!(transferred == vec![(16, 64 * 1024), (64, 64 * 1024)]);
+    }
+
+    /// A normal window may end in a batch, and a valid batch may itself be
+    /// larger than the window. Both make progress by fetching only the
+    /// declared adjacent remainder and preserve the exact timestamp answer.
+    #[tokio::test]
+    async fn timestamp_ranges_complete_crossing_and_oversized_batches() {
+        for (name, first_value_len) in [("crossing", 40 * 1024), ("oversized", 96 * 1024)] {
+            let (ReaderWithDir { reader, dir }, counted) = counted_timestamp_reader(
+                vec![
+                    padded_batch(0, 100, first_value_len),
+                    padded_batch(1, 200, 40 * 1024),
+                ],
+                false,
+            );
+            let found = reader
+                .offset_for_timestamp(&tp(), 150, 0, None, &EpochLineage::unknown(), None)
+                .await
+                .unwrap();
+            assert2::assert!(found == Some((1, 200)), "{name}");
+            let ranges = counted.log_fetches.lock().unwrap();
+            assert!(ranges.len() >= 2, "{name}: {ranges:?}");
+            assert!(ranges.iter().all(|(_, end, _)| end.is_some()));
+            drop(dir);
+        }
+    }
+
+    /// A sparse time index can leave an entire timestamp plateau to scan.
+    /// Bound round trips without sacrificing the small first read or letting
+    /// later windows grow beyond the fixed live-memory cap.
+    #[yare::parameterized(known_max = { false }, unknown_max = { true })]
+    #[test_macro(tokio::test)]
+    async fn a_long_timestamp_plateau_amortizes_range_round_trips(unknown_max: bool) {
+        let mut batches: Vec<_> = (0..768)
+            .map(|offset| padded_batch(offset, 100, 64 * 1024))
+            .collect();
+        batches.push(padded_batch(768, 200, 32));
+        let (ReaderWithDir { reader, dir }, counted) =
+            counted_timestamp_reader(batches, unknown_max);
+        let found = reader
+            .offset_for_timestamp(&tp(), 150, 0, None, &EpochLineage::unknown(), None)
+            .await
+            .unwrap();
+        assert2::assert!(found == Some((768, 200)));
+        let ranges = counted.log_fetches.lock().unwrap();
+        assert2::assert!(
+            ranges.len() <= 24,
+            "48 MiB must not cost a GET per batch: {ranges:?}"
+        );
+        assert2::assert!(ranges[0].2 == 64 * 1024);
+        assert2::assert!(ranges.iter().all(|(_, end, bytes)| {
+            end.is_some() && *bytes <= usize::try_from(MAX_TIMESTAMP_SCAN_WINDOW).unwrap()
+        }));
+        assert2::assert!(
+            ranges
+                .windows(2)
+                .all(|pair| { pair[0].0 + u32::try_from(pair[0].2).unwrap() == pair[1].0 })
+        );
+        drop(dir);
+    }
+
+    fn remote_segment_file(fixture: &ReaderWithDir, suffix: &str) -> std::path::PathBuf {
+        let metadata = fixture
+            .reader
+            .rlmm
+            .list_remote_log_segments(&tp())
+            .unwrap()
+            .remove(0);
+        fixture
+            .dir
+            .path()
+            .join(partition_dir_name(&metadata))
+            .join(segment_file_name(&metadata, suffix))
+    }
+
+    async fn assert_corrupt_timestamp_lookup(fixture: &ReaderWithDir) {
+        let found = fixture
+            .reader
+            .offset_for_timestamp(&tp(), 100, 0, None, &EpochLineage::unknown(), None)
+            .await;
+        assert!(
+            matches!(found, Err(RemoteStorageError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidData)
+        );
+    }
+
+    /// Malformed indexes must fail the lookup rather than become a successful
+    /// empty answer. The metadata still describes a nonempty candidate.
+    #[yare::parameterized(at_end = { 0 }, beyond_end = { 1 })]
+    #[test_macro(tokio::test)]
+    async fn an_offset_index_outside_the_segment_is_rejected(past_end: u32) {
+        let (fixture, counted) = counted_timestamp_reader(vec![padded_batch(0, 100, 32)], false);
+        let log = remote_segment_file(&fixture, ".log");
+        let position = u32::try_from(std::fs::metadata(log).unwrap().len()).unwrap() + past_end;
+        std::fs::write(
+            remote_segment_file(&fixture, ".index"),
+            [0_u32.to_be_bytes(), position.to_be_bytes()].concat(),
+        )
+        .unwrap();
+        assert_corrupt_timestamp_lookup(&fixture).await;
+        assert2::assert!(counted.log_fetches.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_short_initial_range_is_rejected_before_decoding() {
+        let (fixture, _) = counted_timestamp_reader(vec![padded_batch(0, 100, 32)], false);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(remote_segment_file(&fixture, ".log"))
+            .unwrap()
+            .set_len(1)
+            .unwrap();
+        assert_corrupt_timestamp_lookup(&fixture).await;
     }
 }

@@ -156,6 +156,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   places a follower's replica append and a fetch that reads only data this
   broker wrote since it opened the log: work that stays in the page cache runs
   inline, and work that may wait on the disk goes to the blocking pool.
+- Remote timestamp seeks refine sparse indexes with bounded byte ranges
+  instead of downloading the complete segment tail (#1662).
 - A follower fetches from its leader over a dedicated link that hands the
   response's record bytes to the replica append without copying them, instead
   of through the general client connection.
