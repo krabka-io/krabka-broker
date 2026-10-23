@@ -8,7 +8,7 @@ use {
     crate::{error::BrokerError, metrics::BrokerMetrics},
     bytes::Bytes,
     futures_util::StreamExt,
-    krabka_remote_storage::diskless::{REPLAY_FENCE_KEY, wal_index_key_version},
+    krabka_remote_storage::diskless::index::{REPLAY_FENCE_KEY, wal_index_key_version},
     krabka_remote_storage_topic::{KeyedEvent, MetadataEventLog, PartitionStart},
     std::{
         collections::HashMap,

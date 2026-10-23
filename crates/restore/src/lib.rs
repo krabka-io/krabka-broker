@@ -46,7 +46,8 @@ use {
     clap::Parser,
     krabka_remote_storage::{
         AuthenticatedArchive, Sha256Digest, TrustedManifestKeys, VerifyRequest,
-        authenticate_archive, diskless::CAPTURE_HEAD_NAME,
+        authenticate_archive,
+        diskless::capture::{CAPTURE_HEAD_NAME, DisklessWalCapture},
     },
     krabka_remote_storage_topic::Snapshot,
     std::{ffi::OsString, path::Path},
@@ -383,7 +384,7 @@ async fn format_with_next_offsets(
     args: &RestoreArgs,
     archive: &ArchiveInventory,
     predicates: &Predicates,
-    capture: Option<&krabka_remote_storage::diskless::DisklessWalCapture>,
+    capture: Option<&DisklessWalCapture>,
     claims: Option<&std::collections::BTreeMap<String, krabka_remote_storage::ObjectEntry>>,
     metadata_snapshot: Option<&[u8]>,
 ) -> Result<(FormatTargetOutcome, Vec<diskless::DisklessNextOffset>), RestoreError> {
@@ -404,7 +405,7 @@ struct AuthenticatedSnapshots {
 
 async fn authenticate_snapshots(
     args: &RestoreArgs,
-    capture: Option<&krabka_remote_storage::diskless::DisklessWalCapture>,
+    capture: Option<&DisklessWalCapture>,
     authenticated_restore: bool,
 ) -> Result<AuthenticatedSnapshots, RestoreError> {
     let metadata = authenticate_captured_snapshot(
