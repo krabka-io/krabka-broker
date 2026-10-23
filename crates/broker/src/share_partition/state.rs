@@ -87,6 +87,7 @@ impl AckType {
 }
 
 pub use self::{
+    acknowledge::AckAction,
     acquire::AcquireShape,
     dlq::{DlqCause, DlqRange},
 };

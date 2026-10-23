@@ -7,11 +7,19 @@ use {
         test_support::{controller_with_leader, test_coordinator},
     },
     crate::{
-        auto_topic_creation::creatable_topic, broker::Broker, config::BrokerConfig,
-        coordinator::GroupCoordinator, log_dir, log_dir_status::LogDirRegistry,
-        metadata_source::MetadataSource, partition_registry::PartitionRegistry,
-        producer_state::ProducerState, share_coordinator::bootstrap::TOPIC as SHARE_TOPIC,
-        topic_creator::TopicCreator, txn::bootstrap::TOPIC as TXN_TOPIC,
+        auto_topic_creation::creatable_topic,
+        broker::Broker,
+        config::BrokerConfig,
+        coordinator::GroupCoordinator,
+        handlers::create_topics,
+        log_dir,
+        log_dir_status::LogDirRegistry,
+        metadata_source::MetadataSource,
+        partition_registry::PartitionRegistry,
+        producer_state::ProducerState,
+        share_coordinator::bootstrap::TOPIC as SHARE_TOPIC,
+        test_support::{peer, principal, request_context},
+        txn::bootstrap::TOPIC as TXN_TOPIC,
     },
     assert2::{assert, check},
     krabka_ids::PartitionIndex,
@@ -171,8 +179,12 @@ async fn internal_topics_are_created_with_kafkas_topic_configs() {
             .collect(),
         ..Default::default()
     };
-    let response = TopicCreator::new(&broker)
-        .create_topic_without_principal(request)
+    let admin = principal("admin");
+    let address = peer();
+    let ctx = request_context(&admin, &address, "coordinator-topic-config");
+    // This config test exercises creation once. Forwarding retries can repeat
+    // a request whose earlier topics committed before a connection was lost.
+    let response = create_topics::handle(&broker, request, 7, &ctx)
         .await
         .expect("the controller answers CreateTopics");
     for row in &response.topics {

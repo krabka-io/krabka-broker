@@ -38,7 +38,7 @@ use {
     crate::{
         multi_cluster::{
             TieredCluster, controller_leader_addr, local_log_files, ready_admin,
-            start_tiered_cluster,
+            start_tiered_cluster_with,
         },
         support::{
             client::connect_owned,
@@ -319,7 +319,12 @@ async fn a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag() {
         brokers: [b1, b2, b3],
         log_dirs,
         ..
-    } = start_tiered_cluster([krabka_units::kibibytes(1); 3]).await;
+    } = start_tiered_cluster_with([krabka_units::kibibytes(1); 3], |_, config| {
+        // Every sole replica stays alive in this case. Tolerate delayed
+        // heartbeats while parallel suites exercise disk I/O on the runner.
+        config.heartbeat_timeout = krabka_units::secs(30);
+    })
+    .await;
     let admin = ready_admin([&b1, &b2, &b3], "kip1023-admin").await;
     let new_replica_client = connect_owned(
         &format!("127.0.0.1:{}", b3.listen_addr().port()),

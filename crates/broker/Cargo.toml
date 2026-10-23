@@ -256,7 +256,7 @@ temp-env = "0.3"
 # Mock OPA server for OpaAuthorizer unit tests — wiremock
 # answers HTTP on a random local port and lets us assert call counts.
 wiremock = "0.6"
-# Drives the six `[[bench]]` targets below. `codspeed-criterion-compat` is
+# Drives the seven `[[bench]]` targets below. `codspeed-criterion-compat` is
 # criterion under another name: outside `cargo codspeed` it *is* criterion,
 # which is how it runs everywhere it runs today. CodSpeed's instrumented
 # walltime is not wired up and is not planned -- it needs an account and a
@@ -306,6 +306,12 @@ harness = false
 # `Arc<str>` label sets replaced, against the `Arc` clone that replaced it.
 [[bench]]
 name = "metric_labels"
+harness = false
+
+# The share-partition mixed-acknowledgement transition: uniform and
+# per-offset-alternating dispositions over contiguous and fragmented windows.
+[[bench]]
+name = "share_acknowledge"
 harness = false
 
 # OffsetFetch's synchronous group-actor projection, including allocation

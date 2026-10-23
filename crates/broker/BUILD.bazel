@@ -21,7 +21,7 @@ crate_binary(
     lib = ":broker",
 )
 
-# The six criterion benches in `benches/`. `bazel build //...` compiles them and
+# The seven criterion benches in `benches/`. `bazel build //...` compiles them and
 # `bazel test //...` lints them. `ci.yml`'s nightly `bench` job runs them.
 crate_bench(lib = "broker")
 
