@@ -4,7 +4,7 @@ use {
         broker::test_support::{metadata_partition_record, submit_metadata_topic_partition},
         config::BrokerConfig,
         handlers::test_support::StartedBroker,
-        test_support::start_broker_with,
+        test_support::{start_broker_with, tolerate_starved_heartbeats},
     },
     assert2::{assert, check},
     krabka_raft::NodeId,
@@ -52,6 +52,10 @@ fn static_voter_test_config(
         voters,
     } = setup;
     let mut config = BrokerConfig::for_tests(log_dir.to_path_buf());
+    // This accessor fixture never stops a voter or tests session expiry.
+    // Keep both brokers registered through scheduling stalls while preserving
+    // the test's independent ten-second startup deadline.
+    tolerate_starved_heartbeats(&mut config);
     config.broker_id = i32::try_from(node_id.0).expect("node id fits broker id");
     config.node_id = node_id;
     config.listen_addr = listen_addr;
