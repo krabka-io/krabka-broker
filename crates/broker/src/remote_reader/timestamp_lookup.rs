@@ -263,6 +263,8 @@ mod tests {
         },
         assert2::assert,
         bytes::Bytes,
+        krabka_protocol::records::RecordBatch,
+        krabka_remote_storage::RemoteStorageManager,
         std::sync::Arc,
     };
 
@@ -670,26 +672,21 @@ mod tests {
         assert2::assert!(actual == expected);
     }
 
-    fn padded_batch(
-        base: i64,
-        timestamp: i64,
-        value_len: usize,
-    ) -> krabka_protocol::records::RecordBatch {
+    fn padded_batch(base: i64, timestamp: i64, value_len: usize) -> RecordBatch {
         let mut batch = segment(base, &[timestamp], 0, false).batches.remove(0);
         batch.records[0].value = Some(Bytes::from(vec![b'x'; value_len]));
         batch
     }
 
-    fn counted_timestamp_reader(
-        batches: Vec<krabka_protocol::records::RecordBatch>,
-    ) -> (ReaderWithDir, CountedRsm) {
+    fn counted_timestamp_reader(batches: Vec<RecordBatch>) -> (ReaderWithDir, CountedRsm) {
         let ReaderWithDir { reader, dir } = tier_reader(&[TierSegment {
             batches,
             epochs: maplit::btreemap! {krabka_ids::LeaderEpoch(0) => 0},
             unknown_max_timestamp: false,
         }]);
         let counted = CountingRsm::counting(Arc::clone(&reader.rsm));
-        let reader = RemoteReader::new(Arc::clone(&counted.rsm) as _, Arc::clone(&reader.rlmm));
+        let rsm: Arc<dyn RemoteStorageManager> = counted.rsm.clone();
+        let reader = RemoteReader::new(rsm, Arc::clone(&reader.rlmm));
         (ReaderWithDir { reader, dir }, counted)
     }
 
