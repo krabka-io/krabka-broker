@@ -24,7 +24,7 @@ use {
     krabka_ids::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord},
     krabka_units::prelude::{ByteSizeExt as _, TimeExt as _},
-    std::{path::PathBuf, sync::Arc, time::Duration},
+    std::{path::Path, sync::Arc, time::Duration},
 };
 
 /// Everything a regular checkpoint completion needs. In particular, none of
@@ -37,8 +37,8 @@ pub(super) struct SnapshotJobCompletion {
 }
 
 fn write_regular_snapshot(
-    data_dir: PathBuf,
-    image: Arc<MetadataImage>,
+    data_dir: &Path,
+    image: &MetadataImage,
     end_offset: Offset,
     epoch: i32,
     last_contained_ts: i64,
@@ -48,8 +48,8 @@ fn write_regular_snapshot(
     if !delay.is_zero() {
         std::thread::sleep(delay);
     }
-    let result = SnapshotWriter::serialize(&image, last_contained_ts)
-        .and_then(|bytes| write_checkpoint(&data_dir, end_offset.0, epoch, &bytes));
+    let result = SnapshotWriter::serialize(image, last_contained_ts)
+        .and_then(|bytes| write_checkpoint(data_dir, end_offset.0, epoch, &bytes));
     SnapshotJobCompletion {
         end_offset,
         last_contained_ts,
@@ -107,8 +107,8 @@ impl Engine {
         let delay = Duration::ZERO;
         self.snapshot_job = Some(tokio::task::spawn_blocking(move || {
             write_regular_snapshot(
-                data_dir,
-                image,
+                &data_dir,
+                &image,
                 end_offset,
                 epoch,
                 last_contained_ts,
@@ -291,6 +291,11 @@ impl Engine {
     }
 
     pub fn write_snapshot_checkpoint(&self, bytes: &[u8]) -> Result<Offset, RaftError> {
+        if self.snapshot_job.is_some() {
+            return Err(RaftError::ChangeRejected(
+                "regular metadata snapshot is still being written".into(),
+            ));
+        }
         let end_offset = self.log.hwm();
         let epoch = i32::try_from(self.core.quorum_state().leader_epoch).unwrap_or(i32::MAX);
         write_checkpoint(&self.data_dir, end_offset.0, epoch, bytes)?;

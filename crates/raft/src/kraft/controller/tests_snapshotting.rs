@@ -23,7 +23,7 @@ use {
             },
             snapshot_fetch::SnapshotId,
         },
-        snapshot::SnapshotWriter,
+        snapshot::{SnapshotReader, SnapshotWriter},
     },
     assert2::assert,
 };
@@ -76,17 +76,28 @@ fn snapshot_pruning_stays_at_or_below_the_committed_frontier() {
     assert2::assert!(!krabka_verified::snapshot_prune_admission(-1, 10));
 }
 
+fn delayed_snapshot_engine(topic: &str) -> (Engine, tempfile::TempDir) {
+    let (mut engine, dir) = build_engine_only().ids(&[NodeId(1)]).call();
+    elect_single_voter_engine(&mut engine);
+    let mut committed = super::test_support::submit_on_engine(&mut engine, &topic_record(topic));
+    assert2::assert!(matches!(committed.try_recv(), Ok(Ok(_))));
+    engine.snapshot_interval_records = 1;
+    engine.snapshot_write_delay = Duration::from_millis(300);
+    (engine, dir)
+}
+
+fn assert_checkpoint_contains_topic(dir: &std::path::Path, topic: &str) {
+    let bytes = load_latest_checkpoint(dir).unwrap().unwrap();
+    let contents = SnapshotReader::read(&bytes).unwrap();
+    let image = MetadataImage::from_records(uuid::Uuid::nil(), &contents.metadata_records);
+    assert2::assert!(image.topic(topic).is_some());
+}
+
 /// A deliberately slow durable checkpoint must not occupy the owning engine
 /// task. The second command is handled while the sole worker is still asleep.
 #[tokio::test]
 async fn delayed_regular_checkpoint_keeps_engine_commands_moving() {
-    let (mut engine, dir) = build_engine_only().ids(&[NodeId(1)]).call();
-    elect_single_voter_engine(&mut engine);
-    let mut committed =
-        super::test_support::submit_on_engine(&mut engine, &topic_record("snapshot-boundary"));
-    assert2::assert!(matches!(committed.try_recv(), Ok(Ok(_))));
-    engine.snapshot_interval_records = 1;
-    engine.snapshot_write_delay = Duration::from_millis(300);
+    let (mut engine, dir) = delayed_snapshot_engine("snapshot-boundary");
 
     let (tx, rx) = CommandSender::channel(4);
     engine.cmd_tx = tx.clone();
@@ -116,12 +127,39 @@ async fn delayed_regular_checkpoint_keeps_engine_commands_moving() {
     })
     .await
     .expect("worker checkpoint");
-    let bytes = load_latest_checkpoint(dir.path()).unwrap().unwrap();
-    let contents = crate::snapshot::SnapshotReader::read(&bytes).unwrap();
-    let image = MetadataImage::from_records(uuid::Uuid::nil(), &contents.metadata_records);
-    assert2::assert!(image.topic("snapshot-boundary").is_some());
+    assert_checkpoint_contains_topic(dir.path(), "snapshot-boundary");
     tx.send(Command::Halt).await.unwrap();
     task.await.unwrap();
+}
+
+#[tokio::test]
+async fn regular_worker_excludes_other_checkpoint_writers_until_completion() {
+    let (mut engine, _dir) = delayed_snapshot_engine("snapshot-writer");
+    let bytes = SnapshotWriter::serialize(&engine.image, 0).unwrap();
+    let id = (engine.log.hwm().0, 1);
+    engine.maybe_snapshot();
+    assert2::assert!(engine.snapshot_job.is_some());
+    assert2::assert!(engine.do_trigger_snapshot().is_err());
+    assert2::assert!(engine.write_snapshot_checkpoint(&bytes).is_err());
+    assert2::assert!(engine.install_fetched_snapshot(id, &bytes).is_err());
+    let job = engine.snapshot_job.take().unwrap();
+    engine.finish_snapshot_job(job.await);
+    assert2::assert!(engine.do_trigger_snapshot().is_ok());
+    assert2::assert!(engine.write_snapshot_checkpoint(&bytes).is_ok());
+    assert2::assert!(engine.install_fetched_snapshot(id, &bytes).is_ok());
+}
+
+#[tokio::test]
+async fn halting_joins_regular_checkpoint_before_releasing_the_directory() {
+    let (mut engine, dir) = delayed_snapshot_engine("snapshot-halt");
+    engine.maybe_snapshot();
+    let (tx, rx) = CommandSender::channel(4);
+    engine.cmd_tx = tx.clone();
+    tx.send(Command::Halt).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), engine.run(rx))
+        .await
+        .expect("halt joins the checkpoint worker");
+    assert_checkpoint_contains_topic(dir.path(), "snapshot-halt");
 }
 
 #[yare::parameterized(

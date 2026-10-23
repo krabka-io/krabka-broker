@@ -180,6 +180,11 @@ impl Engine {
                 held.push(command);
             }
         }
+        // A blocking checkpoint cannot be cancelled by dropping its handle.
+        // Join it before releasing the directory for a replacement controller.
+        if let Some(job) = self.snapshot_job.take() {
+            self.finish_snapshot_job(job.await);
+        }
         // Fail any parked submitters so callers don't hang on shutdown.
         for w in self.commit_waiters.drain(..) {
             let _ = w.reply.send(Err(RaftError::Shutdown));
