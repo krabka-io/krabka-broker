@@ -1,24 +1,22 @@
 //! Diskless WAL object-store flusher.
 
 use {
-    super::{index_log::DisklessIndexLog, wal_index::WalFlushRecord},
+    super::{
+        index_log::DisklessIndexLog,
+        reclaimer::{RECLAIM_GRACE, RECLAIM_INTERVAL, Reclaimer},
+        retention::Retention,
+        wal_index::WalFlushRecord,
+    },
     crate::{
         error::BrokerError, metrics::BrokerMetrics, partition::Partition,
         partition_registry::PartitionRegistry, time_util::now_ms,
     },
-    futures_util::TryStreamExt as _,
     krabka_log::Offset,
     krabka_metadata::{MetadataImage, NodeId},
-    krabka_units::convert::{ByteSizeExt, TimeExt},
-    krabka_verified::diskless::DisklessRetentionPolicy,
-    object_store::{ObjectStore, ObjectStoreExt as _},
-    std::{
-        collections::{HashMap, HashSet},
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        },
-        time::{Duration, Instant},
+    object_store::ObjectStore,
+    std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
     },
     tokio_util::sync::CancellationToken,
     uuid::Uuid,
@@ -30,12 +28,6 @@ mod object_flush;
 mod test_support;
 
 pub(crate) use self::{config::FlushConfig, object_flush::flush_once};
-
-/// Every broker sweeps the shared prefix, so objects from removed brokers are
-/// covered too. The observation grace lets independent index consumers apply
-/// replacements before any broker deletes the old object.
-const RECLAIM_INTERVAL: Duration = Duration::from_secs(30);
-const RECLAIM_GRACE: Duration = Duration::from_mins(5);
 
 pub(crate) struct FlushPartition {
     pub(crate) topic_id: Uuid,
@@ -53,7 +45,7 @@ pub(crate) struct FlusherContext {
     pub(crate) broker_id: i32,
     pub(crate) metrics: BrokerMetrics,
     /// Set once the first tick is allowed to fire, which is after the index
-    /// projection has replayed the index topic.
+    /// projection has replayed the index topic and the first reclamation sweep has returned.
     pub(crate) ready: Arc<AtomicBool>,
 }
 
@@ -103,12 +95,16 @@ pub(crate) async fn run(
     }
     let projection_unusable = context.index_log.wait_until_unusable();
     tokio::pin!(projection_unusable);
-    let mut reclaimer = Reclaimer::new(RECLAIM_GRACE);
+    let mut reclaimer = Reclaimer::new(
+        context.index_log.clone(),
+        Arc::clone(&context.object_store),
+        RECLAIM_GRACE,
+    );
     tokio::select! {
         biased;
         () = shutdown.cancelled() => return flusher_shut_down(),
         () = &mut projection_unusable => return FlusherExit::ProjectionUnavailable,
-        () = reclaimer.sweep(&context) => {}
+        () = reclaimer.sweep() => {}
     }
     context.ready.store(true, Ordering::Release);
     let mut ticker = tokio::time::interval(config.interval);
@@ -139,6 +135,7 @@ pub(crate) async fn run(
                 let flushed = tokio::select! {
                     biased;
                     () = shutdown.cancelled() => return flusher_shut_down(),
+                    () = &mut projection_unusable => return FlusherExit::ProjectionUnavailable,
                     flushed = flush_tick(&context, &config, rotation) => flushed,
                 };
                 if let Err(error) = flushed {
@@ -150,7 +147,8 @@ pub(crate) async fn run(
                 tokio::select! {
                     biased;
                     () = shutdown.cancelled() => return flusher_shut_down(),
-                    () = reclaimer.sweep(&context) => {}
+                    () = &mut projection_unusable => return FlusherExit::ProjectionUnavailable,
+                    () = reclaimer.sweep() => {}
                 }
             }
         }
@@ -168,9 +166,15 @@ async fn flush_tick(
     rotation: usize,
 ) -> Result<Option<WalFlushRecord>, BrokerError> {
     let image = context.image_rx.borrow().clone();
-    tombstone_deleted_topics(context, &image).await?;
+    let retention = Retention {
+        index_log: &context.index_log,
+        metrics: &context.metrics,
+    };
+    retention.tombstone_deleted_topics(&image).await?;
     let mut partitions = flushable_partitions(&context.partitions, &image, context.node_id).await;
-    expire_retention_breached_ranges(context, &image, &partitions, now_ms()).await?;
+    retention
+        .expire_retention_breached_ranges(&image, &partitions, now_ms())
+        .await?;
     if !partitions.is_empty() {
         let start = rotation % partitions.len();
         partitions.rotate_left(start);
@@ -186,179 +190,6 @@ async fn flush_tick(
         |partition| partition.handle.current_leader.load(Ordering::Relaxed) == context.node_id,
     )
     .await
-}
-
-async fn tombstone_deleted_topics(
-    context: &FlusherContext,
-    image: &MetadataImage,
-) -> Result<(), BrokerError> {
-    let topic_ids = context.index_log.cache().lock().await.topic_ids();
-    for topic_id in topic_ids {
-        if image.topic_by_id(&topic_id).is_none() {
-            context.index_log.tombstone_topic(topic_id).await?;
-            let floors = context
-                .index_log
-                .cache()
-                .lock()
-                .await
-                .delete_floor_partitions(topic_id);
-            for partition in floors {
-                context
-                    .index_log
-                    .tombstone_delete_floor(topic_id, partition)
-                    .await?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Tombstone the index ranges each led partition's retention has expired.
-///
-/// Kafka runs the same three predicates on every `LogManager` cleanup tick,
-/// against both the local segments and, on a tiered topic, the remote ones.
-/// On a diskless topic the object tier is the only tier that holds the
-/// records, so the tombstone is what makes retention mean anything at all.
-///
-/// The object itself is freed by [`Reclaimer`] on a later sweep, and only once
-/// no range in it is referenced. One object holds runs from several
-/// partitions, so a partition whose ranges all expire can still leave the
-/// object in the bucket until its co-tenants expire too.
-///
-/// KFC-9: a write freeze stops this pass, as it stops the cleaner and both of
-/// the remote-log-manager's retention passes. A frozen topic's prefix has to
-/// stay byte-identical, and expiring a range here would let the reclaimer
-/// delete the object bytes behind it. A thaw makes the next tick eligible
-/// again with no further operator step.
-async fn expire_retention_breached_ranges(
-    context: &FlusherContext,
-    image: &MetadataImage,
-    partitions: &[FlushPartition],
-    now_ms: i64,
-) -> Result<(), BrokerError> {
-    for partition in partitions {
-        if matches!(
-            crate::freeze::resolve::resolve_freeze_mutation(
-                image,
-                &partition.handle.topic,
-                true,
-                krabka_verified::FreezeMutationKind::Retention,
-            ),
-            crate::freeze::resolve::FreezeMutationResolution::Frozen(_)
-        ) {
-            tracing::debug!(
-                topic = %partition.handle.topic,
-                partition = partition.handle.index.get(),
-                "diskless WAL retention held by a write freeze"
-            );
-            continue;
-        }
-        let config = partition
-            .handle
-            .log
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .config_snapshot();
-        let retention_ms = config.retention.map(TimeExt::millis_i64_trunc);
-        let retention_bytes = config.retention_size.map(ByteSizeExt::bytes_u64);
-        let index = partition.handle.index.get();
-        let keys = {
-            let cache = context.index_log.cache();
-            let cache = cache.lock().await;
-            // The `DeleteRecords` floor, not the local log start: the flusher
-            // trims the local log behind the committed index on every tick, so
-            // the log start says only how much of the WAL has reached the
-            // bucket, never what an operator asked to delete.
-            let log_start_offset = cache.delete_floor(partition.topic_id, index);
-            cache.retention_expired_keys(partition.topic_id, index, DisklessRetentionPolicy {
-                retention_ms,
-                retention_bytes,
-                log_start_offset,
-                now_ms,
-            })
-        };
-        if keys.is_empty() {
-            continue;
-        }
-        context.index_log.tombstone_ranges(&keys).await?;
-        context
-            .metrics
-            .diskless_wal_expired_ranges_total
-            .inc_by(u64::try_from(keys.len()).unwrap_or(u64::MAX));
-    }
-    Ok(())
-}
-
-struct Reclaimer {
-    first_seen: HashMap<String, Instant>,
-    grace: Duration,
-}
-
-impl Reclaimer {
-    fn new(grace: Duration) -> Self {
-        Self {
-            first_seen: HashMap::new(),
-            grace,
-        }
-    }
-
-    async fn sweep(&mut self, context: &FlusherContext) {
-        self.sweep_at(context, Instant::now()).await;
-    }
-
-    async fn sweep_at(&mut self, context: &FlusherContext, now: Instant) {
-        let referenced = context.index_log.cache().lock().await.referenced_objects();
-        let prefix = object_store::path::Path::from("diskless-wal");
-        let objects = match context
-            .object_store
-            .list(Some(&prefix))
-            .try_collect::<Vec<_>>()
-            .await
-        {
-            Ok(objects) => objects,
-            Err(error) => {
-                tracing::warn!(%error, "diskless WAL reclaim listing failed; retrying");
-                return;
-            }
-        };
-        let mut unreferenced = HashSet::new();
-        for object in objects {
-            let object_key = object.location.to_string();
-            if referenced.contains(&object_key) {
-                self.first_seen.remove(&object_key);
-                continue;
-            }
-            unreferenced.insert(object_key.clone());
-            let first_seen = *self.first_seen.entry(object_key.clone()).or_insert(now);
-            let grace_elapsed = now.duration_since(first_seen) >= self.grace;
-            if !krabka_verified::diskless_object_reclaimable(false, grace_elapsed) {
-                continue;
-            }
-            // Additions for this object take the same fence before the cache
-            // lock. Keep only the object-local fence over slow DELETE.
-            let _object_fence = context.index_log.object_fence(&object_key).await;
-            let cache = context.index_log.cache();
-            let cache = cache.lock().await;
-            if !krabka_verified::diskless_object_reclaimable(
-                cache.references_object(&object_key),
-                true,
-            ) {
-                self.first_seen.remove(&object_key);
-                continue;
-            }
-            drop(cache);
-            match context.object_store.delete(&object.location).await {
-                Ok(()) | Err(object_store::Error::NotFound { .. }) => {
-                    self.first_seen.remove(&object_key);
-                }
-                Err(error) => {
-                    tracing::warn!(%object_key, %error, "diskless WAL reclaim failed; retrying");
-                }
-            }
-        }
-        self.first_seen
-            .retain(|object_key, _| unreferenced.contains(object_key));
-    }
 }
 
 async fn flushable_partitions(
@@ -411,9 +242,17 @@ mod tests {
         krabka_remote_storage_topic::MetadataEventLog,
         krabka_units::ByteSize,
         object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path},
-        std::time::Duration,
+        std::time::{Duration, Instant},
         tempfile::tempdir,
     };
+
+    fn test_reclaimer(context: &FlusherContext, grace: Duration) -> Reclaimer {
+        Reclaimer::new(
+            context.index_log.clone(),
+            Arc::clone(&context.object_store),
+            grace,
+        )
+    }
 
     // Keep field evaluation order, including metrics and readiness allocation.
 
@@ -436,22 +275,6 @@ mod tests {
             metrics: BrokerMetrics::new(),
             ready: ready(),
         }
-    }
-
-    /// A reclaimer-only context has an empty partition registry and no leadership readiness.
-    fn reclaimer_context(
-        image: MetadataImage,
-        store: &Arc<dyn ObjectStore>,
-        index: DisklessIndexLog,
-    ) -> FlusherContext {
-        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(image));
-        test_context(
-            Arc::new(PartitionRegistry::new()),
-            image_rx,
-            Arc::clone(store),
-            index,
-            || Arc::new(AtomicBool::new(false)),
-        )
     }
 
     struct MemoryFlusher {
@@ -583,10 +406,14 @@ mod tests {
         partitions: &[FlushPartition],
         now_ms: i64,
     ) {
-        expire_retention_breached_ranges(context, image, partitions, now_ms)
-            .await
-            .unwrap();
-        Reclaimer::new(Duration::ZERO).sweep(context).await;
+        Retention {
+            index_log: &context.index_log,
+            metrics: &context.metrics,
+        }
+        .expire_retention_breached_ranges(image, partitions, now_ms)
+        .await
+        .unwrap();
+        test_reclaimer(context, Duration::ZERO).sweep().await;
     }
 
     /// The id of the `orders` topic, and an image that holds it.
@@ -753,11 +580,9 @@ mod tests {
                 .unwrap();
             wait_for_object(&cache, topic_id, key).await;
         }
-        let context = reclaimer_context(MetadataImage::new(Uuid::nil()), &store, index);
-
-        let mut reclaimer = Reclaimer::new(Duration::from_mins(1));
+        let mut reclaimer = Reclaimer::new(index, Arc::clone(&store), Duration::from_mins(1));
         let observed = Instant::now();
-        reclaimer.sweep_at(&context, observed).await;
+        reclaimer.sweep_at(observed).await;
         assert!(
             store
                 .head(&Path::from("diskless-wal/9/old.ckwl"))
@@ -765,9 +590,7 @@ mod tests {
                 .is_ok(),
             "the grace period protects lagging projections"
         );
-        reclaimer
-            .sweep_at(&context, observed + Duration::from_mins(1))
-            .await;
+        reclaimer.sweep_at(observed + Duration::from_mins(1)).await;
 
         assert!(
             store
@@ -784,7 +607,7 @@ mod tests {
     }
 
     struct StoredReclaimer {
-        context: Arc<FlusherContext>,
+        index: DisklessIndexLog,
         cache: Arc<tokio::sync::Mutex<WalIndexCache>>,
     }
 
@@ -795,17 +618,15 @@ mod tests {
             .unwrap();
         let index = test_index_log().await;
         let cache = index.cache();
-        let context = Arc::new(reclaimer_context(
-            MetadataImage::new(Uuid::nil()),
-            store,
-            index,
-        ));
-        StoredReclaimer { context, cache }
+        StoredReclaimer { index, cache }
     }
 
-    fn reclaim_in_background(context: &Arc<FlusherContext>) -> tokio::task::JoinHandle<()> {
-        let context = Arc::clone(context);
-        tokio::spawn(async move { Reclaimer::new(Duration::ZERO).sweep(&context).await })
+    fn reclaim_in_background(
+        index: &DisklessIndexLog,
+        store: &Arc<dyn ObjectStore>,
+    ) -> tokio::task::JoinHandle<()> {
+        let mut reclaimer = Reclaimer::new(index.clone(), Arc::clone(store), Duration::ZERO);
+        tokio::spawn(async move { reclaimer.sweep().await })
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -817,10 +638,9 @@ mod tests {
             FaultPolicy::none().with(StoreOp::Delete, OpFault::stall(DELETE_DELAY)),
         ));
         let store: Arc<dyn ObjectStore> = delayed.clone();
-        let StoredReclaimer { context, cache } =
+        let StoredReclaimer { index, cache } =
             stored_reclaimer("diskless-wal/7/unreferenced.ckwl", &store).await;
-        let index = &context.index_log;
-        let sweep = reclaim_in_background(&context);
+        let sweep = reclaim_in_background(&index, &store);
         tokio::time::timeout(Duration::from_secs(1), async {
             while delayed.attempts(StoreOp::Delete) == 0 {
                 tokio::task::yield_now().await;
@@ -865,11 +685,10 @@ mod tests {
         let topic_id = Uuid::from_u128(13);
         let object_key = "diskless-wal/7/referenced-again.ckwl";
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let StoredReclaimer { context, cache } = stored_reclaimer(object_key, &store).await;
-        let index = &context.index_log;
+        let StoredReclaimer { index, cache } = stored_reclaimer(object_key, &store).await;
 
         let fence = index.object_fence(object_key).await;
-        let sweep = reclaim_in_background(&context);
+        let sweep = reclaim_in_background(&index, &store);
         // Let the sweep snapshot this object as unreferenced and reach its
         // object fence before the replacement projection becomes visible.
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -889,17 +708,24 @@ mod tests {
         let topic_id = Uuid::from_u128(11);
         let object_key = "diskless-wal/7/deleted.ckwl";
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let StoredReclaimer { context, cache } = stored_reclaimer(object_key, &store).await;
-        context
-            .index_log
+        let StoredReclaimer { index, cache } = stored_reclaimer(object_key, &store).await;
+        index
             .publish_flush(&three_record_flush(topic_id, object_key))
             .await
             .unwrap();
         wait_for_object(&cache, topic_id, object_key).await;
         let image = MetadataImage::new(Uuid::nil());
 
-        tombstone_deleted_topics(&context, &image).await.unwrap();
-        Reclaimer::new(Duration::ZERO).sweep(&context).await;
+        Retention {
+            index_log: &index,
+            metrics: &BrokerMetrics::new(),
+        }
+        .tombstone_deleted_topics(&image)
+        .await
+        .unwrap();
+        Reclaimer::new(index, Arc::clone(&store), Duration::ZERO)
+            .sweep()
+            .await;
 
         assert!(cache.lock().await.lookup(topic_id, 0, 0).is_none());
         assert!(store.head(&Path::from(object_key)).await.is_err());
@@ -1319,6 +1145,85 @@ mod tests {
             index_projection_timeout: timeout,
             trim_safety_lag: None,
             ..FlushConfig::default()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn projection_failure_cancels_in_flight_maintenance_and_upload() {
+        for operation in [StoreOp::List, StoreOp::Put] {
+            let dir = tempdir().unwrap();
+            let MemoryFlusher {
+                image_rx, store, ..
+            } = memory_flusher_dependencies(1);
+            let store = Arc::new(FaultInjectingStore::new(
+                store,
+                FaultPolicy::none().with(operation, OpFault::stall(Duration::from_hours(1))),
+            ));
+            let event_log: Arc<dyn MetadataEventLog> =
+                krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
+            let index = DisklessIndexLog::start(Arc::clone(&event_log))
+                .await
+                .unwrap();
+            let ready = Arc::new(AtomicBool::new(false));
+            let task = tokio::spawn(run(
+                test_context(
+                    led_orders_partition(dir.path()),
+                    image_rx,
+                    store.clone(),
+                    index,
+                    || Arc::clone(&ready),
+                ),
+                FlushConfig {
+                    interval: Duration::from_millis(1),
+                    ..FlushConfig::default()
+                },
+                CancellationToken::new(),
+            ));
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while store.attempts(operation) == 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            // The initial sweep must finish before readiness or any upload.
+            assert!(ready.load(Ordering::Acquire) == (operation == StoreOp::Put));
+            if operation == StoreOp::List {
+                assert!(store.attempts(StoreOp::Put) == 0);
+            }
+            event_log
+                .publish(0, bytes::Bytes::from_static(b"invalid index record"))
+                .await
+                .unwrap();
+            let exit = tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .expect("projection failure cancels work in flight")
+                .unwrap();
+            assert!(exit == FlusherExit::ProjectionUnavailable);
+            assert!(store.attempts(StoreOp::Delete) == 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn maintenance_waits_for_index_replay() {
+        let SilentFixture {
+            dir: _dir,
+            ready,
+            mut context,
+            store,
+        } = silent_replay_fixture().await;
+        let store = Arc::new(FaultInjectingStore::new(store, FaultPolicy::none()));
+        context.object_store = store.clone();
+        let exit = run(
+            context,
+            stall_after(Duration::from_millis(50)),
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(exit == FlusherExit::ReplayStalled);
+        assert!(!ready.load(Ordering::Acquire));
+        for operation in [StoreOp::List, StoreOp::Delete, StoreOp::Put] {
+            assert!(store.attempts(operation) == 0);
         }
     }
 

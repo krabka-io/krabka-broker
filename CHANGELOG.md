@@ -248,6 +248,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- Diskless upload and maintenance stop when the index projection fails, including during an object-store request (#1703).
+
 - Require `ClusterAction` for `PushTelemetry`, refuse both client-telemetry
   RPCs when no receiver is enabled, reject unsubscribed or structurally
   excessive OTLP metrics, and cap retained Prometheus client series globally
