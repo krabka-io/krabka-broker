@@ -1000,10 +1000,7 @@ mod tests {
 
         for backlog in [1_024_usize, 8_192] {
             let dir = tempfile::tempdir().unwrap();
-            drop(Spool::open(
-                dir.path(),
-                ByteSize::from_bytes(u64::MAX),
-            ).unwrap());
+            drop(Spool::open(dir.path(), ByteSize::from_bytes(u64::MAX)).unwrap());
             let record = chained_record(0, &GENESIS_HEAD, &vec![b'x'; 8 * 1_024]);
             let frame = encode_frame(&record);
             let committed = backlog - REPLAY_BATCH_RECORDS;
