@@ -7,6 +7,7 @@
 //! the partition when this broker stops leading it (see `leadership`).
 
 use {
+    self::verification_client::VerificationClient,
     crate::{
         codes::{INVALID_PRODUCER_ID_MAPPING, UNKNOWN_SERVER_ERROR},
         coordinator::GroupCoordinator,
@@ -47,6 +48,7 @@ mod pid_index;
 pub(crate) mod produce_verification;
 mod reaper;
 mod registration;
+mod verification_client;
 
 #[cfg(test)]
 mod test_support;
@@ -93,10 +95,6 @@ pub(crate) struct TxnCoordinator {
     /// `pending_completions`.
     completion_requested: Notify,
     marker_transport: Option<MarkerTransport>,
-    /// The open connection to each remote transaction coordinator that a
-    /// `Produce` transaction check reached, reused for the next check.
-    verification_connections:
-        Mutex<std::collections::HashMap<krabka_metadata::NodeId, VerificationConnection>>,
     group_coordinator: Option<Arc<GroupCoordinator>>,
     /// Whether `__transaction_state` values carry `LastProducerEpoch` (tag 4).
     /// Kafka trunk persists it (KAFKA-20357); 4.3.1 keeps it in memory only, so
@@ -107,20 +105,8 @@ pub(crate) struct TxnCoordinator {
     pub(crate) marker_fanout_gate: fanout_gate::MarkerFanoutGate,
 }
 
-/// A connection a transaction check keeps open to a remote coordinator, and
-/// the endpoint it was dialed at.
-struct VerificationConnection {
-    address: VerificationEndpoint,
-    connection: krabka_client_core::Connection,
-}
-
-/// The host and port a verification connection was dialed at.
-struct VerificationEndpoint {
-    host: String,
-    port: u16,
-}
-
 struct MarkerTransport {
+    verification_client: VerificationClient,
     controller: Arc<dyn MetadataSource>,
     inter_broker_client: Arc<InterBrokerClient>,
     protocol: ListenerProtocol,
@@ -156,7 +142,6 @@ impl TxnCoordinator {
             pending_completions: StdMutex::new(BTreeSet::new()),
             completion_requested: Notify::new(),
             marker_transport: None,
-            verification_connections: Mutex::new(std::collections::HashMap::new()),
             group_coordinator: None,
             persist_last_producer_epoch: false,
             #[cfg(any(test, feature = "test-helpers"))]
@@ -182,6 +167,13 @@ impl TxnCoordinator {
     ) {
         self.metadata = Some(Arc::clone(&controller));
         self.marker_transport = Some(MarkerTransport {
+            verification_client: VerificationClient::new(
+                self.node_id,
+                Arc::clone(&inter_broker_client),
+                protocol,
+                listener_name.clone(),
+                server_name.clone(),
+            ),
             controller,
             inter_broker_client,
             protocol,
