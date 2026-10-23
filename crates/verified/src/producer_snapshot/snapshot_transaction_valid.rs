@@ -151,6 +151,105 @@ pub fn producer_snapshot_stray(snapshots: &[i64], index: usize, segment_bases: &
     !(is_base || (newest && above_every_base))
 }
 
+/// Classify all producer snapshots using their on-disk offset order.
+///
+/// This is the ordered, bulk form of [`producer_snapshot_stray`]. Both input
+/// slices must be sorted in nondecreasing order. The returned value at each index is
+/// `true` exactly when Kafka removes that snapshot. A single cursor through
+/// `segment_bases` is shared by every snapshot, so each input element is
+/// visited at most once; the greatest base is read once for Kafka's
+/// clean-shutdown exception.
+///
+/// Kafka retains the newest snapshot even when it is not a segment base when
+/// it lies above every segment base. Empty segment lists therefore retain only
+/// the newest snapshot.
+#[cfg_attr(
+    creusot,
+    requires(forall<i: Int, j: Int> 0 <= i && i < j && j < snapshots@.len()
+        ==> snapshots@[i]@ <= snapshots@[j]@)
+)]
+#[cfg_attr(
+    creusot,
+    requires(forall<i: Int, j: Int> 0 <= i && i < j && j < segment_bases@.len()
+        ==> segment_bases@[i]@ <= segment_bases@[j]@)
+)]
+#[ensures(result@.len() == snapshots@.len())]
+#[ensures(forall<i: Int> 0 <= i && i < snapshots@.len()
+    ==> result@[i] == kafka_stray_removed(snapshots@, i, segment_bases@))]
+#[must_use]
+pub fn producer_snapshot_strays(snapshots: &[i64], segment_bases: &[i64]) -> Vec<bool> {
+    let mut removed = Vec::with_capacity(snapshots.len());
+    let greatest_base = if segment_bases.is_empty() {
+        None
+    } else {
+        Some(segment_bases[segment_bases.len() - 1])
+    };
+    let mut base_index = 0usize;
+    let mut snapshot_index = 0usize;
+    #[invariant(snapshot_index@ <= snapshots@.len())]
+    #[invariant(base_index@ <= segment_bases@.len())]
+    #[invariant(removed@.len() == snapshot_index@)]
+    #[invariant(snapshot_index@ < snapshots@.len() ==>
+        forall<i: Int> 0 <= i && i < base_index@
+            ==> segment_bases@[i]@ < snapshots@[snapshot_index@]@)]
+    #[invariant(forall<i: Int> 0 <= i && i < snapshot_index@
+        ==> removed@[i] == kafka_stray_removed(snapshots@, i, segment_bases@))]
+    #[variant(snapshots@.len() - snapshot_index@)]
+    while snapshot_index < snapshots.len() {
+        record_classifier_visit();
+        let offset = snapshots[snapshot_index];
+        #[invariant(base_index@ <= segment_bases@.len())]
+        #[invariant(removed@.len() == snapshot_index@)]
+        #[invariant(forall<i: Int> 0 <= i && i < snapshot_index@
+            ==> removed@[i] == kafka_stray_removed(snapshots@, i, segment_bases@))]
+        #[invariant(forall<i: Int> 0 <= i && i < base_index@
+            ==> segment_bases@[i]@ < offset@)]
+        #[variant(segment_bases@.len() - base_index@)]
+        while base_index < segment_bases.len() && segment_bases[base_index] < offset {
+            record_classifier_visit();
+            base_index += 1;
+        }
+
+        proof_assert!(base_index@ < segment_bases@.len() ==>
+            forall<j: Int> base_index@ <= j && j < segment_bases@.len()
+                ==> segment_bases@[base_index@]@ <= segment_bases@[j]@);
+        let is_base = base_index < segment_bases.len() && segment_bases[base_index] == offset;
+        proof_assert!(is_base == is_segment_base(segment_bases@, offset@));
+        let newest = offset == snapshots[snapshots.len() - 1];
+        proof_assert!(forall<j: Int> 0 <= j && j < snapshots@.len()
+            ==> snapshots@[j]@ <= snapshots@[snapshots@.len() - 1]@);
+        proof_assert!(newest == (forall<j: Int> 0 <= j && j < snapshots@.len()
+            ==> snapshots@[j]@ <= offset@));
+        let above_every_base = match greatest_base {
+            Some(base) => offset > base,
+            None => true,
+        };
+        proof_assert!(above_every_base == (forall<j: Int> 0 <= j && j < segment_bases@.len()
+            ==> segment_bases@[j]@ < offset@));
+        removed.push(!(is_base || (newest && above_every_base)));
+        proof_assert!(snapshot_index@ + 1 < snapshots@.len()
+            ==> offset@ <= snapshots@[snapshot_index@ + 1]@);
+        snapshot_index += 1;
+    }
+    removed
+}
+
+#[cfg(test)]
+thread_local! {
+    static CLASSIFIER_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_classifier_visit() { CLASSIFIER_VISITS.with(|visits| visits.set(visits.get() + 1)); }
+
+#[cfg(not(test))]
+const fn record_classifier_visit() {}
+
+#[cfg(test)]
+pub(crate) fn take_classifier_visits() -> usize {
+    CLASSIFIER_VISITS.with(|visits| visits.replace(0))
+}
+
 /// Return the index of the newest snapshot a reload keeps, as Kafka's
 /// `loadFromSnapshot` loads `latestSnapshotFile()` after `truncateAndReload`
 /// deleted every snapshot outside `(log_start, log_end]`. Input order is
