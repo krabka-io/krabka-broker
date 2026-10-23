@@ -14,6 +14,7 @@ use {
     crc32c::crc32c,
     krabka_object_store::fault::FaultInjectingStore,
     krabka_protocol::records::{Record, RecordBatch},
+    krabka_remote_storage::Sha256Digest,
     object_store::{ObjectStoreExt as _, PutPayload},
     std::sync::Arc,
     tempfile::TempDir,

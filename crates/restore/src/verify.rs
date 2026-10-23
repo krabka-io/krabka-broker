@@ -19,10 +19,11 @@
 //! leader-epoch checkpoint.
 
 use {
+    crate::authenticity,
     bytes::Bytes,
     krabka_ids::{LeaderEpoch, Offset},
     krabka_object_store::{ObjectOps, ObjectStoreError},
-    krabka_remote_storage::{ObjectEntry, Sha256Digest, TopicIdPartition},
+    krabka_remote_storage::{ObjectEntry, TopicIdPartition},
     object_store::path::Path,
     std::collections::BTreeMap,
     uuid::Uuid,
@@ -274,23 +275,9 @@ pub(super) async fn fetch_capped(
     max_bytes: u64,
     authenticated: Option<&BTreeMap<String, ObjectEntry>>,
 ) -> Result<Bytes, RestoreError> {
-    let expected = authenticated.and_then(|objects| objects.get(&key.to_string()));
-    if authenticated.is_some() && expected.is_none() {
-        return Err(RestoreError::Authenticity {
-            reason: format!("object `{key}` is not named by an authenticated manifest"),
-        });
-    }
+    let expected = authenticity::object_claim(key, authenticated)?;
     let meta = ops.head(key).await?;
-    if let Some(expected) = expected
-        && meta.size != expected.size_bytes
-    {
-        return Err(RestoreError::Authenticity {
-            reason: format!(
-                "object `{key}` changed after manifest verification: expected {} bytes, found {} bytes",
-                expected.size_bytes, meta.size
-            ),
-        });
-    }
+    authenticity::verify_object_size(key, expected, meta.size)?;
     if meta.size > max_bytes {
         return Err(ObjectStoreError::TooLarge {
             key: key.clone(),
@@ -300,18 +287,7 @@ pub(super) async fn fetch_capped(
         .into());
     }
     let bytes = ops.get_capped(key, max_bytes).await?;
-    if let Some(expected) = expected {
-        let actual_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        let actual_digest = Sha256Digest::of(&bytes);
-        if expected.size_bytes != actual_size || expected.sha256 != actual_digest {
-            return Err(RestoreError::Authenticity {
-                reason: format!(
-                    "object `{key}` changed after manifest verification: expected {} bytes with SHA-256 {}, fetched {actual_size} bytes with SHA-256 {actual_digest}",
-                    expected.size_bytes, expected.sha256
-                ),
-            });
-        }
-    }
+    authenticity::verify_object_bytes(key, expected, &bytes)?;
     Ok(bytes)
 }
 
