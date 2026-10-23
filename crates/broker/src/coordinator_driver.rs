@@ -2,6 +2,8 @@
 //! Share-state uncertainty has its own wakeup, so recovery never queues replica
 //! configuration work behind the writer whose append is being recovered.
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use {
     crate::{share_coordinator::coordinator::ShareCoordinator, txn::coordinator::TxnCoordinator},
     krabka_metadata::MetadataImage,
@@ -15,6 +17,8 @@ pub(crate) struct CoordinatorDriver {
     txn: Option<Arc<TxnCoordinator>>,
     share: Option<Arc<ShareCoordinator>>,
     shutdown: CancellationToken,
+    #[cfg(test)]
+    retained_loads: Arc<AtomicUsize>,
 }
 
 impl CoordinatorDriver {
@@ -29,6 +33,8 @@ impl CoordinatorDriver {
             txn,
             share,
             shutdown,
+            #[cfg(test)]
+            retained_loads: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -54,8 +60,10 @@ impl CoordinatorDriver {
                         }
                     } => {}
                 }
-                loads.retain(|task| !task.is_finished());
             }
+            loads.retain(|task| !task.is_finished());
+            #[cfg(test)]
+            self.retained_loads.store(loads.len(), Ordering::Relaxed);
             tokio::select! {
                 biased;
                 () = self.shutdown.cancelled() => break,

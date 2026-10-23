@@ -56,6 +56,12 @@ pub(crate) async fn await_load_status(
     .expect("coordinator reaches expected load status");
 }
 
+/// Inject an indeterminate append and its normal recovery wakeup.
+pub(crate) fn mark_append_uncertain(coordinator: &ShareCoordinator, partition: PartitionIndex) {
+    coordinator.uncertain_appends.insert(partition, ());
+    coordinator.recovery_needed.notify_one();
+}
+
 /// Open a real state log whose writer waits for an explicit test release.
 pub(crate) fn gated_state_partition(
     log_dir: &Path,

@@ -9,7 +9,10 @@ use {
             config::ShareCoordinatorConfig,
             coordinator::{
                 LoadStatus,
-                test_support::{await_load_status, gated_state_partition},
+                test_support::{
+                    ConfiguredCoordinator, await_load_status, configured_coordinator,
+                    gated_state_partition, mark_append_uncertain,
+                },
             },
         },
         test_support::metadata_partition_record,
@@ -37,6 +40,36 @@ fn ready_image() -> Arc<MetadataImage> {
             .call(),
     ));
     Arc::new(image)
+}
+
+#[tokio::test]
+async fn recovery_without_metadata_changes_releases_completed_replay_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let ConfiguredCoordinator { coord, .. } =
+        configured_coordinator(dir.path(), ShareCoordinatorConfig {
+            state_topic_num_partitions: 1,
+            ..Default::default()
+        });
+    let coordinator = Arc::new(coord);
+    let (_ready, receiver) = watch::channel(Some(ready_image()));
+    let shutdown = CancellationToken::new();
+    let driver = CoordinatorDriver::new(
+        receiver,
+        None,
+        Some(Arc::clone(&coordinator)),
+        shutdown.clone(),
+    );
+    let retained = Arc::clone(&driver.retained_loads);
+    let task = tokio::spawn(driver.run());
+    await_load_status(&coordinator, PartitionIndex(0), LoadStatus::Active).await;
+
+    for _ in 0..16 {
+        mark_append_uncertain(&coordinator, PartitionIndex(0));
+        await_load_status(&coordinator, PartitionIndex(0), LoadStatus::Active).await;
+        assert!(retained.load(Ordering::Relaxed) <= 1);
+    }
+    shutdown.cancel();
+    task.await.unwrap();
 }
 
 #[tokio::test]
