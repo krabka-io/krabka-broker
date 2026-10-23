@@ -143,6 +143,7 @@ pub(super) async fn finish_broker_startup(
         diskless_read: runtime.diskless_read,
         hot_tail: storage.diskless.hot_tail,
         wal_shards: storage.diskless.wal_shards,
+        wal_router: storage.diskless.wal_router,
         log_dir_status: storage.log_dir_status,
         client_metrics: runtime.client_metrics,
         #[cfg(any(test, feature = "test-helpers"))]

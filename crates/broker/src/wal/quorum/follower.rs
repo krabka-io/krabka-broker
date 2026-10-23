@@ -179,6 +179,7 @@ mod tests {
                 quorum::{
                     engine::WalShardEngine,
                     registry::{WalPlacement, WalShardRegistry},
+                    router::WalShardRouter,
                 },
             },
         },
@@ -215,12 +216,12 @@ mod tests {
 
     /// A registry and the leader engine that it holds.
     struct LeaderRegistry {
-        registry: WalShardRegistry,
+        registry: Arc<WalShardRegistry>,
         engine: Arc<WalShardEngine>,
     }
 
     fn leader_registry(shard: ShardId, leader: &Arc<Mutex<Log>>, epoch: i32) -> LeaderRegistry {
-        let registry = WalShardRegistry::new(NodeId(1));
+        let registry = Arc::new(WalShardRegistry::new(NodeId(1)));
         let engine = Arc::new(WalShardEngine::new_distributed(Arc::clone(leader), 3).unwrap());
         registry.insert(shard, Arc::clone(&engine));
         registry.replace_placements(&maplit::hashmap! {shard => WalPlacement {
@@ -231,7 +232,7 @@ mod tests {
     }
 
     fn fetch_follower(
-        registry: &WalShardRegistry,
+        registry: &Arc<WalShardRegistry>,
         shard: ShardId,
         follower: &FollowerLog,
     ) -> krabka_protocol::owned::fetch_response::PartitionData {
@@ -243,7 +244,7 @@ mod tests {
             follower.end_offset().0,
             krabka_units::mebibytes(1),
         );
-        let response = registry
+        let response = WalShardRouter::new(Arc::clone(registry))
             .route_fetch_request(&req, NodeId(2))
             .unwrap()
             .unwrap();
@@ -307,7 +308,7 @@ mod tests {
             topic_id: uuid::Uuid::from_u128(42),
             partition: PartitionIndex(0),
         };
-        let registry = WalShardRegistry::new(NodeId(1));
+        let registry = Arc::new(WalShardRegistry::new(NodeId(1)));
         registry.replace_placements(&maplit::hashmap! {shard => WalPlacement {
             voters: vec![NodeId(1), NodeId(2), NodeId(3)],
             leader_epoch: 0,
@@ -332,7 +333,7 @@ mod tests {
             0,
             krabka_units::mebibytes(1),
         );
-        let response = registry
+        let response = WalShardRouter::new(Arc::clone(&registry))
             .route_fetch_request(&request, NodeId(2))
             .unwrap()
             .unwrap();
@@ -355,7 +356,7 @@ mod tests {
             follower_end.0,
             krabka_units::mebibytes(1),
         );
-        registry
+        WalShardRouter::new(Arc::clone(&registry))
             .route_fetch_request(&acknowledgement, NodeId(2))
             .unwrap()
             .unwrap();
@@ -469,7 +470,7 @@ mod tests {
         };
         let LeaderRegistry { registry, .. } = leader_registry(shard, &leader, 2);
         let fetch = |follower: &FollowerLog| {
-            let response = registry
+            let response = WalShardRouter::new(Arc::clone(&registry))
                 .route_fetch_request(
                     &fetch_request(
                         QuorumGroup::diskless_wal(shard.topic_id, shard.partition),

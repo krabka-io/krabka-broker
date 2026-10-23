@@ -7,6 +7,7 @@ pub(crate) mod log_view;
 mod membership;
 pub(crate) mod placement;
 pub(crate) mod registry;
+pub(crate) mod router;
 mod shard_dirs;
 pub(crate) mod wire;
 

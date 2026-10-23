@@ -7,6 +7,7 @@ use {
         producer_state::ProducerState,
         wal::quorum::{
             registry::{ShardId, WalShardRegistry},
+            router::WalShardRouter,
             wire::{QuorumGroup, fetch_request},
         },
     },
@@ -161,7 +162,7 @@ async fn distributed_wal_ack_restores_the_partition_watermark() {
         2,
         krabka_units::mebibytes(1),
     );
-    registry
+    WalShardRouter::new(registry.clone())
         .route_fetch_request(&acknowledgement, krabka_raft::NodeId(2))
         .expect("WAL route")
         .expect("WAL response");
