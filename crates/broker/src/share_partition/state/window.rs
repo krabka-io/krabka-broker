@@ -262,25 +262,190 @@ impl AcquisitionState {
     /// Merges adjacent batches that have the same delivery state, delivery
     /// count, and acquisition, that is the same owner and deadline. This keeps
     /// the batch list compact.
-    pub(super) fn coalesce(&mut self) {
-        let mut i = 0;
-        while i + 1 < self.batches.len() {
-            let mergeable = {
-                let a = &self.batches[i];
-                let b = &self.batches[i + 1];
-                a.last_offset + 1 == b.first_offset
-                    && a.state == b.state
-                    && a.delivery_count == b.delivery_count
-                    && a.acquired_by == b.acquired_by
-                    && a.lock_deadline == b.lock_deadline
-            };
+    pub(super) fn coalesce(&mut self) { self.coalesce_with(|| {}); }
+
+    fn coalesce_with(&mut self, mut visit: impl FnMut()) {
+        self.batches.dedup_by(|current, previous| {
+            visit();
+            let mergeable = previous.last_offset + 1 == current.first_offset
+                && previous.state == current.state
+                && previous.delivery_count == current.delivery_count
+                && previous.acquired_by == current.acquired_by
+                && previous.lock_deadline == current.lock_deadline;
             if mergeable {
-                let next_last = self.batches[i + 1].last_offset;
-                self.batches[i].last_offset = next_last;
-                self.batches.remove(i + 1);
+                previous.last_offset = current.last_offset;
+            }
+            mergeable
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::{super::AckType, *},
+        assert2::assert,
+        std::time::{Duration, Instant},
+    };
+
+    fn old_coalesce(mut batches: Vec<InFlightBatch>) -> Vec<InFlightBatch> {
+        let mut i = 0;
+        while i + 1 < batches.len() {
+            let a = &batches[i];
+            let b = &batches[i + 1];
+            let mergeable = a.last_offset + 1 == b.first_offset
+                && a.state == b.state
+                && a.delivery_count == b.delivery_count
+                && a.acquired_by == b.acquired_by
+                && a.lock_deadline == b.lock_deadline;
+            if mergeable {
+                let next_last = batches[i + 1].last_offset;
+                batches[i].last_offset = next_last;
+                batches.remove(i + 1);
             } else {
                 i += 1;
             }
         }
+        batches
+    }
+
+    #[test]
+    fn linear_compaction_matches_previous_algorithm_at_every_boundary() {
+        let now = Instant::now();
+        let states = [
+            RecordState::Available,
+            RecordState::Acquired,
+            RecordState::Acknowledged,
+            RecordState::Archiving,
+            RecordState::Archived,
+            RecordState::Deferred,
+        ];
+        let mut batches = Vec::new();
+        let mut first = Offset(10);
+        for i in 0..96 {
+            let state = states[i % states.len()];
+            let last = first + i64::try_from(i % 3).unwrap();
+            batches.push(InFlightBatch {
+                first_offset: first,
+                last_offset: last,
+                state,
+                delivery_count: i16::try_from(i % 4).unwrap(),
+                acquired_by: (state == RecordState::Acquired).then(|| format!("member-{}", i % 3)),
+                lock_deadline: (state == RecordState::Acquired)
+                    .then(|| now + Duration::from_secs(u64::try_from(i % 5).unwrap())),
+            });
+            // Exercise both contiguous runs and offset gaps.
+            first = last + if i % 7 == 0 { 2 } else { 1 };
+        }
+        // Include long equal regions so each retained run absorbs multiple successors.
+        for i in 0..32 {
+            batches.push(InFlightBatch {
+                first_offset: first + i,
+                last_offset: first + i,
+                state: RecordState::Available,
+                delivery_count: 9,
+                acquired_by: None,
+                lock_deadline: None,
+            });
+        }
+        let mut state = AcquisitionState::new(Offset(10));
+        state.batches = batches;
+        state.end_offset = first + 32;
+        state.delivery_complete_count = 7;
+        state.dlq_enabled = true;
+        let mut expected = state.clone();
+        expected.batches = old_coalesce(expected.batches);
+
+        state.coalesce();
+
+        assert!(state == expected);
+    }
+
+    #[test]
+    fn compaction_visits_each_fragment_once() {
+        for runs in [100, 1_000, 2_000, 4_000] {
+            let mut state = available_fragments(runs);
+            let mut visits = 0;
+            state.coalesce_with(|| visits += 1);
+            assert!(visits == runs - 1);
+            assert_single_available_run(&state, runs);
+        }
+    }
+
+    #[test]
+    fn fragmented_release_expiry_and_acknowledgement_have_identical_results() {
+        for runs in [100, 1_000, 2_000, 4_000] {
+            let now = Instant::now();
+            let acquired = acquired_fragments(runs, now);
+
+            let mut released = acquired.clone();
+            released.release_member("member", i16::MAX);
+            assert_single_available_run(&released, runs);
+
+            let mut expired = acquired.clone();
+            expired.expire_locks(
+                now + Duration::from_secs(u64::try_from(runs + 1).unwrap()),
+                i16::MAX,
+            );
+            assert_single_available_run(&expired, runs);
+
+            let mut acknowledged = acquired;
+            acknowledged
+                .acknowledge(
+                    "member",
+                    Offset(0),
+                    Offset(i64::try_from(runs).unwrap() - 1),
+                    AckType::Release,
+                    i16::MAX,
+                )
+                .unwrap();
+            assert!(acknowledged == released);
+        }
+    }
+
+    fn available_fragments(runs: usize) -> AcquisitionState {
+        let mut state = AcquisitionState::new(Offset(0));
+        state.end_offset = Offset(i64::try_from(runs).unwrap());
+        state.batches = (0..i64::try_from(runs).unwrap())
+            .map(|offset| InFlightBatch {
+                first_offset: Offset(offset),
+                last_offset: Offset(offset),
+                state: RecordState::Available,
+                delivery_count: 1,
+                acquired_by: None,
+                lock_deadline: None,
+            })
+            .collect();
+        state
+    }
+
+    fn acquired_fragments(runs: usize, now: Instant) -> AcquisitionState {
+        let mut state = AcquisitionState::new(Offset(0));
+        state.end_offset = Offset(i64::try_from(runs).unwrap());
+        state.batches = (0..runs)
+            .map(|offset| InFlightBatch {
+                first_offset: Offset(i64::try_from(offset).unwrap()),
+                last_offset: Offset(i64::try_from(offset).unwrap()),
+                state: RecordState::Acquired,
+                delivery_count: 1,
+                acquired_by: Some("member".to_owned()),
+                lock_deadline: Some(now + Duration::from_secs(u64::try_from(offset + 1).unwrap())),
+            })
+            .collect();
+        state
+    }
+
+    fn assert_single_available_run(state: &AcquisitionState, runs: usize) {
+        assert!(
+            state.batches
+                == vec![InFlightBatch {
+                    first_offset: Offset(0),
+                    last_offset: Offset(i64::try_from(runs).unwrap() - 1),
+                    state: RecordState::Available,
+                    delivery_count: 1,
+                    acquired_by: None,
+                    lock_deadline: None,
+                }]
+        );
     }
 }
