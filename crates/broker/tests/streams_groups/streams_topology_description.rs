@@ -13,10 +13,10 @@ use {
         streams_harness::{
             connect, create_topic, finalize_streams_version, first_join, follow_up, topology,
         },
-        support::{GroupCoordinatorBoot, start_group_coordinator_with_config},
+        support::{GroupCoordinatorBoot, heartbeat_config, start_group_coordinator_with_config},
     },
     assert2::assert,
-    krabka_broker::{BrokerConfig, file_config::FileConfig},
+    krabka_broker::file_config::FileConfig,
     krabka_client_core::Client,
     krabka_protocol::owned::{
         common::{
@@ -43,7 +43,7 @@ const SOURCE: &str = "topology-description-input";
 
 async fn boot_with_plugin() -> GroupCoordinatorBoot {
     let dir = tempfile::TempDir::new().unwrap();
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    let mut config = heartbeat_config(dir.path());
     let file: FileConfig = toml::from_str(TRUNK_WITH_PLUGIN).expect("parse the properties");
     file.apply_to(&mut config).expect("apply the properties");
     Box::pin(

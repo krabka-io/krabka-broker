@@ -14,7 +14,7 @@ use std::os::unix::fs::FileExt;
 use {
     criterion::{Criterion, black_box, criterion_group, criterion_main},
     krabka_ids::{LeaderEpoch, Offset, ProducerId},
-    krabka_log::{Log, LogConfig, SegmentAllocation, VerbatimBatch},
+    krabka_log::{AbortedTxn, Log, LogConfig, SegmentAllocation, TxnIndex, VerbatimBatch},
     krabka_protocol::records::RecordBatch,
     krabka_units::prelude::{ByteSize, bytes, gibibytes, kibibytes, mebibytes},
     std::{
@@ -635,6 +635,71 @@ fn bench_accessors(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Transaction-index benchmarks
+// ---------------------------------------------------------------------------
+
+fn txn_entry(n: i64) -> AbortedTxn {
+    AbortedTxn {
+        producer_id: ProducerId(n),
+        start_offset: Offset(n * 2),
+        last_offset: Offset(n * 2 + 1),
+        last_stable_offset: Offset(n * 2 + 2),
+    }
+}
+
+fn txn_bytes(entries: impl IntoIterator<Item = AbortedTxn>) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for entry in entries {
+        bytes.extend_from_slice(&0_i16.to_be_bytes());
+        bytes.extend_from_slice(&entry.producer_id.0.to_be_bytes());
+        bytes.extend_from_slice(&entry.start_offset.0.to_be_bytes());
+        bytes.extend_from_slice(&entry.last_offset.0.to_be_bytes());
+        bytes.extend_from_slice(&entry.last_stable_offset.0.to_be_bytes());
+    }
+    bytes
+}
+
+/// Measure decode/dedup independently from append I/O. Duplicate rates are
+/// exact retries distributed through the file rather than adjacent records.
+fn bench_txn_index_open(c: &mut Criterion) {
+    let mut group = c.benchmark_group("txn_index/open");
+    for distinct in [1_000_i64, 10_000, 100_000] {
+        for duplicate_percent in [0_i64, 50, 90] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("00000000000000000000.txnindex");
+            let total = distinct * 100 / (100 - duplicate_percent);
+            let entries = (0..total).map(|n| txn_entry(n % distinct));
+            std::fs::write(&path, txn_bytes(entries)).unwrap();
+            group.bench_function(
+                format!("{distinct}_distinct_{duplicate_percent}pct_duplicates"),
+                |b| b.iter(|| black_box(TxnIndex::open(path.clone()).unwrap())),
+            );
+        }
+    }
+    group.finish();
+}
+
+/// Exact-duplicate append retries do no file I/O, isolating membership lookup
+/// as the number of distinct transactions in the active segment grows.
+fn bench_txn_index_append_retry(c: &mut Criterion) {
+    let mut group = c.benchmark_group("txn_index/append_retry");
+    for distinct in [1_000_i64, 10_000, 100_000] {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("00000000000000000000.txnindex");
+        std::fs::write(&path, txn_bytes((0..distinct).map(txn_entry))).unwrap();
+        let mut index = TxnIndex::open(path).unwrap();
+        let mut candidate = 0;
+        group.bench_function(format!("{distinct}_distinct"), |b| {
+            b.iter(|| {
+                candidate = (candidate + 7919) % distinct;
+                index.append(black_box(txn_entry(candidate))).unwrap();
+            });
+        });
+    }
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
 
@@ -650,5 +715,7 @@ criterion_group!(
     bench_open,
     bench_truncate,
     bench_accessors,
+    bench_txn_index_open,
+    bench_txn_index_append_retry,
 );
 criterion_main!(benches);

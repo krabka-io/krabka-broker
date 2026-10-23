@@ -64,6 +64,10 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   storage now reopens with its log start at or above its first segment, as
   Kafka's `LogLoader` does, so a crash before the timer fires cannot bring
   back an older start.
+- Opening and appending to a transaction index now uses constant-time exact
+  retry detection while retaining the index's first-occurrence scan order.
+  Broker recovery no longer performs a quadratic scan of aborted transactions
+  in each segment (#1663).
 - `ci.yml` runs on the merge queue's `merge_group` event, treated like a
   pull request: lanes are scoped by path, the remote cache is read-only and
   nextest waits for `main`. Each queued pull request is then tested on top of

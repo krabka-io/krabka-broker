@@ -2,12 +2,15 @@
 //! reloaded group goes on assigning its tasks.
 
 use {
-    crate::streams_harness::{
-        active_partitions_for, boot, connect, create_topic, finalize_streams_version, first_join,
-        follow_up, join_and_converge, topology,
+    crate::{
+        streams_harness::{
+            active_partitions_for, boot, connect, create_topic, finalize_streams_version,
+            first_join, follow_up, join_and_converge, topology,
+        },
+        support::heartbeat_config,
     },
     assert2::assert,
-    krabka_broker::{BootstrapMode, Broker, BrokerConfig},
+    krabka_broker::{BootstrapMode, Broker},
     krabka_client_core::Client,
     krabka_protocol::owned::{
         common::streams_group_heartbeat_request::task_ids::TaskIds as ReqTaskIds,
@@ -84,7 +87,7 @@ async fn a_reloaded_group_assigns_tasks_to_a_member_that_joins_after_a_restart()
     assert!(reloaded.active == vec![0, 1]);
     broker.shutdown().await;
 
-    let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    let mut config = heartbeat_config(dir.path());
     config.bootstrap_mode = BootstrapMode::Rejoin;
     let broker = Broker::start(config).await.unwrap();
     broker.wait_until_group_coordinator_ready().await;

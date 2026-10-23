@@ -1,6 +1,7 @@
 //! Canonical loopback SASL listener fixtures for integration tests.
 
 use {
+    crate::support::heartbeat_config,
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
     krabka_security::{ListenerProtocol, SaslMechanism},
     std::{net::SocketAddr, path::PathBuf},
@@ -222,7 +223,7 @@ pub fn start_plaintext_configured(
     customize: impl FnOnce(&mut BrokerConfig),
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let log_dir = tempfile::tempdir().unwrap();
-    let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
+    let mut cfg = heartbeat_config(log_dir.path());
     customize(&mut cfg);
     start_broker(cfg, log_dir)
 }
@@ -240,6 +241,7 @@ fn start_configured_users(
 ) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let dir = tempfile::tempdir().unwrap();
     let mut config = sasl_plaintext_with_users(dir.path().to_path_buf(), super_user, users);
+    config.heartbeat_timeout = krabka_units::secs(30);
     configure(&mut config);
     start_broker(config, dir)
 }

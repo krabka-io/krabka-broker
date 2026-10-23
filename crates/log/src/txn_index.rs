@@ -17,7 +17,7 @@ use {
         index::{read_sidecar, rewrite_retained_entries, rewrite_sidecar_file},
     },
     krabka_ids::{Offset, ProducerId},
-    std::{fs::OpenOptions, io::Write, path::PathBuf},
+    std::{collections::HashSet, fs::OpenOptions, io::Write, path::PathBuf},
     tracing::instrument,
     zerocopy::{
         BigEndian, FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
@@ -30,7 +30,7 @@ const ENTRY_BYTES: usize = 34;
 /// The only aborted-transaction record version krabka writes or accepts.
 const SUPPORTED_VERSION: i16 = 0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AbortedTxn {
     pub start_offset: Offset,
     pub last_offset: Offset,
@@ -70,6 +70,9 @@ impl AbortedTxnRaw {
 pub struct TxnIndex {
     path: PathBuf,
     entries: Vec<AbortedTxn>,
+    /// Exact identities already represented by `entries`. Keep the vector for
+    /// Kafka's first-occurrence iteration order and this set for retry lookup.
+    identities: HashSet<AbortedTxn>,
     /// Whether the file exists: it did at open, or a write created it. A
     /// segment with no aborted transaction usually has none.
     on_disk: bool,
@@ -91,6 +94,7 @@ impl TxnIndex {
             "length is a multiple of ENTRY_BYTES and AbortedTxnRaw is Unaligned",
             |raws| {
                 let mut entries = Vec::with_capacity(raws.len());
+                let mut identities = HashSet::with_capacity(raws.len());
                 for raw in raws {
                     if raw.version.get() != SUPPORTED_VERSION {
                         return Err(LogError::Corrupt(format!(
@@ -111,20 +115,21 @@ impl TxnIndex {
                             path.display()
                         )));
                     }
-                    if !entries.contains(&entry) {
+                    if identities.insert(entry) {
                         entries.push(entry);
                     }
                 }
-                Ok(entries)
+                Ok((entries, identities))
             },
         )?;
         // A missing file is an index with no entries.
         let on_disk = read.is_some();
-        let entries = read.unwrap_or_default();
+        let (entries, identities) = read.unwrap_or_default();
         tracing::Span::current().record("entries", entries.len());
         Ok(Self {
             path,
             entries,
+            identities,
             on_disk,
         })
     }
@@ -145,7 +150,7 @@ impl TxnIndex {
                 entry.start_offset, entry.last_offset, entry.producer_id
             )));
         }
-        if self.entries.contains(&entry) {
+        if self.identities.contains(&entry) {
             return Ok(());
         }
         let mut f = OpenOptions::new()
@@ -158,6 +163,7 @@ impl TxnIndex {
         f.write_all(raw.as_bytes()).map_err(LogError::Io)?;
         f.sync_data().map_err(LogError::Io)?;
         self.entries.push(entry);
+        self.identities.insert(entry);
         Ok(())
     }
 
@@ -182,6 +188,7 @@ impl TxnIndex {
             },
         )? {
             self.entries = entries;
+            self.identities = self.entries.iter().copied().collect();
         }
         Ok(())
     }
@@ -431,6 +438,53 @@ mod tests {
         assert2::assert!(TxnIndex::open(path).unwrap().entries() == [entry]);
     }
 
+    /// A retry can be separated from its first write by other records (for
+    /// example after an uncertain sync and restart). Identity includes every
+    /// persisted field, while iteration retains each identity's first place.
+    #[test]
+    fn reopen_deduplicates_non_adjacent_retries_by_all_fields_in_first_seen_order() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("00.txnindex");
+        let first = retry_entry();
+        let changed_producer = AbortedTxn {
+            producer_id: ProducerId(first.producer_id.0 + 1),
+            ..first
+        };
+        let changed_start = AbortedTxn {
+            start_offset: Offset(first.start_offset.0 + 1),
+            ..first
+        };
+        let changed_last = AbortedTxn {
+            last_offset: Offset(first.last_offset.0 + 1),
+            ..first
+        };
+        let changed_lso = AbortedTxn {
+            last_stable_offset: Offset(first.last_stable_offset.0 + 1),
+            ..first
+        };
+        let written = [
+            first,
+            changed_producer,
+            changed_start,
+            changed_last,
+            changed_lso,
+            first,
+        ];
+        let bytes = written
+            .iter()
+            .flat_map(|&entry| AbortedTxnRaw::new(entry).as_bytes().to_vec())
+            .collect::<Vec<_>>();
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut reopened = TxnIndex::open(path.clone()).unwrap();
+        assert2::assert!(reopened.entries() == &written[..5]);
+
+        // Retrying after reopen neither writes nor reorders the first entry.
+        reopened.append(first).unwrap();
+        assert2::check!(reopened.entries() == &written[..5]);
+        assert2::check!(std::fs::read(path).unwrap() == bytes);
+    }
+
     #[test]
     fn mutation_io_failures_leave_the_in_memory_index_unchanged() {
         let original = retry_entry();
@@ -523,6 +577,22 @@ mod tests {
 
         index.truncate_from(Offset(4)).unwrap();
         assert2::assert!(index.entries().is_empty());
+    }
+
+    #[test]
+    fn truncate_removes_membership_so_the_same_entry_can_be_reappended() {
+        let entry = retry_entry();
+        let IndexFixture {
+            dir: _dir,
+            path,
+            mut index,
+        } = populated_index("00.txnindex", &[entry]);
+
+        index.truncate_from(entry.last_offset).unwrap();
+        assert2::assert!(index.entries().is_empty());
+        index.append(entry).unwrap();
+        assert2::check!(index.entries() == [entry]);
+        assert2::check!(TxnIndex::open(path).unwrap().entries() == [entry]);
     }
 
     #[test]
