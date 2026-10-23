@@ -16,7 +16,9 @@ use {
     crate::{
         broker::Broker,
         codes,
-        remote_log_manager::quota::{FETCH_MAX_BYTES_PER_SECOND, UNLIMITED_BYTES_PER_SECOND},
+        remote_log_manager::{
+            dynamic_config::FETCH_MAX_BYTES_PER_SECOND, quota::UNLIMITED_BYTES_PER_SECOND,
+        },
     },
     assert2::check,
     krabka_protocol::owned::fetch_response::PartitionData,
