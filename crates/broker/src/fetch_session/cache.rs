@@ -332,7 +332,9 @@ mod tests {
             .map(|(position, &(partition, records))| SentPartition {
                 key: cached_partition(krabka_ids::PartitionIndex(partition)).0,
                 state: CachedPartitionState {
-                    last_high_watermark: position as i64 + 1,
+                    last_high_watermark: i64::try_from(position)
+                        .expect("response position fits i64")
+                        + 1,
                     ..Default::default()
                 },
                 records,
