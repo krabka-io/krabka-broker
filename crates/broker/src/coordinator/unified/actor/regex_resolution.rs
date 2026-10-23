@@ -652,7 +652,7 @@ mod tests {
         for row in rows {
             let mut state = group(&[("m1", Some("a.*")), ("m2", row.old)]);
             state.set_resolved_regex("a.*".into(), resolution(&["a1"], 5, NOW_MS - row.since_ms));
-            let resolver = table(&[entry("a.*", &["a1"]), entry("b.*", &["b1"])]);
+            let pattern_lookup = table(&[entry("a.*", &["a1"]), entry("b.*", &["b1"])]);
 
             let Ran { update, .. } = run(
                 &mut state,
@@ -704,14 +704,14 @@ mod tests {
                     &RegexResolution {
                         now_ms: NOW_MS + after_ms,
                         refresh_version: 6,
-                        ..RegexResolution::with(&resolver)
+                        ..RegexResolution::with(&pattern_lookup)
                     },
                     &mut records,
                 );
                 check!(update == RegexUpdate::NoChange, "{members} {after_ms}");
                 check!(resolved.is_none(), "{members} {after_ms}");
                 check!(records.is_empty(), "{members} {after_ms}");
-                check!(resolver.calls.lock().unwrap().is_empty());
+                check!(pattern_lookup.calls.lock().unwrap().is_empty());
                 check!(state.group_epoch == 1);
             }
 
@@ -723,7 +723,7 @@ mod tests {
                 &RegexResolution {
                     now_ms: NOW_MS + 10_001,
                     refresh_version: 6,
-                    ..RegexResolution::with(&resolver)
+                    ..RegexResolution::with(&pattern_lookup)
                 },
                 &mut records,
             );
@@ -731,7 +731,7 @@ mod tests {
             check!(resolved.is_some(), "{members}");
             check!(records.is_empty(), "{members}");
             check!(
-                *resolver.calls.lock().unwrap()
+                *pattern_lookup.calls.lock().unwrap()
                     == vec![BTreeSet::from(["a.*".to_owned(), "b.*".to_owned()])],
                 "{members}"
             );
