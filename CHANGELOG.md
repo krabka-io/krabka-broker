@@ -47,7 +47,6 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
-- Regular KRaft metadata checkpoints run in a background worker while the controller continues processing events (#1659).
 - The RF3 regression contract is now `rf3-regression-v2`. It raises the
   variance budget of records/s from 10% to 15%, and of p99 latency from 25% to
   50%. The first measured run of `rf3-regression-v1` exceeded both, and
@@ -94,6 +93,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   `remote_epoch_index` suite, so the epoch index's transition, replay, restore
   and lookup costs from #1616 are compared against the previous commit like
   the broker and log suites.
+- Regular KRaft metadata checkpoints run in a background worker while the
+  controller continues processing events (#1659).
 - A produce batch the broker re-encodes (a topic whose `compression.type`
   forces another codec, or a legacy `MessageSet` it up-converts) is encoded
   once instead of three times. The `max.message.bytes` gate keeps the bytes
