@@ -46,12 +46,13 @@ use crate::{delivery::DeliveryHandles, error::BrokerError, replica_state::Replic
 
 mod commands;
 mod commit_wait;
+mod follower_progress;
 mod leadership;
 mod messages;
 mod watermark;
 mod writer_gate;
 
-pub(crate) use self::writer_gate::WriterGate;
+pub(crate) use self::{follower_progress::FollowerPosition, writer_gate::WriterGate};
 
 #[cfg(test)]
 pub(crate) mod test_support;

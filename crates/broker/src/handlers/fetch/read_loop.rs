@@ -7,7 +7,7 @@ use {
     super::{
         plan::{
             PendingRead, ReadRole, TopicPartitionRef, apply_epoch_checks, leader_refusal,
-            record_follower_position, required_leader,
+            required_leader,
         },
         read::{LiveOffsets, ReadRequest, do_read},
         remote::{RemoteFetchWait, try_remote_read},
@@ -404,7 +404,9 @@ pub(super) async fn execute_pending_reads(
         if let Some((position, leader_log_end)) = follower_update
             && read.out.error_code == codes::NONE
         {
-            record_follower_position(&partition, position, read.fetch_offset, leader_log_end).await;
+            partition
+                .record_follower_position(position.position, read.fetch_offset, leader_log_end)
+                .await;
         }
     }
     // KIP-392: a partition that named a preferred read replica was never
