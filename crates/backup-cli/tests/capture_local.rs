@@ -11,9 +11,9 @@
 //! `crates/restore/tests/dr_roundtrip.rs`.
 
 use {
-    assert2::check,
+    assert2::{assert, check},
     krabka_backup::{
-        BackupError, EXIT_INTEGRITY,
+        BackupError, BackupEvent, EXIT_INTEGRITY,
         archive::{Archive, ArchiveArgs},
         capture::capture_key,
         manifest::{MANIFEST, METADATA_CHECKPOINT, Manifest, RLMM_SNAPSHOT, sha256_hex},
@@ -85,6 +85,7 @@ async fn captured_node() -> CapturedNode {
     let args = archive_args(archive_root.path());
     let capture = run::capture(Some(node.log_dir.path()), None, &args)
         .await
+        .result
         .expect("capture the node");
     CapturedNode {
         node,
@@ -99,13 +100,19 @@ async fn a_capture_copies_both_snapshots_and_records_what_it_wrote() {
     let node = FixtureNode::build();
     let archive_root = tempfile::tempdir().expect("archive root");
 
-    let capture = run::capture(
+    let report = run::capture(
         Some(node.log_dir.path()),
         None,
         &archive_args(archive_root.path()),
     )
-    .await
-    .expect("capture the node");
+    .await;
+    let capture = report.result.expect("capture the node");
+    assert!(let [BackupEvent::Capture { manifest, notes, missing }] = report.events.as_slice());
+    check!(manifest.capture_id == capture);
+    check!(manifest.artifacts.len() == 2);
+    check!(notes.len() == 1);
+    check!(notes[0].contains("the age of its newest record is unknown"));
+    check!(missing.is_empty());
 
     let manifest = read_manifest(archive_root.path(), &capture).await;
     check!(manifest.capture_id == capture);
@@ -158,9 +165,33 @@ async fn verify_accepts_a_capture_it_just_wrote_and_list_names_it() {
         capture,
     } = captured_node().await;
 
-    check!(run::list(&args).await.expect("list the captures") == vec![capture.clone()]);
-    check!(run::verify("latest", &args).await.is_ok());
-    check!(run::verify(&capture, &args).await.is_ok());
+    check!(run::list(&args).await.result.expect("list the captures") == vec![capture.clone()]);
+    for selector in ["latest", capture.as_str()] {
+        let report = run::verify(selector, &args).await;
+        check!(report.result.is_ok());
+        assert!(let [
+            BackupEvent::ArtifactVerified { name: rlmm, size_bytes: rlmm_size },
+            BackupEvent::ArtifactVerified { name: checkpoint, size_bytes: checkpoint_size },
+            BackupEvent::CaptureVerified { id, artifacts },
+        ] = report.events.as_slice());
+        check!(
+            (
+                rlmm.as_str(),
+                *rlmm_size,
+                checkpoint.as_str(),
+                *checkpoint_size,
+                id.as_str(),
+                *artifacts
+            ) == (
+                RLMM_SNAPSHOT,
+                RLMM_BYTES.len() as u64,
+                METADATA_CHECKPOINT,
+                NEWEST_CHECKPOINT_BYTES.len() as u64,
+                capture.as_str(),
+                2
+            )
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -181,6 +212,7 @@ async fn verify_reports_an_artifact_the_archive_no_longer_holds_whole() {
 
     let error = run::verify("latest", &args)
         .await
+        .result
         .expect_err("a truncated artifact fails verification");
     check!(matches!(error, BackupError::Integrity(_)), "got: {error}");
     let message = error.to_string();
@@ -196,13 +228,55 @@ async fn a_capture_that_finds_nothing_is_a_failure_and_not_an_empty_capture() {
 
     let message = run::capture(Some(empty.path()), None, &args)
         .await
+        .result
         .expect_err("a capture that finds nothing fails")
         .to_string();
     check!(message.contains("captured nothing"), "got: {message}");
     check!(
         run::list(&args)
             .await
+            .result
             .expect("list the captures")
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn capture_returns_missing_artifacts_without_another_archive_read() {
+    let node = node_with_rlmm();
+    let archive_root = tempfile::tempdir().expect("archive root");
+    let report = run::capture(Some(node.path()), None, &archive_args(archive_root.path())).await;
+    let id = report.result.expect("capture the available snapshot");
+    assert!(let [BackupEvent::Capture { manifest, notes, missing }] = report.events.as_slice());
+    check!(manifest.capture_id == id);
+    check!(manifest.artifacts.len() == 1);
+    check!(notes.is_empty());
+    check!(
+        missing
+            == &[format!(
+                "{} holds no controller or observer metadata checkpoint",
+                node.path().display()
+            )]
+    );
+}
+
+#[tokio::test]
+async fn verification_keeps_successful_checks_before_a_later_read_failure() {
+    let CapturedNode {
+        node: _node,
+        archive_root,
+        args,
+        capture,
+    } = captured_node().await;
+    std::fs::remove_file(
+        archive_root
+            .path()
+            .join(capture_key(&capture, METADATA_CHECKPOINT)),
+    )
+    .expect("remove the second artifact");
+    let report = run::verify(&capture, &args).await;
+    check!(report.result.is_err());
+    assert!(let [BackupEvent::ArtifactVerified { name, size_bytes }] = report.events.as_slice());
+    check!(name == RLMM_SNAPSHOT);
+    check!(*size_bytes == RLMM_BYTES.len() as u64);
 }

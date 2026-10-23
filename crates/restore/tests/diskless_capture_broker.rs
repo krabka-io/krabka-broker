@@ -307,6 +307,7 @@ async fn capture(bootstrap: &str) -> (TempDir, String) {
     };
     let id = run::capture(None, Some(bootstrap), &archive)
         .await
+        .result
         .expect("capture a cluster that has a diskless WAL index");
     (backup_root, id)
 }

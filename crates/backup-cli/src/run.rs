@@ -1,8 +1,7 @@
 //! What each subcommand does, and the one place that talks to a cluster.
 //!
-//! Every function here returns a [`BackupError`], and only [`crate::run()`] turns
-//! one into an exit code. A runbook that wraps the tool gets the code; a test
-//! that drives the library keeps the error.
+//! Public operations return an [`OperationReport`] with their result and ordered diagnostics.
+//! Only [`crate::run()`] renders those diagnostics and maps a [`BackupError`] to an exit code.
 
 use {
     crate::{
@@ -20,6 +19,7 @@ use {
             METADATA_CHECKPOINT, Manifest, RLMM_SNAPSHOT, artifact_problem, sha256_hex,
         },
         offsets::{GroupOffsetsFile, admin_offsets, commit_outcome, group_offsets},
+        report::{BackupEvent, OperationReport},
     },
     krabka_audit::FileEd25519Signer,
     krabka_client_admin::{
@@ -87,29 +87,32 @@ fn now_ms() -> u64 {
 ///
 /// # Errors
 ///
-/// Returns [`BackupError::Io`] when the capture found nothing to take or an
+/// The report result returns [`BackupError::Io`] when the capture found nothing to take or an
 /// artifact exceeds its restore size limit, and the archive's or the cluster's
 /// own error otherwise.
 pub async fn capture(
     log_dir: Option<&std::path::Path>,
     bootstrap_server: Option<&str>,
     archive: &ArchiveArgs,
-) -> Result<String, BackupError> {
-    capture_secured(
+) -> OperationReport<String> {
+    let mut events = Vec::new();
+    let result = capture_secured_inner(
         log_dir,
         bootstrap_server,
         None,
         &CaptureSigningArgs::default(),
         archive,
+        &mut events,
     )
-    .await
+    .await;
+    OperationReport { result, events }
 }
 
 /// Load command-config security and capture this node's restore inputs.
 ///
 /// # Errors
 ///
-/// Returns the same errors as [`capture`], plus command-config read or parse
+/// The report result returns the same errors as [`capture`], plus command-config read or parse
 /// failures.
 pub async fn capture_configured(
     log_dir: Option<&std::path::Path>,
@@ -117,32 +120,48 @@ pub async fn capture_configured(
     security: &SecurityArgs,
     signing: &CaptureSigningArgs,
     archive: &ArchiveArgs,
-) -> Result<String, BackupError> {
-    let client_security = match bootstrap_server {
-        Some(_) => security.load().await?,
-        None => None,
-    };
-    capture_secured(log_dir, bootstrap_server, client_security, signing, archive).await
+) -> OperationReport<String> {
+    let mut events = Vec::new();
+    let result = async {
+        let client_security = match bootstrap_server {
+            Some(_) => security.load().await?,
+            None => None,
+        };
+        capture_secured_inner(
+            log_dir,
+            bootstrap_server,
+            client_security,
+            signing,
+            archive,
+            &mut events,
+        )
+        .await
+    }
+    .await;
+    OperationReport { result, events }
 }
 
-async fn capture_secured(
+async fn capture_secured_inner(
     log_dir: Option<&std::path::Path>,
     bootstrap_server: Option<&str>,
     security: Option<ClientSecurity>,
     signing: &CaptureSigningArgs,
     archive: &ArchiveArgs,
+    events: &mut Vec<BackupEvent>,
 ) -> Result<String, BackupError> {
-    capture_secured_at(
+    capture_secured_at_inner(
         log_dir,
         bootstrap_server,
         security,
         signing,
         archive,
         now_ms(),
+        events,
     )
     .await
 }
 
+#[cfg(test)]
 async fn capture_secured_at(
     log_dir: Option<&std::path::Path>,
     bootstrap_server: Option<&str>,
@@ -150,6 +169,29 @@ async fn capture_secured_at(
     signing: &CaptureSigningArgs,
     archive: &ArchiveArgs,
     captured_at_ms: u64,
+) -> OperationReport<String> {
+    let mut events = Vec::new();
+    let result = capture_secured_at_inner(
+        log_dir,
+        bootstrap_server,
+        security,
+        signing,
+        archive,
+        captured_at_ms,
+        &mut events,
+    )
+    .await;
+    OperationReport { result, events }
+}
+
+async fn capture_secured_at_inner(
+    log_dir: Option<&std::path::Path>,
+    bootstrap_server: Option<&str>,
+    security: Option<ClientSecurity>,
+    signing: &CaptureSigningArgs,
+    archive: &ArchiveArgs,
+    captured_at_ms: u64,
+    events: &mut Vec<BackupEvent>,
 ) -> Result<String, BackupError> {
     let store = Archive::open(archive)?;
     let id = capture_id(captured_at_ms);
@@ -229,9 +271,12 @@ async fn capture_secured_at(
             bootstrap,
             security.clone(),
             signing,
-            metadata_snapshot_sha256,
-            rlmm_snapshot_sha256,
-            group_offsets_sha256,
+            CaptureDigests {
+                metadata_snapshot_sha256,
+                rlmm_snapshot_sha256,
+                group_offsets_sha256,
+            },
+            events,
         )
         .await?
         {
@@ -268,19 +313,11 @@ async fn capture_secured_at(
     check_capture_size(MANIFEST, encoded.len() as u64, MAX_MANIFEST_BYTES)?;
     store.put_new(&capture_key(&id, MANIFEST), encoded).await?;
 
-    println!("capture {id}");
-    for artifact in &manifest.artifacts {
-        println!(
-            "  {} <- {} ({} bytes, sha256 {})",
-            artifact.name, artifact.source, artifact.size_bytes, artifact.sha256
-        );
-    }
-    for note in &notes {
-        println!("  NOTE: {note}");
-    }
-    for missing in &absent {
-        println!("  WARNING: {missing}");
-    }
+    events.push(BackupEvent::Capture {
+        manifest,
+        notes,
+        missing: absent,
+    });
     Ok(id)
 }
 
@@ -349,14 +386,19 @@ fn checkpoint_note(bytes: &[u8], now_ms: u64) -> String {
     )
 }
 
+struct CaptureDigests {
+    metadata_snapshot_sha256: Option<Sha256Digest>,
+    rlmm_snapshot_sha256: Option<Sha256Digest>,
+    group_offsets_sha256: Option<Sha256Digest>,
+}
+
 async fn capture_diskless_index(
     store: &Archive,
     bootstrap: &str,
     security: Option<ClientSecurity>,
     signing: &CaptureSigningArgs,
-    metadata_snapshot_sha256: Option<Sha256Digest>,
-    rlmm_snapshot_sha256: Option<Sha256Digest>,
-    group_offsets_sha256: Option<Sha256Digest>,
+    digests: CaptureDigests,
+    events: &mut Vec<BackupEvent>,
 ) -> Result<Option<Vec<u8>>, BackupError> {
     const TOPIC: &str = "__diskless_wal_index";
     const MAX_WAL_OBJECT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -417,9 +459,9 @@ async fn capture_diskless_index(
     let mut capture = capture_projection(log.clone(), &topics, now_ms())
         .await
         .map_err(BackupError::Integrity)?;
-    capture.metadata_snapshot_sha256 = metadata_snapshot_sha256;
-    capture.rlmm_snapshot_sha256 = rlmm_snapshot_sha256;
-    capture.group_offsets_sha256 = group_offsets_sha256;
+    capture.metadata_snapshot_sha256 = digests.metadata_snapshot_sha256;
+    capture.rlmm_snapshot_sha256 = digests.rlmm_snapshot_sha256;
+    capture.group_offsets_sha256 = digests.group_offsets_sha256;
     log.shutdown().await;
     if let (Some(key_id), Some(key_path)) = (
         signing.worm_signing_key_id.as_ref(),
@@ -455,7 +497,7 @@ async fn capture_diskless_index(
         let head = capture
             .seal(claims, &signer)
             .map_err(BackupError::Integrity)?;
-        println!("  diskless-capture WORM head {head}");
+        events.push(BackupEvent::DisklessSealed { head });
     }
     serde_json::to_vec_pretty(&capture)
         .map(Some)
@@ -636,29 +678,31 @@ async fn upload_capped(
     Ok(artifact)
 }
 
-/// Print every capture in the archive, newest last.
+/// Read every capture in the archive, newest last.
 ///
 /// # Errors
 ///
-/// Returns the archive's own error when the listing or a manifest read fails.
-pub async fn list(archive: &ArchiveArgs) -> Result<Vec<String>, BackupError> {
+/// The report result returns the archive's own error when listing fails. Per-manifest read errors are report events.
+pub async fn list(archive: &ArchiveArgs) -> OperationReport<Vec<String>> {
+    let mut events = Vec::new();
+    let result = list_inner(archive, &mut events).await;
+    OperationReport { result, events }
+}
+
+async fn list_inner(
+    archive: &ArchiveArgs,
+    events: &mut Vec<BackupEvent>,
+) -> Result<Vec<String>, BackupError> {
     let store = Archive::open(archive)?;
     let ids = store.child_directories(CAPTURE_ROOT).await?;
     if ids.is_empty() {
-        println!("no captures under {CAPTURE_ROOT}");
+        events.push(BackupEvent::EmptyList);
     }
     for id in &ids {
-        match read_manifest(&store, id).await {
-            Ok(manifest) => {
-                let names: Vec<&str> = manifest
-                    .artifacts
-                    .iter()
-                    .map(|artifact| artifact.name.as_str())
-                    .collect();
-                println!("{id}  {}", names.join(" "));
-            }
-            Err(error) => println!("{id}  UNREADABLE: {error}"),
-        }
+        events.push(BackupEvent::Listed {
+            id: id.clone(),
+            manifest: read_manifest(&store, id).await,
+        });
     }
     Ok(ids.into_iter().collect())
 }
@@ -667,10 +711,20 @@ pub async fn list(archive: &ArchiveArgs) -> Result<Vec<String>, BackupError> {
 ///
 /// # Errors
 ///
-/// Returns [`BackupError::Integrity`] when an artifact's bytes are not the
+/// The report result returns [`BackupError::Integrity`] when an artifact's bytes are not the
 /// bytes the manifest recorded, and the archive's own error when the capture
 /// cannot be read at all.
-pub async fn verify(capture: &str, archive: &ArchiveArgs) -> Result<(), BackupError> {
+pub async fn verify(capture: &str, archive: &ArchiveArgs) -> OperationReport<()> {
+    let mut events = Vec::new();
+    let result = verify_inner(capture, archive, &mut events).await;
+    OperationReport { result, events }
+}
+
+async fn verify_inner(
+    capture: &str,
+    archive: &ArchiveArgs,
+    events: &mut Vec<BackupEvent>,
+) -> Result<(), BackupError> {
     let OpenedCapture {
         store,
         id,
@@ -687,14 +741,17 @@ pub async fn verify(capture: &str, archive: &ArchiveArgs) -> Result<(), BackupEr
             .await?;
         match artifact_problem(artifact, &bytes) {
             Some(problem) => problems.push(problem),
-            None => println!("  {} ok ({} bytes)", artifact.name, artifact.size_bytes),
+            None => events.push(BackupEvent::ArtifactVerified {
+                name: artifact.name.clone(),
+                size_bytes: artifact.size_bytes,
+            }),
         }
     }
     if problems.is_empty() {
-        println!(
-            "capture {id} verified: {} artifacts",
-            manifest.artifacts.len()
-        );
+        events.push(BackupEvent::CaptureVerified {
+            id,
+            artifacts: manifest.artifacts.len(),
+        });
         return Ok(());
     }
     Err(BackupError::Integrity(format!(
@@ -707,7 +764,7 @@ pub async fn verify(capture: &str, archive: &ArchiveArgs) -> Result<(), BackupEr
 ///
 /// # Errors
 ///
-/// Returns [`BackupError::Integrity`] when the captured offsets do not match
+/// The report result returns [`BackupError::Integrity`] when the captured offsets do not match
 /// their recorded digest, [`BackupError::Cluster`] when the cluster refuses a
 /// commit, and the archive's own error when the capture cannot be read.
 pub async fn restore_offsets(
@@ -715,23 +772,26 @@ pub async fn restore_offsets(
     bootstrap_server: &str,
     dry_run: bool,
     archive: &ArchiveArgs,
-) -> Result<usize, BackupError> {
-    restore_offsets_secured(
+) -> OperationReport<usize> {
+    let mut events = Vec::new();
+    let result = restore_offsets_secured_inner(
         capture,
         bootstrap_server,
         None,
         &CaptureTrustArgs::default(),
         dry_run,
         archive,
+        &mut events,
     )
-    .await
+    .await;
+    OperationReport { result, events }
 }
 
 /// Load command-config security and restore one capture's group offsets.
 ///
 /// # Errors
 ///
-/// Returns the same errors as [`restore_offsets`], plus command-config read or
+/// The report result returns the same errors as [`restore_offsets`], plus command-config read or
 /// parse failures.
 pub async fn restore_offsets_configured(
     capture: &str,
@@ -740,25 +800,32 @@ pub async fn restore_offsets_configured(
     trust: &CaptureTrustArgs,
     dry_run: bool,
     archive: &ArchiveArgs,
-) -> Result<usize, BackupError> {
-    restore_offsets_secured(
-        capture,
-        bootstrap_server,
-        security.load().await?,
-        trust,
-        dry_run,
-        archive,
-    )
-    .await
+) -> OperationReport<usize> {
+    let mut events = Vec::new();
+    let result = async {
+        restore_offsets_secured_inner(
+            capture,
+            bootstrap_server,
+            security.load().await?,
+            trust,
+            dry_run,
+            archive,
+            &mut events,
+        )
+        .await
+    }
+    .await;
+    OperationReport { result, events }
 }
 
-async fn restore_offsets_secured(
+async fn restore_offsets_secured_inner(
     capture: &str,
     bootstrap_server: &str,
     security: Option<ClientSecurity>,
     trust: &CaptureTrustArgs,
     dry_run: bool,
     archive: &ArchiveArgs,
+    events: &mut Vec<BackupEvent>,
 ) -> Result<usize, BackupError> {
     let OpenedCapture {
         store,
@@ -780,10 +847,12 @@ async fn restore_offsets_secured(
     if dry_run {
         for group in &offsets.groups {
             for offset in &group.offsets {
-                println!(
-                    "would commit {}: {}-{} = {}",
-                    group.group, offset.topic, offset.partition, offset.offset
-                );
+                events.push(BackupEvent::WouldCommit {
+                    group: group.group.clone(),
+                    topic: offset.topic.clone(),
+                    partition: offset.partition,
+                    offset: offset.offset,
+                });
             }
         }
         return Ok(offsets.offset_count());
@@ -802,7 +871,10 @@ async fn restore_offsets_secured(
             .alter_consumer_group_offsets(&group.group, &admin_offsets(group))
             .await;
         committed += commit_outcome(group, result)?;
-        println!("{}: {} offsets committed", group.group, group.offsets.len());
+        events.push(BackupEvent::OffsetsCommitted {
+            group: group.group.clone(),
+            offsets: group.offsets.len(),
+        });
     }
     Ok(committed)
 }
@@ -969,6 +1041,7 @@ mod tests {
             cli::CaptureTrustArgs,
             manifest::{Artifact, MANIFEST_VERSION, Manifest, sha256_hex},
             offsets::{CommittedOffset, GROUP_OFFSETS_VERSION, GroupOffsets, GroupOffsetsFile},
+            report::BackupEvent,
         },
         assert2::{assert, check},
         krabka_ids::PartitionIndex,
@@ -1088,7 +1161,10 @@ mod tests {
             args,
             store,
         } = archive_fixture();
-        let error = capture(Some(node.path()), None, &args).await.unwrap_err();
+        let error = capture(Some(node.path()), None, &args)
+            .await
+            .result
+            .unwrap_err();
         check!(error.to_string().contains(name));
         // Both local snapshots are read before the first upload, so either
         // refusal leaves the archive untouched.
@@ -1117,15 +1193,15 @@ mod tests {
             super::capture_secured_at(Some(first.path()), None, None, &signing, &archive, 42),
             super::capture_secured_at(Some(second.path()), None, None, &signing, &archive, 42),
         );
-        let left = left.unwrap();
-        let right = right.unwrap();
+        let left = left.result.unwrap();
+        let right = right.result.unwrap();
         check!(left != right);
-        check!(list(&archive).await.unwrap().len() == 2);
+        check!(list(&archive).await.result.unwrap().len() == 2);
         for (id, expected) in [
             (&left, RLMM_BYTES),
             (&right, b"second node snapshot".as_slice()),
         ] {
-            verify(id, &archive).await.unwrap();
+            verify(id, &archive).await.result.unwrap();
             check!(store.get(&capture_key(id, RLMM_SNAPSHOT)).await.unwrap() == expected);
             check!(capture_manifest(&store, id).await.captured_at_ms == 42);
         }
@@ -1146,10 +1222,10 @@ mod tests {
             .await
             .unwrap();
         check!(super::resolve_capture(&store, "latest").await.unwrap() == complete);
-        check!(verify("latest", &args).await.is_ok());
+        check!(verify("latest", &args).await.result.is_ok());
         check!(super::resolve_capture(&store, orphan).await.unwrap() == orphan);
         check!(matches!(
-            verify(orphan, &args).await,
+            verify(orphan, &args).await.result,
             Err(BackupError::ObjectStore(
                 krabka_object_store::ObjectStoreError::NotFound(_)
             ))
@@ -1175,7 +1251,7 @@ mod tests {
         write_offsets_capture(&store, id, b"offsets", b"offsets").await;
         let key = capture_key(id, GROUP_OFFSETS);
         set_file_len(root.path(), &key, super::MAX_GROUP_OFFSETS_BYTES + 1);
-        let error = verify(id, &archive).await.unwrap_err();
+        let error = verify(id, &archive).await.result.unwrap_err();
         check!(
             matches!(error, BackupError::ObjectStore(krabka_object_store::ObjectStoreError::TooLarge { max_bytes, .. }) if max_bytes == super::MAX_GROUP_OFFSETS_BYTES)
         );
@@ -1222,6 +1298,7 @@ mod tests {
         let args = archive_args(archive_root.path());
         let id = capture(Some(node.path()), None, &args)
             .await
+            .result
             .expect("capture the node");
         CapturedNode {
             node,
@@ -1484,6 +1561,7 @@ mod tests {
 
         let error = capture(Some(&log_dir), None, &args)
             .await
+            .result
             .expect_err("a capture of the format-time checkpoint fails");
 
         check!(
@@ -1513,6 +1591,7 @@ mod tests {
 
         let error = capture(Some(log_dir.path()), None, &args)
             .await
+            .result
             .expect_err("a damaged checkpoint fails the capture");
 
         check!(matches!(&error, BackupError::Integrity(_)), "got: {error}");
@@ -1543,6 +1622,7 @@ mod tests {
 
         let id = capture(Some(&log_dir), None, &args)
             .await
+            .result
             .expect("a capture of a restored node succeeds");
 
         let manifest = capture_manifest(&store, &id).await;
@@ -1606,6 +1686,7 @@ mod tests {
 
         let id = capture(Some(log_dir.path()), None, &args)
             .await
+            .result
             .expect("a capture past the format-time checkpoint succeeds");
 
         let manifest = capture_manifest(&store, &id).await;
@@ -1626,6 +1707,7 @@ mod tests {
 
         let id = capture(Some(log_dir.path()), None, &args)
             .await
+            .result
             .expect("a capture that found one input succeeds");
 
         let store = Archive::open(&args).expect("open the archive");
@@ -1641,6 +1723,7 @@ mod tests {
 
         let message = capture(None, None, &args)
             .await
+            .result
             .expect_err("a capture with no source fails")
             .to_string();
         check!(message.contains("pass --log-dir"), "got: {message}");
@@ -1648,6 +1731,7 @@ mod tests {
         let empty = tempfile::tempdir().expect("an empty log dir");
         let message = capture(Some(empty.path()), None, &args)
             .await
+            .result
             .expect_err("a capture that found nothing fails")
             .to_string();
         check!(message.contains("is absent"), "got: {message}");
@@ -1669,6 +1753,7 @@ mod tests {
             &archive_args(archive_root.path()),
         )
         .await
+        .result
         .expect_err("an unreadable snapshot fails the capture");
         assert!(let BackupError::Io(_) = &error, "got: {error}");
     }
@@ -1680,6 +1765,7 @@ mod tests {
 
         let error = capture(None, Some(&address), &archive_args(archive_root.path()))
             .await
+            .result
             .expect_err("a capture cannot read offsets from a cluster that is not there");
         check_unreachable(&error, &address);
     }
@@ -1688,11 +1774,18 @@ mod tests {
     async fn list_names_every_capture_and_says_so_when_there_are_none() {
         let archive_root = tempfile::tempdir().expect("archive root");
         let args = archive_args(archive_root.path());
-        check!(list(&args).await.expect("list an empty archive").is_empty());
+        check!(
+            list(&args)
+                .await
+                .result
+                .expect("list an empty archive")
+                .is_empty()
+        );
 
         let node = node_with_both_inputs();
         let first = capture(Some(node.path()), None, &args)
             .await
+            .result
             .expect("capture the node");
         // A second capture id that sorts after the first, written by hand so
         // the two do not depend on the clock ticking between them.
@@ -1700,7 +1793,9 @@ mod tests {
         let second = "9999999999999999";
         write_offsets_capture(&store, second, &offsets_json(), &offsets_json()).await;
 
-        check!(list(&args).await.expect("list the captures") == vec![first, second.to_owned()]);
+        check!(
+            list(&args).await.result.expect("list the captures") == vec![first, second.to_owned()]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1715,12 +1810,16 @@ mod tests {
             .await
             .expect("write a truncated manifest");
 
+        let report = list(&args).await;
         check!(
-            list(&args)
-                .await
+            report
+                .result
                 .expect("an unreadable manifest is listed, not fatal")
                 == vec!["0000000000000001".to_owned()]
         );
+        assert!(let [BackupEvent::Listed { id, manifest }] = report.events.as_slice());
+        check!(id == "0000000000000001");
+        check!(matches!(manifest, Err(BackupError::Json { .. })));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1732,8 +1831,8 @@ mod tests {
             id,
         } = captured_node().await;
 
-        check!(verify("latest", &args).await.is_ok());
-        check!(verify(&id, &args).await.is_ok());
+        check!(verify("latest", &args).await.result.is_ok());
+        check!(verify(&id, &args).await.result.is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1755,6 +1854,7 @@ mod tests {
 
         let error = verify("latest", &args)
             .await
+            .result
             .expect_err("a truncated artifact fails verification");
         assert!(let BackupError::Integrity(_) = &error, "got: {error}");
         check!(error.to_string().contains(RLMM_SNAPSHOT), "got: {error}");
@@ -1767,15 +1867,18 @@ mod tests {
 
         let error = verify("latest", &args)
             .await
+            .result
             .expect_err("an empty archive has no newest capture");
         assert!(let BackupError::NoSuchCapture(_) = &error, "got: {error}");
 
         let node = node_with_both_inputs();
         capture(Some(node.path()), None, &args)
             .await
+            .result
             .expect("capture the node");
         let error = verify("0000000000000007", &args)
             .await
+            .result
             .expect_err("a capture the archive does not hold");
         assert!(let BackupError::NoSuchCapture(_) = &error, "got: {error}");
         check!(
@@ -1796,11 +1899,20 @@ mod tests {
 
         // The cluster address is one nothing is listening on: a dry run must
         // not reach for it at all.
+        let report = restore_offsets("latest", &closed_address(), true, &args).await;
+        check!(report.result.expect("a dry run reads the capture alone") == 1);
+        assert!(let [BackupEvent::WouldCommit { group, topic, partition, offset }] = report.events.as_slice());
+        let expected = GroupOffsetsFile::from_slice(&offsets, GROUP_OFFSETS).unwrap();
+        let expected_group = &expected.groups[0];
+        let expected_offset = &expected_group.offsets[0];
         check!(
-            restore_offsets("latest", &closed_address(), true, &args)
-                .await
-                .expect("a dry run reads the capture alone")
-                == 1
+            (group.as_str(), topic.as_str(), *partition, *offset)
+                == (
+                    expected_group.group.as_str(),
+                    expected_offset.topic.as_str(),
+                    expected_offset.partition,
+                    expected_offset.offset
+                )
         );
     }
 
@@ -1811,10 +1923,12 @@ mod tests {
         let args = archive_args(archive_root.path());
         capture(Some(node.path()), None, &args)
             .await
+            .result
             .expect("capture the node");
 
         let error = restore_offsets("latest", &closed_address(), true, &args)
             .await
+            .result
             .expect_err("a capture of the two files holds no offsets");
         assert!(let BackupError::NoSuchCapture(_) = &error, "got: {error}");
         check!(error.to_string().contains(GROUP_OFFSETS), "got: {error}");
@@ -1831,6 +1945,7 @@ mod tests {
 
         let error = restore_offsets("latest", &closed_address(), true, &args)
             .await
+            .result
             .expect_err("offsets that do not match the manifest are an integrity failure");
         assert!(let BackupError::Integrity(_) = &error, "got: {error}");
     }
@@ -1847,6 +1962,7 @@ mod tests {
 
         let error = restore_offsets("latest", &closed_address(), true, &args)
             .await
+            .result
             .expect_err("a JSON array is not the captured shape");
         assert!(let BackupError::Json { .. } = &error, "got: {error}");
         check!(error.to_string().contains(GROUP_OFFSETS), "got: {error}");
@@ -1862,6 +1978,7 @@ mod tests {
 
         let error = restore_offsets("latest", &closed_address(), true, &args)
             .await
+            .result
             .expect_err("an offsets file with no version is refused");
         check!(
             let BackupError::UnsupportedVersion { found: None, expected: GROUP_OFFSETS_VERSION, .. } = &error,
@@ -1891,6 +2008,7 @@ mod tests {
 
         let error = restore_offsets("latest", &closed_address(), true, &args)
             .await
+            .result
             .expect_err("a manifest of a later version is refused");
         assert2::assert!(
             let BackupError::UnsupportedVersion {
@@ -1918,6 +2036,7 @@ mod tests {
         // The admin client's bootstrap connection is the first thing to fail.
         let error = restore_offsets("latest", &address, false, &args)
             .await
+            .result
             .expect_err("a commit cannot reach a cluster that is not there");
         check_unreachable(&error, &address);
     }
@@ -1939,6 +2058,7 @@ mod tests {
         check!(
             restore_offsets("latest", &closed_address(), false, &args)
                 .await
+                .result
                 .expect("an empty capture restores nothing")
                 == 0
         );

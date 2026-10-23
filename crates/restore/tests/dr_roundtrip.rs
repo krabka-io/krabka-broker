@@ -250,9 +250,11 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
     // 2. The capture, and the check that it is whole.
     let capture = run::capture(Some(&node_files), Some(&pre_bootstrap), &backup)
         .await
+        .result
         .expect("capture the restore inputs");
     run::verify(&capture, &backup)
         .await
+        .result
         .expect("the capture verifies");
 
     // 3. The disaster. The cluster is gone and so are its disks.
@@ -303,6 +305,7 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
     // 6. The offsets go back, and the group is where it was.
     let committed = run::restore_offsets(&capture, &post_bootstrap, false, &backup)
         .await
+        .result
         .expect("commit the captured offsets");
     check!(committed == 1);
     check!(committed_offset(&post_bootstrap).await == COMMITTED_OFFSET);
