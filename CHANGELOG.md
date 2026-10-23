@@ -213,6 +213,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   from about 36 ms to under 1 µs in the `remote_epoch_index` benchmark (#1616).
 - Remote read-committed fetches skip transaction-index requests when segment
   metadata declares the index empty (#1661).
+- Local tiered storage seeks to requested log ranges and reads only those
+  bytes, keeping bounded archive fetches independent of segment size (#1681).
 - A controller serving a KIP-630 `FetchSnapshot` reads only the requested
   chunk of the checkpoint. It used to read the whole file for every chunk, so
   a transfer of a snapshot of size S in chunks of C read about
