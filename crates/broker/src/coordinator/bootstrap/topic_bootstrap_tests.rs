@@ -18,7 +18,7 @@ use {
         partition_registry::PartitionRegistry,
         producer_state::ProducerState,
         share_coordinator::bootstrap::TOPIC as SHARE_TOPIC,
-        test_support::{peer, principal, request_context},
+        test_support::{peer, principal, request_context, tolerate_starved_heartbeats},
         txn::bootstrap::TOPIC as TXN_TOPIC,
     },
     assert2::{assert, check},
@@ -167,10 +167,12 @@ async fn bootstrap_opens_the_local_partitions_of_an_existing_offsets_topic() {
 async fn internal_topics_are_created_with_kafkas_topic_configs() {
     let dir = tempdir().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
+    tolerate_starved_heartbeats(&mut config);
     // Kafka's default minimum ISR. The single-node fixture lowers it to 1.
     config.transaction_state_min_isr = 2;
     config.share_coordinator.state_topic_min_isr = 2;
     let handle = Broker::start(config).await.expect("start broker");
+    handle.wait_until_broker_alive(handle.node_id()).await;
     let broker = handle.broker_arc_for_test();
     let request = CreateTopicsRequest {
         topics: [OFFSETS_TOPIC, TXN_TOPIC, SHARE_TOPIC]
