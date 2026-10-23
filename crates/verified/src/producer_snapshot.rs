@@ -114,6 +114,8 @@ pub struct ProducerSnapshotEntryFacts {
 }
 
 mod snapshot_transaction_valid;
+#[cfg(test)]
+pub(crate) use snapshot_transaction_valid::take_classifier_visits;
 #[cfg(creusot)]
 pub use snapshot_transaction_valid::{
     is_segment_base, kafka_reload_keeps, kafka_replay_start, kafka_stray_removed,
@@ -121,7 +123,7 @@ pub use snapshot_transaction_valid::{
 };
 pub use snapshot_transaction_valid::{
     producer_snapshot_latest_index, producer_snapshot_reload_keeps,
-    producer_snapshot_reload_log_start, producer_snapshot_stray,
+    producer_snapshot_reload_log_start, producer_snapshot_stray, producer_snapshot_strays,
 };
 
 mod replay_start;

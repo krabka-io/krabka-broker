@@ -188,8 +188,9 @@ pub(crate) fn retain_reload_range(
 pub(crate) fn remove_strays(dir: &Path, segment_bases: &[i64]) -> Result<(), LogError> {
     let snapshots = list(dir)?;
     let offsets: Vec<i64> = snapshots.iter().map(|snapshot| snapshot.offset.0).collect();
-    for (index, snapshot) in snapshots.into_iter().enumerate() {
-        if kernel::producer_snapshot_stray(&offsets, index, segment_bases) {
+    let stray = kernel::producer_snapshot_strays(&offsets, segment_bases);
+    for (snapshot, stray) in snapshots.into_iter().zip(stray) {
+        if stray {
             fs::remove_file(snapshot.path)?;
         }
     }
@@ -969,9 +970,12 @@ mod tests {
     /// Kafka's `removeStraySnapshots`, run at log load with every local
     /// segment's base offset.
     #[yare::parameterized(
+        no_snapshots = { vec![], vec![0, 4, 8], vec![] },
         snapshots_at_every_base = { vec![0, 4, 8], vec![0, 4, 8], vec![0, 4, 8] },
         only_a_nonnewest_stray = { vec![2, 4, 6], vec![0, 4, 8], vec![4] },
+        strays_below_and_between_bases = { vec![1, 3, 5, 7], vec![2, 4, 6, 8], vec![] },
         preserve_newest_snapshot_above_bases = { vec![4, 9, 11], vec![0, 4, 8], vec![4, 11] },
+        newest_at_greatest_base_is_not_exceptional = { vec![3, 8], vec![0, 4, 8], vec![8] },
         no_segments_keeps_newest_snapshot = { vec![3, 7], vec![], vec![7] },
     )]
     fn remove_strays_keeps_segment_bases_and_the_newest_snapshot_above_them(

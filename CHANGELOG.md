@@ -47,6 +47,10 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- Producer snapshot cleanup classifies all snapshots in one ordered pass over
+  snapshot offsets and segment bases, preserving Kafka's newest-snapshot
+  exception without repeated full scans (#1676).
+
 - The RF3 regression contract is now `rf3-regression-v2`. It raises the
   variance budget of records/s from 10% to 15%, and of p99 latency from 25% to
   50%. The first measured run of `rf3-regression-v1` exceeded both, and

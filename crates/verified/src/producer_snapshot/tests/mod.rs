@@ -2,6 +2,7 @@ use super::{
     ProducerReloadRange, ProducerSnapshotEntryFacts, producer_snapshot_entry_valid,
     producer_snapshot_latest_index, producer_snapshot_reload_keeps,
     producer_snapshot_reload_log_start, producer_snapshot_replay_start, producer_snapshot_stray,
+    producer_snapshot_strays, take_classifier_visits,
 };
 
 const RANGE: ProducerReloadRange = ProducerReloadRange {
@@ -13,3 +14,5 @@ const RANGE: ProducerReloadRange = ProducerReloadRange {
 mod reload_log_start_follows_kafka_log_loader;
 
 mod replay_starts_at_the_loaded_snapshot_or_the_log_start;
+
+mod stray_snapshots_are_classified_in_one_ordered_walk;
