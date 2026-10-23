@@ -112,6 +112,18 @@ pub(crate) fn apply_acknowledgements<'b>(
     codes::NONE
 }
 
+fn has_live_ack_offsets(
+    state: &AcquisitionState,
+    first: i64,
+    last: i64,
+    types: &[i8],
+) -> Result<bool, i16> {
+    if first > last || types.is_empty() {
+        return Err(codes::INVALID_REQUEST);
+    }
+    Ok(state.ack_bounds(Offset(first), Offset(last))?.is_some())
+}
+
 /// Applies one acknowledgement batch to the state machine.
 ///
 /// The batch as a whole must lie inside the records that were handed out, as
@@ -140,10 +152,7 @@ fn apply_one_ack(
         renewal,
         max_attempts,
     } = application;
-    if first > last || types.is_empty() {
-        return Err(codes::INVALID_REQUEST);
-    }
-    if st.ack_bounds(Offset(first), Offset(last))?.is_none() {
+    if !has_live_ack_offsets(st, first, last, types)? {
         return Ok(());
     }
     let apply = |st: &mut AcquisitionState, run_first: i64, run_last: i64, ack_type: i8| {
@@ -300,10 +309,7 @@ mod tests {
         last: i64,
         types: &[i8],
     ) -> Result<(), i16> {
-        if first > last || types.is_empty() {
-            return Err(codes::INVALID_REQUEST);
-        }
-        if st.ack_bounds(Offset(first), Offset(last))?.is_none() {
+        if !has_live_ack_offsets(st, first, last, types)? {
             return Ok(());
         }
         let range_len = last
