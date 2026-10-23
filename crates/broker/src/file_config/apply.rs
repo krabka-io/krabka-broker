@@ -54,23 +54,15 @@ impl FileConfig {
     /// must NOT pass `--listen-addr` or `--advertised-listener`. The
     /// binary entrypoint enforces this (see `bin/broker.rs`); this
     /// method just merges what it's given.
-    // Linear config-load pipeline; each arm is its own validator construction —
-    // extraction obscures the dispatch shape.
-    //
-    // # Errors
-    //
-    // * [`FileConfigError::MissingSection`] when `[authorization] type = "opa"`
-    //   is set without the required `[authorization.opa]` subtable.
-    // * [`FileConfigError::OpaConfig`] when [`crate::authorizer::opa::OpaAuthorizer::new`]
-    //   rejects the resolved knobs (zero cache size, no tokio runtime, etc.).
-    // * [`FileConfigError::SchemaRegistryConfig`] when
-    //   [`crate::schema_validation::SchemaValidator::new`] rejects the resolved
-    //   `[schema_registry]` knobs (zero cache size).
-    // * [`FileConfigError::OperatorKeys`] when an `[[operator_keys]]` entry is
-    //   unloadable, or when `[freeze]` / `[break_glass]` demands a signature
-    //   that no configured key can verify.
+    /// Authorization and schema-registry settings are resolved without building
+    /// their clients or reading registry secrets. Apply higher-precedence inputs
+    /// before starting the broker; [`crate::Broker::start`] validates the final
+    /// configuration and assembles these clients before serving.
+    ///
     /// # Errors
-    /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
+    ///
+    /// Returns an error for invalid file values, missing required sections, or
+    /// failures loading resources owned by other file sections.
     pub fn apply_to(self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         self.apply_to_inner(cfg, true)
     }

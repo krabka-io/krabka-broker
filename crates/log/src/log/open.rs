@@ -12,6 +12,7 @@ use {
             ControlBatchKind, TransactionMarkerFlags, batch_control_marker_coordinator_epoch,
             control_batch_kind, transaction_marker_flags,
         },
+        pending_transactions::PendingTransactions,
     },
     crate::{
         config::LogConfig,
@@ -235,7 +236,7 @@ impl Log {
             // dirty until the first pass says otherwise.
             clean_prefix_segments: 0,
             lso,
-            pending: HashMap::new(),
+            pending: PendingTransactions::default(),
             verification_states: HashMap::new(),
             unreplicated: BTreeMap::new(),
             pending_stamp_ranges: HashMap::new(),
@@ -452,8 +453,8 @@ impl Log {
             if krabka_verified::transaction_marker_closes(
                 is_abort,
                 is_commit,
-                self.pending.contains_key(&producer_id),
-            ) && let Some(first_offset) = self.pending.remove(&producer_id)
+                self.pending.contains_key(producer_id),
+            ) && let Some(first_offset) = self.pending.remove(producer_id)
             {
                 self.unreplicated.insert(
                     first_offset,
@@ -467,8 +468,7 @@ impl Log {
             }
         } else if batch.attributes.is_transactional() {
             self.pending
-                .entry(producer_id)
-                .or_insert(Offset(batch.base_offset));
+                .insert_first(producer_id, Offset(batch.base_offset));
         }
         Ok(())
     }
@@ -517,7 +517,7 @@ impl Log {
                     None => {
                         if batch.attributes.is_transactional()
                             && producer_id.get() >= 0
-                            && self.pending.contains_key(&producer_id)
+                            && self.pending.contains_key(producer_id)
                         {
                             self.pending_stamp_ranges
                                 .entry(producer_id)

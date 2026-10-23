@@ -19,7 +19,8 @@ use {
     krabka_remote_storage::{
         ObjectEntry, TopicIdPartition,
         diskless::{
-            CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture, parse_wal_object,
+            capture::{CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture},
+            object::parse_wal_object,
         },
     },
     object_store::path::Path as ObjectPath,

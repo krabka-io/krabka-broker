@@ -210,8 +210,7 @@ impl StampIndex {
     /// # Errors
     /// Returns an error when appending to or syncing the file fails.
     pub fn append(&mut self, entry: StampEntry) -> Result<(), LogError> {
-        let StampCoordinates { bases, lasts } = Self::coordinates(&self.entries);
-        if let Some(position) = Self::exact_range_index(&bases, &lasts, entry) {
+        if let Some(position) = self.entry_position(entry) {
             if self.entries[position] == entry {
                 return Ok(());
             }
@@ -222,12 +221,7 @@ impl StampIndex {
                 self.path.display()
             )));
         }
-        let Some(position) = krabka_verified::stamp_range_insertion_index(
-            &bases,
-            &lasts,
-            entry.base_offset.0,
-            entry.last_offset.0,
-        ) else {
+        let Some(position) = Self::insertion_position(&self.entries, entry) else {
             if entry.last_offset < entry.base_offset {
                 return Err(LogError::InvalidArgument(format!(
                     "stamp range {}..={} is inverted",
@@ -262,17 +256,46 @@ impl StampIndex {
     }
 
     fn entry_position(&self, entry: StampEntry) -> Option<usize> {
-        let StampCoordinates { bases, lasts } = Self::coordinates(&self.entries);
-        Self::exact_range_index(&bases, &lasts, entry)
+        Self::exact_range_index(&self.entries, entry.base_offset, entry.last_offset)
     }
 
-    fn exact_range_index(bases: &[i64], lasts: &[i64], entry: StampEntry) -> Option<usize> {
-        krabka_verified::exact_stamp_range_index(
-            bases,
-            lasts,
-            entry.base_offset.0,
-            entry.last_offset.0,
-        )
+    /// The entries are sorted and disjoint: open validates this invariant,
+    /// insertion checks both adjacent ranges, and other mutations only
+    /// replace stamps or remove ranges. The general verified lookup kernels
+    /// remain the oracle for callers that do not have that invariant.
+    fn exact_range_index(entries: &[StampEntry], first: Offset, last: Offset) -> Option<usize> {
+        if entries.last().is_none_or(|entry| entry.last_offset < first) {
+            return None;
+        }
+        entries
+            .binary_search_by_key(&first, |entry| entry.base_offset)
+            .ok()
+            .filter(|&position| entries[position].last_offset == last)
+    }
+
+    fn insertion_position(entries: &[StampEntry], entry: StampEntry) -> Option<usize> {
+        if entry.last_offset < entry.base_offset {
+            return None;
+        }
+        // Increasing, disjoint batches are the ordinary append path. They
+        // need no search or temporary parallel-coordinate allocation.
+        if entries
+            .last()
+            .is_none_or(|last| last.last_offset < entry.base_offset)
+        {
+            return Some(entries.len());
+        }
+        let position = entries.partition_point(|known| known.base_offset < entry.base_offset);
+        if position > 0 && entries[position - 1].last_offset >= entry.base_offset {
+            return None;
+        }
+        if entries
+            .get(position)
+            .is_some_and(|next| entry.last_offset >= next.base_offset)
+        {
+            return None;
+        }
+        Some(position)
     }
 
     /// Insert a committed transactional range or replace the same exact
@@ -319,10 +342,7 @@ impl StampIndex {
     pub fn remove_ranges(&mut self, ranges: &[OffsetRange]) -> Result<(), LogError> {
         let mut entries = self.entries.clone();
         for &OffsetRange { first, last } in ranges {
-            let StampCoordinates { bases, lasts } = Self::coordinates(&entries);
-            if let Some(position) =
-                krabka_verified::exact_stamp_range_index(&bases, &lasts, first.0, last.0)
-            {
+            if let Some(position) = Self::exact_range_index(&entries, first, last) {
                 entries.remove(position);
             }
         }
@@ -370,9 +390,11 @@ impl StampIndex {
     /// range contains `offset`, or `None` when no entry covers it.
     #[must_use]
     pub fn stamp_for_offset(&self, offset: Offset) -> Option<u64> {
-        let StampCoordinates { bases, lasts } = Self::coordinates(&self.entries);
-        krabka_verified::covering_stamp_range_index(&bases, &lasts, offset.0)
-            .map(|index| self.entries[index].stamp)
+        let after = self
+            .entries
+            .partition_point(|entry| entry.base_offset <= offset);
+        let entry = self.entries.get(after.checked_sub(1)?)?;
+        (offset <= entry.last_offset).then_some(entry.stamp)
     }
 }
 
@@ -385,6 +407,7 @@ mod tests {
             index::{IndexFixture, index_fixture},
             test_support::stamp_entry,
         },
+        std::sync::atomic::{AtomicBool, AtomicUsize, Ordering},
         tempfile::TempDir,
     };
 
@@ -406,6 +429,179 @@ mod tests {
             bytes.extend_from_slice(StampEntryRaw::new(entry).as_bytes());
         }
         std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn ordered_searches_match_the_general_verified_oracles() {
+        for length in 0..20 {
+            let entries: Vec<_> = (0..length)
+                .map(|number| stamp_entry(number * 5 - 40, number * 5 - 38, 1))
+                .collect();
+            let StampCoordinates { bases, lasts } = StampIndex::coordinates(&entries);
+            assert2::assert!(krabka_verified::stamp_ranges_valid(&bases, &lasts));
+            let IndexFixture {
+                dir: _dir, index, ..
+            } = index_with(&entries);
+            for first in -45..65 {
+                let expected_stamp =
+                    krabka_verified::covering_stamp_range_index(&bases, &lasts, first)
+                        .map(|position| entries[position].stamp);
+                assert2::assert!(index.stamp_for_offset(Offset(first)) == expected_stamp);
+                for last in -45..65 {
+                    let entry = stamp_entry(first, last, 1);
+                    assert2::assert!(
+                        StampIndex::exact_range_index(&entries, Offset(first), Offset(last))
+                            == krabka_verified::exact_stamp_range_index(
+                                &bases, &lasts, first, last
+                            )
+                    );
+                    assert2::assert!(
+                        StampIndex::insertion_position(&entries, entry)
+                            == krabka_verified::stamp_range_insertion_index(
+                                &bases, &lasts, first, last
+                            )
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sequential_and_interleaved_upserts_keep_the_same_v0_bytes() {
+        let IndexFixture {
+            dir: _dir,
+            path,
+            mut index,
+        } = index_with(&[]);
+        let mut expected = Vec::new();
+        for number in 0..100 {
+            let entry = stamp_entry(number * 3, number * 3 + 1, 10);
+            index.upsert(entry).unwrap();
+            expected.push(entry);
+        }
+        // Replace older append-time stamps and insert late transactional
+        // ranges into the gaps without changing canonical ordering.
+        for number in (0..100).rev() {
+            index
+                .upsert(stamp_entry(number * 3, number * 3 + 1, 20))
+                .unwrap();
+            index
+                .upsert(stamp_entry(number * 3 + 2, number * 3 + 2, 30))
+                .unwrap();
+        }
+        expected = expected
+            .into_iter()
+            .flat_map(|mut entry| {
+                entry.stamp = 20;
+                [
+                    entry,
+                    stamp_entry(entry.last_offset.0 + 1, entry.last_offset.0 + 1, 30),
+                ]
+            })
+            .collect();
+        assert2::assert!(index.entries() == expected);
+        assert2::assert!(StampIndex::open(path.clone()).unwrap().entries() == expected);
+        let mut bytes = STAMP_INDEX_VERSION.to_be_bytes().to_vec();
+        for entry in &expected {
+            bytes.extend_from_slice(StampEntryRaw::new(*entry).as_bytes());
+        }
+        // The last middle insert appends physically; a retained-entry rewrite
+        // canonicalizes the file just as the old implementation does.
+        index.truncate_from(Offset(299)).unwrap();
+        expected.pop();
+        bytes.truncate(bytes.len() - ENTRY_BYTES);
+        assert2::assert!(index.entries() == expected);
+        assert2::assert!(std::fs::read(path).unwrap() == bytes);
+    }
+
+    #[test]
+    fn uncertain_sync_retry_is_canonical_after_reopen() {
+        #[derive(Debug)]
+        struct FailSyncOnce(AtomicBool);
+        impl LogIo for FailSyncOnce {
+            fn sync_file(&self, _target: IoTarget, file: &std::fs::File) -> std::io::Result<()> {
+                if self.0.swap(false, Ordering::SeqCst) {
+                    Err(std::io::Error::other("injected uncertain stamp sync"))
+                } else {
+                    file.sync_data()
+                }
+            }
+        }
+        let IndexFixture {
+            dir: _dir,
+            path,
+            mut index,
+        } = index_with(&[]);
+        let first = stamp_entry(0, 2, 100);
+        index.append(first).unwrap();
+        index.set_io(Arc::new(FailSyncOnce(AtomicBool::new(true))));
+        let second = stamp_entry(5, 8, 200);
+        assert2::assert!(let Err(LogError::Io(_)) = index.upsert(second));
+        assert2::assert!(index.entries() == [first]);
+        index.upsert(second).unwrap();
+        assert2::assert!(StampIndex::open(path).unwrap().entries() == [first, second]);
+    }
+
+    #[test]
+    fn searches_preserve_i64_boundary_ranges() {
+        let entries = [
+            stamp_entry(i64::MIN, i64::MIN + 1, 1),
+            stamp_entry(i64::MAX - 1, i64::MAX, 2),
+        ];
+        let IndexFixture {
+            dir: _dir, index, ..
+        } = index_with(&entries);
+        for (offset, expected) in [(i64::MIN, Some(1)), (0, None), (i64::MAX, Some(2))] {
+            assert2::assert!(index.stamp_for_offset(Offset(offset)) == expected);
+        }
+        assert2::assert!(
+            StampIndex::insertion_position(&entries, stamp_entry(-1, 1, 3)) == Some(1)
+        );
+        assert2::assert!(
+            StampIndex::insertion_position(&entries, stamp_entry(i64::MIN, i64::MAX, 3)).is_none()
+        );
+    }
+
+    #[yare::parameterized(
+        hundred = { 100 },
+        thousand = { 1_000 },
+        ten_thousand = { 10_000 },
+    )]
+    fn sequential_upserts_append_one_fixed_width_entry_each(ranges: i64) {
+        #[derive(Debug, Default)]
+        struct CountSyncs(AtomicUsize);
+        impl LogIo for CountSyncs {
+            fn sync_file(&self, _target: IoTarget, _file: &std::fs::File) -> std::io::Result<()> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                // This scaling regression measures index operations and
+                // exact file bytes, excluding device fsync latency.
+                Ok(())
+            }
+        }
+        let IndexFixture {
+            dir: _dir,
+            path,
+            mut index,
+        } = index_with(&[]);
+        let io = Arc::new(CountSyncs::default());
+        index.set_io(io.clone());
+        for number in 0..ranges {
+            index
+                .upsert(stamp_entry(
+                    number * 3,
+                    number * 3 + 1,
+                    u64::try_from(number).unwrap(),
+                ))
+                .unwrap();
+        }
+        let count = usize::try_from(ranges).unwrap();
+        assert2::assert!(index.entries().len() == count);
+        assert2::assert!(io.0.load(Ordering::Relaxed) == count);
+        assert2::assert!(
+            std::fs::metadata(&path).unwrap().len()
+                == u64::try_from(HEADER_BYTES + ENTRY_BYTES * count).unwrap()
+        );
+        assert2::assert!(StampIndex::open(path).unwrap().entries() == index.entries());
     }
 
     /// The two entries the golden fixture holds, in offset order.

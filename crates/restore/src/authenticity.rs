@@ -7,7 +7,7 @@ use {
     krabka_remote_storage::{
         AuthenticatedArchive, ObjectEntry, Sha256Digest, TrustedManifestKeys, VerifyRequest,
         authenticate_archive,
-        diskless::{CAPTURE_HEAD_NAME, DisklessWalCapture},
+        diskless::capture::{CAPTURE_HEAD_NAME, DisklessWalCapture},
         manifest_head,
     },
     krabka_remote_storage_topic::Snapshot,
@@ -86,7 +86,7 @@ pub(super) struct AuthenticatedSnapshots {
 
 async fn authenticate_snapshots(
     args: &RestoreArgs,
-    capture: Option<&krabka_remote_storage::diskless::DisklessWalCapture>,
+    capture: Option<&DisklessWalCapture>,
     authenticated_restore: bool,
 ) -> Result<AuthenticatedSnapshots, RestoreError> {
     let metadata = authenticate_captured_snapshot(

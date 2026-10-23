@@ -1,7 +1,8 @@
 //! Diskless WAL offset-to-object index records and in-memory projection.
 
 pub(crate) use krabka_remote_storage::diskless::{
-    WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexEntry, WalIndexKey,
+    WalIndexEntry,
+    index::{WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexKey},
 };
 use {
     krabka_verified::{

@@ -121,10 +121,9 @@ mod tests {
         crate::{
             authorizer::{AuthorizationRequest, opa::OpaAuthorizer},
             config::BrokerConfig,
-            file_config::test_support::configured_unwrap_parse,
+            file_config::{FileConfigError, test_support::configured_unwrap_parse},
             test_support::{peer, sasl_principal},
         },
-        assert2::assert,
         krabka_units::{Time, convert::TimeExt as _},
     };
 
@@ -155,8 +154,8 @@ super_users = ["User:admin", "User:ANONYMOUS", "operator"]
                 "operator".to_string(),
             ]
             .into();
-            assert!(cfg.super_users == expected, "{case}");
-            assert!(cfg.validate().is_ok(), "{case}");
+            assert2::assert!(cfg.super_users == expected, "{case}");
+            assert2::assert!(cfg.validate().is_ok(), "{case}");
         }
     }
 
@@ -169,7 +168,7 @@ super_users = ["operator", "admin"]
 
         let expected: std::collections::HashSet<String> =
             ["operator".to_string(), "admin".to_string()].into();
-        assert!(cfg.super_users == expected);
+        assert2::assert!(cfg.super_users == expected);
     }
     // `[authorization]` TOML section → `Arc<dyn Authorizer>`.
 
@@ -189,125 +188,102 @@ super_users = ["operator", "admin"]
     }
 
     #[test]
-    fn authorization_section_simple_builds_simple_acl_authorizer() {
-        use {crate::authorizer::AuthorizationResult, krabka_metadata::MetadataImage};
-
-        let toml = r#"
+    fn authorization_section_resolves_super_users_without_building_an_authorizer() {
+        let cfg = configured_unwrap_parse(
+            r#"
+super_users = ["top-level"]
 [authorization]
 type = "simple"
-super_users = ["admin"]
-"#;
-        let cfg = configured_unwrap_parse(toml).unwrap();
+super_users = ["User:admin"]
+"#,
+        )
+        .unwrap();
+        assert2::assert!(cfg.super_users == ["admin".to_owned()].into());
+        let authorization = cfg
+            .authorization_config
+            .as_ref()
+            .expect("resolved authorization");
+        assert2::assert!(authorization.authz_type == AuthzType::Simple);
+        assert2::assert!(!authorization.allow_everyone_if_no_acl_found);
+        assert2::assert!(!cfg.authorizer.is_configured());
+    }
 
-        assert!(
-            cfg.super_users.contains("admin"),
-            "[authorization].super_users must populate BrokerConfig.super_users for act-as parity"
-        );
-        // `admin` is a super-user → bypass returns Allow even with an
-        // empty MetadataImage (no ACLs). This is the SimpleAclAuthorizer
-        // contract; AllowAllAuthorizer would also Allow, but the
-        // default-deny SimpleAcl behavior is exercised by the
-        // explicit `type = "simple"` branch's own unit tests.
-        let img = MetadataImage::new(uuid::Uuid::nil());
-        let admin = test_principal("admin");
-        let host = peer();
-        let req = topic_read_request(&admin, &host);
-        assert!(cfg.authorizer.authorize(&img, &req) == AuthorizationResult::Allow);
-
-        // Non-super-user with no matching ACL → Deny (proves we got
-        // SimpleAcl, not AllowAll).
-        let alice = test_principal("alice");
-        let req_alice = topic_read_request(&alice, &host);
-        assert!(
-            cfg.authorizer.authorize(&img, &req_alice) == AuthorizationResult::Deny,
-            "type=simple must default-deny non-super-users with no matching ACL"
+    #[yare::parameterized(
+        omitted = { "", false },
+        deny = { "allow_everyone_if_no_acl_found = false", false },
+        allow = { "allow_everyone_if_no_acl_found = true", true },
+    )]
+    fn allow_everyone_if_no_acl_found_is_resolved(setting: &str, expected: bool) {
+        let cfg =
+            configured_unwrap_parse(&format!("[authorization]\ntype = \"simple\"\n{setting}\n"))
+                .unwrap();
+        assert2::assert!(
+            cfg.authorization_config
+                .expect("resolved authorization")
+                .allow_everyone_if_no_acl_found
+                == expected
         );
     }
 
-    /// #650: `allow_everyone_if_no_acl_found` defaults to `false`
-    /// (Kafka's `allow.everyone.if.no.acl.found` default), and when set
-    /// `true` in the TOML it flows through to the built
-    /// `SimpleAclAuthorizer` and allows a non-super-user with no matching
-    /// ACL for the resource.
     #[test]
-    fn allow_everyone_if_no_acl_found_toml_flows_to_simple_acl_authorizer() {
-        use {crate::authorizer::AuthorizationResult, krabka_metadata::MetadataImage};
-
-        let img = MetadataImage::new(uuid::Uuid::nil());
-        let alice = test_principal("alice");
-        let host = peer();
-        let req = topic_read_request(&alice, &host);
-
-        let cases = [
-            (
-                "omitted defaults to false",
-                r#"
-[authorization]
-type = "simple"
-"#,
-                AuthorizationResult::Deny,
-            ),
-            (
-                "explicit false",
-                r#"
-[authorization]
-type = "simple"
-allow_everyone_if_no_acl_found = false
-"#,
-                AuthorizationResult::Deny,
-            ),
-            (
-                "explicit true",
-                r#"
-[authorization]
-type = "simple"
-allow_everyone_if_no_acl_found = true
-"#,
-                AuthorizationResult::Allow,
-            ),
-        ];
-        for (case, toml, expected) in cases {
-            let cfg = configured_unwrap_parse(toml).unwrap();
-            assert!(cfg.authorizer.authorize(&img, &req) == expected, "{case}");
-        }
-    }
-    #[test]
-    fn authorization_section_opa_builds_opa_authorizer() {
-        use {crate::authorizer::AuthorizationResult, krabka_metadata::MetadataImage};
-
-        // `OpaAuthorizer::new` captures `Handle::try_current()` — needs
-        // an active tokio runtime. `Runtime::new()` defaults to
-        // multi-thread, which the OPA `block_in_place` bridge requires
-        // for any actual HTTP call (super-user bypass below sidesteps
-        // that).
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let toml = r#"
+    fn authorization_section_opa_resolves_without_a_tokio_runtime() {
+        let cfg = configured_unwrap_parse(
+            r#"
 [authorization]
 type = "opa"
-super_users = ["operator"]
-
+super_users = ["User:operator"]
 [authorization.opa]
 url = "http://opa.invalid:8181/v1/data/k/a"
 allow_on_error = false
 maximum_cache_size = 100
 expire_after_ms = 60000
-"#;
-            let cfg = configured_unwrap_parse(toml).unwrap();
+"#,
+        )
+        .unwrap();
+        assert2::assert!(cfg.super_users == ["operator".to_owned()].into());
+        let authorization = cfg
+            .authorization_config
+            .as_ref()
+            .expect("resolved authorization");
+        assert2::assert!(authorization.authz_type == AuthzType::Opa);
+        assert2::assert!(
+            authorization.opa
+                == Some(FileOpaConfig {
+                    url: "http://opa.invalid:8181/v1/data/k/a".to_owned(),
+                    allow_on_error: false,
+                    maximum_cache_size: 100,
+                    expire_after_ms: 60_000,
+                })
+        );
+        assert2::assert!(!cfg.authorizer.is_configured());
+        assert2::assert!(cfg.validate().is_ok());
+    }
 
-            assert!(cfg.super_users.contains("operator"));
+    #[test]
+    fn missing_opa_section_keeps_the_diagnostic() {
+        let error = configured_unwrap_parse("[authorization]\ntype = \"opa\"\n")
+            .expect_err("missing OPA section");
+        assert2::assert!(matches!(
+            error,
+            FileConfigError::MissingSection(section)
+                if section == "[authorization.opa]"
+        ));
+    }
 
-            // Smoke-check via the super-user bypass — no HTTP call is
-            // made (and `opa.invalid` deliberately doesn't resolve).
-            let img = MetadataImage::new(uuid::Uuid::nil());
-            let operator = test_principal("operator");
-            let host = peer();
-            let req = topic_read_request(&operator, &host);
-            assert!(
-                cfg.authorizer.authorize(&img, &req) == AuthorizationResult::Allow,
-                "OPA super-user bypass must short-circuit before any HTTP call"
-            );
-        });
+    #[yare::parameterized(
+        cache = { "maximum_cache_size = 0", "ZeroCache" },
+        zero_ttl = { "expire_after_ms = 0", "InvalidCacheTtl" },
+        negative_ttl = { "expire_after_ms = -1", "InvalidCacheTtl" },
+    )]
+    fn invalid_opa_scalars_fail_without_a_runtime(setting: &str, expected: &str) {
+        let error = configured_unwrap_parse(&format!(
+            "[authorization]\ntype = \"opa\"\n[authorization.opa]\nurl = \"http://opa.invalid\"\n{setting}"
+        ))
+        .expect_err("invalid OPA scalar");
+        assert2::assert!(matches!(
+            error,
+            FileConfigError::OpaConfig(message) if message == expected
+        ));
     }
     #[test]
     fn opa_allow_on_error_defaults_to_fail_closed_when_omitted() {
@@ -319,7 +295,7 @@ maximum_cache_size = 100
 expire_after_ms = 60000
 "#;
         let opa: FileOpaConfig = toml::from_str(toml).unwrap();
-        assert!(!opa.allow_on_error, "allow_on_error must default to false");
+        assert2::assert!(!opa.allow_on_error, "allow_on_error must default to false");
 
         // And the built authorizer must Deny on OPA error (fail-closed).
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -343,7 +319,7 @@ expire_after_ms = 60000
             let p = test_principal("alice");
             let host = peer();
             let req = topic_read_request(&p, &host);
-            assert!(
+            assert2::assert!(
                 auth.authorize(&img, &req) == AuthorizationResult::Deny,
                 "OPA outage with default allow_on_error must fail closed (Deny)"
             );
@@ -356,8 +332,8 @@ url = "http://opa.invalid:8181/v1/data/k/a"
 "#;
         let opa: FileOpaConfig = toml::from_str(toml).unwrap();
 
-        assert!(opa.maximum_cache_size == 50_000);
-        assert!(opa.expire_after_ms == 3_600_000);
+        assert2::assert!(opa.maximum_cache_size == 50_000);
+        assert2::assert!(opa.expire_after_ms == 3_600_000);
     }
     #[test]
     fn authorization_section_absent_defaults_to_allow_all() {
@@ -372,6 +348,6 @@ url = "http://opa.invalid:8181/v1/data/k/a"
         let anyone = test_principal("anyone");
         let check_req = topic_read_request(&anyone, &peer_host);
         let auth_res = cfg.authorizer.authorize(&img, &check_req);
-        assert!(auth_res == AuthorizationResult::Allow);
+        assert2::assert!(auth_res == AuthorizationResult::Allow);
     }
 }

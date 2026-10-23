@@ -247,7 +247,7 @@ pub(super) struct Term {
 /// The serialized operation and leadership guards of one active state
 /// partition, and the term that the partition serves.
 pub(super) struct Active<'a> {
-    _led: RwLockReadGuard<'a, LeaderPartitions>,
+    leadership: RwLockReadGuard<'a, LeaderPartitions>,
     _operation: OwnedMutexGuard<()>,
     pub(super) term: Term,
 }
@@ -271,6 +271,10 @@ pub(crate) struct ShareCoordinator {
     pub(crate) partitions: Arc<PartitionRegistry>,
     /// Live in-memory state: `(group, topicId, partition)` → locked state.
     state: DashMap<ShareStateKey3, Arc<Mutex<SharePartitionState>>>,
+    /// Live membership changes by state partition. Background jobs compare
+    /// these revisions under the operation guard before using collected
+    /// keys. Leadership generations separately fence replay and unload.
+    key_revisions: DashMap<PartitionIndex, AtomicU64>,
     /// The `__share_group_state` partitions this broker leads, with the load
     /// status of each.
     leader_partitions: RwLock<LeaderPartitions>,
@@ -316,6 +320,7 @@ impl ShareCoordinator {
             node_id,
             partitions,
             state: DashMap::new(),
+            key_revisions: DashMap::new(),
             leader_partitions: RwLock::new(HashMap::new()),
             operation_locks: DashMap::new(),
             uncertain_appends: DashMap::new(),
@@ -328,6 +333,21 @@ impl ShareCoordinator {
 
     /// The current time in milliseconds since the epoch.
     fn now_ms(&self) -> i64 { epoch_millis(self.wall_clock.now()) }
+
+    fn state_key_revision(&self, partition: PartitionIndex) -> u64 {
+        self.key_revisions
+            .get(&partition)
+            .map_or(0, |revision| revision.load(Ordering::Acquire))
+    }
+
+    /// Runs after the map change, before releasing the shard operation
+    /// guard, so a queued job cannot accept a stale key list.
+    fn note_state_key_change(&self, partition: PartitionIndex) {
+        self.key_revisions
+            .entry(partition)
+            .or_default()
+            .fetch_add(1, Ordering::Release);
+    }
 
     /// Wait for an indeterminate append or a client retry to request a
     /// bounded replay against the supervisor's current metadata image.
@@ -509,7 +529,7 @@ impl ShareCoordinator {
                 leader_epoch,
                 ..
             }) => Ok(Active {
-                _led: led,
+                leadership: led,
                 _operation: operation,
                 term: Term {
                     partition: state_partition,

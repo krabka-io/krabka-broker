@@ -47,6 +47,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- Appending to a partition with open transactions reuses indexed transaction
+  bounds instead of collecting every pending start to refresh the last stable
+  offset (#1715).
 - Scheduled delivery checks over archived segments buffer bounded byte ranges
   instead of fetching each batch header separately, reducing remote requests for
   ListOffsets LATEST and retention scans (#1682).
@@ -56,6 +59,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   [Performance budget results](docs/operations/performance-budget-results.md#calibration)
   records the calibration runs. Every materiality floor and spread multiplier
   is unchanged (#1395).
+- Bucket share coordinator background-job keys once per sweep across active
+  state partitions, refreshing a shard after load or membership changes (#1717).
 - Wide ShareFetch sessions now index partition membership and cached response
   state, and rotate records-bearing partitions in bounded passes rather than
   repeatedly scanning and shifting the ordered session list (#1678).
@@ -108,6 +113,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   the broker and log suites.
 - Regular KRaft metadata checkpoints run in a background worker while the
   controller continues processing events (#1659).
+- Skip regex subscriber aggregation when a consumer heartbeat is inside the
+  minimum resolution refresh interval, including a retained regex subscription
+  (#1716).
 - Consumer and share coordinators reuse an immutable metadata projection on
   repeated reads of the same controller image, avoiding full-cluster topic and
   replica-rack copies on steady share heartbeats (#1679).
@@ -119,6 +127,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   lock are still the ones they were encoded with. A config change in between
   encodes again under the new settings, as before. The stored bytes are
   unchanged.
+- Explicit stamp sources use direct ordered stamp-index searches and a tail
+  insertion path without rebuilding temporary coordinate arrays (#1720).
 - Pending transaction stamp recovery starts at the earliest surviving open
   transaction, clamped to the local log floor, so reopening a log skips older
   unrelated record batches (#1677).
@@ -195,7 +205,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   summing every partition's bytes, so a fetch over `P` partitions did `P²`
   additions. It now keeps a running total. On a 4-vCPU host, the read loop
   over 10,000 entries took 21-23 ms instead of 32-34 ms (#1609).
+- Use per-topic membership sets when a hosted classic consumer waits on
+  unreleased target partitions, avoiding repeated assignment-vector scans
+  (#1719).
 - OffsetFetch projects only the requested committed and pending group offsets instead of copying unrelated entries (#1656).
+- User/client quota lookup constructs keys only for enabled levels up to the
+  first matching rate, retaining Kafka's precedence and sensor keys (#1718).
 - Less work per request on the produce and fetch paths:
   - Dispatch reads a Produce request's `acks` from its leading fields to
     decide whether a response is owed, instead of decoding the request a

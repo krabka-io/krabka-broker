@@ -37,7 +37,7 @@ impl Log {
         base_offset: Offset,
         last_offset: Offset,
     ) {
-        self.pending.entry(pid).or_insert(base_offset);
+        self.pending.insert_first(pid, base_offset);
         self.pending_stamp_ranges
             .entry(pid)
             .or_default()

@@ -546,7 +546,7 @@ impl Log {
     /// partition, or `None` when no transaction from that producer is pending.
     #[must_use]
     pub fn pending_transaction_start(&self, producer_id: ProducerId) -> Option<Offset> {
-        self.pending.get(&producer_id).copied()
+        self.pending.get(producer_id).copied()
     }
 
     /// Producer and coordinator generations used to admit one transaction
@@ -566,7 +566,7 @@ impl Log {
         (
             producer_epoch,
             coordinator_epoch,
-            self.pending.contains_key(&producer_id),
+            self.pending.contains_key(producer_id),
         )
     }
 

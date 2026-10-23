@@ -44,7 +44,7 @@
 use {
     self::authenticity::SourceAuthentication,
     clap::Parser,
-    krabka_remote_storage::AuthenticatedArchive,
+    krabka_remote_storage::{AuthenticatedArchive, diskless::capture::DisklessWalCapture},
     std::{ffi::OsString, path::Path},
 };
 
@@ -347,7 +347,7 @@ async fn format_with_next_offsets(
     args: &RestoreArgs,
     archive: &ArchiveInventory,
     predicates: &Predicates,
-    capture: Option<&krabka_remote_storage::diskless::DisklessWalCapture>,
+    capture: Option<&DisklessWalCapture>,
     claims: Option<&std::collections::BTreeMap<String, krabka_remote_storage::ObjectEntry>>,
     metadata_snapshot: Option<&[u8]>,
 ) -> Result<(FormatTargetOutcome, Vec<diskless::DisklessNextOffset>), RestoreError> {

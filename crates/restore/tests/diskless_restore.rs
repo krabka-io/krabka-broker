@@ -10,8 +10,11 @@ use {
     krabka_remote_storage::{
         ObjectEntry, RlmmCacheDump, Sha256Digest,
         diskless::{
-            CAPTURE_HEAD_NAME, CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture,
-            WalIndexEntry, WalObjectBuilder,
+            WalIndexEntry,
+            capture::{
+                CAPTURE_HEAD_NAME, CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture,
+            },
+            object::{WalObjectBuilder, parse_wal_object},
         },
     },
     krabka_remote_storage_topic::snapshot::Snapshot,
@@ -58,9 +61,7 @@ fn fixture_with_second_base(
     let mut builder = WalObjectBuilder::new();
     builder.append_run(topic_id, 0, 0, second_base, &encoded);
     let bytes = builder.finish();
-    let manifest = krabka_remote_storage::diskless::parse_wal_object(&bytes)
-        .unwrap()
-        .remove(0);
+    let manifest = parse_wal_object(&bytes).unwrap().remove(0);
     if object {
         let path = root.join("diskless-wal/1");
         std::fs::create_dir_all(&path).unwrap();

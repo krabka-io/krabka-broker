@@ -234,6 +234,7 @@ pub(crate) mod replica_state;
 mod replicator;
 mod replicator_supervisor;
 pub mod schema_validation;
+pub mod security_clients;
 pub mod share_coordinator;
 pub mod share_partition;
 pub(crate) mod signing_domains;

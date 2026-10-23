@@ -636,6 +636,79 @@ mod tests {
         }
     }
 
+    #[test]
+    fn classic_heartbeat_waits_for_large_reordered_assignments_and_refreshes_sessions() {
+        for partition_count in [1_000, 2_000, 4_000, 8_000] {
+            for pending_revocation in [false, true] {
+                let last_partition = partition_count - 1;
+                let assigned: Vec<_> = (0..last_partition).rev().collect();
+                let mut target: Vec<_> = (0..partition_count).rev().collect();
+                target.push(0);
+                let mut m = member("m", true);
+                m.assignment_state = MemberAssignmentState::UnreleasedPartitions;
+                m.assigned_partitions = [(TOPIC, assigned)].into();
+                m.stamp_assignment_epochs(TARGET_EPOCH);
+                let mut other = member("other", false);
+                other.assigned_partitions.clear();
+                let holdings = if pending_revocation {
+                    &mut other.partitions_pending_revocation
+                } else {
+                    &mut other.assigned_partitions
+                };
+                holdings.insert(TOPIC, vec![last_partition]);
+                let mut state = group(vec![m, other]);
+                state
+                    .target
+                    .per_member
+                    .insert("m".into(), [(TOPIC, target)].into());
+                let request = HeartbeatRequest {
+                    group_id: "g".into(),
+                    member_id: "m".into(),
+                    generation_id: TARGET_EPOCH,
+                    ..HeartbeatRequest::default()
+                };
+                let before = state.members["m"].clone();
+
+                for (release, want) in [(false, codes::NONE), (true, codes::REBALANCE_IN_PROGRESS)]
+                {
+                    if release {
+                        let other = state.members.get_mut("other").unwrap();
+                        other.assigned_partitions.clear();
+                        other.partitions_pending_revocation.clear();
+                    }
+                    let previous_seen = Instant::now()
+                        .checked_sub(Duration::from_secs(60))
+                        .expect("the fixture clock supports a minute before now");
+                    state.members.get_mut("m").unwrap().last_seen = previous_seen;
+
+                    check!(
+                        serve_classic_heartbeat(&mut state, &request) == want,
+                        "partitions={partition_count}, pending={pending_revocation}, release={release}"
+                    );
+                    let after = &state.members["m"];
+                    check!(after.last_seen > previous_seen);
+                    check!(
+                        (
+                            &after.assigned_partitions,
+                            &after.partitions_pending_revocation,
+                            &after.assignment_epochs,
+                            after.member_epoch,
+                            after.previous_member_epoch,
+                            after.assignment_state,
+                        ) == (
+                            &before.assigned_partitions,
+                            &before.partitions_pending_revocation,
+                            &before.assignment_epochs,
+                            before.member_epoch,
+                            before.previous_member_epoch,
+                            before.assignment_state,
+                        )
+                    );
+                }
+            }
+        }
+    }
+
     /// The member checks of the classic `Heartbeat` are the sync's: (label,
     /// request) to the error.
     #[test]

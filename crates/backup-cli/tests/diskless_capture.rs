@@ -4,8 +4,9 @@ use {
     bytes::Bytes,
     krabka_backup::diskless::capture_projection,
     krabka_remote_storage::diskless::{
-        CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture, REPLAY_FENCE_KEY,
-        WalFlushRecord, WalIndexEntry,
+        WalIndexEntry,
+        capture::{CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture},
+        index::{REPLAY_FENCE_KEY, WalFlushRecord},
     },
     krabka_remote_storage_topic::{
         AssignmentHandle, InProcessMetadataEventLog, MetadataEventLog, MetadataEventStream,
