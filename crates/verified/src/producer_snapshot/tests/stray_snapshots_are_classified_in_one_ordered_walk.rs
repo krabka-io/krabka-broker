@@ -15,6 +15,13 @@ fn ordered_examples(snapshots: &[i64], bases: &[i64], expected: &[bool]) {
     assert2::assert!(producer_snapshot_strays(snapshots, bases).as_slice() == expected);
 }
 
+fn assert_oracle_equivalence(snapshots: &[i64], bases: &[i64]) {
+    let expected: Vec<_> = (0..snapshots.len())
+        .map(|index| producer_snapshot_stray(snapshots, index, bases))
+        .collect();
+    assert2::assert!(producer_snapshot_strays(snapshots, bases) == expected);
+}
+
 #[test]
 fn sorted_unordered_fixtures_match_the_order_independent_oracle() {
     let mut snapshots = [12, 1, 9, 4];
@@ -22,10 +29,7 @@ fn sorted_unordered_fixtures_match_the_order_independent_oracle() {
     snapshots.sort_unstable();
     bases.sort_unstable();
 
-    let expected: Vec<_> = (0..snapshots.len())
-        .map(|index| producer_snapshot_stray(&snapshots, index, &bases))
-        .collect();
-    assert2::assert!(producer_snapshot_strays(&snapshots, &bases) == expected);
+    assert_oracle_equivalence(&snapshots, &bases);
 }
 
 proptest! {
@@ -36,11 +40,7 @@ proptest! {
     ) {
         snapshots.sort_unstable();
         bases.sort_unstable();
-        let expected: Vec<_> = (0..snapshots.len())
-            .map(|index| producer_snapshot_stray(&snapshots, index, &bases))
-            .collect();
-
-        assert2::assert!(producer_snapshot_strays(&snapshots, &bases) == expected);
+        assert_oracle_equivalence(&snapshots, &bases);
     }
 }
 
