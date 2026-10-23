@@ -24,6 +24,8 @@ mod archive_args;
 
 mod build;
 mod config;
+#[cfg(not(target_family = "wasm"))]
+mod control_plane;
 mod error;
 pub mod fault;
 #[cfg(not(target_family = "wasm"))]

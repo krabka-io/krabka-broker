@@ -4,7 +4,7 @@ use {
     crate::{
         GcsConfig, ObjectStoreError, S3Config,
         build::{build_gcs_store, build_s3_store},
-        multipart::{backend, read_ok_body, s3_bucket_url, s3_http_client, signed_s3_get_xml},
+        control_plane::{backend, read_ok_body, s3_bucket_url, s3_http_client, signed_s3_get_xml},
     },
     object_store::RetryConfig,
     serde::{Deserialize, de::DeserializeOwned},
