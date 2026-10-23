@@ -7,11 +7,13 @@
 //! for a registry that could not answer, reads in one place.
 
 use {
-    super::{SchemaValidator, UNAVAILABLE_TTL_MS, reject::RejectReason},
-    crate::{metrics::BrokerMetrics, schema_validation::ValidationMode, time_util},
-    krabka_schema_serde::{
-        error::SchemaSerdeError, registry::model::SchemaReference, subject::SchemaKind,
+    super::{
+        SchemaValidator, UNAVAILABLE_TTL_MS,
+        references::{MAX_REFERENCE_BYTES, ReferenceSources, reference_sources_ordered},
+        reject::RejectReason,
     },
+    crate::{metrics::BrokerMetrics, schema_validation::ValidationMode, time_util},
+    krabka_schema_serde::{error::SchemaSerdeError, subject::SchemaKind},
     krabka_units::convert::TimeExt as _,
     qubit_clock::WallClock as _,
     std::{
@@ -19,9 +21,6 @@ use {
         sync::Arc,
     },
 };
-
-const MAX_REFERENCE_SCHEMAS: usize = 32;
-const MAX_REFERENCE_BYTES: usize = 1024 * 1024;
 
 /// What the registry said about one schema id.
 #[derive(Debug, Clone)]
@@ -41,29 +40,6 @@ pub(super) struct SchemaBody {
     pub(super) schema: String,
     pub(super) references: HashMap<String, String>,
     pub(super) reference_order: Vec<String>,
-}
-
-/// A subject at one version, as a schema reference names it.
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct SubjectVersion {
-    subject: String,
-    version: i32,
-}
-
-/// The schema sources a root schema's references resolve to, and the order
-/// they must be loaded in.
-struct ReferenceSources {
-    sources: HashMap<String, String>,
-    order: Vec<String>,
-}
-
-struct ReferenceClosure {
-    sources: HashMap<String, String>,
-    order: Vec<String>,
-    resolving: HashSet<SubjectVersion>,
-    fetched_count: usize,
-    fetched_bytes: usize,
-    remaining_bytes: usize,
 }
 
 /// One cached answer, positive or negative, with the instant it goes stale.
@@ -185,13 +161,13 @@ impl SchemaValidator {
             let ReferenceSources {
                 sources: references,
                 order: reference_order,
-            } = self
-                .reference_sources_ordered(
-                    &fetched.references,
-                    MAX_REFERENCE_BYTES - fetched.schema.len(),
-                )
-                .await
-                .map_err(|e| Self::fetch_error(id, &e))?;
+            } = reference_sources_ordered(
+                &self.client,
+                &fetched.references,
+                MAX_REFERENCE_BYTES - fetched.schema.len(),
+            )
+            .await
+            .map_err(|e| Self::fetch_error(id, &e))?;
             Some(Arc::new(SchemaBody {
                 kind: fetched.kind,
                 schema: fetched.schema,
@@ -203,83 +179,6 @@ impl SchemaValidator {
         };
 
         Ok(SchemaEntry { subjects, body })
-    }
-
-    async fn reference_sources_ordered(
-        &self,
-        references: &[SchemaReference],
-        remaining_bytes: usize,
-    ) -> Result<ReferenceSources, SchemaSerdeError> {
-        let mut closure = ReferenceClosure {
-            sources: HashMap::new(),
-            order: Vec::new(),
-            resolving: HashSet::new(),
-            fetched_count: 0,
-            fetched_bytes: 0,
-            remaining_bytes,
-        };
-        self.resolve_reference_sources(references, &mut closure, 0)
-            .await?;
-        Ok(ReferenceSources {
-            sources: closure.sources,
-            order: closure.order,
-        })
-    }
-
-    async fn resolve_reference_sources(
-        &self,
-        references: &[SchemaReference],
-        closure: &mut ReferenceClosure,
-        depth: usize,
-    ) -> Result<(), SchemaSerdeError> {
-        const MAX_REFERENCE_DEPTH: usize = 32;
-        if !references.is_empty() && depth >= MAX_REFERENCE_DEPTH {
-            return Err(SchemaSerdeError::Schema(format!(
-                "schema reference depth exceeds {MAX_REFERENCE_DEPTH}"
-            )));
-        }
-        for reference in references {
-            if closure.sources.contains_key(&reference.name) {
-                continue;
-            }
-            let key = SubjectVersion {
-                subject: reference.subject.clone(),
-                version: reference.version,
-            };
-            if !closure.resolving.insert(key.clone()) {
-                return Err(SchemaSerdeError::Schema(format!(
-                    "cyclic schema reference at {} version {}",
-                    reference.subject, reference.version
-                )));
-            }
-            if closure.fetched_count >= MAX_REFERENCE_SCHEMAS {
-                return Err(SchemaSerdeError::Schema(format!(
-                    "schema closure exceeds {MAX_REFERENCE_SCHEMAS} references"
-                )));
-            }
-            closure.fetched_count += 1;
-            let fetched = self
-                .client
-                .schema_by_subject_version(&reference.subject, reference.version)
-                .await?;
-            closure.fetched_bytes = closure
-                .fetched_bytes
-                .checked_add(fetched.schema.len())
-                .filter(|bytes| *bytes <= closure.remaining_bytes)
-                .ok_or_else(|| {
-                    SchemaSerdeError::Schema(format!(
-                        "schema closure exceeds {MAX_REFERENCE_BYTES} bytes"
-                    ))
-                })?;
-            Box::pin(self.resolve_reference_sources(&fetched.references, closure, depth + 1))
-                .await?;
-            closure.resolving.remove(&key);
-            closure
-                .sources
-                .insert(reference.name.clone(), fetched.schema);
-            closure.order.push(reference.name.clone());
-        }
-        Ok(())
     }
 
     /// Turn a registry failure into the reason it stands for.
@@ -409,30 +308,6 @@ mod tests {
         );
     }
 
-    async fn reference_endpoint(
-        server: &MockServer,
-        index: usize,
-        references: Option<serde_json::Value>,
-        expected_calls: u64,
-    ) {
-        let mut body = serde_json::json!({
-            "subject": format!("subject-{index}"),
-            "version": 1,
-            "id": index,
-            "schema": r#"{"type":"record","name":"Leaf","fields":[]}"#,
-        });
-        if let Some(references) = references {
-            body["references"] = references;
-        }
-        response_endpoint(
-            server,
-            &format!("/subjects/subject-{index}/versions/1"),
-            ResponseTemplate::new(200).set_body_json(body),
-            Some(expected_calls),
-        )
-        .await;
-    }
-
     #[tokio::test]
     async fn the_cache_counters_move_on_a_miss_then_a_hit() {
         // `registry(1)` allows exactly one call to `/versions`, so the second
@@ -545,102 +420,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_reference_chain_may_end_at_the_depth_limit() {
-        const DEPTH: usize = 32;
-        let server = MockServer::start().await;
-        for index in 0..DEPTH {
-            let references = if index + 1 == DEPTH {
-                serde_json::json!([])
-            } else {
-                serde_json::json!([{
-                    "name": format!("Ref{}", index + 1),
-                    "subject": format!("subject-{}", index + 1),
-                    "version": 1
-                }])
-            };
-            reference_endpoint(&server, index, Some(references), 1).await;
-        }
-
-        let v = validator(server.uri());
-        let root = [SchemaReference {
-            name: "Ref0".to_owned(),
-            subject: "subject-0".to_owned(),
-            version: 1,
-        }];
-        let result = v
-            .reference_sources_ordered(&root, MAX_REFERENCE_BYTES)
-            .await;
-        assert!(let Ok(ReferenceSources { sources, order }) = result);
-        check!(sources.len() == DEPTH);
-        check!(order.len() == DEPTH);
-    }
-
-    #[derive(Clone, Copy)]
-    enum ClosureLimit {
-        SchemaCount,
-        TotalBytes,
-    }
-
-    #[yare::parameterized(
-        schema_count = { ClosureLimit::SchemaCount },
-        total_bytes = { ClosureLimit::TotalBytes },
-    )]
-    #[test_macro(tokio::test)]
-    async fn a_reference_closure_is_bounded(limit: ClosureLimit) {
-        let server = MockServer::start().await;
-        let (root, expected_error) = match limit {
-            ClosureLimit::SchemaCount => {
-                let mut root = Vec::new();
-                for index in 0..=MAX_REFERENCE_SCHEMAS {
-                    root.push(SchemaReference {
-                        name: format!("Ref{index}"),
-                        subject: format!("subject-{index}"),
-                        version: 1,
-                    });
-                    reference_endpoint(
-                        &server,
-                        index,
-                        None,
-                        u64::from(index < MAX_REFERENCE_SCHEMAS),
-                    )
-                    .await;
-                }
-                (root, "schema closure exceeds 32 references")
-            }
-            ClosureLimit::TotalBytes => {
-                response_endpoint(
-                    &server,
-                    "/subjects/large/versions/1",
-                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                        "subject": "large",
-                        "version": 1,
-                        "id": 7,
-                        "schema": "x".repeat(MAX_REFERENCE_BYTES + 1)
-                    })),
-                    Some(1),
-                )
-                .await;
-                (
-                    vec![SchemaReference {
-                        name: "large".to_owned(),
-                        subject: "large".to_owned(),
-                        version: 1,
-                    }],
-                    "schema closure exceeds 1048576 bytes",
-                )
-            }
-        };
-
-        let result = validator(server.uri())
-            .reference_sources_ordered(&root, MAX_REFERENCE_BYTES)
-            .await;
-        let Err(error) = result else {
-            panic!("expected the oversized reference closure to be rejected");
-        };
-        check!(error.to_string().contains(expected_error), "{error}");
-    }
-
-    #[tokio::test]
     async fn one_deadline_bounds_the_whole_registry_operation() {
         let server = MockServer::start().await;
         response_endpoint(
@@ -657,9 +436,21 @@ mod tests {
         response_endpoint(
             &server,
             &format!("/schemas/ids/{KNOWN_ID}"),
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "schema": r#""string""#,
+                "references": [{"name":"Leaf","subject":"leaf","version":1}]
+            })),
+            Some(1),
+        )
+        .await;
+        response_endpoint(
+            &server,
+            "/subjects/leaf/versions/1",
             ResponseTemplate::new(200)
                 .set_delay(Duration::from_millis(50))
-                .set_body_json(serde_json::json!({"schema": r#""string""#})),
+                .set_body_json(serde_json::json!({
+                    "subject": "leaf", "version": 1, "id": 7, "schema": r#""string""#
+                })),
             Some(1),
         )
         .await;
