@@ -47,6 +47,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- Use per-topic membership sets when a hosted classic consumer waits on
+  unreleased target partitions, avoiding repeated assignment-vector scans
+  (#1719).
 - Scheduled delivery checks over archived segments buffer bounded byte ranges
   instead of fetching each batch header separately, reducing remote requests for
   ListOffsets LATEST and retention scans (#1682).
