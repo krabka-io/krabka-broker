@@ -108,6 +108,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   the broker and log suites.
 - Regular KRaft metadata checkpoints run in a background worker while the
   controller continues processing events (#1659).
+- Skip regex subscriber aggregation when a consumer heartbeat is inside the
+  minimum resolution refresh interval, including a retained regex subscription
+  (#1716).
 - Consumer and share coordinators reuse an immutable metadata projection on
   repeated reads of the same controller image, avoiding full-cluster topic and
   replica-rack copies on steady share heartbeats (#1679).

@@ -205,7 +205,15 @@ pub(crate) fn maybe_update_regular_expressions(
         }
     }
 
-    // 0. The group subscribes to a regular expression: the member's own
+    // Reject throttled refreshes before collecting every member's pattern.
+    // Pattern changes still run above: dropping the last subscriber must
+    // tombstone its resolution even inside the minimum refresh interval.
+    let last_ms = state.last_regex_resolution_ms();
+    if regexes.now_ms <= last_ms.saturating_add(duration_millis(regexes.min_refresh_interval)) {
+        return (update, None);
+    }
+
+    // 1. The group subscribes to a regular expression: the member's own
     // change included.
     let mut subscribed = state.subscribed_regexes();
     if let Some(old) = old_regex {
@@ -215,12 +223,6 @@ pub(crate) fn maybe_update_regular_expressions(
         *subscribed.entry(new.to_owned()).or_insert(0) += 1;
     }
     if !require_refresh && subscribed.is_empty() {
-        return (update, None);
-    }
-
-    // 2. The last resolution is older than the minimum interval between two.
-    let last_ms = state.last_regex_resolution_ms();
-    if regexes.now_ms <= last_ms.saturating_add(duration_millis(regexes.min_refresh_interval)) {
         return (update, None);
     }
 
@@ -669,6 +671,69 @@ mod tests {
                 (resolver.calls.lock().unwrap().len() == 1) == row.resolves,
                 "{}",
                 row.name
+            );
+        }
+    }
+
+    /// A stored pattern, including an omitted heartbeat field that keeps it,
+    /// obeys the same inclusive minimum-refresh boundary at any group size.
+    /// A newer metadata image and unresolved patterns cannot bypass it.
+    #[test]
+    fn unchanged_patterns_wait_for_the_minimum_refresh_interval() {
+        for members in [1_000, 2_000, 4_000, 8_000] {
+            let mut state = group(&[]);
+            for index in 0..members {
+                let mut subscriber = member(&format!("m{index}"));
+                subscriber.subscribed_topic_regex = Some("a.*".to_owned());
+                state.add_or_update_member(subscriber);
+            }
+            // b.* has not resolved yet, so it must be resolved after the
+            // guard expires even though the requesting member uses a.*.
+            let mut unresolved = member("unresolved");
+            unresolved.subscribed_topic_regex = Some("b.*".to_owned());
+            state.add_or_update_member(unresolved);
+            state.set_resolved_regex("a.*".into(), resolution(&["a1"], 5, NOW_MS));
+            let pattern_lookup = table(&[entry("a.*", &["a1"]), entry("b.*", &["b1"])]);
+
+            for after_ms in [0, 9_999, 10_000] {
+                let mut records = Vec::new();
+                let (update, resolved) = maybe_update_regular_expressions(
+                    &mut state,
+                    Some("a.*"),
+                    Some("a.*"),
+                    &RegexResolution {
+                        now_ms: NOW_MS + after_ms,
+                        refresh_version: 6,
+                        ..RegexResolution::with(&pattern_lookup)
+                    },
+                    &mut records,
+                );
+                check!(update == RegexUpdate::NoChange, "{members} {after_ms}");
+                check!(resolved.is_none(), "{members} {after_ms}");
+                check!(records.is_empty(), "{members} {after_ms}");
+                check!(pattern_lookup.calls.lock().unwrap().is_empty());
+                check!(state.group_epoch == 1);
+            }
+
+            let mut records = Vec::new();
+            let (update, resolved) = maybe_update_regular_expressions(
+                &mut state,
+                Some("a.*"),
+                Some("a.*"),
+                &RegexResolution {
+                    now_ms: NOW_MS + 10_001,
+                    refresh_version: 6,
+                    ..RegexResolution::with(&pattern_lookup)
+                },
+                &mut records,
+            );
+            check!(update == RegexUpdate::NoChange, "{members}");
+            check!(resolved.is_some(), "{members}");
+            check!(records.is_empty(), "{members}");
+            check!(
+                *pattern_lookup.calls.lock().unwrap()
+                    == vec![BTreeSet::from(["a.*".to_owned(), "b.*".to_owned()])],
+                "{members}"
             );
         }
     }
