@@ -47,8 +47,6 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
-- Local tiered storage seeks to requested log ranges and reads only those
-  bytes, keeping bounded archive fetches independent of segment size (#1681).
 - The RF3 regression contract is now `rf3-regression-v2`. It raises the
   variance budget of records/s from 10% to 15%, and of p99 latency from 25% to
   50%. The first measured run of `rf3-regression-v1` exceeded both, and
@@ -212,6 +210,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   from about 36 ms to under 1 µs in the `remote_epoch_index` benchmark (#1616).
 - Remote read-committed fetches skip transaction-index requests when segment
   metadata declares the index empty (#1661).
+- Local tiered storage seeks to requested log ranges and reads only those
+  bytes, keeping bounded archive fetches independent of segment size (#1681).
 - A controller serving a KIP-630 `FetchSnapshot` reads only the requested
   chunk of the checkpoint. It used to read the whole file for every chunk, so
   a transfer of a snapshot of size S in chunks of C read about
