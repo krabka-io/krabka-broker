@@ -101,6 +101,7 @@ mod graceful_shutdown;
 mod handle;
 mod idle;
 mod inbound;
+mod mutation_policy;
 mod offsets;
 mod peer_rpc;
 mod queries;
