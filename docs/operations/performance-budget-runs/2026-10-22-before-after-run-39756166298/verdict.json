@@ -1,0 +1,541 @@
+{
+  "contract_name": "rf3-regression-v1",
+  "contract_sha256": "88125f23e83026670713516c73f401d80cced33577e1a4244b33b3cac83e4d17",
+  "mode": "before_after",
+  "gate_performance": true,
+  "reference": {
+    "label": "krabka",
+    "revision": "ac9deff316d38418622b16c237c671df88f57c7a",
+    "image": "docker.io/krabka-io/krabka-broker:budget-reference",
+    "image_digest": "sha256:30b24062e47106cae03c694b9ae37c4b12b27c08a31829fee287c0f161f8a5a6"
+  },
+  "candidate": {
+    "label": "krabka",
+    "revision": "54c132a41ccc3c8c50324c50177256f89b4fba03",
+    "image": "docker.io/krabka-io/krabka-broker:budget-candidate",
+    "image_digest": "sha256:19bd76ed7f5a905db10683731a5e26f1a7b160fec1e9665e47170707b83cf248"
+  },
+  "cells": {
+    "100b-random-lz4-p12-saturate": {
+      "records_per_second": {
+        "reference_median": 923364.633,
+        "candidate_median": 1015038.289,
+        "worse_change": -0.09928218249182169,
+        "reference_spread": 0.03606430310397212,
+        "candidate_spread": 0.005398407192499482,
+        "allowed_change": 0.10819290931191636,
+        "status": "within_budget"
+      },
+      "latency_ms_p50": {
+        "reference_median": 9.123,
+        "candidate_median": 5.312,
+        "worse_change": -0.41773539405897175,
+        "reference_spread": 0.13624904088567352,
+        "candidate_spread": 0.029743975903614526,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p95": {
+        "reference_median": 21.129,
+        "candidate_median": 16.836,
+        "worse_change": -0.2031804628709358,
+        "reference_spread": 0.14922618202470547,
+        "candidate_spread": 0.0406866239011641,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p99": {
+        "reference_median": 39.55,
+        "candidate_median": 59.459,
+        "worse_change": 0.5033881163084705,
+        "reference_spread": 0.22596713021491796,
+        "candidate_spread": 0.09823575909450198,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "cpu_micros_per_record": {
+        "reference_median": 4.997,
+        "candidate_median": 3.398,
+        "worse_change": -0.31999199519711824,
+        "reference_spread": 0.030018010806483784,
+        "candidate_spread": 0.0017657445556208897,
+        "allowed_change": 0.09005403241945135,
+        "status": "improved"
+      },
+      "peak_rss_mib": {
+        "reference_median": 144.3203125,
+        "candidate_median": 146.01953125,
+        "worse_change": 0.011773940345368918,
+        "reference_spread": 0.00960861798300222,
+        "candidate_spread": 0.022738824536529253,
+        "allowed_change": 0.1,
+        "status": "within_budget"
+      }
+    },
+    "100k-random-lz4-p12-saturate": {
+      "records_per_second": {
+        "reference_median": 1840.154,
+        "candidate_median": 1860.418,
+        "worse_change": -0.011012121811543978,
+        "reference_spread": 0.02159058426631685,
+        "candidate_spread": 0.023387754794890286,
+        "allowed_change": 0.07016326438467085,
+        "status": "within_budget"
+      },
+      "latency_ms_p50": {
+        "reference_median": 135.83,
+        "candidate_median": 114.385,
+        "worse_change": -0.1578811749981595,
+        "reference_spread": 0.05206508135168963,
+        "candidate_spread": 0.034672378371289884,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p95": {
+        "reference_median": 398.606,
+        "candidate_median": 729.198,
+        "worse_change": 0.8293703556895782,
+        "reference_spread": 0.36483645504583484,
+        "candidate_spread": 0.17559291166459595,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p99": {
+        "reference_median": 1145.861,
+        "candidate_median": 1408.85,
+        "worse_change": 0.2295121310525446,
+        "reference_spread": 0.047681175989059923,
+        "candidate_spread": 0.1385569790964261,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "cpu_micros_per_record": {
+        "reference_median": 2339.6666666666665,
+        "candidate_median": 1472.0,
+        "worse_change": -0.3708505485111839,
+        "reference_spread": 0.04316854252742556,
+        "candidate_spread": 0.027853260869565216,
+        "allowed_change": 0.12950562758227668,
+        "status": "improved"
+      },
+      "peak_rss_mib": {
+        "reference_median": 208.34375,
+        "candidate_median": 185.9296875,
+        "worse_change": -0.1075821208939553,
+        "reference_spread": 0.009862006899655017,
+        "candidate_spread": 0.024160679020126898,
+        "allowed_change": 0.1,
+        "status": "improved"
+      }
+    },
+    "1k-random-lz4-p1-saturate": {
+      "records_per_second": {
+        "reference_median": 38721.878,
+        "candidate_median": 49575.123,
+        "worse_change": -0.2802871544608452,
+        "reference_spread": 0.011462279799548988,
+        "candidate_spread": 0.014997300157984525,
+        "allowed_change": 0.05,
+        "status": "improved"
+      },
+      "latency_ms_p50": {
+        "reference_median": 768.925,
+        "candidate_median": 596.463,
+        "worse_change": -0.22428975517768313,
+        "reference_spread": 0.01763110836557519,
+        "candidate_spread": 0.011549752457403075,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p95": {
+        "reference_median": 832.939,
+        "candidate_median": 648.949,
+        "worse_change": -0.22089252634346576,
+        "reference_spread": 0.017977306861606833,
+        "candidate_spread": 0.04385090353787431,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p99": {
+        "reference_median": 866.804,
+        "candidate_median": 669.31,
+        "worse_change": -0.22784158817910397,
+        "reference_spread": 0.03364197673291765,
+        "candidate_spread": 0.0492357801317776,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "cpu_micros_per_record": {
+        "reference_median": 50.22,
+        "candidate_median": 37.05,
+        "worse_change": -0.2622461170848268,
+        "reference_spread": 0.006172839506172885,
+        "candidate_spread": 0.020242914979757085,
+        "allowed_change": 0.06072874493927126,
+        "status": "improved"
+      },
+      "peak_rss_mib": {
+        "reference_median": 207.9140625,
+        "candidate_median": 186.8671875,
+        "worse_change": -0.10122872280464434,
+        "reference_spread": 0.009976327358809604,
+        "candidate_spread": 0.024499351979597808,
+        "allowed_change": 0.1,
+        "status": "improved"
+      }
+    },
+    "1k-random-lz4-p1000-fixed-5k": {
+      "records_per_second": {
+        "reference_median": 4998.586,
+        "candidate_median": 4998.46,
+        "worse_change": 0.000025207128576002036,
+        "reference_spread": 0.000013803903743879816,
+        "candidate_spread": 0.000021806716468748043,
+        "allowed_change": 0.05,
+        "status": "within_budget"
+      },
+      "latency_ms_p50": {
+        "reference_median": 11.563,
+        "candidate_median": 10.122,
+        "worse_change": -0.1246216379832224,
+        "reference_spread": 0.00925365389604768,
+        "candidate_spread": 0.02627939142461964,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p95": {
+        "reference_median": 18.9,
+        "candidate_median": 15.937,
+        "worse_change": -0.15677248677248673,
+        "reference_spread": 0.055661375661375835,
+        "candidate_spread": 0.049319194327665156,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p99": {
+        "reference_median": 38.977,
+        "candidate_median": 31.581,
+        "worse_change": -0.1897529312158452,
+        "reference_spread": 0.17738666393000987,
+        "candidate_spread": 0.04220892308666609,
+        "allowed_change": 0.5321599917900296,
+        "status": "within_budget"
+      },
+      "cpu_micros_per_record": {
+        "reference_median": 459.6333333333333,
+        "candidate_median": 394.93333333333334,
+        "worse_change": -0.14076437740227715,
+        "reference_spread": 0.009427804771919604,
+        "candidate_spread": 0.01738690074274141,
+        "allowed_change": 0.052160702228224234,
+        "status": "improved"
+      },
+      "peak_rss_mib": {
+        "reference_median": 272.15625,
+        "candidate_median": 249.3515625,
+        "worse_change": -0.08379262831553565,
+        "reference_spread": 0.01677861981857848,
+        "candidate_spread": 0.012516840555190024,
+        "allowed_change": 0.1,
+        "status": "within_budget"
+      }
+    },
+    "1k-random-lz4-p12-fixed-20k": {
+      "records_per_second": {
+        "reference_median": 19993.182,
+        "candidate_median": 19993.683,
+        "worse_change": -0.00002505854245713382,
+        "reference_spread": 7.002387113737969e-6,
+        "candidate_spread": 0.000011853744004911529,
+        "allowed_change": 0.05,
+        "status": "within_budget"
+      },
+      "latency_ms_p50": {
+        "reference_median": 4.369,
+        "candidate_median": 3.939,
+        "worse_change": -0.09842069123369186,
+        "reference_spread": 0.02517738612954917,
+        "candidate_spread": 0.02157908098502157,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p95": {
+        "reference_median": 6.152,
+        "candidate_median": 5.583,
+        "worse_change": -0.09249024707412222,
+        "reference_spread": 0.013979193758127487,
+        "candidate_spread": 0.009493104065914372,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p99": {
+        "reference_median": 9.628,
+        "candidate_median": 10.947,
+        "worse_change": 0.13699626090569164,
+        "reference_spread": 0.10926464478604067,
+        "candidate_spread": 0.09317621266100298,
+        "allowed_change": 0.327793934358122,
+        "status": "noisy_not_material"
+      },
+      "cpu_micros_per_record": {
+        "reference_median": 68.18333333333334,
+        "candidate_median": 52.13333333333333,
+        "worse_change": -0.23539476900513326,
+        "reference_spread": 0.01784404791004647,
+        "candidate_spread": 0.03260869565217383,
+        "allowed_change": 0.09782608695652148,
+        "status": "improved"
+      },
+      "peak_rss_mib": {
+        "reference_median": 208.30078125,
+        "candidate_median": 188.05078125,
+        "worse_change": -0.09721518987341772,
+        "reference_spread": 0.016652601969057667,
+        "candidate_spread": 0.0027211732203319414,
+        "allowed_change": 0.1,
+        "status": "within_budget"
+      }
+    },
+    "1k-random-lz4-p12-idle-burst": {
+      "records_per_second": {
+        "reference_median": 49443.229,
+        "candidate_median": 49709.945,
+        "worse_change": -0.005394388784761618,
+        "reference_spread": 0.0026204801470389874,
+        "candidate_spread": 0.0007362108326613834,
+        "allowed_change": 0.05,
+        "status": "within_budget"
+      },
+      "latency_ms_p50": {
+        "reference_median": 128.975,
+        "candidate_median": 49.874,
+        "worse_change": -0.6133049040511728,
+        "reference_spread": 0.2282767978290366,
+        "candidate_spread": 0.13744636483939535,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p95": {
+        "reference_median": 930.26,
+        "candidate_median": 170.146,
+        "worse_change": -0.817098445595855,
+        "reference_spread": 0.11892481671790692,
+        "candidate_spread": 0.45869429783832705,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p99": {
+        "reference_median": 997.586,
+        "candidate_median": 211.945,
+        "worse_change": -0.7875421266938389,
+        "reference_spread": 0.10871944874928065,
+        "candidate_spread": 0.40228832951945076,
+        "allowed_change": 1.2068649885583522,
+        "status": "excess_variance"
+      },
+      "cpu_micros_per_record": {
+        "reference_median": 140.46,
+        "candidate_median": 130.78,
+        "worse_change": -0.06891641748540514,
+        "reference_spread": 0.01452370781717209,
+        "candidate_spread": 0.01881021562930118,
+        "allowed_change": 0.056430646887903536,
+        "status": "improved"
+      },
+      "peak_rss_mib": {
+        "reference_median": 276.21875,
+        "candidate_median": 260.578125,
+        "worse_change": -0.05662405249462609,
+        "reference_spread": 0.008145717841384773,
+        "candidate_spread": 0.0177939677400012,
+        "allowed_change": 0.1,
+        "status": "within_budget"
+      }
+    },
+    "1k-random-lz4-p12-saturate": {
+      "records_per_second": {
+        "reference_median": 145257.918,
+        "candidate_median": 180137.09,
+        "worse_change": -0.24011890353543405,
+        "reference_spread": 0.06601459068138366,
+        "candidate_spread": 0.012913759181965264,
+        "allowed_change": 0.19804377204415097,
+        "status": "improved"
+      },
+      "latency_ms_p50": {
+        "reference_median": 159.454,
+        "candidate_median": 116.541,
+        "worse_change": -0.26912463782658325,
+        "reference_spread": 0.04102750636547218,
+        "candidate_spread": 0.03343887558884861,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p95": {
+        "reference_median": 280.975,
+        "candidate_median": 516.424,
+        "worse_change": 0.8379713497642137,
+        "reference_spread": 0.21669543553696954,
+        "candidate_spread": 0.28299807909779573,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p99": {
+        "reference_median": 960.193,
+        "candidate_median": 925.208,
+        "worse_change": -0.036435383303148446,
+        "reference_spread": 0.20368717539078077,
+        "candidate_spread": 0.08532243560366957,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "cpu_micros_per_record": {
+        "reference_median": 31.52,
+        "candidate_median": 18.19,
+        "worse_change": -0.42290609137055835,
+        "reference_spread": 0.04124365482233505,
+        "candidate_spread": 0.01356056441268093,
+        "allowed_change": 0.12373096446700516,
+        "status": "improved"
+      },
+      "peak_rss_mib": {
+        "reference_median": 140.09765625,
+        "candidate_median": 138.71875,
+        "worse_change": -0.009842464798550119,
+        "reference_spread": 0.007862818904224174,
+        "candidate_spread": 0.017824960576706465,
+        "allowed_change": 0.1,
+        "status": "within_budget"
+      }
+    },
+    "1k-random-none-p12-saturate": {
+      "records_per_second": {
+        "reference_median": 157121.15,
+        "candidate_median": 191841.332,
+        "worse_change": -0.22097713770552216,
+        "reference_spread": 0.0688840808509867,
+        "candidate_spread": 0.12101857174344474,
+        "allowed_change": 0.3630557152303342,
+        "status": "excess_variance"
+      },
+      "latency_ms_p50": {
+        "reference_median": 186.563,
+        "candidate_median": 129.693,
+        "worse_change": -0.3048300038056848,
+        "reference_spread": 0.06019414353328361,
+        "candidate_spread": 0.009483935139136408,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p95": {
+        "reference_median": 270.338,
+        "candidate_median": 240.369,
+        "worse_change": -0.11085751910571218,
+        "reference_spread": 0.07285694205032228,
+        "candidate_spread": 0.07879135828663426,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p99": {
+        "reference_median": 787.556,
+        "candidate_median": 1042.472,
+        "worse_change": 0.3236798399097968,
+        "reference_spread": 0.20965112322171384,
+        "candidate_spread": 0.24929494509205047,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "cpu_micros_per_record": {
+        "reference_median": 33.89333333333333,
+        "candidate_median": 19.01,
+        "worse_change": -0.4391227380015735,
+        "reference_spread": 0.05802517702596376,
+        "candidate_spread": 0.0045590040329652574,
+        "allowed_change": 0.17407553107789128,
+        "status": "improved"
+      },
+      "peak_rss_mib": {
+        "reference_median": 200.69921875,
+        "candidate_median": 181.48828125,
+        "worse_change": -0.0957200412619942,
+        "reference_spread": 0.021701473364604217,
+        "candidate_spread": 0.01814425001614257,
+        "allowed_change": 0.1,
+        "status": "within_budget"
+      }
+    },
+    "1k-zeros-lz4-p12-saturate": {
+      "records_per_second": {
+        "reference_median": 728045.393,
+        "candidate_median": 712408.315,
+        "worse_change": 0.02147816351885094,
+        "reference_spread": 0.04168232131097349,
+        "candidate_spread": 0.024070217372463,
+        "allowed_change": 0.12504696393292047,
+        "status": "within_budget"
+      },
+      "latency_ms_p50": {
+        "reference_median": 173.245,
+        "candidate_median": 204.666,
+        "worse_change": 0.18136742763138902,
+        "reference_spread": 0.21003780772893882,
+        "candidate_spread": 0.1450265310310458,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p95": {
+        "reference_median": 313.538,
+        "candidate_median": 364.321,
+        "worse_change": 0.16196760839196528,
+        "reference_spread": 0.16853778489369714,
+        "candidate_spread": 0.2346804054666078,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "latency_ms_p99": {
+        "reference_median": 364.467,
+        "candidate_median": 421.489,
+        "worse_change": 0.1564531219561716,
+        "reference_spread": 0.14390054517967335,
+        "candidate_spread": 0.09269755557084519,
+        "allowed_change": 0.0,
+        "status": "not_budgeted"
+      },
+      "cpu_micros_per_record": {
+        "reference_median": 2.7899999999999996,
+        "candidate_median": 2.256666666666667,
+        "worse_change": -0.19115890083632,
+        "reference_spread": 0.026284348864993843,
+        "candidate_spread": 0.004431314623338162,
+        "allowed_change": 0.07885304659498153,
+        "status": "improved"
+      },
+      "peak_rss_mib": {
+        "reference_median": 196.15234375,
+        "candidate_median": 175.97265625,
+        "worse_change": -0.10287762620730857,
+        "reference_spread": 0.022523150453051876,
+        "candidate_spread": 0.034229394659148926,
+        "allowed_change": 0.10268818397744678,
+        "status": "improved"
+      }
+    }
+  },
+  "rejections": [
+    {
+      "kind": "excess_variance",
+      "cell": "1k-random-none-p12-saturate",
+      "metric": "records_per_second",
+      "spread": 0.12101857174344474,
+      "max_spread": 0.1
+    },
+    {
+      "kind": "excess_variance",
+      "cell": "1k-random-lz4-p12-idle-burst",
+      "metric": "latency_ms_p99",
+      "spread": 0.40228832951945076,
+      "max_spread": 0.25
+    }
+  ],
+  "passed": false
+}
