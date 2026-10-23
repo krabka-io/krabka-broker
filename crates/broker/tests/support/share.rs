@@ -3,11 +3,12 @@ use {
     crate::support::{
         client::{connect as connect_client, create_topic_with},
         configs::{incremental_config, incremental_request, incremental_resource},
+        heartbeat_config,
         records::{batch_from_records, value_record},
         topics::{CreateTopicSetup, TopicPartitionCount},
     },
     assert2::assert,
-    krabka_broker::BrokerConfig,
+    krabka_broker::{BrokerConfig, NodeId},
     krabka_client_core::Client,
     krabka_protocol::{
         owned::{
@@ -66,7 +67,9 @@ pub async fn broker_test_permit() -> tokio::sync::OwnedSemaphorePermit {
 }
 
 pub fn broker_config(log_dir: std::path::PathBuf) -> BrokerConfig {
-    let mut config = BrokerConfig::for_tests(log_dir);
+    // These fixtures keep one broker alive; member session/lock expiry is
+    // configured independently from the broker's own heartbeat session.
+    let mut config = heartbeat_config(log_dir);
     config.share_coordinator.state_topic_num_partitions = SHARE_STATE_PARTITIONS;
     config
 }
@@ -308,7 +311,13 @@ pub async fn create_topic(
 ) {
     let setup = ShareTopicSetup { topic, partitions };
     create_topic_with(client, setup.into()).await;
-    broker.wait_until_partition_present(setup.topic, 0).await;
+    // Metadata presence precedes installation of the local leader, epoch and
+    // ISR that Produce checks. Settle that setup before testing share RPCs.
+    for partition in 0..setup.partitions.0 {
+        broker
+            .wait_until_local_partition_leader(setup.topic, partition, NodeId(broker.node_id()))
+            .await;
+    }
 }
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
@@ -615,6 +624,7 @@ pub async fn start_topic(
     let setup = ShareTopicSetup { topic, partitions };
     // Keep the growing broker config inside a boxed startup future.
     let broker = Box::pin(krabka_broker::Broker::start(cfg)).await.unwrap();
+    broker.wait_until_broker_alive(broker.node_id()).await;
     let client = connect(&broker.listen_addr().to_string()).await;
     create_topic()
         .broker(&broker)

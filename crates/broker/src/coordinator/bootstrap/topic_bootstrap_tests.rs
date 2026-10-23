@@ -8,13 +8,13 @@ use {
     },
     crate::{
         auto_topic_creation::creatable_topic, broker::Broker, config::BrokerConfig,
-        coordinator::GroupCoordinator, log_dir, log_dir_status::LogDirRegistry,
-        metadata_source::MetadataSource, partition_registry::PartitionRegistry,
-        producer_state::ProducerState, share_coordinator::bootstrap::TOPIC as SHARE_TOPIC,
-        topic_creator::TopicCreator, txn::bootstrap::TOPIC as TXN_TOPIC,
+        coordinator::GroupCoordinator, handlers::create_topics, log_dir,
+        log_dir_status::LogDirRegistry, metadata_source::MetadataSource,
+        partition_registry::PartitionRegistry, producer_state::ProducerState,
+        share_coordinator::bootstrap::TOPIC as SHARE_TOPIC, txn::bootstrap::TOPIC as TXN_TOPIC,
     },
     assert2::{assert, check},
-    krabka_ids::PartitionIndex,
+    krabka_ids::{ApiVersion, PartitionIndex},
     krabka_metadata::{MetadataRecord, TopicRecord},
     krabka_protocol::owned::create_topics_request::CreateTopicsRequest,
     std::sync::Arc,
@@ -171,8 +171,13 @@ async fn internal_topics_are_created_with_kafkas_topic_configs() {
             .collect(),
         ..Default::default()
     };
-    let response = TopicCreator::new(&broker)
-        .create_topic_without_principal(request)
+    krabka_macros::request_test_identity! {
+        bind(ctx);
+        user ["admin"];
+    };
+    // This config test exercises creation once. Forwarding retries can repeat
+    // a request whose earlier topics committed before a connection was lost.
+    let response = create_topics::handle(&broker, request, ApiVersion(7), &ctx)
         .await
         .expect("the controller answers CreateTopics");
     for row in &response.topics {
