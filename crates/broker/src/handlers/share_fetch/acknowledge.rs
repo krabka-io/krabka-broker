@@ -212,17 +212,14 @@ fn apply_one_ack(
             }
         })
         .collect::<Result<Vec<_>, _>>();
-    let actions = match actions {
-        Ok(actions) => actions,
-        Err(_) => {
-            // Parsing every action first must not hide an earlier ownership
-            // error. The enclosing request rolls back these transitions on
-            // failure, just as it does for the normal mixed path.
-            for (offset, ack_type) in (first..=last).zip(types) {
-                apply(st, offset, offset, *ack_type)?;
-            }
-            return Ok(());
+    let Ok(actions) = actions else {
+        // Parsing every action first must not hide an earlier ownership
+        // error. The enclosing request rolls back these transitions on
+        // failure, just as it does for the normal mixed path.
+        for (offset, ack_type) in (first..=last).zip(types) {
+            apply(st, offset, offset, *ack_type)?;
         }
+        return Ok(());
     };
     st.acknowledge_mixed(member, Offset(first), Offset(last), &actions, max_attempts)
 }
