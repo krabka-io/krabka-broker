@@ -16,8 +16,7 @@ use {
         handlers::{
             ApiVersion, CorrelationId, alter_replica_log_dirs::handle, audit_admin_for,
             create_delegation_token as token_create, describe_delegation_token as token_describe,
-            encode_response, expire_delegation_token as token_expire,
-            renew_delegation_token as token_renew,
+            expire_delegation_token as token_expire, renew_delegation_token as token_renew,
         },
         network::auth::ConnectionAuth,
     },
