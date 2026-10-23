@@ -17,11 +17,9 @@ use {
     krabka_log::Log,
     krabka_protocol::records::{RecordBatchBorrowed, validate_one_v2_batch},
     krabka_remote_storage::{
-        ObjectEntry, TopicIdPartition, TrustedManifestKeys,
+        ObjectEntry, TopicIdPartition,
         diskless::{
-            capture::{
-                CAPTURE_HEAD_NAME, CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture,
-            },
+            capture::{CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture},
             object::parse_wal_object,
         },
     },
@@ -131,38 +129,6 @@ pub(super) fn add_partitions(
         }
     }
     Ok(())
-}
-
-/// What authenticating a diskless capture established.
-pub(super) struct CaptureAuthentication {
-    /// The objects the signed capture vouches for, by key.
-    pub(super) claims: BTreeMap<String, ObjectEntry>,
-    /// The head of the capture's WORM chain.
-    pub(super) head: String,
-}
-
-pub(super) fn authenticate(
-    capture: &DisklessWalCapture,
-    trusted: &TrustedManifestKeys,
-    args: &RestoreArgs,
-) -> Result<CaptureAuthentication, RestoreError> {
-    let expected = args.worm_expect_head.iter().find_map(|value| {
-        value
-            .split_once('=')
-            .filter(|(name, _)| *name == CAPTURE_HEAD_NAME)
-            .map(|(_, head)| head)
-    });
-    let claims = capture
-        .authenticate(trusted, expected)
-        .map_err(|reason| RestoreError::Authenticity { reason })?;
-    let head = capture
-        .authentication
-        .as_ref()
-        .map(|manifest| krabka_remote_storage::manifest_head(&manifest.body).to_string())
-        .ok_or_else(|| RestoreError::Authenticity {
-            reason: "diskless capture has no signed WORM boundary".to_owned(),
-        })?;
-    Ok(CaptureAuthentication { claims, head })
 }
 
 /// The offset a restored diskless partition's next write takes: the end the

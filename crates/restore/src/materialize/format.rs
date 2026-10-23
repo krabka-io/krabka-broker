@@ -517,7 +517,7 @@ mod tests {
     use {
         super::*,
         crate::{
-            authenticate_captured_snapshot,
+            authenticity::authenticate_captured_snapshot,
             discover::UnrecognizedKeys,
             materialize::test_support::{args_from, partition_inventory},
         },

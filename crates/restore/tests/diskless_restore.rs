@@ -544,6 +544,25 @@ enum TrustedCaptureTampering {
     UntrustedKey,
 }
 
+#[tokio::test]
+async fn continue_on_corrupt_rejects_a_changed_signed_snapshot_before_target_writes() {
+    let setup = trusted_capture_setup();
+    std::fs::write(&setup.rlmm_path, b"changed signed snapshot").unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let mut args = trusted_args(
+        setup.archive.path(),
+        target.path(),
+        &setup.capture_path,
+        &setup.public_path,
+        &setup.head,
+    );
+    args.archive.rlmm_snapshot = Some(setup.rlmm_path);
+    args.continue_on_corrupt = true;
+    let error = restore(&args).await.unwrap_err();
+    assert2::assert!(matches!(error, RestoreError::Authenticity { .. }));
+    assert2::assert!(std::fs::read_dir(target.path()).unwrap().next().is_none());
+}
+
 #[yare::parameterized(
     changed_state = { "changed state", TrustedCaptureTampering::ChangedState },
     wrong_head = { "wrong head", TrustedCaptureTampering::WrongHead },
