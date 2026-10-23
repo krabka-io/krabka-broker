@@ -15,6 +15,7 @@ use {
     qubit_clock::{MonotonicClock, StdMonotonicClock},
     std::{
         collections::HashMap,
+        mem,
         sync::{
             Arc, Mutex,
             atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering},
@@ -134,13 +135,17 @@ impl FetchSessionCache {
         let Some(session) = guard.sessions.get_mut(&session_id) else {
             return;
         };
-        for SentPartition {
-            key,
-            state: s,
-            records,
-        } in sent
+        let mut last_records_position = HashMap::new();
+        for (
+            position,
+            SentPartition {
+                key,
+                state: s,
+                records,
+            },
+        ) in sent.iter().enumerate()
         {
-            let Some((index, _, state)) = session.partitions.get_full_mut(key) else {
+            let Some(state) = session.partitions.get_mut(key) else {
                 continue;
             };
             state.last_high_watermark = s.last_high_watermark;
@@ -150,10 +155,52 @@ impl FetchSessionCache {
             state.last_aborted_txns_hash = s.last_aborted_txns_hash;
             state.last_error_code = s.last_error_code;
             if *records {
-                let last = session.partitions.len() - 1;
-                session.partitions.move_index(index, last);
+                last_records_position.insert(key, position);
             }
         }
+
+        if last_records_position.is_empty() {
+            return;
+        }
+
+        if last_records_position.len() == 1 {
+            let key = last_records_position
+                .keys()
+                .next()
+                .expect("one moved partition");
+            let index = session
+                .partitions
+                .get_index_of(*key)
+                .expect("cached partition");
+            let last = session.partitions.len() - 1;
+            session.partitions.move_index(index, last);
+            return;
+        }
+
+        // Rebuild once instead of shifting the IndexMap after every records-bearing
+        // row. Rows that did not carry records retain their relative order. The
+        // moved rows are appended in the order of their final records-bearing
+        // occurrence, which is exactly what repeated moves produce for duplicate
+        // response rows.
+        let capacity = session.partitions.len();
+        let mut retained = SessionPartitions::with_capacity(capacity);
+        let mut moved = HashMap::with_capacity(last_records_position.len());
+        for (key, state) in mem::take(&mut session.partitions) {
+            if last_records_position.contains_key(&key) {
+                moved.insert(key, state);
+            } else {
+                retained.insert(key, state);
+            }
+        }
+        for (position, sent_partition) in sent.iter().enumerate() {
+            if last_records_position.get(&sent_partition.key) != Some(&position) {
+                continue;
+            }
+            if let Some((key, state)) = moved.remove_entry(&sent_partition.key) {
+                retained.insert(key, state);
+            }
+        }
+        session.partitions = retained;
     }
 
     /// Drops the session. The handler calls it when the request is `Close`,
@@ -262,9 +309,13 @@ mod tests {
     #[yare::parameterized(
         nothing_sent = { &[], &[0, 1, 2, 3] },
         offsets_only = { &[(1, false)], &[0, 1, 2, 3] },
+        last_with_records = { &[(3, true)], &[0, 1, 2, 3] },
         first_with_records = { &[(0, true)], &[1, 2, 3, 0] },
         two_with_records = { &[(2, true), (0, true)], &[1, 3, 2, 0] },
         mixed = { &[(0, true), (1, false), (3, true)], &[1, 2, 0, 3] },
+        all_with_records = { &[(0, true), (1, true), (2, true), (3, true)], &[0, 1, 2, 3] },
+        duplicate_records = { &[(2, true), (0, true), (2, true)], &[1, 3, 0, 2] },
+        duplicate_offsets_after_records = { &[(2, true), (0, true), (2, false)], &[1, 3, 2, 0] },
     )]
     fn finalize_incremental_moves_partitions_that_sent_records_to_the_end(
         sent: &[(i32, bool)],
@@ -277,9 +328,13 @@ mod tests {
             .call();
         let sent: Vec<SentPartition> = sent
             .iter()
-            .map(|&(partition, records)| SentPartition {
+            .enumerate()
+            .map(|(position, &(partition, records))| SentPartition {
                 key: cached_partition(krabka_ids::PartitionIndex(partition)).0,
-                state: CachedPartitionState::default(),
+                state: CachedPartitionState {
+                    last_high_watermark: position as i64 + 1,
+                    ..Default::default()
+                },
                 records,
             })
             .collect();
@@ -292,6 +347,18 @@ mod tests {
             .map(|key| key.partition)
             .collect();
         assert2::assert!(order == expected_order);
+        let guard = cache.inner.lock().unwrap();
+        let partitions = &guard.sessions[&id].partitions;
+        for row in &sent {
+            let last = sent
+                .iter()
+                .rev()
+                .find(|other| other.key == row.key)
+                .unwrap();
+            assert2::assert!(
+                partitions[&row.key].last_high_watermark == last.state.last_high_watermark
+            );
+        }
     }
 
     fn cached_partition(

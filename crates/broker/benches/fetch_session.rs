@@ -39,6 +39,12 @@
 //! for the cost of the allocation itself and the wide rows for what contention
 //! does to it.
 //!
+//! The wide-session groups isolate the other three mutex-held operations:
+//! updating every existing partition, forgetting partitions, and finalizing a
+//! response in which every partition carried records. Each is swept over
+//! increasing partition counts so Criterion's report exposes non-linear
+//! scaling without treating a single timing as an end-to-end broker result.
+//!
 //! `bench_occupancy_ratio` prints the 100%-over-0% ratio per thread count, so
 //! a run answers "does a full cache cost more to allocate into" without
 //! reading the criterion report. Criterion compares a benchmark against its
@@ -47,16 +53,16 @@
 
 use {
     assert2::assert,
-    criterion::{Criterion, criterion_group, criterion_main},
+    criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main},
     krabka_broker::{
         config::DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
         fetch_session::{
             CachedPartitionState, FetchSessionCache, FetchSessionKey, INITIAL_EPOCH,
-            INVALID_SESSION_ID, SessionDecision,
+            INVALID_SESSION_ID, SentPartition, SessionDecision,
         },
     },
     krabka_protocol::{
-        owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+        owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic, ForgottenTopic},
         primitives::uuid::Uuid as WireUuid,
     },
     qubit_clock::ManualMonotonicClock,
@@ -88,6 +94,11 @@ const TOPIC: &str = "bench-topic";
 const PRINCIPAL: &str = "bench-principal";
 /// The requests below name their topic, as `Fetch` v12 and earlier do.
 const NAME_FETCH_VERSION: i16 = 12;
+
+/// Sizes large enough to distinguish linear work from a partition-by-partition
+/// scan, while retaining the issue's 8,000-partition reproduction as the top
+/// row.
+const WIDE_PARTITIONS: [usize; 4] = [1_000, 2_000, 4_000, 8_000];
 
 /// One partition of a session's partition set: its key and cached state.
 #[derive(Clone)]
@@ -132,6 +143,85 @@ fn new_session_request() -> FetchRequest {
         }],
         ..FetchRequest::default()
     }
+}
+
+fn wide_partition_set(partitions: usize) -> Vec<(FetchSessionKey, CachedPartitionState)> {
+    (0..partitions)
+        .map(|partition| {
+            (
+                FetchSessionKey {
+                    topic_name: TOPIC.to_string(),
+                    topic_id: WireUuid::ZERO,
+                    partition: i32::try_from(partition).expect("benchmark partition fits i32"),
+                },
+                CachedPartitionState {
+                    max_bytes: 1024 * 1024,
+                    ..CachedPartitionState::default()
+                },
+            )
+        })
+        .collect()
+}
+
+fn wide_cache(partitions: usize) -> (FetchSessionCache, i32) {
+    let cache = FetchSessionCache::new(1);
+    let session_id = cache.try_allocate(
+        false,
+        false,
+        PRINCIPAL.to_string(),
+        wide_partition_set(partitions),
+    );
+    assert!(session_id != INVALID_SESSION_ID, "wide session was refused");
+    (cache, session_id)
+}
+
+fn merge_request(session_id: i32, partitions: usize) -> FetchRequest {
+    FetchRequest {
+        session_id,
+        session_epoch: 1,
+        topics: vec![FetchTopic {
+            topic: TOPIC.to_string(),
+            partitions: (0..partitions)
+                .map(|partition| FetchPartition {
+                    partition: i32::try_from(partition).expect("benchmark partition fits i32"),
+                    fetch_offset: 1,
+                    partition_max_bytes: 1024 * 1024,
+                    ..FetchPartition::default()
+                })
+                .collect(),
+            ..FetchTopic::default()
+        }],
+        ..FetchRequest::default()
+    }
+}
+
+fn forget_request(session_id: i32, partitions: usize) -> FetchRequest {
+    FetchRequest {
+        session_id,
+        session_epoch: 1,
+        forgotten_topics_data: vec![ForgottenTopic {
+            topic: TOPIC.to_string(),
+            partitions: (0..partitions)
+                .step_by(2)
+                .map(|partition| i32::try_from(partition).expect("benchmark partition fits i32"))
+                .collect(),
+            ..ForgottenTopic::default()
+        }],
+        ..FetchRequest::default()
+    }
+}
+
+fn finalize_case(partitions: usize) -> (FetchSessionCache, i32, Vec<SentPartition>) {
+    let (cache, session_id) = wide_cache(partitions);
+    let sent = wide_partition_set(partitions)
+        .into_iter()
+        .map(|(key, state)| SentPartition {
+            key,
+            state,
+            records: true,
+        })
+        .collect();
+    (cache, session_id, sent)
 }
 
 /// More than Kafka's two-minute staleness threshold, which the clock advances
@@ -272,6 +362,42 @@ fn bench_fetch_session_allocate(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_wide_sessions(c: &mut Criterion) {
+    for operation in ["merge", "forget", "finalize"] {
+        let mut group = c.benchmark_group(format!("broker/fetch_session/wide_{operation}"));
+        for partitions in WIDE_PARTITIONS {
+            group.throughput(Throughput::Elements(
+                u64::try_from(partitions).expect("benchmark size fits u64"),
+            ));
+            group.bench_with_input(
+                BenchmarkId::from_parameter(partitions),
+                &partitions,
+                |b, &partitions| {
+                    if operation == "finalize" {
+                        let (cache, session_id, sent) = finalize_case(partitions);
+                        b.iter(|| cache.finalize_incremental(session_id, &sent));
+                    } else {
+                        b.iter_batched(
+                            || {
+                                let (cache, session_id) = wide_cache(partitions);
+                                let request = if operation == "merge" {
+                                    merge_request(session_id, partitions)
+                                } else {
+                                    forget_request(session_id, partitions)
+                                };
+                                (cache, request)
+                            },
+                            |(cache, request)| cache.classify(&request, NAME_FETCH_VERSION),
+                            BatchSize::LargeInput,
+                        );
+                    }
+                },
+            );
+        }
+        group.finish();
+    }
+}
+
 /// Print the per-turn cost at each occupancy, and what a full cache costs over
 /// an empty one.
 ///
@@ -320,5 +446,10 @@ fn bench_occupancy_ratio(_c: &mut Criterion) {
     println!();
 }
 
-criterion_group!(benches, bench_fetch_session_allocate, bench_occupancy_ratio);
+criterion_group!(
+    benches,
+    bench_fetch_session_allocate,
+    bench_wide_sessions,
+    bench_occupancy_ratio
+);
 criterion_main!(benches);
