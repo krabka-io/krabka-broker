@@ -247,7 +247,7 @@ pub(super) struct Term {
 /// The serialized operation and leadership guards of one active state
 /// partition, and the term that the partition serves.
 pub(super) struct Active<'a> {
-    _led: RwLockReadGuard<'a, LeaderPartitions>,
+    leadership: RwLockReadGuard<'a, LeaderPartitions>,
     _operation: OwnedMutexGuard<()>,
     pub(super) term: Term,
 }
@@ -529,7 +529,7 @@ impl ShareCoordinator {
                 leader_epoch,
                 ..
             }) => Ok(Active {
-                _led: led,
+                leadership: led,
                 _operation: operation,
                 term: Term {
                     partition: state_partition,

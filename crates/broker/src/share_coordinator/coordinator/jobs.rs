@@ -49,7 +49,7 @@ impl PartitionKeys {
     fn still_active(&self, active: &Active<'_>) -> bool {
         self.term == active.term
             && active
-                ._led
+                .leadership
                 .get(&self.term.partition)
                 .is_some_and(|led| led.generation == self.generation)
     }
