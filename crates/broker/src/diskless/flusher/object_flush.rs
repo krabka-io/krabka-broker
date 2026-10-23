@@ -129,11 +129,13 @@ pub(crate) async fn flush_once(
         if !is_current_leader(partition) {
             continue;
         }
-        if let Some(frontier) = cache
-            .lock()
-            .await
-            .flushed_frontier(partition.topic_id, partition.handle.index.get())
-        {
+        let frontier = {
+            cache
+                .lock()
+                .await
+                .flushed_frontier(partition.topic_id, partition.handle.index.get())
+        };
+        if let Some(frontier) = frontier {
             metrics.record_diskless_wal_projection_lag(
                 partition.topic_id,
                 partition.handle.index,

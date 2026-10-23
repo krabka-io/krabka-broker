@@ -214,6 +214,7 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   their keys and their partitions are unchanged. `MetadataEventLog` gains
   `publish_keyed_group` and `KeyedEvent`; its default publishes one record at
   a time (#1617).
+- Diskless WAL trimming and object reclamation release the shared projection mutex before waiting on storage I/O (#1658).
 
 ### Fixed
 
