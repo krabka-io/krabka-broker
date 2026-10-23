@@ -2,6 +2,6 @@
   "name": "krabka-duplicate-check",
   "private": true,
   "dependencies": {
-    "jscpd": "5.4.1"
+    "jscpd": "5.4.2"
   }
 }
