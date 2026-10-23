@@ -114,23 +114,19 @@ fn lookup_null_client_quota(
     if principal.is_empty() {
         return None;
     }
-    let pair = |user: Option<&str>| -> EntityKey {
-        vec![
-            ("client-id".into(), None),
-            ("user".into(), user.map(Into::into)),
-        ]
-    };
     let user = |user: Option<&str>| -> EntityKey { vec![("user".into(), user.map(Into::into))] };
-    let (throttles, rate) = [
-        (pair(Some(principal)), false),
-        (user(Some(principal)), true),
-        (pair(None), false),
-        (user(None), true),
-    ]
-    .into_iter()
-    .find_map(|(key, throttles)| {
-        quota_for_key(image, &key, quota_key).map(|rate| (throttles, rate))
-    })?;
+    let candidates: [BorrowedEntity<'_>; 4] = [
+        &[("client-id", None), ("user", Some(principal))],
+        &[("user", Some(principal))],
+        &[("client-id", None), ("user", None)],
+        &[("user", None)],
+    ];
+    let (throttles, rate) = candidates
+        .into_iter()
+        .zip([false, true, false, true])
+        .find_map(|(key, throttles)| {
+            quota_for_candidate(image, key, quota_key).map(|rate| (throttles, rate))
+        })?;
     throttles.then(|| (user(Some(principal)), rate))
 }
 
@@ -209,6 +205,22 @@ struct LevelRate {
     rate: f64,
 }
 
+/// A candidate's borrowed, canonically ordered entity fields.
+type BorrowedEntity<'a> = &'a [(&'a str, Option<&'a str>)];
+
+/// Own only the candidate being probed, rather than every precedence level.
+fn quota_for_candidate(
+    image: &MetadataImage,
+    candidate: BorrowedEntity<'_>,
+    quota_key: &str,
+) -> Option<f64> {
+    let key = candidate
+        .iter()
+        .map(|(name, value)| ((*name).into(), value.map(Into::into)))
+        .collect();
+    quota_for_key(image, &key, quota_key)
+}
+
 /// The highest-precedence level of `levels` that has `quota_key` set for
 /// `(principal, client_id)`, with its value.
 fn resolve_levels(
@@ -220,29 +232,27 @@ fn resolve_levels(
     quota_key: &str,
     levels: Levels,
 ) -> Option<LevelRate> {
-    let candidates: [EntityKey; 8] = [
-        vec![
-            ("client-id".into(), Some(client_id.into())),
-            ("user".into(), Some(principal.into())),
-        ],
-        vec![
-            ("client-id".into(), None),
-            ("user".into(), Some(principal.into())),
-        ],
-        vec![("user".into(), Some(principal.into()))],
-        vec![
-            ("client-id".into(), Some(client_id.into())),
-            ("user".into(), None),
-        ],
-        vec![("client-id".into(), None), ("user".into(), None)],
-        vec![("user".into(), None)],
-        vec![("client-id".into(), Some(client_id.into()))],
-        vec![("client-id".into(), None)],
+    // Borrowed descriptors allocate nothing. Disabled levels and levels below
+    // the first matching rate never need an owned metadata lookup key.
+    let candidates: [BorrowedEntity<'_>; 8] = [
+        &[("client-id", Some(client_id)), ("user", Some(principal))],
+        &[("client-id", None), ("user", Some(principal))],
+        &[("user", Some(principal))],
+        &[("client-id", Some(client_id)), ("user", None)],
+        &[("client-id", None), ("user", None)],
+        &[("user", None)],
+        &[("client-id", Some(client_id))],
+        &[("client-id", None)],
     ];
     let mut values: [Option<f64>; 8] = [None; 8];
     for (index, key) in candidates.into_iter().enumerate() {
         if levels.0[index] {
-            values[index] = quota_for_key(image, &key, quota_key);
+            values[index] = quota_for_candidate(image, key, quota_key);
+            if values[index].is_some() {
+                // Every remaining candidate has lower priority. Keep using
+                // the verified selector with just the winning presence set.
+                break;
+            }
         }
     }
     let present = |index: usize| {
@@ -1217,6 +1227,36 @@ mod tests {
             }
             // A quota_key no candidate carries never resolves.
             assert!(lookup_quota_with_key(&img, "u", Some("c"), "absent_key").is_none());
+        }
+    }
+
+    #[test]
+    fn a_higher_entity_without_the_requested_rate_does_not_shadow_it() {
+        let candidates = uc_candidates("alice", "app");
+        for (index, entity) in candidates.iter().enumerate() {
+            let mut records = candidate_quota_records()
+                .entities(&candidates)
+                .mask(255_u16)
+                .key("consumer_byte_rate")
+                .call();
+            records.push(
+                rec()
+                    .entity(entity.clone())
+                    .key("producer_byte_rate")
+                    .value(CAND_VALS[index])
+                    .call(),
+            );
+            let image = img_with(records);
+            let key = match index {
+                2 | 5 => user_key("alice"),
+                6 | 7 => client_key("app"),
+                _ => pair_key("alice", "app"),
+            };
+            check!(
+                matched_quota(&image, "alice", Some("app"), "producer_byte_rate")
+                    == Some(MatchedQuota::new(key, CAND_VALS[index])),
+                "priority {index}"
+            );
         }
     }
 
