@@ -9,7 +9,7 @@ use {
     super::{actor::MetadataProvider, assignor::TopicIdPartition, reconciler},
     crate::metadata_source::MetadataSource,
     krabka_metadata::MetadataImage,
-    std::sync::{Arc, Mutex},
+    std::sync::{Arc, Mutex, Weak},
 };
 
 /// `MetadataProvider` backed by `krabka_raft::ControllerHandle::current_image()`.
@@ -22,8 +22,9 @@ pub struct ImageMetadataProvider {
 }
 
 struct CachedSnapshot {
-    // Retain the source allocation, so pointer identity cannot suffer ABA.
-    image: Arc<MetadataImage>,
+    // Keep allocation identity without pinning a published controller image.
+    // Weak ownership prevents ABA and still allows the controller to unwrap it.
+    image: Weak<MetadataImage>,
     input: Arc<reconciler::ReconcileInput>,
 }
 
@@ -45,13 +46,16 @@ impl MetadataProvider for ImageMetadataProvider {
             .lock()
             .expect("coordinator metadata cache poisoned");
         if let Some(previous) = cached.as_ref()
-            && Arc::ptr_eq(&previous.image, &image)
+            && previous
+                .image
+                .upgrade()
+                .is_some_and(|previous| Arc::ptr_eq(&previous, &image))
         {
             return Arc::clone(&previous.input);
         }
         let input = Arc::new(project_image(&image));
         *cached = Some(CachedSnapshot {
-            image,
+            image: Arc::downgrade(&image),
             input: Arc::clone(&input),
         });
         input
@@ -152,6 +156,26 @@ mod tests {
             ));
         }
         image
+    }
+
+    #[test]
+    fn cached_projection_does_not_prevent_controller_image_reuse() {
+        let source = Arc::new(FakeMetadataSource::static_image(projected_image(1, 2, &[
+            "rack-a",
+        ])));
+        let provider = ImageMetadataProvider::new(source.clone());
+        let image = source.current_image();
+        let projection = provider.snapshot();
+        let original_hash = projection.metadata_hash(["input"]);
+        // The controller owns one published Arc; this test owns the other.
+        assert!(Arc::strong_count(&image) == 2);
+        source.set_image(MetadataImage::new(real_uuid(9)));
+        // AppliedImage::publish uses this operation to reuse the replaced image.
+        // Keeping both the cache and an old projection alive must not block it.
+        assert!(Arc::try_unwrap(image).is_ok());
+        assert!(projection.metadata_hash(["input"]) == original_hash);
+        assert!(provider.snapshot().topic_id_by_name.is_empty());
+        assert!(projection.metadata_hash(["input"]) == original_hash);
     }
 
     #[test]
