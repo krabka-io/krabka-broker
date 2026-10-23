@@ -56,6 +56,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   [Performance budget results](docs/operations/performance-budget-results.md#calibration)
   records the calibration runs. Every materiality floor and spread multiplier
   is unchanged (#1395).
+- Wide ShareFetch sessions now index partition membership and cached response
+  state, and rotate records-bearing partitions in bounded passes rather than
+  repeatedly scanning and shifting the ordered session list (#1678).
 - The broker writes the log start offset that local retention moves to a
   partition's `log-start-offset-checkpoint` on a timer, instead of on every
   retention pass. The `[runtime]` key

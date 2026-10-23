@@ -29,7 +29,7 @@
 use {
     crate::codes,
     std::{
-        collections::{HashMap, HashSet},
+        collections::{HashMap, HashSet, hash_map::Entry},
         sync::Mutex,
     },
 };
@@ -57,7 +57,6 @@ pub(crate) struct ShareFetchSessionRequest<'a> {
 /// One partition of a live session, Kafka's `CachedSharePartition`.
 #[derive(Debug, Clone, Copy)]
 struct CachedPartition {
-    key: SharePartitionKey,
     /// The next incremental response must carry this partition: it was just
     /// added, or its last row carried an error.
     requires_update: bool,
@@ -70,7 +69,8 @@ struct CachedPartition {
 #[derive(Debug)]
 struct ShareSession {
     epoch: i32,
-    partitions: Vec<CachedPartition>,
+    partitions: Vec<SharePartitionKey>,
+    cached: HashMap<SharePartitionKey, CachedPartition>,
     connection_id: String,
 }
 
@@ -178,7 +178,7 @@ impl ShareSessionCache {
             let session = remove_session(&mut inner, &key).ok_or(codes::SHARE_SESSION_NOT_FOUND)?;
             return Ok(ShareFetchSessionUpdate {
                 partitions: Vec::new(),
-                released: session.partitions.iter().map(|p| p.key).collect(),
+                released: session.partitions.iter().copied().collect(),
                 final_request: true,
                 incremental: false,
             });
@@ -192,22 +192,24 @@ impl ShareSessionCache {
             if inner.sessions.len() >= self.max {
                 return Err(codes::SHARE_SESSION_LIMIT_REACHED);
             }
-            let mut ordered: Vec<CachedPartition> = Vec::with_capacity(partitions.requested.len());
+            let mut ordered = Vec::with_capacity(partitions.requested.len());
+            let mut cached = HashMap::with_capacity(partitions.requested.len());
             for requested in partitions.requested {
-                if !ordered.iter().any(|p| p.key == *requested) {
-                    ordered.push(CachedPartition {
-                        key: *requested,
+                if let Entry::Vacant(entry) = cached.entry(*requested) {
+                    entry.insert(CachedPartition {
                         requires_update: false,
                     });
+                    ordered.push(*requested);
                 }
             }
-            let fetch = ordered.iter().map(|p| p.key).collect();
+            let fetch = ordered.clone();
             inner
                 .connections
                 .insert(connection_id.to_string(), key.clone());
             inner.sessions.insert(key, ShareSession {
                 epoch: 1,
                 partitions: ordered,
+                cached,
                 connection_id: connection_id.to_string(),
             });
             return Ok(ShareFetchSessionUpdate {
@@ -220,19 +222,22 @@ impl ShareSessionCache {
 
         let session = session_at_epoch(&mut inner, &key, epoch)?;
         for requested in partitions.requested {
-            if !session.partitions.iter().any(|p| p.key == *requested) {
-                session.partitions.push(CachedPartition {
-                    key: *requested,
+            if let Entry::Vacant(entry) = session.cached.entry(*requested) {
+                entry.insert(CachedPartition {
                     requires_update: true,
                 });
+                session.partitions.push(*requested);
             }
         }
         session
             .partitions
-            .retain(|p| !partitions.forgotten.contains(&p.key));
+            .retain(|key| !partitions.forgotten.contains(key));
+        for forgotten in partitions.forgotten {
+            session.cached.remove(forgotten);
+        }
         session.epoch = next_epoch(session.epoch);
         Ok(ShareFetchSessionUpdate {
-            partitions: session.partitions.iter().map(|p| p.key).collect(),
+            partitions: session.partitions.clone(),
             released: HashSet::new(),
             final_request: false,
             incremental: true,
@@ -261,9 +266,8 @@ impl ShareSessionCache {
         rows.iter()
             .map(|row| {
                 session
-                    .partitions
-                    .iter()
-                    .find(|p| p.key == row.key)
+                    .cached
+                    .get(&row.key)
                     .is_none_or(|cached| row.has_records || row.has_error || cached.requires_update)
             })
             .collect()
@@ -284,15 +288,25 @@ impl ShareSessionCache {
             return;
         };
         for row in rows {
-            let Some(index) = session.partitions.iter().position(|p| p.key == row.key) else {
-                continue;
-            };
-            session.partitions[index].requires_update = row.has_error;
-            if row.has_records {
-                let moved = session.partitions.remove(index);
-                session.partitions.push(moved);
+            if let Some(cached) = session.cached.get_mut(&row.key) {
+                cached.requires_update = row.has_error;
             }
         }
+
+        // Repeatedly removing record-bearing partitions from the middle of
+        // the vector makes a wide response quadratic. The original operation
+        // leaves them at the end in last-record-occurrence order, which these
+        // bounded passes reproduce even when `rows` contains duplicates.
+        let mut moved = HashSet::new();
+        let mut moved_order = Vec::new();
+        for row in rows.iter().rev() {
+            if row.has_records && session.cached.contains_key(&row.key) && moved.insert(row.key) {
+                moved_order.push(row.key);
+            }
+        }
+        moved_order.reverse();
+        session.partitions.retain(|key| !moved.contains(key));
+        session.partitions.extend(moved_order);
     }
 
     /// Validate a `ShareAcknowledge` epoch and advance or close its session.
@@ -309,7 +323,7 @@ impl ShareSessionCache {
         let mut inner = self.inner.lock().expect("share-session mutex poisoned");
         if epoch == FINAL_EPOCH {
             return remove_session(&mut inner, &key)
-                .map(|session| session.partitions.iter().map(|p| p.key).collect())
+                .map(|session| session.partitions.iter().copied().collect())
                 .ok_or(codes::SHARE_SESSION_NOT_FOUND);
         }
         let session = session_at_epoch(&mut inner, &key, epoch)?;
@@ -336,7 +350,7 @@ impl ShareSessionCache {
         Some(ClosedShareSession {
             group: key.group,
             member: key.member,
-            partitions: session.partitions.iter().map(|p| p.key).collect(),
+            partitions: session.partitions.iter().copied().collect(),
         })
     }
 }
@@ -369,7 +383,11 @@ fn next_epoch(epoch: i32) -> i32 { epoch.checked_add(1).unwrap_or(1) }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {
+        super::*,
+        assert2::assert,
+        std::{sync::Arc, thread},
+    };
 
     fn partition(id: u8, partition: i32) -> SharePartitionKey {
         (uuid::Uuid::from_bytes([id; 16]), partition)
@@ -425,6 +443,35 @@ mod tests {
         assert!(updated.partitions == vec![p1, p2]);
         assert!(updated.incremental);
         assert!(fetch(&cache, "m", 2, &[], &[]).is_ok());
+    }
+
+    #[test]
+    fn membership_keeps_first_seen_order_and_existing_state() {
+        let cache = ShareSessionCache::new(8);
+        let (p0, p1, p2, p3) = (
+            partition(1, 0),
+            partition(1, 1),
+            partition(1, 2),
+            partition(1, 3),
+        );
+        let row = |key, has_error| ResponseRow {
+            key,
+            has_records: false,
+            has_error,
+        };
+
+        let opened = fetch(&cache, "m", 0, &[p1, p0, p1, p0], &[]).expect("open");
+        assert!(opened.partitions == vec![p1, p0]);
+        cache.commit_response("g", "m", &[row(p1, true)]);
+
+        // Existing and repeated partitions do not move or reset their cached
+        // state. New partitions append on their first occurrence, before the
+        // forgotten set is applied.
+        let updated = fetch(&cache, "m", 1, &[p0, p2, p2, p1, p3], &[p0, p3]).expect("incremental");
+        assert!(updated.partitions == vec![p1, p2]);
+        assert!(
+            cache.select_response("g", "m", &[row(p1, false), row(p2, false)]) == vec![true, true]
+        );
     }
 
     #[test]
@@ -591,6 +638,107 @@ mod tests {
                 order: order.iter().map(|&index| partition(1, index)).collect(),
             }
         );
+    }
+
+    #[test]
+    fn response_rotation_uses_last_record_occurrence_and_last_error_state() {
+        let cache = ShareSessionCache::new(8);
+        let (p0, p1, p2, p3, unknown) = (
+            partition(1, 0),
+            partition(1, 1),
+            partition(1, 2),
+            partition(1, 3),
+            partition(2, 0),
+        );
+        let row = |key, has_records, has_error| ResponseRow {
+            key,
+            has_records,
+            has_error,
+        };
+        fetch(&cache, "m", 0, &[p0, p1, p2, p3], &[]).expect("open");
+
+        cache.commit_response("g", "m", &[
+            row(p2, true, true),
+            row(p0, true, true),
+            row(unknown, true, true),
+            row(p1, false, true),
+            row(p2, true, false),
+            row(p1, false, false),
+        ]);
+
+        let continued = fetch(&cache, "m", 1, &[], &[]).expect("continue");
+        // Moving p2 again puts it after p0, while untouched partitions keep
+        // their relative order. An unknown row has no effect.
+        assert!(continued.partitions == vec![p1, p3, p0, p2]);
+        // A later row without records updates the error flag without moving
+        // that partition after a subsequent record-bearing partition.
+        cache.commit_response("g", "m", &[
+            row(p1, true, true),
+            row(p3, true, false),
+            row(p1, false, false),
+        ]);
+        let rotated = fetch(&cache, "m", 2, &[], &[]).expect("continue after repeated rows");
+        assert!(rotated.partitions == vec![p0, p2, p1, p3]);
+        // The final row for each cached partition determines whether its
+        // error needs a clearing response.
+        assert!(
+            cache.select_response("g", "m", &[
+                row(p0, false, false),
+                row(p1, false, false),
+                row(p2, false, false),
+                row(unknown, false, false),
+            ],) == vec![true, false, false, true]
+        );
+    }
+
+    #[test]
+    fn wide_and_small_sessions_progress_concurrently() {
+        for partition_count in [1_000_usize, 2_000, 4_000] {
+            let cache = Arc::new(ShareSessionCache::new(2));
+            let wide: Vec<_> = (0..partition_count)
+                .map(|index| partition(1, i32::try_from(index).expect("partition index")))
+                .collect();
+            let new: Vec<_> = (0..partition_count)
+                .map(|index| partition(2, i32::try_from(index).expect("partition index")))
+                .collect();
+            let forgotten: Vec<_> = wide.iter().step_by(2).copied().collect();
+            let forgotten_count = forgotten.len();
+            let small = partition(3, 0);
+
+            let wide_cache = Arc::clone(&cache);
+            let wide_thread = thread::spawn(move || {
+                fetch(&wide_cache, "wide", 0, &wide, &[]).expect("open wide");
+                let updated = fetch(&wide_cache, "wide", 1, &new, &forgotten).expect("update wide");
+                let rows: Vec<_> = updated
+                    .partitions
+                    .iter()
+                    .copied()
+                    .map(|key| ResponseRow {
+                        key,
+                        has_records: true,
+                        has_error: false,
+                    })
+                    .collect();
+                assert!(
+                    wide_cache
+                        .select_response("g", "wide", &rows)
+                        .iter()
+                        .all(|carried| *carried)
+                );
+                wide_cache.commit_response("g", "wide", &rows);
+                updated.partitions
+            });
+            let small_cache = Arc::clone(&cache);
+            let small_thread = thread::spawn(move || {
+                fetch(&small_cache, "small", 0, &[small], &[]).expect("open small");
+                fetch(&small_cache, "small", 1, &[], &[]).expect("update small")
+            });
+
+            let wide_order = wide_thread.join().expect("wide thread");
+            let small_update = small_thread.join().expect("small thread");
+            assert!(wide_order.len() == partition_count + forgotten_count);
+            assert!(small_update.partitions == vec![small]);
+        }
     }
 
     #[test]
