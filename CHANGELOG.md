@@ -198,6 +198,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   summing every partition's bytes, so a fetch over `P` partitions did `P²`
   additions. It now keeps a running total. On a 4-vCPU host, the read loop
   over 10,000 entries took 21-23 ms instead of 32-34 ms (#1609).
+- Use per-topic membership sets when a hosted classic consumer waits on
+  unreleased target partitions, avoiding repeated assignment-vector scans
+  (#1719).
 - OffsetFetch projects only the requested committed and pending group offsets instead of copying unrelated entries (#1656).
 - Less work per request on the produce and fetch paths:
   - Dispatch reads a Produce request's `acks` from its leading fields to

@@ -372,11 +372,15 @@ impl GroupState {
         let wanted: Partitions = target
             .iter()
             .map(|(topic_id, partitions)| {
-                let assigned = member.assigned_partitions.get(topic_id);
+                // Replay can retain assignment order, so membership must not require sorted vectors.
+                let assigned: HashSet<i32> = member
+                    .assigned_partitions
+                    .get(topic_id)
+                    .map_or_default(|held| held.iter().copied().collect());
                 let missing: Vec<i32> = partitions
                     .iter()
                     .copied()
-                    .filter(|partition| assigned.is_none_or(|held| !held.contains(partition)))
+                    .filter(|partition| !assigned.contains(partition))
                     .collect();
                 (*topic_id, missing)
             })
@@ -1313,6 +1317,66 @@ mod tests {
         );
         check!(g.held_by_others("a", &Partitions::new()).is_empty());
     }
+
+    #[test]
+    fn unreleased_waiting_matches_reordered_and_duplicate_assignment_ownership() {
+        let assignments: &[&[i32]] = &[&[], &[0], &[2, 0, 2], &[1, 2, 0], &[2, 2]];
+        for target in assignments {
+            for assigned in assignments {
+                for other_assigned in assignments {
+                    for other_pending in assignments {
+                        for assignment_state in [
+                            MemberAssignmentState::Stable,
+                            MemberAssignmentState::UnrevokedPartitions,
+                            MemberAssignmentState::UnreleasedPartitions,
+                        ] {
+                            let mut g = GroupState::new("g");
+                            let mut a = member("a");
+                            a.assignment_state = assignment_state;
+                            if !assigned.is_empty() {
+                                a.assigned_partitions = [(T, assigned.to_vec())].into();
+                            }
+                            a.partitions_pending_revocation = [(T, vec![2, 0, 2])].into();
+                            let mut b = member("b");
+                            b.assigned_partitions =
+                                [(T, other_assigned.to_vec()), (U, vec![1, 0, 2])].into();
+                            b.partitions_pending_revocation = [(T, other_pending.to_vec())].into();
+                            g.members.insert("a".into(), a);
+                            g.members.insert("b".into(), b);
+                            g.target
+                                .per_member
+                                .insert("a".into(), [(T, target.to_vec())].into());
+
+                            let expected = assignment_state
+                                == MemberAssignmentState::UnreleasedPartitions
+                                && target.iter().any(|partition| {
+                                    !assigned.contains(partition)
+                                        && (other_assigned.contains(partition)
+                                            || other_pending.contains(partition))
+                                });
+                            check!(
+                                g.waiting_on_unreleased_partition("a") == expected,
+                                "state={assignment_state:?}, target={target:?}, assigned={assigned:?}, other assigned={other_assigned:?}, other pending={other_pending:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unreleased_waiting_requires_a_member_and_target() {
+        let mut g = GroupState::new("g");
+        check!(!g.waiting_on_unreleased_partition("a"));
+        let mut a = member("a");
+        a.assignment_state = MemberAssignmentState::UnreleasedPartitions;
+        g.members.insert("a".into(), a);
+        check!(!g.waiting_on_unreleased_partition("a"));
+        g.target.per_member.insert("a".into(), Partitions::new());
+        check!(!g.waiting_on_unreleased_partition("a"));
+    }
+
     fn revoking_shape() -> Held {
         held()
             .state(MemberAssignmentState::UnrevokedPartitions)
