@@ -47,6 +47,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- Scheduled delivery checks over archived segments buffer bounded byte ranges
+  instead of fetching each batch header separately, reducing remote requests for
+  ListOffsets LATEST and retention scans (#1682).
 - The RF3 regression contract is now `rf3-regression-v2`. It raises the
   variance budget of records/s from 10% to 15%, and of p99 latency from 25% to
   50%. The first measured run of `rf3-regression-v1` exceeded both, and
