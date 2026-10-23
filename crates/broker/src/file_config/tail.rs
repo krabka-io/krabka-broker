@@ -2,7 +2,7 @@
 //!
 //! [`FileConfigTail`] bundles the sections that are applied after the
 //! listeners, OAUTHBEARER, and remote storage: the authorizer and schema
-//! registry clients, the `KRaft` roles, the Kerberos credentials, the quorum
+//! registry settings, the `KRaft` roles, the Kerberos credentials, the quorum
 //! and bootstrap endpoints, and the audit subsystem. They travel together
 //! because each is a whole-broker singleton that `apply_to` writes exactly
 //! once, after the values they may depend on are already resolved.
@@ -14,16 +14,13 @@ use {
         gssapi::DEFAULT_KERBEROS_SERVICE_NAME, parse_bootstrap_server, parse_quorum_voter,
     },
     crate::{
-        authorizer::{AllowAllAuthorizer, SimpleAclAuthorizer},
         config::{BrokerConfig, InterBrokerCredentials, NodeRole, validate_oauthbearer_token_file},
         network::auth::GssapiConfig,
-        schema_validation::SchemaValidator,
     },
     krabka_units::{
         ByteSize, Time,
         convert::{ByteSizeExt as _, TimeExt as _},
     },
-    std::sync::Arc,
 };
 
 pub(super) struct FileConfigTail {
@@ -39,111 +36,55 @@ pub(super) struct FileConfigTail {
     pub(super) audit: Option<FileAuditConfig>,
 }
 
-/// Apply the `[authorization]` section: super users and the authorizer impl.
-fn apply_authorization_tail(
-    authorization: &FileAuthorizationConfig,
-    cfg: &mut BrokerConfig,
-) -> Result<(), FileConfigError> {
-    let super_users = authorization
-        .super_users
-        .iter()
-        .map(|entry| super::authorization::super_user_name(entry))
-        .collect();
-    cfg.super_users.clone_from(&super_users);
-    cfg.authorizer = match authorization.authz_type {
-        AuthzType::AllowAll => Arc::new(AllowAllAuthorizer),
-        AuthzType::Simple => Arc::new(
-            SimpleAclAuthorizer::new(super_users)
-                .with_allow_everyone_if_no_acl_found(authorization.allow_everyone_if_no_acl_found),
-        ),
-        #[cfg(target_family = "wasm")]
-        AuthzType::Opa => {
-            return Err(FileConfigError::OpaConfig(
-                "the OPA authorizer is unavailable on this platform".to_owned(),
-            ));
-        }
-        #[cfg(not(target_family = "wasm"))]
-        AuthzType::Opa => {
-            use crate::authorizer::opa::OpaAuthorizer;
-
-            let opa = authorization
-                .opa
-                .as_ref()
-                .ok_or_else(|| FileConfigError::MissingSection("[authorization.opa]".into()))?;
-            Arc::new(
-                OpaAuthorizer::new(
-                    super_users,
-                    opa.url.clone(),
-                    opa.allow_on_error,
-                    opa.maximum_cache_size,
-                    Time::from_millis(opa.expire_after_ms),
-                    cfg.opa_http_timeout,
-                )
-                .map_err(|error| FileConfigError::OpaConfig(format!("{error:?}")))?,
-            )
-        }
-    };
-    Ok(())
-}
-
+/// Apply the remaining singleton settings; defer security-client construction.
 pub(super) fn apply_config_tail(
     tail: FileConfigTail,
     cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
-    if let Some(authorization) = tail.authorization.as_ref() {
-        apply_authorization_tail(authorization, cfg)?;
-    }
-    if let Some(sr) = tail.schema_registry.as_ref() {
-        let basic_auth = match (
-            sr.basic_auth_username.as_ref(),
-            sr.basic_auth_password_path.as_ref(),
-        ) {
-            (None, None) => None,
-            (Some(username), Some(path)) => Some((
-                username.clone(),
-                std::fs::read_to_string(path)
-                    .map_err(|error| {
-                        FileConfigError::InvalidConfig(format!(
-                            "[schema_registry]: failed to read basic_auth_password_path {}: {error}",
-                            path.display()
-                        ))
-                    })?
-                    .trim_end_matches(['\n', '\r'])
-                    .to_owned(),
-            )),
-            _ => {
-                return Err(FileConfigError::InvalidConfig(
-                    "[schema_registry]: basic_auth_username and basic_auth_password_path must be set together"
-                        .to_owned(),
-                ));
+    if let Some(authorization) = tail.authorization {
+        if authorization.authz_type == AuthzType::Opa {
+            #[cfg(target_family = "wasm")]
+            return Err(FileConfigError::OpaConfig(
+                "the OPA authorizer is unavailable on this platform".to_owned(),
+            ));
+            #[cfg(not(target_family = "wasm"))]
+            {
+                let opa = authorization.opa.as_ref().ok_or_else(|| {
+                    FileConfigError::MissingSection("[authorization.opa]".into())
+                })?;
+                if opa.maximum_cache_size == 0 {
+                    return Err(FileConfigError::OpaConfig("ZeroCache".into()));
+                }
+                if opa.expire_after_ms <= 0 {
+                    return Err(FileConfigError::OpaConfig("InvalidCacheTtl".into()));
+                }
             }
-        };
-        cfg.schema_validator = Some(std::sync::Arc::new(
-            basic_auth
-                .map_or_else(
-                    || {
-                        SchemaValidator::new(
-                            sr.url.clone(),
-                            sr.fail_open,
-                            sr.maximum_cache_size,
-                            Time::from_millis(sr.expire_after_ms),
-                            cfg.schema_registry_http_timeout,
-                        )
-                    },
-                    |(username, password)| {
-                        SchemaValidator::new_with_basic_auth(
-                            sr.url.clone(),
-                            sr.fail_open,
-                            sr.maximum_cache_size,
-                            Time::from_millis(sr.expire_after_ms),
-                            cfg.schema_registry_http_timeout,
-                            username,
-                            password,
-                        )
-                    },
-                )
-                .map_err(|error| FileConfigError::SchemaRegistryConfig(format!("{error:?}")))?,
+        }
+        cfg.super_users = authorization
+            .super_users
+            .iter()
+            .map(|entry| super::authorization::super_user_name(entry))
+            .collect();
+        cfg.authorization_config = Some(authorization);
+    }
+    if let Some(sr) = tail.schema_registry {
+        if sr.basic_auth_username.is_some() != sr.basic_auth_password_path.is_some() {
+            return Err(FileConfigError::InvalidConfig(
+                "[schema_registry]: basic_auth_username and basic_auth_password_path must be set together"
+                    .to_owned(),
+            ));
+        }
+        #[cfg(target_family = "wasm")]
+        return Err(FileConfigError::SchemaRegistryConfig(
+            "Unavailable { reason: \"the schema registry client needs an HTTP stack that wasm32-wasip1 does not have\" }".into(),
         ));
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if sr.maximum_cache_size == 0 {
+                return Err(FileConfigError::SchemaRegistryConfig("ZeroCache".into()));
+            }
+            cfg.schema_registry_config = Some(sr);
+        }
     }
     if let Some(process) = tail.process
         && !process.roles.is_empty()

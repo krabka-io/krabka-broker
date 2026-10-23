@@ -38,6 +38,7 @@ use {
         metadata_source::{MetadataSource, or_fatal_fault},
         metrics::BrokerMetrics,
         raft_handshake::AuditLogArc,
+        security_clients::assemble,
         share_coordinator::coordinator::jobs::spawn as spawn_share_coordinator_jobs,
         share_partition::backlog_poller::BacklogPoller,
     },
@@ -164,6 +165,8 @@ impl Broker {
         Tail: FnOnce(JoinedQuorum) -> TailFuture,
         TailFuture: Future<Output = Result<BrokerHandle, BrokerError>>,
     {
+        config.validate()?;
+        assemble(&mut config).map_err(|error| BrokerError::Startup(error.to_string()))?;
         // Binds the default data-plane listener now, and publishes its real
         // port into `config`, when the config asks for one and the caller
         // supplied none. `start_metadata_phase` below registers this node
