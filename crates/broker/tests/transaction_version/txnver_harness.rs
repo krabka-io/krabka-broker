@@ -75,7 +75,7 @@ pub fn config(
     log_dir: std::path::PathBuf,
     bootstrap_mode: Option<krabka_broker::BootstrapMode>,
 ) -> krabka_broker::BrokerConfig {
-    let mut config = krabka_broker::BrokerConfig::for_tests(log_dir);
+    let mut config = crate::support::heartbeat_config(log_dir);
     config.transaction_state_num_partitions = 1;
     config.transaction_state_replication_factor = 1;
     if let Some(mode) = bootstrap_mode {
