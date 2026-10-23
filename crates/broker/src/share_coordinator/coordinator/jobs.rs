@@ -18,18 +18,42 @@
 //! (`isShareGroupsEnabled`: `share.version` 1 or more in the image).
 
 use {
-    super::{Active, LoadStatus, ShareCoordinator, Term, state_machine::StateRecord},
+    super::{
+        Active, LoadStatus, ShareCoordinator, ShareStateKey3, Term, state_machine::StateRecord,
+    },
     crate::{
         coordinator::topic_deletion::deleted_topics, features::share_groups_enabled,
         time_util::duration_millis,
     },
     krabka_ids::PartitionIndex,
     krabka_metadata::MetadataImage,
-    std::{collections::HashSet, sync::Arc},
+    std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    },
     tokio::{sync::watch, time::Instant},
     tokio_util::sync::CancellationToken,
     tracing::{info, warn},
 };
+
+/// The sorted keys observed for one loaded shard. A later load or membership
+/// change must refresh this list before processing it.
+struct PartitionKeys {
+    term: Term,
+    generation: u64,
+    revision: u64,
+    keys: Vec<ShareStateKey3>,
+}
+
+impl PartitionKeys {
+    fn still_active(&self, active: &Active<'_>) -> bool {
+        self.term == active.term
+            && active
+                .leadership
+                .get(&self.term.partition)
+                .is_some_and(|led| led.generation == self.generation)
+    }
+}
 
 impl ShareCoordinator {
     /// The state partitions that this broker leads and has loaded.
@@ -46,23 +70,77 @@ impl ShareCoordinator {
         partitions
     }
 
-    /// The keys that map to `state_partition` and that `filter` accepts.
-    fn keys_of(
+    /// A shard may reload or initialize another key while the job waits for
+    /// its operation guard. Only that changed shard needs another scan,
+    /// under its active guard; otherwise a one-shot topic-deletion job could
+    /// miss the new keys.
+    fn current_partition_keys(
         &self,
-        state_partition: PartitionIndex,
+        bucket: PartitionKeys,
+        active: &Active<'_>,
         filter: impl Fn(&uuid::Uuid) -> bool,
-    ) -> Vec<(String, uuid::Uuid, i32)> {
-        let mut keys: Vec<(String, uuid::Uuid, i32)> = self
+    ) -> Vec<ShareStateKey3> {
+        if bucket.still_active(active)
+            && bucket.revision == self.state_key_revision(active.term.partition)
+        {
+            return bucket.keys;
+        }
+        let mut keys: Vec<ShareStateKey3> = self
             .state
             .iter()
-            .map(|entry| entry.key().clone())
-            .filter(|(group, topic_id, partition)| {
+            .filter(|entry| {
+                let (group, topic_id, partition) = entry.key();
                 filter(topic_id)
-                    && self.state_partition_for(group, topic_id, *partition) == state_partition
+                    && self.state_partition_for(group, topic_id, *partition)
+                        == active.term.partition
             })
+            .map(|entry| entry.key().clone())
             .collect();
         keys.sort_unstable();
         keys
+    }
+
+    /// Buckets accepted keys once for every active shard, preserving the
+    /// partition and key order of the per-shard jobs. Filter borrowed keys
+    /// before routing or cloning them, so unrelated deletions clone no keys.
+    async fn keys_by_active_partition(
+        &self,
+        filter: impl Fn(&uuid::Uuid) -> bool,
+    ) -> Vec<PartitionKeys> {
+        let led = self.leader_partitions.read().await;
+        let mut partitions: HashMap<PartitionIndex, PartitionKeys> = led
+            .iter()
+            .filter(|(_, led)| led.status == LoadStatus::Active)
+            .map(|(&partition, led)| {
+                (partition, PartitionKeys {
+                    term: Term {
+                        partition,
+                        leader_epoch: led.leader_epoch,
+                    },
+                    generation: led.generation,
+                    revision: self.state_key_revision(partition),
+                    keys: Vec::new(),
+                })
+            })
+            .collect();
+        if partitions.is_empty() {
+            return Vec::new();
+        }
+        for entry in &self.state {
+            let (group, topic_id, partition) = entry.key();
+            if filter(topic_id)
+                && let Some(bucket) =
+                    partitions.get_mut(&self.state_partition_for(group, topic_id, *partition))
+            {
+                bucket.keys.push(entry.key().clone());
+            }
+        }
+        let mut partitions: Vec<PartitionKeys> = partitions.into_values().collect();
+        partitions.sort_unstable_by_key(|bucket| bucket.term.partition.get());
+        for bucket in &mut partitions {
+            bucket.keys.sort_unstable();
+        }
+        partitions
     }
 
     /// Waits until the records that `appended` counts on the partition of
@@ -111,14 +189,17 @@ impl ShareCoordinator {
             return 0;
         }
         let mut written = 0;
-        for state_partition in self.active_partitions().await {
-            let Ok(active) = self.active(state_partition).await else {
+        for bucket in self
+            .keys_by_active_partition(|topic_id| deleted.contains(topic_id))
+            .await
+        {
+            let Ok(active) = self.active(bucket.term.partition).await else {
                 continue;
             };
+            let keys =
+                self.current_partition_keys(bucket, &active, |topic_id| deleted.contains(topic_id));
             let mut appended = 0;
-            for (group, topic_id, partition) in
-                self.keys_of(state_partition, |topic_id| deleted.contains(topic_id))
-            {
+            for (group, topic_id, partition) in keys {
                 let Some(entry) = self.entry(&group, topic_id, partition) else {
                     continue;
                 };
@@ -160,11 +241,11 @@ impl ShareCoordinator {
     pub(crate) async fn snapshot_cold_partitions(&self) -> usize {
         let interval = duration_millis(self.config.cold_partition_snapshot_interval);
         let mut written = 0;
-        for state_partition in self.active_partitions().await {
-            let Ok(active) = self.active(state_partition).await else {
+        for bucket in self.keys_by_active_partition(|_| true).await {
+            let Ok(active) = self.active(bucket.term.partition).await else {
                 continue;
             };
-            let keys = self.keys_of(state_partition, |_| true);
+            let keys = self.current_partition_keys(bucket, &active, |_| true);
             let mut cells = Vec::with_capacity(keys.len());
             let mut all_cold = true;
             for key in keys {

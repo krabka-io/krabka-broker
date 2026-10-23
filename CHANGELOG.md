@@ -59,6 +59,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   [Performance budget results](docs/operations/performance-budget-results.md#calibration)
   records the calibration runs. Every materiality floor and spread multiplier
   is unchanged (#1395).
+- Bucket share coordinator background-job keys once per sweep across active
+  state partitions, refreshing a shard after load or membership changes (#1717).
 - Wide ShareFetch sessions now index partition membership and cached response
   state, and rotate records-bearing partitions in bounded passes rather than
   repeatedly scanning and shifting the ordered session list (#1678).

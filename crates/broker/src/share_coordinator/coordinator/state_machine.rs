@@ -311,6 +311,7 @@ impl ShareCoordinator {
                 &snapshot, offset,
             ))),
         );
+        self.note_state_key_change(term.partition);
         Ok(())
     }
 
@@ -659,7 +660,13 @@ impl ShareCoordinator {
             warn!(error = %e, "share delete persist failed");
             e.share_error()
         })?;
-        self.state.remove(&(group.to_string(), topic_id, partition));
+        if self
+            .state
+            .remove(&(group.to_string(), topic_id, partition))
+            .is_some()
+        {
+            self.note_state_key_change(term.partition);
+        }
         Ok(())
     }
 }
