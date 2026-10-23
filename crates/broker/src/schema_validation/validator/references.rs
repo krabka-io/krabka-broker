@@ -194,6 +194,8 @@ mod tests {
     )]
     #[test_macro(tokio::test)]
     async fn a_cycle_or_excess_depth_is_rejected(cycle: bool, expected: &str) {
+        use assert2::assert;
+
         let server = MockServer::start().await;
         let count = if cycle { 1 } else { 32 };
         for index in 0..count {
