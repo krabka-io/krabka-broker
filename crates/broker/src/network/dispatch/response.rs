@@ -1,24 +1,20 @@
-//! Response framing and the KIP-219 throttle. It prepends the response header
-//! to a handler's body, charges the request quota, and patches the leading
-//! `ThrottleTimeMs` of the responses whose schema carries that field first.
+//! Response framing and throttle-field rewriting. It prepends the response
+//! header to a handler's body and raises its schema-specific `ThrottleTimeMs`.
 //!
-//! Charging a quota never sleeps here. It returns the throttle window
-//! alongside the bytes, and the connection loop enforces it by muting the
+//! The connection loop enforces the throttle window by muting the
 //! connection *after* the response is written, which is what KIP-219 asks for.
 
 use {
     crate::{
-        broker::Broker,
         error::BrokerError,
         handlers::{ApiKeyCode, ApiVersion, CorrelationId},
-        metrics::{QuotaCharge, QuotaType},
+        metrics::QuotaCharge,
         network::{
-            auth::ConnectionAuth,
             codec::{self, KafkaCodec},
             request::ParsedRequest,
             response_header_len, response_header_v1,
         },
-        quota::{QuotaDelay, consume_request_quota, throttle_time_ms},
+        quota::throttle_time_ms,
     },
     bytes::{BufMut, Bytes, BytesMut},
     krabka_protocol::api_key::ApiKey,
@@ -31,7 +27,7 @@ use {
 pub(super) struct ThrottledResponse {
     pub(super) bytes: Bytes,
     pub(super) throttle: Time,
-    /// A quota charge the handler left for [`apply_request_quota`] to resolve
+    /// A quota charge the handler left for [`super::quota_accounting::apply_request_quota`] to resolve
     /// together with the request quota. See
     /// [`crate::quota::ThrottleSlot::defer`].
     pub(super) deferred_charge: Option<QuotaCharge>,
@@ -92,87 +88,25 @@ impl ResponseShape {
     }
 }
 
-/// Charges the KIP-124 request quota for a finished request and returns the
-/// response with the throttle window it earned.
-///
-/// `handler_time` is the time the handler actually ran, not the time it was
-/// parked on a coordinator, a replication wait or a raft commit: Kafka meters
-/// request-handler thread time, and a request waiting in a purgatory holds no
-/// thread. `deferred_charge` is a quota the handler charged and left for this
-/// function, which resolves both in one metrics call.
-///
-/// The function does not wait. It patches the response's leading
-/// `ThrottleTimeMs` where the schema has one, so the client learns how long to
-/// back off, and returns the window so the caller can mute the connection
-/// after the write.
-pub(super) fn apply_request_quota(
-    broker: &Broker,
-    mut response_bytes: Bytes,
-    parsed: &ParsedRequest<'_>,
+/// Raises the encoded response's throttle field to the requested delay.
+/// Only response bytes and their schema metadata are needed; quota accounting
+/// and connection muting remain the caller's responsibility.
+pub(super) fn patch_response_throttle(
+    response_bytes: Bytes,
+    api_key: ApiKeyCode,
     shape: ResponseShape,
-    auth: &ConnectionAuth,
-    handler_time: std::time::Duration,
-    deferred_charge: Option<QuotaCharge>,
-) -> ThrottledResponse {
-    let elapsed_micros = u64::try_from(handler_time.as_micros()).unwrap_or(u64::MAX);
-    let self_accounts = matches!(
-        ApiKey::from_i16(parsed.api_key),
-        Some(ApiKey::Produce | ApiKey::Fetch)
-    );
-    let mut throttle = <Time as TimeExt>::ZERO;
-    if !self_accounts {
-        // KIP-124 keys the request quota on the principal. A PLAINTEXT or SSL
-        // connection starts as `ANONYMOUS`, so only a SASL connection that has
-        // not authenticated yet has none, and Kafka's authenticator answers
-        // those requests before `KafkaApis` could charge them. The zero still
-        // reaches the throttle histogram below, which is what keeps that
-        // family's `_count` equal to the number of requests this path
-        // accounted for.
-        let charged = match auth.principal() {
-            None => QuotaDelay::zero(),
-            Some(principal) => {
-                let image = broker.controller.current_image();
-                consume_request_quota(
-                    &image,
-                    &broker.quota_buckets,
-                    &principal.name,
-                    parsed.client_id,
-                    elapsed_micros,
-                    broker.config.quota_throttle_max,
-                )
-            }
-        };
-        // One metrics call resolves the request quota and any quota the
-        // handler deferred, and the larger delay is the window this request is
-        // muted for.
-        let request_charge: QuotaCharge = (QuotaType::Request, charged).into();
-        let quota_charges: Vec<QuotaCharge> = deferred_charge
-            .into_iter()
-            .chain(std::iter::once(request_charge))
-            .collect();
-        let delay = broker
-            .metrics
-            .record_applied_throttle(parsed.api_key, &quota_charges);
-        if delay > <Time as TimeExt>::ZERO {
-            let delay_ms = throttle_time_ms(delay);
-            if throttle_is_leading_field(parsed.api_key, shape.version) {
-                response_bytes = patch_leading_throttle(
-                    response_bytes,
-                    parsed.api_key,
-                    shape.body_flexible,
-                    delay_ms,
-                );
-            } else if buried_throttle_is_reencoded(parsed.api_key) {
-                response_bytes = set_buried_throttle(response_bytes, parsed, shape, delay_ms);
-            }
-            throttle = delay;
-        }
+    delay: Time,
+) -> Bytes {
+    if delay <= <Time as TimeExt>::ZERO {
+        return response_bytes;
     }
-    ThrottledResponse {
-        bytes: response_bytes,
-        throttle,
-        deferred_charge: None,
-        close_after_response: false,
+    let delay_ms = throttle_time_ms(delay);
+    if throttle_is_leading_field(api_key, shape.version) {
+        patch_leading_throttle(response_bytes, api_key, shape.body_flexible, delay_ms)
+    } else if buried_throttle_is_reencoded(api_key) {
+        set_buried_throttle(response_bytes, api_key, shape, delay_ms)
+    } else {
+        response_bytes
     }
 }
 
@@ -206,7 +140,7 @@ pub(super) fn buried_throttle_is_reencoded(api_key: ApiKeyCode) -> bool {
 /// gets is the one the handler wrote.
 fn set_buried_throttle(
     response_bytes: Bytes,
-    parsed: &ParsedRequest<'_>,
+    api_key: ApiKeyCode,
     shape: ResponseShape,
     delay_ms: i32,
 ) -> Bytes {
@@ -218,12 +152,12 @@ fn set_buried_throttle(
         renew_delegation_token_response::RenewDelegationTokenResponse,
     };
 
-    let header_len = response_header_len(parsed.api_key, shape.body_flexible);
+    let header_len = response_header_len(api_key, shape.body_flexible);
     let Some(body) = response_bytes.get(header_len..) else {
         return response_bytes;
     };
     let version = shape.version;
-    let reencoded = match ApiKey::from_i16(parsed.api_key) {
+    let reencoded = match ApiKey::from_i16(api_key) {
         Some(ApiKey::CreateDelegationToken) => {
             reencode::<CreateDelegationTokenResponse>(body, version, |response| {
                 response.throttle_time_ms = response.throttle_time_ms.max(delay_ms);
@@ -251,7 +185,7 @@ fn set_buried_throttle(
     };
     let Some(reencoded) = reencoded else {
         tracing::warn!(
-            api_key = parsed.api_key,
+            api_key,
             version,
             "could not set the request-quota delay on the response; sending it unchanged"
         );
@@ -351,7 +285,7 @@ pub(super) fn encode_response(
 /// that test.
 ///
 /// Classifying an API correctly is necessary but not sufficient for it to echo
-/// a delay. This predicate is only consulted where `apply_request_quota`
+/// a delay. This predicate is only consulted where `patch_response_throttle`
 /// runs: the dispatch entries whose policy is
 /// `RequestQuotaPolicy::ApplyFallbackAccounting` (every api except the
 /// self-accounted and exempt ones) and the unsupported-version reply path,
@@ -365,7 +299,7 @@ pub(super) fn encode_response(
 /// `Produce` (0) and `Fetch` (1) never reach this predicate. Both their
 /// bandwidth quota and their share of the request quota are charged by the
 /// handler, which sets `ThrottleTimeMs` on the typed response before encoding,
-/// so `apply_request_quota` returns for both before consulting the
+/// so quota accounting returns zero for both before consulting the
 /// table. They are still classified below, and the audit still probes them, so
 /// a schema move cannot pass unnoticed.
 ///
@@ -509,6 +443,86 @@ fn patch_leading_throttle(
 #[cfg(test)]
 mod tests {
     use {super::*, crate::network::dispatch::API_VERSIONS_KEY, assert2::assert};
+
+    #[test]
+    fn response_throttle_uses_response_shape_and_keeps_larger_delay() {
+        for (version, flexible, existing, requested, expected) in [
+            (2, false, 500_i32, 100, 500_i32),
+            (3, false, 500, 100, 500),
+            (3, false, 10, 250, 250),
+            (9, true, 10, 250, 250),
+            (9, true, 10, 0, 10),
+        ] {
+            let body = existing.to_be_bytes();
+            let bytes = encode_response(3, 7, flexible, &body).expect("response");
+            let patched = patch_response_throttle(
+                bytes,
+                3,
+                ResponseShape {
+                    version,
+                    body_flexible: flexible,
+                },
+                krabka_units::millis(requested),
+            );
+            let expected =
+                encode_response(3, 7, flexible, &expected.to_be_bytes()).expect("response");
+            assert!(patched == expected);
+        }
+    }
+
+    #[test]
+    fn buried_response_throttle_preserves_header_and_existing_delay() {
+        // OffsetDelete v0: ErrorCode precedes ThrottleTimeMs; empty topics follows.
+        for (existing, requested, expected) in [(500_i32, 100, 500_i32), (10, 250, 250)] {
+            let mut body = BytesMut::new();
+            body.put_i16(0);
+            body.put_i32(existing);
+            body.put_i32(0);
+            let bytes = encode_response(47, 7, false, &body).expect("response");
+            let patched = patch_response_throttle(
+                bytes,
+                47,
+                ResponseShape {
+                    version: 0,
+                    body_flexible: false,
+                },
+                krabka_units::millis(requested),
+            );
+            body[2..6].copy_from_slice(&expected.to_be_bytes());
+            let expected = encode_response(47, 7, false, &body).expect("response");
+            assert!(patched == expected);
+        }
+    }
+
+    #[test]
+    fn malformed_buried_response_is_unchanged() {
+        let bytes = Bytes::from_static(&[0, 0, 0, 7, 0]);
+        let patched = patch_response_throttle(
+            bytes.clone(),
+            47,
+            ResponseShape {
+                version: 0,
+                body_flexible: false,
+            },
+            krabka_units::millis(250),
+        );
+        assert!(patched == bytes);
+    }
+
+    #[test]
+    fn fallback_api_versions_v0_is_not_throttle_stamped() {
+        let bytes = encode_response(API_VERSIONS_KEY, 7, false, &[0; 6]).expect("response");
+        let patched = patch_response_throttle(
+            bytes.clone(),
+            API_VERSIONS_KEY,
+            ResponseShape {
+                version: 0,
+                body_flexible: false,
+            },
+            krabka_units::millis(250),
+        );
+        assert!(patched == bytes);
+    }
 
     #[test]
     fn encode_response_apiversions_uses_v0_header() {

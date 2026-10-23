@@ -28,6 +28,7 @@ mod accept;
 mod fetch;
 mod guards;
 mod idle_clock;
+mod quota_accounting;
 mod receive;
 mod registry;
 mod response;
@@ -83,9 +84,10 @@ use {
         fetch::{FetchPlan, fetch_reply},
         guards::{ActiveConnectionGuard, InFlightGuard, QueuedRequestGuard},
         idle_clock::IdleClock,
+        quota_accounting::apply_request_quota,
         registry::{DispatchContext, registry_reply},
         response::{
-            ResponseShape, ThrottledResponse, apply_request_quota, encode_response,
+            ResponseShape, ThrottledResponse, encode_response, patch_response_throttle,
             send_throttled_response,
         },
         sasl::{SaslConnection, SaslFrameOutcome, SaslListener, try_handle_sasl_frame},
@@ -451,15 +453,13 @@ where
             return AfterResponse::Close;
         }
     };
-    let response = apply_request_quota(
-        broker,
-        response,
-        parsed,
-        shape,
-        auth,
-        started.elapsed(),
-        None,
-    );
+    let delay = apply_request_quota(broker, parsed, auth, started.elapsed(), None);
+    let response = ThrottledResponse {
+        bytes: patch_response_throttle(response, parsed.api_key, shape, delay),
+        throttle: delay,
+        deferred_charge: None,
+        close_after_response: false,
+    };
     respond(framed, clock, Reply::Frame(response), &broker.metrics).await
 }
 
