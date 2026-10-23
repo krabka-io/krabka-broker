@@ -1,6 +1,7 @@
 //! Client connections and topic creation shared by coordinator suites.
 use {
     crate::support::{
+        heartbeat_config,
         produce::{
             ProduceAcknowledgements, ProduceTimeoutMillis, SinglePartitionProduceSetup, send_batch,
         },
@@ -262,7 +263,7 @@ pub async fn metric_value(handle: &BrokerHandle, series: &str) -> f64 {
 }
 
 pub fn metrics_config(log_dir: PathBuf) -> BrokerConfig {
-    let mut cfg = BrokerConfig::for_tests(log_dir);
+    let mut cfg = heartbeat_config(log_dir);
     cfg.listeners = vec![crate::support::listeners::loopback_listener(
         "PLAINTEXT",
         ListenerProtocol::Plaintext,

@@ -13,11 +13,12 @@ use {
         downgrade_streams_join::{streams_join_and_converge, streams_leave, topology},
         support::{
             client::start_client,
+            heartbeat_config,
             offsets::{offset_fetch_group, offset_fetch_request, offset_fetch_topic},
         },
     },
     assert2::{assert, check},
-    krabka_broker::{Broker, BrokerConfig, coordinator::unified::GroupType},
+    krabka_broker::{Broker, coordinator::unified::GroupType},
 };
 
 /// A drained streams group with a committed offset converts to classic on a
@@ -109,9 +110,10 @@ async fn downgrade_survives_restart() {
     let log_dir = dir.path().to_path_buf();
     let topic_id;
     {
-        let broker = Broker::start(BrokerConfig::for_tests(log_dir.clone()))
+        let broker = Broker::start(heartbeat_config(log_dir.clone()))
             .await
             .unwrap();
+        broker.wait_until_broker_alive(broker.node_id()).await;
         broker.wait_until_group_coordinator_ready().await;
         let bootstrap = broker.listen_addr().to_string();
         let sc = connect(&bootstrap).await;

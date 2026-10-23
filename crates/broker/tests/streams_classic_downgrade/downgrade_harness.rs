@@ -13,6 +13,7 @@ use {
         ERR_NONE,
         support::{
             client::{connect as connect_client, create_topic as create_support_topic},
+            heartbeat_config,
             offsets::{offset_commit_partition, offset_commit_topic},
             streams::{
                 ElectionReadiness, boot as boot_streams,
@@ -85,7 +86,7 @@ pub(crate) async fn commit_offset_as_member(
 }
 
 pub(crate) fn rejoin_config(log_dir: std::path::PathBuf) -> BrokerConfig {
-    let mut cfg = BrokerConfig::for_tests(log_dir);
+    let mut cfg = heartbeat_config(log_dir);
     cfg.bootstrap_mode = BootstrapMode::Rejoin;
     cfg
 }

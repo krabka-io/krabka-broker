@@ -10,6 +10,7 @@ use {
     crate::{
         support::{
             client::start_client,
+            heartbeat_config,
             topics::TopicPartitionCount,
             transaction_wire::{partitions_request, transaction_topic},
             transactions::{ProducerIdentity, end_transaction_request, init_producer_request},
@@ -42,7 +43,7 @@ const fn coordinator_not_ready(error_code: i16) -> bool { matches!(error_code, 1
 /// `BootstrapMode::Rejoin`. This is the same pattern as
 /// `consumer_group_next_gen_persistence.rs`.
 fn recovery_config(log_dir: std::path::PathBuf) -> BrokerConfig {
-    let mut cfg = BrokerConfig::for_tests(log_dir);
+    let mut cfg = heartbeat_config(log_dir);
     // Recovery fails closed if any locally led state partition is missing.
     // This single-transaction fixture materializes and replays one partition.
     cfg.transaction_state_num_partitions = 1;

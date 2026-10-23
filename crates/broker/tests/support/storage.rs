@@ -1,5 +1,6 @@
 //! Log-directory fixtures shared by JBOD integration suites.
 use {
+    crate::support::heartbeat_config,
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
     std::net::SocketAddr,
     tempfile::TempDir,
@@ -25,7 +26,7 @@ pub fn local_log_segment_metadata(directory: &std::path::Path) -> Vec<std::fs::M
 
 /// Preserve the primary directory and the one extra directory in configured order.
 pub fn two_dir_config(primary: &std::path::Path, extra: &std::path::Path) -> BrokerConfig {
-    let mut config = BrokerConfig::for_tests(primary.to_path_buf());
+    let mut config = heartbeat_config(primary);
     config.extra_log_dirs = vec![extra.to_path_buf()];
     config
 }

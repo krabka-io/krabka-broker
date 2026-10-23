@@ -8,7 +8,7 @@
 //! `SASL_PLAINTEXT`.
 
 use {
-    crate::support::client::connect_owned,
+    crate::support::{client::connect_owned, heartbeat_config},
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
     krabka_client_core::Client,
 };
@@ -226,7 +226,7 @@ fn operator_config(
     let setup = OperatorKeysSetup { keys, approvers };
     let OperatorKeysSetup { keys, approvers } = setup;
     let entries: Vec<_> = keys.iter().map(|key| key.entry()).collect();
-    let mut config = BrokerConfig::for_tests(dir.to_path_buf());
+    let mut config = heartbeat_config(dir);
     config.operator_keys = krabka_broker::operator_keys::OperatorKeys::load(&entries)
         .expect("load the operator trust set");
     config.break_glass.approvers = approvers

@@ -7,6 +7,7 @@ use {
     crate::support::{
         client::{connect, connect_client},
         consumer_groups::{consumer_heartbeat, joining_consumer},
+        heartbeat_config,
     },
     assert2::assert,
     krabka_broker::{BootstrapMode, Broker, BrokerConfig},
@@ -48,7 +49,7 @@ async fn boot_topic(log_dir: std::path::PathBuf, topic: &str) -> BrokerWithClien
 }
 
 fn rejoin_config(log_dir: std::path::PathBuf) -> BrokerConfig {
-    let mut cfg = BrokerConfig::for_tests(log_dir);
+    let mut cfg = heartbeat_config(log_dir);
     cfg.bootstrap_mode = BootstrapMode::Rejoin;
     cfg
 }
@@ -215,9 +216,8 @@ struct BrokerWithClient {
 }
 
 async fn boot(log_dir: std::path::PathBuf) -> BrokerWithClient {
-    let broker = Broker::start(BrokerConfig::for_tests(log_dir))
-        .await
-        .unwrap();
+    let broker = Broker::start(heartbeat_config(log_dir)).await.unwrap();
+    broker.wait_until_broker_alive(broker.node_id()).await;
     broker.wait_until_group_coordinator_ready().await;
     let client = connect(&broker.listen_addr().to_string(), "c").await;
     BrokerWithClient { broker, client }
