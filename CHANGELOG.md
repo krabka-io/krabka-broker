@@ -47,6 +47,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- Explicit stamp sources use direct ordered stamp-index searches and a tail
+  insertion path without rebuilding temporary coordinate arrays (#1720).
 - Scheduled delivery checks over archived segments buffer bounded byte ranges
   instead of fetching each batch header separately, reducing remote requests for
   ListOffsets LATEST and retention scans (#1682).
