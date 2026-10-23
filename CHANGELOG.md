@@ -47,8 +47,6 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
-- Mixed per-offset share acknowledgements now update an acquisition window in
-  one pass instead of repeating the complete state transition for every run.
 - The RF3 regression contract is now `rf3-regression-v2`. It raises the
   variance budget of records/s from 10% to 15%, and of p99 latency from 25% to
   50%. The first measured run of `rf3-regression-v1` exceeded both, and
@@ -192,6 +190,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   segment roll or a diskless WAL no longer holds back the other partitions of
   the request. Two entries for the same partition still append in request
   order, and the response keeps the request's order (#1618).
+- Mixed per-offset share acknowledgements now update an acquisition window in
+  one pass instead of repeating the complete state transition for every run.
 - A remote segment's lifecycle transition updates only that segment's entries
   in the tiered-storage metadata manager's epoch index. Each finish, hide and
   delete used to rebuild and sort the partition's whole index under the
