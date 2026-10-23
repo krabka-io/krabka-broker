@@ -60,6 +60,7 @@ pub mod ids;
 mod numeric;
 pub mod payload;
 pub mod prom;
+pub mod qualification;
 pub mod rate;
 pub mod report;
 pub mod scenario;

@@ -2,9 +2,10 @@ use {
     assert2::check,
     krabka_bench_driver::{
         ids::{MessageCount, TimeOffsetMs, WallclockMs},
+        report,
         scenario::{
-            Acks, Compression, LatencyPercentiles, LoadMode, ModeTag, Resource, RunOutput, Sample,
-            Scenario, Stack, Throughput, Topology,
+            Acks, Compression, Disturbance, FailoverSpec, LatencyPercentiles, LoadMode, ModeTag,
+            Resource, RunOutput, Sample, Scenario, Stack, Throughput, Topology,
         },
     },
     krabka_units::prelude::*,
@@ -89,11 +90,64 @@ fn report_reads_the_run_output_encoding_and_renders_operator_units() {
     check!(summary_csv.contains(",4.250,"));
 }
 
+#[test]
+fn failover_gate_preserves_summary_on_pass_and_failure() {
+    for (recovery_ms, passes) in [(16_000, true), (18_000, false)] {
+        let dir = tempfile::tempdir().expect("temp dir");
+        for (name, stack, recovery) in [
+            ("krabka.json", Stack::Krabka, recovery_ms),
+            ("kafka.json", Stack::Kafka, 17_000),
+        ] {
+            let mut run = run_fixture(stack);
+            run.scenario.failover = Some(FailoverSpec {
+                kill_after: secs(14),
+                target: "partition0_leader".into(),
+            });
+            run.disturbance = Some(Disturbance {
+                kill_at_ms: TimeOffsetMs(14_000),
+                recovery_at_ms: TimeOffsetMs(recovery),
+                ..Disturbance::default()
+            });
+            run.samples.push(Sample {
+                t_offset_ms: TimeOffsetMs(6_000),
+                producer_rate: per_sec(10_000),
+                consumer_rate: per_sec(10_000),
+                ..Sample::default()
+            });
+            write_run_output(dir.path(), name, &run);
+        }
+        let expected = report::render_markdown(dir.path(), true).expect("render summary");
+        for gate in [false, true] {
+            let summary = dir.path().join("SUMMARY.md");
+            let mut command = Command::new(env!("CARGO_BIN_EXE_krabka-bench-report"));
+            command
+                .arg("--input-dir")
+                .arg(dir.path())
+                .arg("--out")
+                .arg(&summary)
+                .arg("--strict");
+            if gate {
+                command.arg("--failover-gate");
+            }
+            let output = command.output().expect("run report");
+            check!(output.status.success() == (!gate || passes));
+            check!(std::fs::read_to_string(&summary).expect("summary written") == expected);
+            let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
+            check!(stdout.contains("failover gate: PASS") == (gate && passes));
+            if gate && !passes {
+                let stderr = String::from_utf8(output.stderr).expect("stderr is utf8");
+                check!(stderr.contains("Krabka recovery 4s is slower than kafka 3s"));
+                check!(stderr.contains("failover gate failed with 1 violation(s)"));
+            }
+        }
+    }
+}
+
 krabka_macros::benchmark_latency_fixture!(sample_latency);
 krabka_macros::benchmark_scenario_fixture!(benchmark_scenario);
 
-fn write_run(dir: &Path, name: &str, stack: Stack) {
-    let run = RunOutput {
+fn run_fixture(stack: Stack) -> RunOutput {
+    RunOutput {
         scenario: benchmark_scenario("cell", kibibytes(1)),
         stack,
         topology: Topology {
@@ -133,7 +187,14 @@ fn write_run(dir: &Path, name: &str, stack: Stack) {
             consumer_e2e_p99: millis(7),
         }],
         broker_samples: vec![],
-    };
-    let json = serde_json::to_string_pretty(&run).expect("encode run output");
+    }
+}
+
+fn write_run(dir: &Path, name: &str, stack: Stack) {
+    write_run_output(dir, name, &run_fixture(stack));
+}
+
+fn write_run_output(dir: &Path, name: &str, run: &RunOutput) {
+    let json = serde_json::to_string_pretty(run).expect("encode run output");
     std::fs::write(dir.join(name), json).expect("write run output");
 }

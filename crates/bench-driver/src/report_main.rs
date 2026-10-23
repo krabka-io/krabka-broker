@@ -4,7 +4,7 @@
 use {
     anyhow::{Context, Result},
     clap::Parser,
-    krabka_bench_driver::report,
+    krabka_bench_driver::{qualification, report},
     std::path::PathBuf,
 };
 
@@ -77,7 +77,8 @@ fn main() -> Result<()> {
     }
 
     if cli.failover_gate {
-        let violations = report::failover_gate_violations(&cli.input_dir, cli.strict)?;
+        let runs = report::load_runs(&cli.input_dir, cli.strict)?;
+        let violations = qualification::failover_gate_violations(&runs);
         if violations.is_empty() {
             println!("failover gate: PASS");
         } else {

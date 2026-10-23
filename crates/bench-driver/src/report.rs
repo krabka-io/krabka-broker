@@ -2,14 +2,17 @@
 
 use {
     crate::{
-        aggregate::CellKey,
+        aggregate::{CellKey, stat},
         graph::{
             TaggedRun, push_fmt, render_html as render_graph_html,
             render_web_fragment as render_graph_web_fragment,
         },
-        ids::{MessageCount, TimeOffsetMs},
         numeric::{mebibytes_f64, millis_f64, to_f64},
-        scenario::{Disturbance, LatencyPercentiles, RunOutput, Sample, Stack},
+        qualification::{
+            RateRecovery, consumer_sample_rate, mean_failover_recovery, mean_rate_recovery,
+            producer_sample_rate,
+        },
+        scenario::{Disturbance, LatencyPercentiles, RunOutput, Stack},
     },
     anyhow::{Context, Result},
     krabka_units::{fmt::Human as _, prelude::*},
@@ -42,7 +45,7 @@ enum Render {
 impl Render {
     /// The mean of `values` in this metric's unit.
     fn mean(self, values: &[f64]) -> String {
-        let m = mean(values);
+        let m = stat(values).mean;
         match self {
             Render::Number => format!("{m:.3}"),
             Render::Extent => Time::from_secs_f64(m).human().to_string(),
@@ -57,12 +60,7 @@ impl Render {
     fn cell(self, values: &[f64]) -> String {
         let rendered = self.mean(values);
         if values.len() > 1 {
-            let m = mean(values);
-            let cv = if m == 0.0 {
-                0.0
-            } else {
-                (sample_stddev(values) / m).abs() * 100.0
-            };
+            let cv = stat(values).cv_percent();
             format!("{rendered} (±{cv:.0}%)")
         } else {
             rendered
@@ -223,7 +221,7 @@ fn render_group(out: &mut String, key: &CellKey, runs: &[RunOutput]) {
                 "**Failover ({label}, n={}):** recovery {}, {:.0} drops, max latency spike {}.\n\n",
                 dists.len(),
                 Render::Extent.mean(&recovery),
-                mean(&dropped),
+                stat(&dropped).mean,
                 Render::Extent.mean(&spike),
             ),
         );
@@ -363,18 +361,14 @@ fn render_notes_and_errors(out: &mut String, krabka: &[&RunOutput], kafka: &[&Ru
     }
 }
 
-/// Returns the failover gate violations in a form a person can read. An empty
-/// vector means every failover cell that holds both stacks has the evidence the
-/// objective needs. That evidence is: Krabka recovered no slower than Kafka, and
-/// both stacks emitted producer and consumer message-rate samples over time.
+/// Load benchmark runs from JSON files in `input_dir`.
 /// # Errors
-/// Returns an error when input data is invalid, required I/O fails, or the destination rejects the generated report or audit event.
-pub fn failover_gate_violations(input_dir: &Path, strict: bool) -> Result<Vec<String>> {
-    let runs: Vec<RunOutput> = collect_runs(input_dir, strict)?
+/// Returns an error if the directory cannot be read, or a run is invalid in strict mode.
+pub fn load_runs(input_dir: &Path, strict: bool) -> Result<Vec<RunOutput>> {
+    Ok(collect_runs(input_dir, strict)?
         .into_iter()
         .map(|file| file.run)
-        .collect();
-    Ok(failover_gate_violations_for_runs(&runs))
+        .collect())
 }
 
 fn truncate_list(items: &[String], n: usize) -> String {
@@ -475,34 +469,6 @@ fn producer_byte_rate(r: &RunOutput) -> ByteRate {
     byte_rate(r.throughput.bytes_in, window)
 }
 
-/// Arithmetic mean of a sample. An empty sample gives 0.0, so an absent stack
-/// renders as a zero cell and matches the behaviour before averaging.
-fn mean(v: &[f64]) -> f64 {
-    if v.is_empty() {
-        0.0
-    } else {
-        v.iter().sum::<f64>() / to_f64(v.len())
-    }
-}
-
-/// Sample standard deviation, Bessel-corrected. This is zero for fewer than two
-/// samples, because a single run has no measurable spread.
-fn sample_stddev(v: &[f64]) -> f64 {
-    if v.len() < 2 {
-        return 0.0;
-    }
-    let m = mean(v);
-    let var = v.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (to_f64(v.len()) - 1.0);
-    var.sqrt()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct RateRecovery {
-    baseline: Frequency,
-    min_after_kill: Frequency,
-    recovery: Option<Time>,
-}
-
 fn render_failover_comparison(out: &mut String, krabka: &[&RunOutput], kafka: &[&RunOutput]) {
     let c_recovery = mean_failover_recovery(krabka);
     let k_recovery = mean_failover_recovery(kafka);
@@ -554,300 +520,6 @@ fn render_failover_comparison(out: &mut String, krabka: &[&RunOutput], kafka: &[
     out.push('\n');
 }
 
-/// Why one failover run carries no usable evidence, or `None` when it does.
-///
-/// A run that errored, that recorded no disturbance, that stamped a recovery
-/// before the kill, or that moved no traffic is not a measurement. Admitting
-/// one is what let the gate report PASS over a workload that died: a recovery
-/// stamp below the kill stamp saturates to 0 ms in
-/// [`crate::ids::TimeOffsetMs::since`], and a zero-rate baseline reads as a
-/// stack that never slowed down. Each of these is a gate violation and not a
-/// reason to drop the run quietly.
-fn failover_evidence_defect(run: &RunOutput) -> Option<String> {
-    if !run.errors.is_empty() {
-        return Some(format!(
-            "the run reported errors: {}",
-            run.errors.join("; ")
-        ));
-    }
-    let Some(disturbance) = run.disturbance.as_ref() else {
-        return Some("the run recorded no disturbance".to_owned());
-    };
-    if disturbance.kill_at_ms == TimeOffsetMs(0) {
-        return Some("the run recorded no broker kill".to_owned());
-    }
-    if disturbance.recovery_at_ms < disturbance.kill_at_ms {
-        return Some(format!(
-            "the recovery stamp {} is before the kill stamp {}",
-            disturbance.recovery_at_ms, disturbance.kill_at_ms
-        ));
-    }
-    if disturbance.recovery_at_ms == TimeOffsetMs(0) {
-        return Some("the run never acknowledged a record after the kill".to_owned());
-    }
-    if run.throughput.msgs_produced == MessageCount(0) {
-        return Some("the run produced no messages".to_owned());
-    }
-    if run.throughput.producer_rate <= Frequency::ZERO {
-        return Some("the run measured a zero producer rate".to_owned());
-    }
-    None
-}
-
-fn failover_gate_violations_for_runs(runs: &[RunOutput]) -> Vec<String> {
-    let mut violations = Vec::new();
-    let mut by_group: BTreeMap<CellKey, Vec<&RunOutput>> = BTreeMap::new();
-    for r in runs.iter().filter(|r| r.scenario.failover.is_some()) {
-        // Validate before grouping. A run with no usable evidence never
-        // reaches the comparison, and it fails the gate on its own account.
-        if let Some(defect) = failover_evidence_defect(r) {
-            violations.push(format!(
-                "{}: {} failover run is not a measurement: {defect}",
-                CellKey::of(r).label(),
-                r.stack.as_str(),
-            ));
-            continue;
-        }
-        by_group.entry(CellKey::of(r)).or_default().push(r);
-    }
-
-    if by_group.is_empty() {
-        violations.push("missing failover results".into());
-        return violations;
-    }
-
-    for (key, group) in by_group {
-        let krabka: Vec<&RunOutput> = group
-            .iter()
-            .copied()
-            .filter(|r| r.stack == Stack::Krabka)
-            .collect();
-        let kafka: Vec<&RunOutput> = group
-            .iter()
-            .copied()
-            .filter(|r| r.stack == Stack::Kafka)
-            .collect();
-        let label = key.label();
-
-        let Some(c_recovery) = mean_failover_recovery(&krabka) else {
-            violations.push(format!(
-                "{label}: missing Krabka failover disturbance result"
-            ));
-            continue;
-        };
-        let Some(k_recovery) = mean_failover_recovery(&kafka) else {
-            violations.push(format!(
-                "{label}: missing kafka failover disturbance result"
-            ));
-            continue;
-        };
-        if c_recovery > k_recovery {
-            violations.push(format!(
-                "{label}: Krabka recovery {} is slower than kafka {}",
-                c_recovery.human(),
-                k_recovery.human()
-            ));
-        }
-        compare_failover_smoothness(&mut violations, &label, &krabka, &kafka);
-
-        require_rate_samples(&mut violations, &label, "krabka", &krabka);
-        require_rate_samples(&mut violations, &label, "kafka", &kafka);
-        compare_rate_recovery(
-            &mut violations,
-            &label,
-            &krabka,
-            &kafka,
-            "producer",
-            producer_sample_rate,
-        );
-        compare_rate_recovery(
-            &mut violations,
-            &label,
-            &krabka,
-            &kafka,
-            "consumer",
-            consumer_sample_rate,
-        );
-    }
-
-    violations
-}
-
-fn compare_failover_smoothness(
-    violations: &mut Vec<String>,
-    label: &str,
-    krabka: &[&RunOutput],
-    kafka: &[&RunOutput],
-) {
-    if let (Some(c_drops), Some(k_drops)) =
-        (mean_failover_dropped(krabka), mean_failover_dropped(kafka))
-        && c_drops > k_drops
-    {
-        violations.push(format!(
-            "{label}: Krabka dropped {c_drops:.0} messages vs kafka {k_drops:.0}"
-        ));
-    }
-    if let (Some(c_spike), Some(k_spike)) = (
-        mean_failover_latency_spike(krabka),
-        mean_failover_latency_spike(kafka),
-    ) && c_spike > k_spike
-    {
-        violations.push(format!(
-            "{label}: Krabka latency spike {} is higher than kafka {}",
-            c_spike.human(),
-            k_spike.human()
-        ));
-    }
-}
-
-fn compare_rate_recovery(
-    violations: &mut Vec<String>,
-    label: &str,
-    krabka: &[&RunOutput],
-    kafka: &[&RunOutput],
-    metric: &str,
-    select: SampleRate,
-) {
-    let (Some(c_rate), Some(k_rate)) = (
-        mean_rate_recovery(krabka, select),
-        mean_rate_recovery(kafka, select),
-    ) else {
-        return;
-    };
-
-    match (c_rate.recovery, k_rate.recovery) {
-        (Some(c), Some(k)) if c > k => violations.push(format!(
-            "{label}: Krabka {metric} rate recovery {} is slower than kafka {}",
-            c.human(),
-            k.human()
-        )),
-        (None, Some(k)) => violations.push(format!(
-            "{label}: Krabka {metric} rate did not recover while kafka recovered in {}",
-            k.human()
-        )),
-        (None, None) => violations.push(format!("{label}: Krabka {metric} rate did not recover")),
-        _ => {}
-    }
-}
-
-fn require_rate_samples(
-    violations: &mut Vec<String>,
-    label: &str,
-    stack_label: &str,
-    runs: &[&RunOutput],
-) {
-    if runs.is_empty() {
-        return;
-    }
-    for (idx, run) in runs.iter().enumerate() {
-        if rate_recovery_for_run(run, producer_sample_rate).is_none()
-            || rate_recovery_for_run(run, consumer_sample_rate).is_none()
-        {
-            violations.push(format!(
-                "{label}: {stack_label} failover run is missing message-rate samples (run {})",
-                idx + 1
-            ));
-        }
-    }
-}
-
-fn mean_failover_value(runs: &[&RunOutput], value: impl Fn(&Disturbance) -> f64) -> Option<f64> {
-    let vals: Vec<f64> = runs
-        .iter()
-        .filter_map(|r| r.disturbance.as_ref())
-        .map(value)
-        .collect();
-    (!vals.is_empty()).then(|| mean(&vals))
-}
-
-fn mean_failover_recovery(runs: &[&RunOutput]) -> Option<Time> {
-    mean_failover_value(runs, |d| d.recovery_at_ms.since(d.kill_at_ms).secs_f64())
-        .map(Time::from_secs_f64)
-}
-
-fn mean_failover_dropped(runs: &[&RunOutput]) -> Option<f64> {
-    mean_failover_value(runs, |d| to_f64(d.dropped.0))
-}
-
-fn mean_failover_latency_spike(runs: &[&RunOutput]) -> Option<Time> {
-    mean_failover_value(runs, |d| d.latency_spike_max.secs_f64()).map(Time::from_secs_f64)
-}
-
-fn mean_rate_recovery(runs: &[&RunOutput], select: SampleRate) -> Option<RateRecovery> {
-    let vals: Vec<RateRecovery> = runs
-        .iter()
-        .filter_map(|r| rate_recovery_for_run(r, select))
-        .collect();
-    if vals.is_empty() {
-        return None;
-    }
-    let baselines: Vec<f64> = vals.iter().map(|v| v.baseline.per_sec_f64()).collect();
-    let mins: Vec<f64> = vals
-        .iter()
-        .map(|v| v.min_after_kill.per_sec_f64())
-        .collect();
-    let recoveries: Vec<f64> = vals
-        .iter()
-        .filter_map(|v| v.recovery.map(TimeExt::secs_f64))
-        .collect();
-    Some(RateRecovery {
-        baseline: Frequency::from_per_sec(mean(&baselines)),
-        min_after_kill: Frequency::from_per_sec(mean(&mins)),
-        recovery: (!recoveries.is_empty()).then(|| Time::from_secs_f64(mean(&recoveries))),
-    })
-}
-
-fn rate_recovery_for_run(r: &RunOutput, select: SampleRate) -> Option<RateRecovery> {
-    let failover = r.scenario.failover.as_ref()?;
-    if r.samples.is_empty() {
-        return None;
-    }
-    // Sample offsets are measured from the *measurement* window start, so the
-    // kill offset drops the warmup the scenario spent before it.
-    let kill_offset = failover.kill_after - r.scenario.warmup;
-    let rate_at = |s: &Sample| select(s).per_sec_f64();
-    let baseline: Vec<f64> = r
-        .samples
-        .iter()
-        .filter(|s| s.t_offset_ms.as_time() < kill_offset)
-        .map(rate_at)
-        .collect();
-    if baseline.is_empty() {
-        return None;
-    }
-    let baseline_rate = mean(&baseline);
-    let after: Vec<&Sample> = r
-        .samples
-        .iter()
-        .filter(|s| s.t_offset_ms.as_time() >= kill_offset)
-        .collect();
-    if after.is_empty() {
-        return None;
-    }
-    let min_after_kill = after
-        .iter()
-        .map(|s| rate_at(s))
-        .fold(f64::INFINITY, f64::min);
-    let threshold = baseline_rate * 0.90;
-    let recovery = after
-        .iter()
-        .find(|s| rate_at(s) >= threshold)
-        .map(|s| s.t_offset_ms.as_time() - kill_offset);
-
-    Some(RateRecovery {
-        baseline: Frequency::from_per_sec(baseline_rate),
-        min_after_kill: Frequency::from_per_sec(min_after_kill),
-        recovery,
-    })
-}
-
-/// How one of the two client message rates is read out of a time-series sample.
-type SampleRate = fn(&Sample) -> Frequency;
-
-fn producer_sample_rate(s: &Sample) -> Frequency { s.producer_rate }
-
-fn consumer_sample_rate(s: &Sample) -> Frequency { s.consumer_rate }
-
 fn render_rate_recovery_row(
     out: &mut String,
     stack: &str,
@@ -897,8 +569,8 @@ fn row_metric(
 ) {
     let cvals: Vec<f64> = krabka.iter().map(|&r| value(r)).collect();
     let kvals: Vec<f64> = kafka.iter().map(|&r| value(r)).collect();
-    let c = mean(&cvals);
-    let k = mean(&kvals);
+    let c = stat(&cvals).mean;
+    let k = stat(&kvals).mean;
     let ratio = if higher_is_better {
         if k > 0.0 {
             format!("{:.2}×", c / k)
@@ -1172,8 +844,9 @@ mod tests {
     use {
         super::*,
         crate::{
-            ids::WallclockMs,
+            ids::{MessageCount, TimeOffsetMs, WallclockMs},
             numeric::{event_rate, nonnegative_i64_to_u64},
+            qualification::failover_gate_violations,
             scenario::{
                 Disturbance, FailoverSpec, LatencyPercentiles, ModeTag, Resource, Sample,
                 Throughput, Topology,
@@ -1332,6 +1005,18 @@ mod tests {
     }
 
     #[test]
+    fn markdown_cells_use_shared_sample_statistics() {
+        for (values, expected) in [
+            (&[][..], "0.000"),
+            (&[2.0][..], "2.000"),
+            (&[1.0, 3.0][..], "2.000 (±71%)"),
+            (&[0.0, 0.0][..], "0.000 (±0%)"),
+        ] {
+            assert2::assert!(Render::Number.cell(values) == expected);
+        }
+    }
+
+    #[test]
     fn failover_summary_compares_recovery_and_rate_over_time() {
         let dir = tempdir().unwrap();
         write_default_failover_runs(dir.path());
@@ -1351,10 +1036,11 @@ mod tests {
 
     #[test]
     fn failover_gate_passes_when_krabka_recovers_no_slower_with_rate_samples() {
-        let dir = tempdir().unwrap();
-        write_default_failover_runs(dir.path());
-
-        let violations = failover_gate_violations(dir.path(), true).unwrap();
+        let runs = [
+            fake_failover_run(Stack::Krabka, secs(2), per_sec(8_000)),
+            fake_failover_run(Stack::Kafka, secs(3), per_sec(6_000)),
+        ];
+        let violations = failover_gate_violations(&runs);
 
         assert2::assert!(violations.is_empty());
     }
@@ -1378,7 +1064,7 @@ mod tests {
 
     fn check_failover_runs(dir: &Path, krabka: &RunOutput, kafka: &RunOutput, expected: &[&str]) {
         write_failover_runs(dir, krabka, kafka);
-        let violations = failover_gate_violations(dir, true).unwrap();
+        let violations = failover_gate_violations(&load_runs(dir, true).unwrap());
         for expected in expected {
             assert_violation_contains(&violations, expected);
         }
@@ -1418,7 +1104,7 @@ mod tests {
 
     fn check_failover_pair(dir: &Path, krabka: &RunOutput, expected: impl Fn(&String) -> bool) {
         write_failover_pair(dir, krabka);
-        let violations = failover_gate_violations(dir, true).unwrap();
+        let violations = failover_gate_violations(&load_runs(dir, true).unwrap());
         assert2::assert!(violations.iter().any(expected), "{violations:?}");
     }
 
@@ -1486,7 +1172,7 @@ mod tests {
             &fake_run(Stack::Kafka, 400_000),
         );
 
-        let violations = failover_gate_violations(dir.path(), true).unwrap();
+        let violations = failover_gate_violations(&load_runs(dir.path(), true).unwrap());
 
         assert_violation_contains(&violations, "missing failover results");
     }
@@ -1509,7 +1195,7 @@ mod tests {
             &kafka,
         );
 
-        let violations = failover_gate_violations(dir.path(), true).unwrap();
+        let violations = failover_gate_violations(&load_runs(dir.path(), true).unwrap());
 
         assert_violation_contains(
             &violations,
@@ -1580,7 +1266,7 @@ mod tests {
         set_slow_rate(&mut kafka);
         write_failover_runs(dir.path(), &krabka, &kafka);
 
-        let violations = failover_gate_violations(dir.path(), true).unwrap();
+        let violations = failover_gate_violations(&load_runs(dir.path(), true).unwrap());
 
         assert_violation_contains(&violations, "Krabka producer rate did not recover");
     }
