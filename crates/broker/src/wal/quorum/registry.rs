@@ -1,19 +1,10 @@
 //! WAL shard registry.
 
 use {
-    super::{
-        engine::WalShardEngine,
-        wire::{
-            FENCED_LEADER_EPOCH, OFFSET_OUT_OF_RANGE, QuorumGroup, UNKNOWN_LEADER_EPOCH,
-            WalFetchRequest, decode_fetch, decode_fetch_request, encode_fetch_response_struct,
-            fetch_response, unknown_shard_fetch_response,
-        },
-    },
-    crate::{BrokerError, codes::INVALID_REQUEST, metrics::BrokerMetrics},
+    super::{engine::WalShardEngine, wire::QuorumGroup},
+    crate::metrics::BrokerMetrics,
     dashmap::DashMap,
     krabka_ids::PartitionIndex,
-    krabka_protocol::records::RecordsPayload,
-    krabka_verified::wal::{WalFetchAdmission, wal_fetch_admission},
     std::{
         collections::HashMap,
         sync::{Arc, RwLock},
@@ -28,7 +19,7 @@ pub(crate) struct ShardId {
 }
 
 impl ShardId {
-    fn from_group(group: QuorumGroup) -> Option<Self> {
+    pub(super) fn from_group(group: QuorumGroup) -> Option<Self> {
         match group {
             QuorumGroup::Metadata => None,
             QuorumGroup::DisklessWal {
@@ -52,7 +43,6 @@ pub(crate) struct WalPlacement {
 #[derive(Debug)]
 pub(crate) struct WalShardRegistry {
     local_node_id: krabka_raft::NodeId,
-    principal_node_ids: HashMap<String, krabka_raft::NodeId>,
     engines: DashMap<ShardId, Arc<WalShardEngine>>,
     placements: RwLock<HashMap<ShardId, WalPlacement>>,
     metrics: BrokerMetrics,
@@ -65,7 +55,6 @@ impl WalShardRegistry {
     pub(crate) fn new(local_node_id: krabka_raft::NodeId) -> Self {
         Self {
             local_node_id,
-            principal_node_ids: HashMap::new(),
             engines: DashMap::new(),
             placements: RwLock::new(HashMap::new()),
             metrics: BrokerMetrics::new(),
@@ -78,39 +67,6 @@ impl WalShardRegistry {
     pub(crate) fn with_metrics(mut self, metrics: BrokerMetrics) -> Self {
         self.metrics = metrics;
         self
-    }
-
-    #[must_use]
-    pub(crate) fn with_principal_node_ids(
-        mut self,
-        principal_node_ids: HashMap<String, krabka_raft::NodeId>,
-    ) -> Self {
-        self.principal_node_ids = principal_node_ids;
-        self
-    }
-
-    /// Maps an authenticated principal to the WAL node id it may fetch as.
-    ///
-    /// `inter_broker_principal_node_ids` is authoritative: when it is
-    /// populated, only the names it lists map to a node id. The built-in
-    /// `broker-<id>` / `CN=broker-<id>` convention is a fallback for an empty
-    /// map, and only on the inter-broker listener -- otherwise a principal
-    /// created on a client listener could name itself into a voter slot.
-    pub(crate) fn authenticated_node_id(
-        &self,
-        principal: &krabka_security::Principal,
-        on_inter_broker_listener: bool,
-    ) -> Option<krabka_raft::NodeId> {
-        if principal.auth_method == krabka_security::AuthMethod::Anonymous {
-            return None;
-        }
-        if let Some(node_id) = self.principal_node_ids.get(&principal.name) {
-            return Some(*node_id);
-        }
-        if !on_inter_broker_listener || !self.principal_node_ids.is_empty() {
-            return None;
-        }
-        super::wire::conventional_node_id(&principal.name)
     }
 
     pub(crate) fn insert(&self, shard_id: ShardId, engine: Arc<WalShardEngine>) {
@@ -206,206 +162,37 @@ impl WalShardRegistry {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn route_fetch_request(
+    /// Read placement and engine under the same placement lock as registration.
+    pub(super) fn fetch_target(
         &self,
-        request: &krabka_protocol::owned::fetch_request::FetchRequest,
-        authenticated_from: krabka_raft::NodeId,
-    ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, BrokerError>> {
-        self.route_decoded_fetch(decode_fetch_request(request)?, Some(authenticated_from))
-    }
-
-    pub(crate) async fn route_fetch_request_wait(
-        &self,
-        request: &krabka_protocol::owned::fetch_request::FetchRequest,
-        authenticated_from: krabka_raft::NodeId,
-    ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, BrokerError>> {
-        self.route_decoded_fetch_wait(decode_fetch_request(request)?, Some(authenticated_from))
-            .await
-    }
-
-    async fn route_decoded_fetch_wait(
-        &self,
-        request: WalFetchRequest,
-        authenticated_from: Option<krabka_raft::NodeId>,
-    ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, BrokerError>> {
-        let Some(engine) = self.get(ShardId::from_group(request.group)?) else {
-            return self.route_decoded_fetch(request, authenticated_from);
-        };
-        let deadline = tokio::time::Instant::now()
-            + std::time::Duration::from_millis(u64::try_from(request.max_wait_ms).unwrap_or(0));
-        loop {
-            let progress = engine.fetch_progress_changed();
-            tokio::pin!(progress);
-            progress.as_mut().enable();
-            let response = self.route_decoded_fetch(request, authenticated_from)?;
-            let Ok(response) = response else {
-                return Some(response);
-            };
-            let row = &response.responses[0].partitions[0];
-            let bytes = row.records.as_ref().map_or(0, RecordsPayload::payload_len);
-            if row.error_code != 0
-                || row.diverging_epoch.end_offset >= 0
-                || bytes >= usize::try_from(request.min_bytes).unwrap_or(0)
-                || tokio::time::Instant::now() >= deadline
-            {
-                return Some(Ok(response));
-            }
-            tokio::select! {
-                () = &mut progress => {},
-                () = tokio::time::sleep_until(deadline) => {
-                    return self.route_decoded_fetch(request, authenticated_from);
-                }
-            }
-        }
-    }
-
-    fn route_decoded_fetch(
-        &self,
-        request: WalFetchRequest,
-        authenticated_from: Option<krabka_raft::NodeId>,
-    ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, BrokerError>> {
-        let shard = ShardId::from_group(request.group)?;
-        let placement = self
+        shard: ShardId,
+    ) -> (Option<WalPlacement>, Option<Arc<WalShardEngine>>) {
+        let placements = self
             .placements
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&shard)
-            .cloned();
-        let voters = placement.as_ref().map_or_else(Vec::new, |placement| {
-            placement.voters.iter().map(|voter| voter.0).collect()
-        });
-        let admission = wal_fetch_admission(
-            authenticated_from.map(|node| node.0),
-            request.from.0,
-            self.local_node_id.0,
-            &voters,
-            request.current_leader_epoch,
-            placement
-                .as_ref()
-                .map_or(0, |placement| placement.leader_epoch),
-        );
-        if admission == WalFetchAdmission::Denied {
-            return Some(Ok(unknown_shard_fetch_response(request.group)));
-        }
-        if request.max_wait_ms < 0 || request.min_bytes < 0 {
-            return Some(Ok(fetch_response(
-                request.group,
-                0,
-                0,
-                0,
-                bytes::Bytes::new(),
-                INVALID_REQUEST,
-                None,
-            )));
-        }
-        #[cfg(any(test, feature = "test-helpers"))]
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (placements.get(&shard).cloned(), self.get(shard))
+    }
+
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub(super) fn record_fetcher(&self, shard: ShardId, node: krabka_raft::NodeId) {
         self.follower_fetchers
             .entry(shard)
             .or_default()
-            .insert(request.from);
-        let Some(engine) = self.get(shard) else {
-            return Some(Ok(unknown_shard_fetch_response(request.group)));
-        };
-        let epoch_error = match admission {
-            WalFetchAdmission::FencedLeaderEpoch => Some(FENCED_LEADER_EPOCH),
-            WalFetchAdmission::UnknownLeaderEpoch => Some(UNKNOWN_LEADER_EPOCH),
-            WalFetchAdmission::Denied | WalFetchAdmission::Serve => None,
-        };
-        if let Some(error_code) = epoch_error {
-            return Some(Ok(fetch_response(
-                request.group,
-                0,
-                0,
-                0,
-                bytes::Bytes::new(),
-                error_code,
-                None,
-            )));
-        }
-        Some(
-            engine
-                .serve_fetch(
-                    krabka_ids::Offset(request.fetch_offset),
-                    request.last_fetched_epoch,
-                    request.max_size,
-                )
-                .map(|fetch| {
-                    if !fetch.offset_out_of_range && fetch.diverging_epoch.is_none() {
-                        engine.record_follower_ack(
-                            request.from,
-                            krabka_ids::Offset(request.fetch_offset),
-                        );
-                    }
-                    let error_code = if fetch.offset_out_of_range {
-                        OFFSET_OUT_OF_RANGE
-                    } else {
-                        0
-                    };
-                    fetch_response(
-                        request.group,
-                        fetch.high_watermark.0,
-                        fetch.log_end_offset.0,
-                        fetch.log_start_offset.0,
-                        fetch.records,
-                        error_code,
-                        fetch
-                            .diverging_epoch
-                            .map(|(epoch, offset)| (epoch.0, offset.0)),
-                    )
-                }),
-        )
-    }
-}
-
-/// Routes shard-addressed KIP-595 Fetch requests to the registered diskless
-/// WAL engines.
-#[derive(Debug, Clone)]
-pub(crate) struct WalShardRouter {
-    registry: Arc<WalShardRegistry>,
-}
-
-impl WalShardRouter {
-    #[must_use]
-    pub(crate) fn new(registry: Arc<WalShardRegistry>) -> Self { Self { registry } }
-}
-
-impl krabka_raft::RaftShardRouter for WalShardRouter {
-    fn route(
-        &self,
-        api_key: i16,
-        body: bytes::Bytes,
-        principal: Option<&krabka_security::Principal>,
-    ) -> krabka_raft::ShardRouteFuture<'_> {
-        // The raft transport only ever carries inter-broker traffic, so the
-        // `broker-<id>` convention stays available on it.
-        let authenticated_from =
-            principal.and_then(|principal| self.registry.authenticated_node_id(principal, true));
-        Box::pin(async move {
-            if api_key != krabka_raft::kraft::transport::api_key::FETCH {
-                return Ok(None);
-            }
-            let Some(request) = decode_fetch(&body) else {
-                return Ok(None);
-            };
-            let Some(response) = self
-                .registry
-                .route_decoded_fetch_wait(request, authenticated_from)
-                .await
-            else {
-                return Ok(None);
-            };
-            let response =
-                response.map_err(|err| krabka_raft::RaftError::ChangeRejected(err.to_string()))?;
-            Ok(Some(encode_fetch_response_struct(&response)))
-        })
+            .insert(node);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
+        super::{
+            super::{
+                router::WalShardRouter,
+                wire::{FENCED_LEADER_EPOCH, OFFSET_OUT_OF_RANGE, UNKNOWN_LEADER_EPOCH},
+            },
+            *,
+        },
         crate::{
             test_support::sasl_principal,
             wal::quorum::{
@@ -486,11 +273,7 @@ mod tests {
         ));
         engine.replicate_and_sync(&source, Offset(1)).await.unwrap();
 
-        let registry = Arc::new(
-            WalShardRegistry::new(krabka_raft::NodeId(9)).with_principal_node_ids(
-                maplit::hashmap! {"admin".to_string() => krabka_raft::NodeId(9)},
-            ),
-        );
+        let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(9)));
         let topic_id = uuid::Uuid::from_u128(17);
         let partition = PartitionIndex(2);
         registry.insert(
@@ -504,7 +287,9 @@ mod tests {
             topic_id,
             partition,
         } => placement(vec![krabka_raft::NodeId(9)], 0)});
-        let router = WalShardRouter::new(registry);
+        let router = WalShardRouter::new(registry).with_principal_node_ids(
+            maplit::hashmap! {"admin".to_string() => krabka_raft::NodeId(9)},
+        );
         let body = encode_fetch_for_group(
             QuorumGroup::diskless_wal(topic_id, partition),
             krabka_raft::NodeId(9),
@@ -634,7 +419,7 @@ mod tests {
         };
         source.lock().unwrap().append(&mut batch).unwrap();
         let engine = Arc::new(WalShardEngine::new_distributed(source, 3).unwrap());
-        let registry = WalShardRegistry::new(krabka_raft::NodeId(1));
+        let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(1)));
         let shard = ShardId {
             topic_id: uuid::Uuid::from_u128(19),
             partition: PartitionIndex(0),
@@ -644,6 +429,7 @@ mod tests {
             vec![krabka_raft::NodeId(1), krabka_raft::NodeId(2), krabka_raft::NodeId(3)],
             0,
         )});
+        let router = WalShardRouter::new(Arc::clone(&registry));
         let request = fetch_request(
             QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
             krabka_raft::NodeId(2),
@@ -653,7 +439,7 @@ mod tests {
             krabka_units::mebibytes(1),
         );
 
-        let response = registry
+        let response = router
             .route_fetch_request(&request, krabka_raft::NodeId(3))
             .unwrap()
             .unwrap();
@@ -679,7 +465,7 @@ mod tests {
             topic_id: uuid::Uuid::from_u128(19),
             partition: PartitionIndex(4),
         };
-        let registry = WalShardRegistry::new(krabka_raft::NodeId(1));
+        let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(1)));
         registry.replace_placements(&maplit::hashmap! {shard => placement(
             vec![
                 krabka_raft::NodeId(1),
@@ -690,6 +476,7 @@ mod tests {
         )});
         registry.insert(shard, Arc::clone(&engine));
         for (epoch, expected) in [(7, FENCED_LEADER_EPOCH), (9, UNKNOWN_LEADER_EPOCH)] {
+            let router = WalShardRouter::new(Arc::clone(&registry));
             let request = fetch_request(
                 QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
                 krabka_raft::NodeId(2),
@@ -698,7 +485,7 @@ mod tests {
                 1,
                 krabka_units::mebibytes(1),
             );
-            let response = registry
+            let response = router
                 .route_fetch_request(&request, krabka_raft::NodeId(2))
                 .unwrap()
                 .unwrap();
@@ -714,7 +501,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let source = open_log(dir.path());
         let engine = Arc::new(WalShardEngine::new_distributed(Arc::clone(&source), 3).unwrap());
-        let registry = WalShardRegistry::new(NodeId(1));
+        let registry = Arc::new(WalShardRegistry::new(NodeId(1)));
         let shard = ShardId {
             topic_id: uuid::Uuid::from_u128(199),
             partition: PartitionIndex(0),
@@ -722,6 +509,7 @@ mod tests {
         let voters = vec![NodeId(1), NodeId(2), NodeId(3)];
         registry.replace_placements(&HashMap::from([(shard, placement(voters.clone(), 0))]));
         registry.insert(shard, Arc::clone(&engine));
+        let router = WalShardRouter::new(Arc::clone(&registry));
         let mut request = fetch_request(
             QuorumGroup::diskless_wal(shard.topic_id, shard.partition),
             NodeId(2),
@@ -734,7 +522,7 @@ mod tests {
         request.min_bytes = 1;
         {
             let waiting =
-                assert_pending(registry.route_fetch_request_wait(&request, NodeId(2))).await;
+                assert_pending(router.route_fetch_request_wait(&request, NodeId(2))).await;
             source.lock().unwrap().append(&mut value_batch()).unwrap();
             let syncing = engine.replicate_and_sync(&source, Offset(1));
             tokio::pin!(syncing);
@@ -753,7 +541,7 @@ mod tests {
             let mut ack = request.clone();
             ack.topics[0].partitions[0].fetch_offset = 1;
             ack.min_bytes = 0;
-            registry
+            router
                 .route_fetch_request_wait(&ack, NodeId(2))
                 .await
                 .unwrap()
@@ -762,13 +550,13 @@ mod tests {
         }
         // Existing records do not wait when they meet the requested minimum.
         {
-            let immediate = registry.route_fetch_request_wait(&request, NodeId(2));
+            let immediate = router.route_fetch_request_wait(&request, NodeId(2));
             tokio::pin!(immediate);
             assert2::assert!(futures_util::poll!(immediate.as_mut()).is_ready());
             let mut larger_minimum = request.clone();
             larger_minimum.min_bytes = i32::MAX;
             let waiting =
-                assert_pending(registry.route_fetch_request_wait(&larger_minimum, NodeId(2))).await;
+                assert_pending(router.route_fetch_request_wait(&larger_minimum, NodeId(2))).await;
             tokio::time::advance(Duration::from_millis(500)).await;
             assert2::assert!(
                 waiting.await.unwrap().unwrap().responses[0].partitions[0]
@@ -783,7 +571,7 @@ mod tests {
         request.topics[0].partitions[0].fetch_offset = 1;
         {
             let mut waiting =
-                assert_pending(registry.route_fetch_request_wait(&request, NodeId(2))).await;
+                assert_pending(router.route_fetch_request_wait(&request, NodeId(2))).await;
             tokio::time::advance(Duration::from_millis(400)).await;
             engine.wake_fetches();
             assert2::assert!(futures_util::poll!(waiting.as_mut()).is_pending());
@@ -804,7 +592,7 @@ mod tests {
         ] {
             registry.replace_placements(&HashMap::from([(shard, placement(voters.clone(), 0))]));
             let waiting =
-                assert_pending(registry.route_fetch_request_wait(&request, NodeId(2))).await;
+                assert_pending(router.route_fetch_request_wait(&request, NodeId(2))).await;
             registry.replace_placements(&HashMap::from([(shard, placement(next_voters, epoch))]));
             let response = waiting.await.unwrap().unwrap();
             assert2::assert!(response.responses[0].partitions[0].error_code == code);
@@ -817,7 +605,7 @@ mod tests {
                 invalid.min_bytes = -1;
             }
             registry.replace_placements(&HashMap::from([(shard, placement(voters.clone(), 0))]));
-            let response = registry
+            let response = router
                 .route_fetch_request_wait(&invalid, NodeId(2))
                 .await
                 .unwrap()
@@ -830,7 +618,7 @@ mod tests {
 
     #[test]
     fn replacing_placements_removes_stale_shards() {
-        let registry = WalShardRegistry::new(krabka_raft::NodeId(1));
+        let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(1)));
         let stale = ShardId {
             topic_id: uuid::Uuid::from_u128(1),
             partition: PartitionIndex(0),
@@ -883,15 +671,16 @@ mod tests {
         ];
 
         for (principal_node_ids, name, auth_method, inter_broker, expected) in cases {
-            let registry = WalShardRegistry::new(krabka_raft::NodeId(1))
-                .with_principal_node_ids(principal_node_ids);
+            let router =
+                WalShardRouter::new(Arc::new(WalShardRegistry::new(krabka_raft::NodeId(1))))
+                    .with_principal_node_ids(principal_node_ids);
             let principal = Principal {
                 name: name.to_string(),
                 auth_method,
                 groups: Vec::new(),
             };
 
-            let actual = registry.authenticated_node_id(&principal, inter_broker);
+            let actual = router.authenticated_node_id(&principal, inter_broker);
 
             assert2::check!(actual == expected, "{name} inter_broker={inter_broker}");
         }

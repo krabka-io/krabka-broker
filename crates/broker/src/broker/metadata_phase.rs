@@ -29,7 +29,7 @@ use {
         raft_handshake::{AuditLogArc, BrokerRaftHandshake},
         registration_admission::BrokerRegistrationAdmission,
         time_util::system_timer,
-        wal::quorum::registry::{WalShardRegistry, WalShardRouter},
+        wal::quorum::{registry::WalShardRegistry, router::WalShardRouter},
     },
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
     std::sync::Arc,
@@ -230,7 +230,10 @@ async fn start_metadata_source(
             cluster_id: config.cluster_id,
             dialer,
             handshake,
-            shard_router: Some(Arc::new(WalShardRouter::new(wal_shards))),
+            shard_router: Some(Arc::new(
+                WalShardRouter::new(wal_shards)
+                    .with_principal_node_ids(config.inter_broker_principal_node_ids.clone()),
+            )),
             admin_router: admin_router
                 .clone()
                 .map(|router| router as Arc<dyn krabka_raft::ControllerAdminRouter>),

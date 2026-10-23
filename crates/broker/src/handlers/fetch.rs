@@ -244,14 +244,14 @@ pub(crate) async fn handle(
         let on_inter_broker_listener =
             ctx.connection_listener_name == broker.config.inter_broker_listener_name;
         let Some(authenticated_node) = broker
-            .wal_shards
+            .wal_router
             .authenticated_node_id(ctx.principal, on_inter_broker_listener)
         else {
             return Ok((cluster_authorization_failed(), version));
         };
         let routing_start = std::time::Instant::now();
         if let Some(response) = broker
-            .wal_shards
+            .wal_router
             .route_fetch_request_wait(&req, authenticated_node)
             .await
         {

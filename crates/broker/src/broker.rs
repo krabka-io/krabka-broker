@@ -36,7 +36,7 @@ use {
         throttle::ThrottleState,
         txn::coordinator::TxnCoordinator,
         unclean_recovery::UncleanRecoveryHandle,
-        wal::quorum::registry::WalShardRegistry,
+        wal::quorum::{registry::WalShardRegistry, router::WalShardRouter},
     },
     dashmap::DashMap,
     krabka_ids::PartitionIndex,
@@ -258,6 +258,7 @@ pub struct Broker {
     pub(crate) hot_tail: Arc<HotTailCache>,
     /// Shard registry used by the controller listener's diskless WAL router.
     pub(crate) wal_shards: Arc<WalShardRegistry>,
+    pub(crate) wal_router: WalShardRouter,
     /// KIP-113 (offline-dir handling): per-log-dir online/offline status,
     /// built by a writability probe at `Broker::start` time. Handlers
     /// (today: `DescribeLogDirs`; future: produce/fetch) read this through
@@ -289,6 +290,7 @@ pub struct Broker {
 struct DisklessRuntime {
     hot_tail: Arc<HotTailCache>,
     wal_shards: Arc<WalShardRegistry>,
+    wal_router: WalShardRouter,
 }
 
 impl DisklessRuntime {
@@ -298,13 +300,13 @@ impl DisklessRuntime {
         hot_tail_max_bytes: usize,
         metrics: BrokerMetrics,
     ) -> Self {
+        let wal_shards = Arc::new(WalShardRegistry::new(node_id).with_metrics(metrics));
+        let wal_router = WalShardRouter::new(Arc::clone(&wal_shards))
+            .with_principal_node_ids(principal_node_ids);
         Self {
             hot_tail: Arc::new(HotTailCache::new(hot_tail_max_bytes)),
-            wal_shards: Arc::new(
-                WalShardRegistry::new(node_id)
-                    .with_metrics(metrics)
-                    .with_principal_node_ids(principal_node_ids),
-            ),
+            wal_shards,
+            wal_router,
         }
     }
 }
