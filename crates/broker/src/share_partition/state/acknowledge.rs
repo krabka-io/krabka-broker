@@ -9,6 +9,7 @@
 
 use {
     super::{AckType, AcquisitionState, RecordState, clamp_i32, dlq::DlqCause, window::give_back},
+    crate::codes::{INVALID_RECORD_STATE, INVALID_REQUEST},
     krabka_log::Offset,
     std::time::Instant,
 };
@@ -48,13 +49,13 @@ impl AcquisitionState {
             .and_then(|len| len.checked_add(1))
             .and_then(|len| usize::try_from(len).ok());
         if range_len != Some(actions.len()) {
-            return Err(crate::codes::INVALID_REQUEST);
+            return Err(INVALID_REQUEST);
         }
         let Some(bounds) = self.ack_bounds(first, last)? else {
             return Ok(());
         };
         if !self.range_acquired_by(member, bounds.first, bounds.last) {
-            return Err(crate::codes::INVALID_RECORD_STATE);
+            return Err(INVALID_RECORD_STATE);
         }
 
         let old_batches = std::mem::take(&mut self.batches);
@@ -65,7 +66,7 @@ impl AcquisitionState {
             pending_dlq: &mut self.pending_dlq,
         };
         let mut action_index =
-            usize::try_from(bounds.first.0 - first.0).map_err(|_| crate::codes::INVALID_REQUEST)?;
+            usize::try_from(bounds.first.0 - first.0).map_err(|_| INVALID_REQUEST)?;
         let mut action_run_end = action_index;
 
         for batch in old_batches {
@@ -285,6 +286,6 @@ mod tests {
     fn acknowledge_wrong_member_is_invalid_record_state() {
         let mut s = acquired_state(krabka_log::Offset(3));
         let err = s.acknowledge("m2", Offset(0), Offset(2), AckType::Accept, 5);
-        assert!(err == Err(crate::codes::INVALID_RECORD_STATE));
+        assert!(err == Err(INVALID_RECORD_STATE));
     }
 }
