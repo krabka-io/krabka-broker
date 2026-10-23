@@ -20,7 +20,7 @@ use {
         authorizer::AuthorizationResult,
         broker::Broker,
         codes,
-        coordinator::unified::group::GroupOffsets,
+        coordinator::unified::group::{GroupOffsets, OffsetFetchSelection},
         handlers::{RequestContext, requested_topic_name},
     },
     krabka_protocol::{
@@ -68,11 +68,34 @@ pub(super) async fn handle_groups(
         // checks the v9+ member id and epoch first, and a refusal is the
         // group's error code with no topics (Kafka's
         // `OffsetFetchResponse.groupError`).
+        // Resolve v10 ids before the actor lookup so the selection uses the
+        // coordinator's name-keyed representation. The same image is retained
+        // for response projection, avoiding two metadata incarnations in one
+        // group response.
+        let image = broker.controller.current_image();
+        let selection = grp
+            .topics
+            .as_deref()
+            .map_or(OffsetFetchSelection::All, |topics| {
+                OffsetFetchSelection::Keys(
+                    topics
+                        .iter()
+                        .flat_map(|topic| {
+                            let name = requested_topic_name(&image, &topic.name, topic.topic_id);
+                            topic
+                                .partition_indexes
+                                .iter()
+                                .map(move |&partition| (name.clone(), partition))
+                        })
+                        .collect(),
+                )
+            });
         let offsets = match fetch_offsets(
             broker,
             &grp.group_id,
             grp.member_id.as_deref(),
             grp.member_epoch,
+            selection,
         )
         .await
         {
@@ -82,8 +105,6 @@ pub(super) async fn handle_groups(
                 continue;
             }
         };
-        let image = broker.controller.current_image();
-
         // Named/id'd topics: resolve id→name (v10) and read each requested
         // partition from the name-keyed store. `None` topics → fetch-all.
         let topics_out: Vec<OffsetFetchResponseTopics> =

@@ -16,6 +16,8 @@ pub mod config;
 pub(crate) mod consumer_state;
 pub(crate) mod group;
 pub(crate) mod migration;
+#[doc(hidden)]
+pub mod offset_fetch_bench;
 pub mod offsets_log;
 pub(crate) mod persistence;
 pub mod persistence_next_gen;
