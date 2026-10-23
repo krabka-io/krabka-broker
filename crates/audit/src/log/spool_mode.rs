@@ -84,39 +84,44 @@ impl AuditWriter {
             self.spooling = false;
             return Ok(());
         }
-        let records = match spool.read_all() {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!(error = %e, "audit spool read failed during replay");
-                return Ok(());
-            }
-        };
+        let total = spool.count().0;
         let mut replayed = 0usize;
-        while replayed < records.len() {
-            let record = &records[replayed];
-            spool.begin_replay(record)?;
-            match self.sink.write(record.clone(), true).await {
-                Ok(()) => {
-                    if let Err(error) = spool.commit_replay(record) {
-                        return Err(AuditError::Indeterminate(format!(
-                            "replay append succeeded but cursor commit failed: {error}"
-                        )));
-                    }
-                    replayed += 1;
-                    self.stats.inc_replayed_by(1);
-                    self.stats.set_depth(spool.count(), spool.size());
+        'replay: loop {
+            let records = match spool.read_replay_batch() {
+                Ok(records) => records,
+                Err(error) => {
+                    tracing::error!(%error, "audit spool read failed during replay");
+                    return Ok(());
                 }
-                Err(error @ AuditError::Indeterminate(_)) => return Err(error),
-                Err(_) => {
-                    spool.abort_replay()?;
-                    break;
+            };
+            if records.is_empty() {
+                break;
+            }
+            for replay in records {
+                spool.begin_replay(&replay.record)?;
+                match self.sink.write(replay.record, true).await {
+                    Ok(()) => {
+                        if let Err(error) = spool.commit_replay_frame(replay.frame_len) {
+                            return Err(AuditError::Indeterminate(format!(
+                                "replay append succeeded but cursor commit failed: {error}"
+                            )));
+                        }
+                        replayed += 1;
+                        self.stats.inc_replayed_by(1);
+                        self.stats.set_depth(spool.count(), spool.size());
+                    }
+                    Err(error @ AuditError::Indeterminate(_)) => return Err(error),
+                    Err(_) => {
+                        spool.abort_replay()?;
+                        break 'replay;
+                    }
                 }
             }
         }
         let span = tracing::Span::current();
         span.record("replayed", replayed);
-        span.record("total", records.len());
-        if replayed == records.len() {
+        span.record("total", total);
+        if spool.is_empty() {
             spool.truncate()?;
             self.stats.set_depth(spool.count(), spool.size());
             self.spooling = false;
@@ -539,6 +544,18 @@ mod tests {
         })
         .await;
         check!(fixture.stats.depth() == 1); // remainder retained, still spooling
+
+        // A second rejected replay starts from the committed cursor and keeps
+        // the same remainder pending without duplicating the successful prefix.
+        fixture
+            .clock
+            .advance(REPLAY_EVERY.to_std())
+            .expect("manual time moves forward");
+        await_until("replay retries the pending cursor", || {
+            fixture.sink.durable_requests() >= 4
+        })
+        .await;
+        check!((fixture.sink.inner.records().len(), fixture.stats.depth()) == (2, 1));
 
         // allow the rest; fire the replay ticker again to drain the remainder
         fixture.sink.allow_unlimited();

@@ -26,9 +26,8 @@ pub async fn start() -> InProcess { start_configured(|_| {}).await }
 /// Panics if the temporary directory or broker cannot be created.
 pub async fn standalone_broker() -> (TempDir, BrokerHandle) {
     let dir = TempDir::new().unwrap();
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .unwrap();
+    let broker = Broker::start(heartbeat_config(dir.path())).await.unwrap();
+    broker.wait_until_broker_alive(1).await;
     (dir, broker)
 }
 
@@ -156,7 +155,7 @@ pub async fn start_with_bound_listeners(
     (broker, dir)
 }
 
-/// A bare `for_tests` broker, with no readiness wait or client-side setup.
+/// A single broker registered as alive, with no client-side setup.
 ///
 /// # Panics
 /// Panics if the temporary directory or broker cannot be created.
@@ -166,13 +165,13 @@ pub async fn boot_single() -> (BrokerHandle, String, TempDir) {
     (broker, bootstrap, dir)
 }
 
-/// A classic-group fixture with the unmodified `for_tests` configuration.
+/// A classic-group fixture with the single-broker heartbeat tolerance.
 ///
 /// # Panics
 /// Panics if the temporary directory or broker cannot be created.
 pub async fn start_group_coordinator() -> (BrokerHandle, String, TempDir) {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
+    let config = heartbeat_config(tempdir.path());
     let started = Box::pin(
         start_group_coordinator_with_config()
             .config(config)
@@ -212,9 +211,11 @@ pub async fn start_ready_group() -> InProcess {
     p
 }
 
-/// The single-client fixtures' shared heartbeat timeout, before caller overrides.
-fn heartbeat_config(dir: &std::path::Path) -> BrokerConfig {
-    let mut config = BrokerConfig::for_tests(dir.to_path_buf());
+/// A non-failover fixture must not fence its only broker when a loaded test
+/// runner delays its heartbeats. Keep `for_tests`' two-second timeout for the
+/// failover fixtures, and apply this tolerance before caller overrides.
+pub fn heartbeat_config(dir: impl Into<std::path::PathBuf>) -> BrokerConfig {
+    let mut config = BrokerConfig::for_tests(dir.into());
     config.heartbeat_timeout = krabka_units::secs(30);
     config
 }
