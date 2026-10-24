@@ -92,6 +92,9 @@ clap = { workspace = true, features = ["env"] }
 uuid = { workspace = true }
 # KIP-1071 streams group metadata hash: Kafka hashes topic metadata with XXH3.
 twox-hash = { workspace = true }
+# Feature unification only: turns on zlib-rs' runtime-dispatched AVX-512
+# kernels for the gzip codec in krabka-compression. See the root manifest.
+zlib-rs = { workspace = true }
 futures-util = { workspace = true }
 # The object-store core. `krabka-object-store` turns on the S3, GCS and
 # local-filesystem backends on the targets that build them.
@@ -119,7 +122,7 @@ zerocopy.workspace = true
 # JSON Schema generation for FileConfig — consumed by krabka-docgen.
 schemars = { workspace = true }
 # KIP-714: stable subscription-id via CRC32C over sorted metric-prefix set.
-crc32c = { workspace = true }
+crc-fast = { workspace = true }
 # KIP-714: decode OTLP MetricsData protobuf payloads in PushTelemetry handler.
 prost = { workspace = true }
 hex = { workspace = true }
@@ -185,6 +188,9 @@ rcgen = { workspace = true }
 nix = { version = "0.31", default-features = false, features = ["zerocopy"] }
 
 [dev-dependencies]
+# An independent CRC-32C oracle for the checksums the broker computes with
+# `crc-fast`.
+crc32c = { workspace = true }
 # Trait mocks for the KIP-939 reaper orchestration unit tests
 # (`txn::coordinator::ReaperBackend`).
 mockall = { workspace = true }

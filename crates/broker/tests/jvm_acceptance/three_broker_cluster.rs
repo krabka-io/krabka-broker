@@ -98,7 +98,7 @@ pub(crate) async fn start_sasl_cluster<const N: usize>(
         extra_users,
     } = setup;
     init_jvm_tracing("krabka_broker=info");
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let dirs: [tempfile::TempDir; N] =
         std::array::from_fn(|_| tempfile::tempdir().expect("broker directory"));
     let voters: Vec<_> = listeners

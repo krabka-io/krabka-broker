@@ -47,7 +47,7 @@ use {
     },
     rustls::{
         ClientConfig, RootCertStore,
-        crypto::ring,
+        crypto::aws_lc_rs,
         pki_types::{CertificateDer, ServerName, pem::PemObject as _},
     },
     std::{collections::BTreeMap, sync::Arc, time::Duration},
@@ -409,7 +409,7 @@ async fn handshake(address: &str, ca: &str) -> Result<(), String> {
     roots.add(der).map_err(|error| error.to_string())?;
     // The provider is named rather than installed: this process links more
     // than one, so rustls has no default to pick.
-    let config = ClientConfig::builder_with_provider(Arc::new(ring::default_provider()))
+    let config = ClientConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
         .with_safe_default_protocol_versions()
         .map_err(|error| error.to_string())?
         .with_root_certificates(roots)

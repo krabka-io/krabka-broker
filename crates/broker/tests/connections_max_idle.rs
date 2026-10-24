@@ -312,7 +312,7 @@ async fn a_request_trickled_across_two_windows_is_served() {
 /// in `TlsAcceptor::accept` for as long as the peer cared to hold them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_tls_listener_closes_a_socket_that_never_starts_its_handshake() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let log_dir = tempfile::tempdir().expect("tempdir");
     let pem_dir = tempfile::tempdir().expect("tempdir");

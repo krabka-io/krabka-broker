@@ -78,7 +78,7 @@ impl ReqwestIntrospectionClient {
         // works from any entry point — the `let _ =` swallows
         // `AlreadySet` when a sibling caller (notably `Broker::start`)
         // won the race.
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
         let mut builder = reqwest::Client::builder().timeout(timeout.to_std());
         if let Some(path) = tls_trust {
@@ -552,7 +552,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let EcdsaPair { cert, .. } = ecdsa_pair_for_host("127.0.0.1");
         let ca_path = dir.path().join("ca.pem");
         std::fs::write(&ca_path, cert.pem()).unwrap();

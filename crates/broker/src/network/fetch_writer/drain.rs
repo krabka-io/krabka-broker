@@ -396,7 +396,7 @@ mod tests {
             // also exercises the kTLS RX path on the server side.
             const REQ: &[u8] = b"fetch-request";
 
-            let _ = rustls::crypto::ring::default_provider().install_default();
+            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
             // Records large enough to span several TLS records + partial writes.
             let mut records = Vec::new();

@@ -104,7 +104,7 @@ async fn tls_connect_without_client_cert(
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier {
             pinned,
-            schemes: tokio_rustls::rustls::crypto::ring::default_provider()
+            schemes: tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
                 .signature_verification_algorithms
                 .supported_schemes(),
             mismatch: "presented cert does not match pinned dev cert",
@@ -124,7 +124,7 @@ async fn unauthenticated_create_delegation_token_is_refused() {
     // The broker installs the rustls crypto provider in `Broker::start`, but
     // the client side below needs one too, and it builds its config first.
     // `.ok()` swallows `AlreadySet`.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     for protocol in [ListenerProtocol::Plaintext, ListenerProtocol::Ssl] {
         for super_users in [&[][..], &["operator"][..]] {

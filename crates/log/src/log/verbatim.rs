@@ -119,7 +119,7 @@ impl VerbatimBatch {
         // The CRC covers the header from `attributes` to the end of the batch,
         // and the body follows the header without a gap, so one pass over the
         // tail of the buffer is the whole covered region.
-        let crc = crc32c::crc32c(&bytes[CRC_COVERAGE_START..]);
+        let crc = crc_fast::crc32_iscsi(&bytes[CRC_COVERAGE_START..]);
         bytes[CRC_RANGE].copy_from_slice(&crc.to_be_bytes());
         Self {
             bytes: bytes.freeze(),

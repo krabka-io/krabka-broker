@@ -38,7 +38,7 @@ krabka-compression = { version = "0.7.0", default-features = false }
 krabka-verified = { version = "1.0.8", path = "../verified" }
 krabka-units = { workspace = true }
 bytes = { workspace = true }
-crc32c = { workspace = true }
+crc-fast = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 zerocopy = { workspace = true }
@@ -61,6 +61,9 @@ compio = { version = "0.19.2", default-features = false, features = ["runtime", 
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+# An independent CRC-32C oracle for the checksums the library computes with
+# `crc-fast`.
+crc32c = { workspace = true }
 bon = { workspace = true }
 yare = { workspace = true }
 # The lookup and compaction tests of `max.decompressed.message.bytes` write

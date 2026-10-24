@@ -5,7 +5,7 @@ use {
     rcgen::{CertificateParams, DnType, KeyPair},
 };
 
-fn install_provider() { drop(rustls::crypto::ring::default_provider().install_default()); }
+fn install_provider() { drop(rustls::crypto::aws_lc_rs::default_provider().install_default()); }
 
 /// A certificate and its PKCS#8 key, both PEM.
 struct Identity {

@@ -460,7 +460,7 @@ fn with_max_timestamp(bytes: &Bytes, max_timestamp: i64) -> Bytes {
     patched[MAX_TIMESTAMP_RANGE].copy_from_slice(&max_timestamp.to_be_bytes());
     // The CRC covers the header from `attributes` to the end of the batch,
     // and the body follows the header without a gap.
-    let crc = crc32c::crc32c(&patched[CRC_COVERAGE_START..]);
+    let crc = crc_fast::crc32_iscsi(&patched[CRC_COVERAGE_START..]);
     patched[CRC_RANGE].copy_from_slice(&crc.to_be_bytes());
     patched.freeze()
 }
