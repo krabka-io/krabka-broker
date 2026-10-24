@@ -156,7 +156,13 @@ fn check_entry(
     if keys.get(&freeze.key_id).is_none() {
         return Some(Unproved::UnknownKeyId);
     }
-    let message = freeze_signing_bytes(&freeze_signing_input(cluster_id, freeze, true));
+    let message = freeze_signing_bytes(
+        &freeze_signing_input()
+            .cluster_id(cluster_id)
+            .entry(freeze)
+            .frozen(true)
+            .call(),
+    );
     // `verify` also checks that the key is bound to the principal the entry
     // names, so a signature from Alice's key over a record that claims Bob
     // wrote it does not pass.
@@ -290,9 +296,13 @@ mod tests {
             key_id: key_id.to_owned(),
             ..DescribedTopicFreeze::default()
         };
-        entry.signature = signer.sign(&freeze_signing_bytes(&freeze_signing_input(
-            CLUSTER, &entry, true,
-        )));
+        entry.signature = signer.sign(&freeze_signing_bytes(
+            &freeze_signing_input()
+                .cluster_id(CLUSTER)
+                .entry(&entry)
+                .frozen(true)
+                .call(),
+        ));
         entry
     }
 

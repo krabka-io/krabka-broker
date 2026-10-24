@@ -8,6 +8,7 @@
 
 use {
     super::{OperatorKeyEntry, OperatorKeyError, key_file::read_public_key},
+    crate::signing::verify_signature,
     std::collections::BTreeMap,
 };
 
@@ -116,8 +117,7 @@ impl OperatorKeys {
     #[must_use]
     pub fn verify(&self, key_id: &str, principal: &str, message: &[u8], signature: &[u8]) -> bool {
         self.get(key_id).is_some_and(|key| {
-            key.principal == principal
-                && crate::signing::verify_signature(&key.public_key, message, signature)
+            key.principal == principal && verify_signature(&key.public_key, message, signature)
         })
     }
 }
