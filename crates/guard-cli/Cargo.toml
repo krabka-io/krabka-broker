@@ -23,12 +23,8 @@ name = "krabka-guard"
 path = "src/main.rs"
 
 [dependencies]
-# `codes` names the krabka-private error codes that the exit-code map reads,
-# and `operator_keys` is the trust set that `freeze list --verify-signatures`
-# checks against, so the tool and the broker agree on one key file shape.
-krabka-broker = { version = "1.0.8", path = "../broker" }
 # `FileEd25519Signer` is the signer the audit checkpoints already use. The
-# operator key material has the same shape, so there is one signer here.
+# operator key trust set and signer share one crypto owner here.
 krabka-audit = { workspace = true }
 krabka-client-core = { version = "0.7.1" }
 krabka-protocol = { version = "0.7.0" }
@@ -47,9 +43,9 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
-# BrokerConfig::for_tests lives behind the broker's own test-helpers feature
-# now that the facade crate is gone.
+# Broker integration fixtures and value checks stay out of the production graph.
 krabka-broker = { version = "1.0.8", path = "../broker", features = ["test-helpers"] }
+krabka-security = { version = "0.7.0" }
 # Signing goes through `FileEd25519Signer`, so `ring` is here only to mint the
 # PKCS#8 key pair that a signature case hands to `--sign-with`.
 ring = { workspace = true }

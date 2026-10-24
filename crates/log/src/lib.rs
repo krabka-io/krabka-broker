@@ -64,6 +64,7 @@
 
 #![doc(html_root_url = "https://docs.rs/krabka-log/1.0.8")]
 
+mod barrier_marker;
 mod compact;
 #[cfg(any(test, feature = "test-helpers"))]
 mod compaction_pause;
@@ -105,6 +106,7 @@ pub use segment::RawSegmentDesc;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use stamp_source::MonotonicStampSource;
 pub use {
+    barrier_marker::{BarrierMarker, parse_barrier_marker},
     config::{
         CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DEFAULT_READ_AHEAD_MAX, DEFAULT_TAIL_CACHE_SIZE,
         DeliveryPolicy, LogConfig, RemoteTierFlags, ScheduleOrder, SegmentAllocation,

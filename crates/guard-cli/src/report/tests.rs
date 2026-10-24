@@ -53,3 +53,19 @@ fn a_private_code_reads_as_more_than_a_number() {
     check!(code_name(codes::FREEZE_LIMIT_EXCEEDED).contains("freeze.max_entries"));
     check!(code_name(codes::NOT_CONTROLLER) == "error 41");
 }
+
+#[test]
+fn cli_private_code_values_match_the_broker_wire_contract() {
+    check!(
+        crate::broker_codes::BREAK_GLASS_APPROVAL_REQUIRED == codes::BREAK_GLASS_APPROVAL_REQUIRED
+    );
+    check!(
+        crate::broker_codes::BREAK_GLASS_DUPLICATE_APPROVER
+            == codes::BREAK_GLASS_DUPLICATE_APPROVER
+    );
+    check!(crate::broker_codes::BREAK_GLASS_NOT_AN_APPROVER == codes::BREAK_GLASS_NOT_AN_APPROVER);
+    check!(crate::broker_codes::OPERATOR_SIGNATURE_INVALID == codes::OPERATOR_SIGNATURE_INVALID);
+    check!(crate::broker_codes::OPERATOR_SIGNATURE_REQUIRED == codes::OPERATOR_SIGNATURE_REQUIRED);
+    check!(crate::broker_codes::FREEZE_SCOPE_INVALID == codes::FREEZE_SCOPE_INVALID);
+    check!(crate::broker_codes::FREEZE_LIMIT_EXCEEDED == codes::FREEZE_LIMIT_EXCEEDED);
+}

@@ -8,7 +8,7 @@
 //! [`OperatorKeys::load`] reads every configured public key file, so an
 //! unreadable path or a malformed key stops the broker at boot instead of in
 //! the middle of an incident. Verification calls
-//! [`krabka_audit::signing::verify_signature`], the same code path that checks
+//! [`crate::signing::verify_signature`], the same code path that checks
 //! an audit checkpoint, so operator key material has the shape the audit
 //! checkpoint keys already have.
 //!

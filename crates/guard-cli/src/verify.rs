@@ -35,11 +35,8 @@
 //! exit codes.
 
 use {
-    crate::signing::freeze_signing_bytes,
-    krabka_broker::{
-        freeze_signing_input,
-        operator_keys::{OperatorKeyEntry, OperatorKeys},
-    },
+    crate::signing::{freeze_signing_bytes, freeze_signing_input},
+    krabka_audit::operator_keys::{OperatorKeyEntry, OperatorKeys},
     krabka_protocol::krabka::freeze::DescribedTopicFreeze,
     std::path::{Path, PathBuf},
 };
@@ -159,13 +156,7 @@ fn check_entry(
     if keys.get(&freeze.key_id).is_none() {
         return Some(Unproved::UnknownKeyId);
     }
-    let message = freeze_signing_bytes(
-        &freeze_signing_input()
-            .cluster_id(cluster_id)
-            .entry(freeze)
-            .frozen(true)
-            .call(),
-    );
+    let message = freeze_signing_bytes(&freeze_signing_input(cluster_id, freeze, true));
     // `verify` also checks that the key is bound to the principal the entry
     // names, so a signature from Alice's key over a record that claims Bob
     // wrote it does not pass.
@@ -299,13 +290,9 @@ mod tests {
             key_id: key_id.to_owned(),
             ..DescribedTopicFreeze::default()
         };
-        entry.signature = signer.sign(&freeze_signing_bytes(
-            &freeze_signing_input()
-                .cluster_id(CLUSTER)
-                .entry(&entry)
-                .frozen(true)
-                .call(),
-        ));
+        entry.signature = signer.sign(&freeze_signing_bytes(&freeze_signing_input(
+            CLUSTER, &entry, true,
+        )));
         entry
     }
 
@@ -440,7 +427,7 @@ mod tests {
         check!(keys.len() == 1);
         check!(
             keys.get("alice-yubi")
-                .map(krabka_broker::operator_keys::OperatorKey::principal)
+                .map(krabka_audit::operator_keys::OperatorKey::principal)
                 == Some(ALICE)
         );
     }

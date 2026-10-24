@@ -14,7 +14,7 @@ use crate::{EXIT_MISMATCH, EXIT_REFUSED, verify::VerifyOutcome};
 /// one code an operator of this tool meets that a Kafka reference will not
 /// list is the krabka-private one, so that gets a word.
 fn code_name(code: i16) -> String {
-    if code == krabka_broker::codes::BARRIER_INJECTION_IN_PROGRESS {
+    if code == crate::broker_codes::BARRIER_INJECTION_IN_PROGRESS {
         return format!("error {code} (an injection is already in flight, retry)");
     }
     format!("error {code}")

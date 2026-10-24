@@ -8,6 +8,7 @@ pub mod event;
 pub mod ids;
 pub mod log;
 pub mod ocsf;
+pub mod operator_keys;
 pub mod signing;
 pub mod sink;
 pub mod spool;

@@ -49,8 +49,10 @@
 //! outside the signed bytes on purpose: every approver signs the same payload,
 //! and a payload that grew with each approval could never verify twice.
 
-pub use krabka_broker::FreezeSigningInput;
-use {krabka_audit::FileEd25519Signer, std::path::Path};
+use {
+    krabka_audit::FileEd25519Signer, krabka_protocol::krabka::freeze::DescribedTopicFreeze,
+    std::path::Path,
+};
 
 /// Domain separator for a freeze record signature (KFC-9).
 ///
@@ -60,6 +62,37 @@ pub const FREEZE_DOMAIN: &[u8] = b"krabka-topic-freeze-v1\0";
 
 /// Domain separator for a break-glass approval signature (KFC-9).
 pub const BREAK_GLASS_DOMAIN: &[u8] = b"krabka-break-glass-v1\0";
+
+/// The freeze fields this CLI encodes and signs independently of the broker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FreezeSigningInput<'a> {
+    pub cluster_id: &'a str,
+    pub pattern_type: i8,
+    pub scope: &'a str,
+    pub frozen: bool,
+    pub reason: &'a str,
+    pub set_by: &'a str,
+    pub set_at_ms: i64,
+    pub proposal_id: [u8; 16],
+}
+
+/// Project the signed values from a described freeze returned by the broker.
+pub fn freeze_signing_input<'a>(
+    cluster_id: &'a str,
+    entry: &'a DescribedTopicFreeze,
+    frozen: bool,
+) -> FreezeSigningInput<'a> {
+    FreezeSigningInput {
+        cluster_id,
+        pattern_type: entry.pattern_type,
+        scope: &entry.scope,
+        frozen,
+        reason: &entry.reason,
+        set_by: &entry.set_by,
+        set_at_ms: entry.set_at_ms,
+        proposal_id: entry.proposal_id.0,
+    }
+}
 
 /// The break-glass proposal fields that an approval signature covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,7 +191,11 @@ fn put_len_prefixed(bytes: &mut Vec<u8>, field: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        krabka_protocol::{krabka::freeze::DescribedTopicFreeze, primitives::uuid::Uuid},
+    };
 
     krabka_macros::break_glass_golden_id!(PROPOSAL_ID);
 
@@ -172,6 +209,40 @@ mod tests {
             set_by: "User:alice",
             set_at_ms: 1_770_000_000_000,
             proposal_id: [0; 16],
+        }
+    }
+
+    #[test]
+    fn freeze_field_projection_matches_the_broker_contract() {
+        let entry = DescribedTopicFreeze {
+            pattern_type: 4,
+            scope: "tenant-a.".to_owned(),
+            reason: "maintenance".to_owned(),
+            set_by: "User:alice".to_owned(),
+            set_at_ms: 1_770_000_000_001,
+            proposal_id: Uuid([7; 16]),
+            ..DescribedTopicFreeze::default()
+        };
+
+        for frozen in [true, false] {
+            let cli = freeze_signing_input("cluster-a", &entry, frozen);
+            let broker = krabka_broker::freeze_signing_input()
+                .cluster_id("cluster-a")
+                .entry(&entry)
+                .frozen(frozen)
+                .call();
+            check!(
+                cli == FreezeSigningInput {
+                    cluster_id: broker.cluster_id,
+                    pattern_type: broker.pattern_type,
+                    scope: broker.scope,
+                    frozen: broker.frozen,
+                    reason: broker.reason,
+                    set_by: broker.set_by,
+                    set_at_ms: broker.set_at_ms,
+                    proposal_id: broker.proposal_id,
+                }
+            );
         }
     }
 

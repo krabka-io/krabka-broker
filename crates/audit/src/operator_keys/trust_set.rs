@@ -117,7 +117,7 @@ impl OperatorKeys {
     pub fn verify(&self, key_id: &str, principal: &str, message: &[u8], signature: &[u8]) -> bool {
         self.get(key_id).is_some_and(|key| {
             key.principal == principal
-                && krabka_audit::signing::verify_signature(&key.public_key, message, signature)
+                && crate::signing::verify_signature(&key.public_key, message, signature)
         })
     }
 }

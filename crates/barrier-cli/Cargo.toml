@@ -22,9 +22,8 @@ name = "krabka-barrier"
 path = "src/main.rs"
 
 [dependencies]
-# `parse_barrier_marker` reads a marker back out of a fetched batch. The decoder
-# lives with the injector so the two cannot drift.
-krabka-broker = { version = "1.0.8", path = "../broker" }
+# The barrier control-record decoder and type live with the log's control records.
+krabka-log = { version = "1.0.8", path = "../log" }
 krabka-client-core = { version = "0.7.1" }
 krabka-protocol = { version = "0.7.0" }
 krabka-units = { workspace = true }
@@ -40,8 +39,7 @@ tracing-subscriber = { workspace = true }
 [dev-dependencies]
 assert2 = { workspace = true }
 krabka-client-admin = { version = "0.7.1" }
-# BrokerConfig::for_tests lives behind the broker's own test-helpers feature
-# now that the facade crate is gone.
+# Broker fixtures and the production encoder remain test-only dependencies.
 krabka-broker = { version = "1.0.8", path = "../broker", features = ["test-helpers"] }
 tempfile = { workspace = true }
 yare = { workspace = true }
