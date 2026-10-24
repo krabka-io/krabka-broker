@@ -39,8 +39,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   and has the `Localhost` lines as a comment. [Deploy](docs/operations/deploy.md#seccomp-and-io_uring)
   tells how to install the profile and how to see that the
   `preallocate=true` writes use io_uring (#1582).
-- `krabka-log` gains `Log::fence`, `Log::append_may_block` and
-  `Log::written_since_open_from`, and `LogError` gains a `Fenced` variant. A
+- `krabka-log` gains `Log::fence`, `Log::append_may_block`,
+  `Log::verbatim_append_may_block` and `Log::read_may_block`, and `LogError` gains a `Fenced` variant. A
   fenced log refuses every append with `LogError::Fenced`, which the broker
   answers with `NOT_LEADER_OR_FOLLOWER`. The broker fences a partition's log
   when it retires the partition, so an append that raced the retirement cannot
@@ -49,6 +49,16 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- CPU profiling initializes the sampler and builds, encodes, and compresses
+  reports on blocking workers, keeping that work off runtime workers.
+- Direct-mode reads covered by the tail cache and ordinary verbatim appends
+  that fit an initialized direct-write queue can run without a blocking-worker
+  handoff. Segment setup, flushes, epoch checkpoint changes, cold reads and
+  queue backpressure still use blocking placement.
+- Large in-memory fetch payloads share vectored writes with their headers,
+  reducing socket calls without copying records. Small responses retain
+  coalescing. [Small-record profiling](docs/operations/omb-small-record-profiling.md)
+  records the measurements and their limits.
 - Appending to a partition with open transactions reuses indexed transaction
   bounds instead of collecting every pending start to refresh the last stable
   offset (#1715).

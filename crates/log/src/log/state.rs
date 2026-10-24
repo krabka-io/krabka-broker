@@ -10,7 +10,7 @@ use crate::io::LogIo;
 use {
     super::Log,
     crate::{
-        RecoveredProducer, SegmentAllocation,
+        DeliveryPolicy, RecoveredProducer, SegmentAllocation, VerbatimBatch,
         config::LogConfig,
         error::LogError,
         leader_epoch_checkpoint::LeaderEpochCheckpoint,
@@ -20,6 +20,7 @@ use {
         txn_index::{AbortedTxn, TxnIndex},
     },
     krabka_ids::{Offset, ProducerId},
+    krabka_protocol::records::{Attributes, CRC_COVERAGE_START, HEADER_LEN, TimestampType},
     krabka_units::prelude::{ByteSize, ByteSizeExt},
     std::{path::Path, time::Instant},
     tracing::instrument,
@@ -442,27 +443,15 @@ impl Log {
         }
     }
 
-    /// The first offset whose bytes this process wrote into the active
-    /// segment, and so most likely finds in the page cache: the active
-    /// segment's base, or the log end offset at open when the active segment
-    /// was already there. A read below it may have to go to the disk.
+    /// Whether a raw read from `fetch_offset` may need bytes outside memory.
     ///
-    /// A log with `preallocate` writes through `O_DIRECT`, which leaves
-    /// nothing in the page cache beyond its bounded tail cache, so for it no
-    /// offset counts as written here: every read may go to the disk.
-    ///
-    /// # Panics
-    /// Panics if the log's configuration lock is poisoned.
+    /// Buffered reads of this process's active-segment appends use the page cache. Direct reads can run in memory when the tail cache covers the sparse-index floor and every byte after it. Older segments, reopened bytes, and evicted direct tails need the blocking path. The caller must retain the log lock through the read so a concurrent append cannot evict the checked bytes.
     #[must_use]
-    pub fn written_since_open_from(&self) -> Offset {
-        if self.config.read().unwrap().segment_allocation == SegmentAllocation::Preallocate {
-            return Offset(i64::MAX);
-        }
-        let active_base = self
-            .active
-            .as_ref()
-            .map_or_else(|| self.log_end_offset(), Segment::base_offset);
-        active_base.max(self.opened_end)
+    pub fn read_may_block(&self, fetch_offset: Offset) -> bool {
+        self.active.as_ref().is_none_or(|active| {
+            fetch_offset < active.base_offset()
+                || active.read_may_block(fetch_offset, self.opened_end)
+        })
     }
 
     /// Whether appending `incoming_size` bytes whose newest record is stamped
@@ -484,13 +473,70 @@ impl Log {
         incoming_size: ByteSize,
         incoming_max_timestamp: i64,
     ) -> bool {
+        self.append_may_block_with(incoming_size, incoming_max_timestamp, None)
+    }
+
+    /// Whether appending this one verbatim batch can wait on storage. An initialized direct writer with queue space can accept ordinary batches without a worker handoff. Flushes, epoch changes, segment setup, and queue backpressure still require blocking placement. The caller must hold the log lock through the append.
+    ///
+    /// # Panics
+    /// Panics if the log's configuration lock is poisoned.
+    pub fn verbatim_append_may_block(&mut self, batch: &VerbatimBatch) -> bool {
+        self.append_may_block_with(
+            ByteSize::from_bytes(u64::try_from(batch.bytes.len()).unwrap_or(u64::MAX)),
+            batch.max_timestamp,
+            Some(batch),
+        )
+    }
+
+    fn can_queue_verbatim(&self, batch: &VerbatimBatch, config: &LogConfig) -> bool {
+        !batch.is_transactional
+            && batch.bytes.len() >= HEADER_LEN
+            && !Attributes(i16::from_be_bytes([
+                batch.bytes[CRC_COVERAGE_START],
+                batch.bytes[CRC_COVERAGE_START + 1],
+            ]))
+            .is_control_batch()
+            && config.delivery_policy == DeliveryPolicy::Immediate
+            && config.message_timestamp_type == TimestampType::CreateTime
+            && self.active.as_ref().is_some_and(|active| {
+                active.can_queue_append(batch.bytes.len(), config.segment_size)
+            })
+    }
+
+    fn verbatim_epoch_is_current(&self, batch: &VerbatimBatch) -> bool {
+        !batch.leader_epoch.is_known()
+            || self.epoch_checkpoint.entries().last().is_some_and(|entry| {
+                entry.epoch == batch.leader_epoch
+                    // A follower can clear a reconciled frontier before appending. The local log end is the lower bound shared by both append paths.
+                    && entry.start_offset <= self.log_end_offset()
+            })
+    }
+
+    fn append_may_block_with(
+        &mut self,
+        incoming_size: ByteSize,
+        incoming_max_timestamp: i64,
+        verbatim: Option<&VerbatimBatch>,
+    ) -> bool {
         let (flushes, segment_size, roll_interval, index_size) = {
             let config = self.config.read().unwrap();
+            let storage_may_block = match config.segment_allocation {
+                SegmentAllocation::Preallocate => {
+                    verbatim.is_none_or(|batch| !self.can_queue_verbatim(batch, &config))
+                }
+                SegmentAllocation::OnWrite => {
+                    self.active.as_ref().is_some_and(Segment::writes_direct)
+                }
+            };
             (
                 config.flush_on_append
                     || config.flush_messages.is_some()
                     || config.flush_interval.is_some()
-                    || config.segment_allocation == SegmentAllocation::Preallocate,
+                    || self.stamp_source.is_some()
+                    || storage_may_block
+                    || verbatim.is_some_and(|batch| !self.verbatim_epoch_is_current(batch))
+                    || (verbatim.is_some()
+                        && config.message_timestamp_type == TimestampType::LogAppendTime),
                 config.segment_size,
                 config.segment_roll_interval,
                 config.segment_index_size,

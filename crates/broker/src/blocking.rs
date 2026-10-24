@@ -20,10 +20,7 @@
 //! [`inline_blocking_on_this_thread`], and so drives the WASI path on every
 //! target.
 //!
-//! [`run_page_cache_io`] is the exception: file work that only touches the
-//! page cache runs on the calling task, because handing it off costs more
-//! than the work. Work that may wait on a lock or the disk still goes
-//! through [`run_blocking`].
+//! [`run_page_cache_io`] is the exception: page-cache work, direct-tail reads, and appends that fit an initialized direct queue can run on the calling task. Work that may wait on a lock or storage still goes through [`run_blocking`].
 
 use {
     std::{
@@ -100,9 +97,7 @@ where
     }
 }
 
-/// Run `work` on the value behind `lock`, on the calling task when that only
-/// touches the page cache, and through [`run_blocking`] otherwise. A panic is
-/// returned as an error rather than unwound into the caller.
+/// Run `work` on the value behind `lock`, on the calling task when its storage work stays in memory, and through [`run_blocking`] otherwise. A panic is returned as an error rather than unwound into the caller.
 ///
 /// This is for the log's hot paths: a produce append, a fetch read, and a
 /// follower's replicated append. Most of those are a copy into or out of the

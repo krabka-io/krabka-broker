@@ -1,6 +1,6 @@
 //! Drains an ordered [`WriteOp`] plan to a connection stream.
 //!
-//! Inline ops go out with `write_all`. A file-backed op goes through the
+//! Inline plans with large payloads use vectored writes when the stream supports them. A file-backed op goes through the
 //! kernel `sendfile(2)` when the stream allows it, and through a buffered
 //! `pread` and `write_all` fallback that produces identical wire bytes when it
 //! does not.
@@ -22,6 +22,7 @@ use {
         error::BrokerError,
         metrics::{BrokerMetrics, FetchDrainPath},
     },
+    std::io::{Error, ErrorKind, IoSlice},
     tokio::io::{AsyncWrite, AsyncWriteExt},
 };
 
@@ -29,6 +30,47 @@ use {
 /// ones are written from their own `Bytes`, where the copy would cost more
 /// than the syscall it saves.
 const COALESCE_BELOW: usize = 16 * 1024;
+
+/// Stay below the platform's iovec limit even for a fetch with many partitions.
+const MAX_IO_SLICES: usize = 64;
+
+/// The inline bytes of an op. File regions are excluded by the vectored-path selector and contribute no inline bytes.
+fn inline_bytes(op: &WriteOp) -> &[u8] {
+    krabka_macros::sendfile_match! { match op {
+        WriteOp::Inline(bytes) => bytes.as_ref(),
+        WriteOp::File(_) => &[],
+    }}
+}
+
+/// Write an inline plan without copying its payloads. A partial write can stop inside any slice, so advance both the slice list and its first remaining byte.
+async fn write_inline_vectored<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    ops: &[WriteOp],
+) -> Result<(), BrokerError> {
+    let mut slices: Vec<_> = ops
+        .iter()
+        .map(inline_bytes)
+        .filter(|bytes| !bytes.is_empty())
+        .map(IoSlice::new)
+        .collect();
+    let mut remaining = slices.as_mut_slice();
+    while !remaining.is_empty() {
+        let count = remaining.len().min(MAX_IO_SLICES);
+        let written = match stream.write_vectored(&remaining[..count]).await {
+            Ok(0) => {
+                return Err(BrokerError::Io(Error::new(
+                    ErrorKind::WriteZero,
+                    "fetch response write made no progress",
+                )));
+            }
+            Ok(written) => written,
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => return Err(BrokerError::Io(error)),
+        };
+        IoSlice::advance_slices(&mut remaining, written);
+    }
+    Ok(())
+}
 
 /// Writes and clears the coalesced inline bytes, if there are any.
 async fn write_coalesced<S>(stream: &mut S, coalesced: &mut Vec<u8>) -> Result<(), BrokerError>
@@ -45,8 +87,7 @@ where
 /// Drain a fetch write-plan to `stream`, write each op in order, then flush.
 ///
 /// The caller MUST have flushed any pending `Framed` codec output first, so
-/// the bytes do not interleave with the codec's write buffer. Inline ops use
-/// `write_all`. File ops use `sendfile` when the stream is a Linux plaintext
+/// the bytes do not interleave with the codec's write buffer. An inline plan with a large payload uses vectored writes when the stream supports them; other plans coalesce small inline ops. File ops use `sendfile` when the stream is a Linux plaintext
 /// `TcpStream`, and a buffered `pread` + `write_all` fallback otherwise.
 ///
 /// On success it bumps `fetch_response_drain_total` once, on the path the
@@ -70,6 +111,18 @@ pub async fn write_fetch_plan<S>(
 where
     S: AsyncWrite + SendfileSink + Unpin,
 {
+    // Small inline ops already coalesce into one write. Vectors save work when a large payload would otherwise split that write, while preserving the cheaper copy for short responses.
+    let vectored = stream.is_write_vectored()
+        && ops.iter().all(|op| matches!(op, WriteOp::Inline(_)))
+        && ops
+            .iter()
+            .any(|op| inline_bytes(op).len() >= COALESCE_BELOW);
+    if vectored {
+        write_inline_vectored(stream, &ops).await?;
+        stream.flush().await.map_err(BrokerError::Io)?;
+        metrics.record_fetch_response_drain(FetchDrainPath::Vectored);
+        return Ok(());
+    }
     let mut ops = ops.into_iter();
     let first = ops.next().ok_or_else(|| {
         BrokerError::Io(std::io::Error::other(
@@ -179,6 +232,46 @@ where
 #[cfg(test)]
 mod tests {
     use {super::*, crate::metrics::FetchDrainPathLabel};
+
+    /// A bounded pipe forces writes to stop inside and between slices. More than 64 nonempty slices also cross the per-write vector bound.
+    #[tokio::test]
+    async fn vectored_inline_writes_preserve_bytes_across_partial_writes() {
+        use {bytes::Bytes, tokio::io::AsyncReadExt as _};
+
+        let expected: Vec<_> = (0..=u8::MAX)
+            .flat_map(|byte| std::iter::repeat_n(byte, 9))
+            .collect();
+        let ops: Vec<_> = expected
+            .chunks(9)
+            .flat_map(|chunk| {
+                [
+                    WriteOp::Inline(Bytes::new()),
+                    WriteOp::Inline(Bytes::copy_from_slice(chunk)),
+                ]
+            })
+            .collect();
+        let (mut writer, mut reader) = tokio::io::duplex(7);
+        let send = async {
+            write_inline_vectored(&mut writer, &ops).await.unwrap();
+            writer.shutdown().await.unwrap();
+        };
+        let mut received = Vec::new();
+        let ((), read) = tokio::join!(send, reader.read_to_end(&mut received));
+        assert2::assert!(read.unwrap() == expected.len());
+        assert2::assert!(received == expected);
+    }
+
+    #[tokio::test]
+    async fn a_zero_vectored_write_fails_instead_of_spinning() {
+        let mut storage = [0; 3];
+        let mut writer = std::io::Cursor::new(storage.as_mut_slice());
+        let ops = [WriteOp::Inline(bytes::Bytes::from_static(b"abcdef"))];
+        let error = write_inline_vectored(&mut writer, &ops).await.unwrap_err();
+        assert2::assert!(
+            matches!(error, BrokerError::Io(error) if error.kind() == ErrorKind::WriteZero)
+        );
+        assert2::assert!(storage == *b"abc");
+    }
 
     /// The count this drain's counter carries for `path`.
     fn drained(metrics: &BrokerMetrics, path: FetchDrainPath) -> u64 {
