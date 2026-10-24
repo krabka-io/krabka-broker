@@ -254,6 +254,13 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
 
     let burst = usize::try_from(interval).unwrap() * 3;
     submit_burst(&net, leader, burst, "f", 2000).await;
+    let committed = net
+        .get(leader)
+        .unwrap()
+        .quorum_state()
+        .await
+        .expect("leader quorum state")
+        .high_watermark;
 
     // The follower must have pruned on its own — the direct fix for #364:
     // `maybe_snapshot_and_prune` no longer gates on `is_leader()`, so a
@@ -261,11 +268,16 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
     // prunes exactly as the leader's does, with the leader never touched.
     let follower_ctrl = net.get(follower).unwrap();
     let follower_dir = dirs[&follower].path().to_path_buf();
-    // Checkpoint installation precedes retention cleanup on the engine task.
-    let names = await_until(Duration::from_secs(10), || {
+    // Drain automatic pruning through the final burst so the response and
+    // published quorum state cannot straddle another snapshot completion.
+    let (names, follower_log_start) = await_until(Duration::from_secs(10), || {
+        let state = follower_ctrl.quorum_snapshot();
         let names = checkpoint_names(&follower_dir);
-        (follower_ctrl.quorum_snapshot().log_start_offset > 0 && (1..=2).contains(&names.len()))
-            .then_some(names)
+        (state.high_watermark == committed
+            && state.log_start_offset > 0
+            && committed - state.log_start_offset < i64::try_from(interval).unwrap()
+            && (1..=2).contains(&names.len()))
+        .then_some((names, state.log_start_offset))
     })
     .await;
     // Retention keeps the latest checkpoint and the one before it (#365), so a
@@ -290,7 +302,6 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
     else {
         panic!("follower did not return a decodable Fetch response");
     };
-    let follower_log_start = follower_ctrl.quorum_snapshot().log_start_offset;
     assert2::assert!(
         answer
             == wire::FetchAnswer {
