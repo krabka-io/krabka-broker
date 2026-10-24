@@ -142,9 +142,7 @@ impl SeedLabels {
                 topic: "orders".into(),
                 partition: 0,
             },
-            api_key: ApiKeyLabel {
-                api_key: "Produce".into(),
-            },
+            api_key: ApiKeyLabel { api_key: "Produce" },
             group: BarrierGroupLabel {
                 group: "orders-cut".into(),
             },

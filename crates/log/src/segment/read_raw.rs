@@ -189,7 +189,13 @@ impl Segment {
             }
         }
         self.advise_read(start_pos, first_read as u64, read_ahead_max);
-        let mut buf: Vec<u8> = Vec::with_capacity(first_read.min(read_buffer_cap.bytes_usize()));
+        // A tailing consumer can request megabytes while only one small
+        // batch remains. The returned Bytes retains this allocation, so
+        // reserve at most what read_log_range can actually read.
+        let available =
+            usize::try_from(self.log_size.saturating_sub(start_pos)).unwrap_or(usize::MAX);
+        let mut buf: Vec<u8> =
+            Vec::with_capacity(first_read.min(read_buffer_cap.bytes_usize()).min(available));
         self.read_log_range(start_pos, &mut buf, first_read)?;
 
         let Some(range) =
@@ -287,6 +293,21 @@ mod tests {
             !inside.is_empty(),
             "a fetch inside the segment and below the limit"
         );
+    }
+
+    #[test]
+    fn a_small_tail_does_not_retain_the_consumers_large_read_budget() {
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = test_segment();
+        append_two_record_batches(&mut seg, BatchCount(4));
+        let read = seg.read_raw(Offset(6), Offset(99), mebibytes(10)).unwrap();
+        assert_read_offsets(&read, 6, 7);
+        let length = read.bytes.len();
+        let allocation = read.bytes.try_into_mut().expect("unique read buffer");
+        check!(length > HEADER_LEN);
+        check!(allocation.capacity() == length);
     }
 
     /// Batches before the fetch offset are stepped over by their own length.

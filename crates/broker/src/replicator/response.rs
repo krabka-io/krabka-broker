@@ -156,6 +156,16 @@ fn first_batch_span(records: &RecordsPayload) -> Option<(Offset, Offset)> {
 /// below this log's end, and without the restart the append refuses it on
 /// every round and the follower never catches up.
 async fn restart_at_first_batch_base(part: &Partition, cfg: &Config, records: &RecordsPayload) {
+    // Only an empty log can need this recovery. In steady-state replication
+    // leave the first batch's CRC to replicate_raw_batches, which validates
+    // every batch before appending it. Checking it here too used to scan that
+    // batch twice on every fetch, including compressed batches.
+    {
+        let log = part.log.lock().expect("log mutex poisoned");
+        if log.log_start_offset() != log.log_end_offset() {
+            return;
+        }
+    }
     let Some((base, last)) = first_batch_span(records) else {
         return;
     };
@@ -1382,6 +1392,65 @@ mod tests {
         assert2::assert!(
             (part.log_start_offset(), part.log_end_offset()) == (Offset(want.0), Offset(want.1))
         );
+    }
+
+    /// Both the empty-log recovery and steady-state append must refuse a
+    /// first batch with a bad CRC, without resetting or extending the log.
+    #[yare::parameterized(
+        uncompressed_empty_recovery = { false, CompressionType::None },
+        uncompressed_holding_records = { true, CompressionType::None },
+        lz4_empty_recovery = { false, CompressionType::Lz4 },
+        lz4_holding_records = { true, CompressionType::Lz4 },
+    )]
+    #[test_macro(tokio::test)]
+    async fn corrupt_first_batch_preserves_the_follower_log(
+        holding_records: bool,
+        codec: CompressionType,
+    ) {
+        let LocalPartitionFixture {
+            cfg,
+            dir: _dir,
+            part,
+        } = local_partition_fixture();
+        if holding_records {
+            for base in 0..3 {
+                part.log
+                    .lock()
+                    .unwrap()
+                    .append(&mut one_record_batch(base))
+                    .unwrap();
+            }
+        } else {
+            part.reset_to(Offset(3)).await.unwrap();
+        }
+        let before = (part.log_start_offset(), part.log_end_offset());
+        let batch = RecordBatch {
+            attributes: Attributes::default().with_compression(codec),
+            last_offset_delta: 4,
+            records: (0..5)
+                .map(|offset_delta| Record {
+                    offset_delta,
+                    ..Record::default()
+                })
+                .collect(),
+            ..one_record_batch(0)
+        };
+        let mut encoded = BytesMut::new();
+        batch.encode(&mut encoded).unwrap();
+        let last = encoded.len() - 1;
+        encoded[last] ^= 1;
+        let response = fetch_response(TOPIC, WIRE_TOPIC_ID, PartitionData {
+            partition_index: PARTITION,
+            high_watermark: before.1.0,
+            log_start_offset: before.0.0,
+            records: Some(RecordsPayload::Raw(encoded.freeze())),
+            ..PartitionData::default()
+        });
+
+        assert2::assert!(
+            handle_response(response, &cfg, cfg.leader_epoch.0).await == RowAction::Continue
+        );
+        assert2::assert!((part.log_start_offset(), part.log_end_offset()) == before);
     }
 
     #[tokio::test]

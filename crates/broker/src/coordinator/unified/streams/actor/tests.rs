@@ -2855,7 +2855,10 @@ async fn the_replayed_assignment_timestamp_holds_the_interval() {
             Some(200),
             (2, Some(ASSIGNMENT_INTERVAL_DETAIL.to_owned()), false),
         ),
-        ("an assignment 1 s ago", Some(1_000), (3, None, true)),
+        // Leave a full interval of margin: the wall/monotonic clock samples
+        // can round to different milliseconds even while Tokio is paused.
+        // The pure assignment-interval helper tests cover the exact boundary.
+        ("an assignment 2 s ago", Some(2_000), (3, None, true)),
     ];
     for (case, ago, expected) in rows {
         let coord = coordinator_with_log(

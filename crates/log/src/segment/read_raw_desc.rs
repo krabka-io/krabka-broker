@@ -15,7 +15,7 @@ use {
     krabka_ids::Offset,
     krabka_protocol::records::HEADER_LEN,
     krabka_units::prelude::{ByteSize, ByteSizeExt},
-    std::sync::Arc,
+    std::sync::{Arc, atomic::Ordering},
     tracing::instrument,
 };
 
@@ -80,7 +80,21 @@ impl Segment {
             return true;
         }
         let last = start_pos + window.saturating_sub(1);
-        self.io.is_cached(&self.log_file, start_pos) && self.io.is_cached(&self.log_file, last)
+        self.byte_is_cached(start_pos) && self.byte_is_cached(last)
+    }
+
+    /// Cache capability only; successful probes and misses can change as
+    /// pages enter and leave the cache and must always be checked again.
+    fn byte_is_cached(&self, offset: u64) -> bool {
+        if self.cache_probe_unsupported.load(Ordering::Relaxed) {
+            return true;
+        }
+        if let Some(cached) = self.io.is_cached(&self.log_file, offset) {
+            cached
+        } else {
+            self.cache_probe_unsupported.store(true, Ordering::Relaxed);
+            true
+        }
     }
 
     /// Descriptor variant of [`Segment::read_raw`] for the zero-copy
@@ -252,6 +266,7 @@ mod tests {
             test_support::AdviceCall,
         },
         bytes::Bytes,
+        krabka_protocol::records::{Record, RecordBatch},
         krabka_units::prelude::{bytes, mebibytes},
     };
 
@@ -263,7 +278,45 @@ mod tests {
     struct NothingCached;
 
     impl LogIo for NothingCached {
-        fn is_cached(&self, _file: &std::fs::File, _offset: u64) -> bool { false }
+        fn is_cached(&self, _file: &std::fs::File, _offset: u64) -> Option<bool> { Some(false) }
+    }
+
+    #[derive(Debug)]
+    struct ChangingCache(std::sync::Mutex<Vec<Option<bool>>>);
+
+    impl LogIo for ChangingCache {
+        fn is_cached(&self, _file: &std::fs::File, _offset: u64) -> Option<bool> {
+            self.0.lock().unwrap().remove(0)
+        }
+    }
+
+    #[test]
+    fn cache_misses_and_hits_are_rechecked_but_unsupported_probes_stop() {
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = test_segment();
+        seg.io = Arc::new(ChangingCache(std::sync::Mutex::new(vec![
+            Some(false),
+            Some(true),
+            Some(false),
+            None,
+        ])));
+        assert2::assert!(!seg.byte_is_cached(0));
+        assert2::assert!(seg.byte_is_cached(0));
+        assert2::assert!(!seg.byte_is_cached(0));
+        assert2::assert!(seg.byte_is_cached(0));
+        // No fifth I/O response exists: unsupported capabilities suppress
+        // subsequent probes, including probes of a different byte.
+        assert2::assert!(seg.byte_is_cached(123));
+        seg.set_io(Arc::new(NothingCached));
+        assert2::assert!(!seg.byte_is_cached(0));
+        let TempSegment {
+            dir: _other_dir,
+            segment: mut other,
+        } = test_segment();
+        other.io = Arc::new(NothingCached);
+        assert2::assert!(!other.byte_is_cached(0));
     }
 
     /// Run the sendfile-path read of `seg` from `fetch_offset` and record
@@ -300,10 +353,9 @@ mod tests {
 
     /// The sendfile path resolves a run's start position through the sparse
     /// index once, and both the page-cache probe and the description use it.
-    /// Off an exact index entry the lookup reads a header-scan window, so
-    /// each case expects that window read once, followed by the
-    /// description's own header reads. The region always equals the bytes
-    /// `read_raw` returns for the same fetch.
+    /// An indexed successor needs only the preceding header; other sparse
+    /// lookups scan one window. The description then reads its own headers.
+    /// The region always equals the bytes `read_raw` returns for the same fetch.
     #[test]
     fn the_sendfile_read_looks_up_its_start_position_once() {
         struct Case {
@@ -311,9 +363,8 @@ mod tests {
             /// `(offset, payload bytes)` of each appended batch.
             batches: Vec<(i64, usize)>,
             fetch: i64,
-            /// Whether the fetch lands off an exact index entry, so the
-            /// lookup scans one header window from the index floor.
-            scans: bool,
+            /// The lookup's expected first read, absent on an exact index hit.
+            lookup_bytes: Option<usize>,
         }
         let lookup_window = DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize();
         let sparse = DEFAULT_INDEX_INTERVAL;
@@ -324,25 +375,31 @@ mod tests {
                 name: "first batch, one large batch",
                 batches: vec![(0, 1024 * 1024)],
                 fetch: 0,
-                scans: true,
+                lookup_bytes: Some(lookup_window),
             },
             Case {
                 name: "unindexed small batch behind an index entry",
                 batches: (0..2000).map(|off| (off, 100)).collect(),
                 fetch: 1001,
-                scans: true,
+                lookup_bytes: Some(HEADER_LEN),
             },
             Case {
                 name: "exact index entry",
                 batches: (0..64).map(|off| (off, 32 * 1024)).collect(),
                 fetch: 37,
-                scans: false,
+                lookup_bytes: None,
             },
             Case {
                 name: "fetch inside a compacted gap",
                 batches: vec![(0, 100), (5, 100), (10, 100)],
                 fetch: 3,
-                scans: true,
+                lookup_bytes: Some(lookup_window),
+            },
+            Case {
+                name: "compacted gap after an indexed batch",
+                batches: vec![(0, 32 * 1024), (5, 32 * 1024), (10, 32 * 1024)],
+                fetch: 6,
+                lookup_bytes: Some(HEADER_LEN),
             },
         ];
         for case in cases {
@@ -364,8 +421,8 @@ mod tests {
                 .unwrap();
             let floor = index_floor(&seg, fetch);
             let mut expected = Vec::new();
-            if case.scans {
-                expected.push((floor, lookup_window));
+            if let Some(bytes) = case.lookup_bytes {
+                expected.push((floor, bytes));
             }
             expected.push((start_pos, HEADER_LEN));
 
@@ -377,13 +434,90 @@ mod tests {
             assert2::check!(reads[..expected.len()] == expected[..], "{name}");
             assert2::check!(
                 reads.iter().filter(|read| read.1 == lookup_window).count()
-                    == usize::from(case.scans),
+                    == usize::from(case.lookup_bytes == Some(lookup_window)),
                 "{name}"
             );
             assert2::check!(desc.start_offset == raw.start_offset, "{name}");
             assert2::check!(desc.last_offset == raw.last_offset, "{name}");
             assert2::check!(region_bytes(&region) == raw.bytes.to_vec(), "{name}");
         }
+    }
+
+    /// A follower asks for the offset immediately after the index floor's
+    /// last offset. Neither locating nor describing its batch should copy a
+    /// payload window, including when compaction left a gap after the floor.
+    #[yare::parameterized(
+        one_kibibyte_records = { 63, 1024, 0 },
+        one_hundred_byte_records = { 600, 100, 0 },
+        one_kibibyte_records_after_a_gap = { 63, 1024, 17 },
+        one_hundred_byte_records_after_a_gap = { 600, 100, 17 },
+    )]
+    fn an_indexed_successor_reads_headers_only(records: i32, payload: usize, gap: i64) {
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = test_segment();
+        let next = i64::from(2 * records);
+        let mut expected = Vec::new();
+        for base in [0, i64::from(records), next + gap] {
+            let batch = RecordBatch {
+                base_offset: base,
+                last_offset_delta: records - 1,
+                records: (0..records)
+                    .map(|offset_delta| Record {
+                        offset_delta,
+                        value: Some(Bytes::from(vec![0; payload])),
+                        ..Record::default()
+                    })
+                    .collect(),
+                ..RecordBatch::default()
+            };
+            seg.append(&batch, DEFAULT_INDEX_INTERVAL).unwrap();
+            if base == next + gap {
+                batch.encode(&mut expected).unwrap();
+            }
+        }
+        let last = next + gap + i64::from(records) - 1;
+
+        let (desc, reads) = counted_read(&seg, Offset(next), Offset(last + 1));
+
+        let desc = desc.unwrap();
+        assert2::assert!(desc.start_offset == Offset(next + gap));
+        assert2::assert!(desc.last_offset == Offset(last));
+        assert2::assert!(region_bytes(&desc.region.unwrap()) == expected);
+        assert2::assert!(reads.iter().all(|&(_, bytes)| bytes <= HEADER_LEN));
+        assert2::assert!(reads.iter().map(|&(_, bytes)| bytes).sum::<usize>() <= 2 * HEADER_LEN);
+    }
+
+    #[test]
+    fn an_inconsistent_index_cannot_skip_the_batch_containing_the_fetch() {
+        let TempSegment {
+            dir: _dir,
+            segment: mut seg,
+        } = test_segment();
+        let batch = RecordBatch {
+            last_offset_delta: 188,
+            records: (0..189)
+                .map(|offset_delta| Record {
+                    offset_delta,
+                    ..Record::default()
+                })
+                .collect(),
+            ..RecordBatch::default()
+        };
+        seg.append(&batch, DEFAULT_INDEX_INTERVAL).unwrap();
+        // This entry claims that the batch at position zero ends at 125,
+        // but its header says 188. Offset 126 is still inside that batch.
+        seg.offset_index.append(125, 0).unwrap();
+        let mut expected = Vec::new();
+        batch.encode(&mut expected).unwrap();
+
+        let (desc, _) = counted_read(&seg, Offset(126), Offset(189));
+
+        let desc = desc.unwrap();
+        assert2::assert!(desc.start_offset == Offset(0));
+        assert2::assert!(desc.last_offset == Offset(188));
+        assert2::assert!(region_bytes(&desc.region.unwrap()) == expected);
     }
 
     /// A run outside the page cache is not described, and the probe that

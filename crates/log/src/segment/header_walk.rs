@@ -51,8 +51,9 @@ impl Segment {
     pub(super) fn read_start_position_with(
         &self,
         target_rel: u32,
-        read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
+        mut read_range: impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
     ) -> Result<u64, LogError> {
+        let target = self.base_offset.0 + i64::from(target_rel);
         let position = match self.offset_index.floor_entry(target_rel) {
             Some(OffsetIndexEntry {
                 relative_offset,
@@ -60,10 +61,25 @@ impl Segment {
             }) if relative_offset == target_rel => {
                 return Ok(u64::from(position));
             }
-            Some(OffsetIndexEntry { position, .. }) => u64::from(position),
+            Some(OffsetIndexEntry {
+                relative_offset,
+                position,
+            }) => {
+                let position = u64::from(position);
+                // The index records each batch's last offset. A follower
+                // normally asks for the next offset, so its index floor is
+                // the preceding batch. Its fixed header gives the next byte
+                // position without copying a whole header-scan window.
+                if relative_offset.checked_add(1) == Some(target_rel)
+                    && let Some(next) =
+                        self.indexed_successor_with(position, target - 1, &mut read_range)?
+                {
+                    return Ok(next);
+                }
+                position
+            }
             None => 0,
         };
-        let target = self.base_offset.0 + i64::from(target_rel);
         self.walk_batch_headers_with(position, read_range, |view| {
             if view.last_offset.0 >= target {
                 ControlFlow::Break(())
@@ -71,6 +87,42 @@ impl Segment {
                 ControlFlow::Continue(())
             }
         })
+    }
+
+    /// The byte after an indexed batch whose last offset immediately
+    /// precedes the fetch. An inconsistent index or torn header leaves the
+    /// ordinary boundary walk in charge.
+    fn indexed_successor_with(
+        &self,
+        position: u64,
+        previous_last: i64,
+        read_range: &mut impl FnMut(u64, &mut Vec<u8>, usize) -> Result<(), LogError>,
+    ) -> Result<Option<u64>, LogError> {
+        let mut buf = Vec::with_capacity(HEADER_LEN);
+        read_range(position, &mut buf, HEADER_LEN)?;
+        let Ok(header) = RecordBatchHeader::ref_from_bytes(&buf) else {
+            return Ok(None);
+        };
+        if header.magic != 2
+            || header
+                .base_offset
+                .get()
+                .checked_add(i64::from(header.last_offset_delta.get()))
+                != Some(previous_last)
+        {
+            return Ok(None);
+        }
+        let Some(total) = usize::try_from(header.batch_length.get())
+            .ok()
+            .and_then(|length| length.checked_add(12))
+            .filter(|&length| length >= HEADER_LEN)
+        else {
+            return Ok(None);
+        };
+        let next = u64::try_from(total)
+            .ok()
+            .and_then(|length| position.checked_add(length));
+        Ok(next.filter(|&next| next <= self.log_size))
     }
 
     /// Walk the fixed v2 batch headers from `start_pos` forward and hand each
