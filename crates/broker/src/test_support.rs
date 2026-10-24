@@ -243,7 +243,7 @@ pub(crate) struct LoopbackTlsListener {
 /// Binds an HTTPS fixture with a fresh loopback certificate and returns the
 /// trust bundle path. The directory stays alive for background client requests.
 pub(crate) async fn loopback_tls_listener() -> LoopbackTlsListener {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let EcdsaPair { cert, key } = ecdsa_pair_for_host("127.0.0.1");
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let cert_path = dir.path().join("cert.pem");

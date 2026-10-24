@@ -256,7 +256,11 @@ jobs:
       - name: build and push the arm64 manifest
         id: arm64
         run: |
-          flags=(-c opt --platforms=//:linux_arm64)
+          # `--config=release` is what `delivery` in ci.yml builds the AMD64
+          # child with, so both children of the index are the same build.
+          # One array for build, cquery and push, so the digest recorded is
+          # the digest pushed.
+          flags=(--config=release --platforms=//:linux_arm64)
           bazel build "${flags[@]}" //packaging:image_manifest_blob
           manifest="$(bazel cquery "${flags[@]}" //packaging:image_manifest_blob --output=files)"
           jq -e '.layers | length > 0' "${manifest}" >/dev/null
@@ -329,6 +333,7 @@ jobs:
                   bazelTarget: "//packaging:image",
                   platforms: "//:linux_arm64",
                   compilationMode: "opt",
+                  bazelConfig: "release",
                   arm64Digest: $arm64,
                   imageSource: $source
                 },

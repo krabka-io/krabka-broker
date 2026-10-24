@@ -93,7 +93,7 @@ struct TlsPair {
 }
 
 async fn tls_pair(window: Duration) -> TlsPair {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let (certificate, key) = localhost_ecdsa_pair();
     let cert = certificate.der().clone();
     let server = rustls::ServerConfig::builder()

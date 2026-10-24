@@ -5,59 +5,168 @@
 
 use {
     super::{ClientAttributes, ComputedSubscription},
-    crate::client_metrics::config::{self, ALL_METRICS},
+    crate::client_metrics::config::{self, ALL_METRICS, MatchRule},
     krabka_metadata::MetadataImage,
+    std::collections::{BTreeMap, HashMap},
     uuid::Uuid,
 };
 
-/// Kafka's `ClientMetricsManager.createClientInstance`: the push interval
-/// starts at `default_interval_ms` (Kafka's
-/// [`config::INTERVAL_MS_DEFAULT`] unless the operator moved it) and every
-/// matched subscription lowers it, whether or not it names any metric.
+/// One subscription's configs and the parts of them that matching reads,
+/// parsed when the subscription changes rather than once per client.
+#[derive(Debug)]
+struct CompiledSubscription {
+    name: String,
+    configs: BTreeMap<String, String>,
+    /// The compiled `match` selectors, or `None` when they do not parse, which
+    /// leaves the subscription matching no client.
+    rules: Option<Vec<MatchRule>>,
+    metrics: Vec<String>,
+}
+
+impl CompiledSubscription {
+    fn new(name: &str, configs: &BTreeMap<String, String>) -> Self {
+        let rules = configs
+            .get(config::KEY_MATCH)
+            .map_or_else(|| Ok(Vec::new()), |v| config::parse_match_rules(v))
+            .ok();
+        let metrics = configs
+            .get(config::KEY_METRICS)
+            .map_or_else(Vec::new, |v| config::parse_metrics(v));
+        Self {
+            name: name.to_owned(),
+            configs: configs.clone(),
+            rules,
+            metrics,
+        }
+    }
+}
+
+/// The client-metrics subscriptions of a metadata image with their `match`
+/// patterns compiled, kept in the image's iteration order.
+///
+/// [`Self::observe`] recompiles only a subscription whose configs changed, so
+/// a `java.util.regex.Pattern` is compiled once per subscription change, not
+/// once per new client instance.
+#[derive(Debug, Default)]
+pub(crate) struct Subscriptions {
+    entries: Vec<CompiledSubscription>,
+    by_name: HashMap<String, usize>,
+    /// How many subscriptions have been compiled, for the tests that pin the
+    /// reuse.
+    #[cfg(test)]
+    compilations: usize,
+}
+
+impl Subscriptions {
+    /// The subscriptions of `image`, all compiled.
+    #[cfg(test)]
+    pub(crate) fn from_image(image: &MetadataImage) -> Self {
+        let mut subscriptions = Self::default();
+        subscriptions.observe(image);
+        subscriptions
+    }
+
+    /// Brings the set in line with `image`, and says whether anything changed:
+    /// Kafka's `subscriptionUpdateVersion` moves exactly then.
+    pub(crate) fn observe(&mut self, image: &MetadataImage) -> bool {
+        let unchanged = image.client_metrics_subscriptions().count() == self.entries.len()
+            && image.client_metrics_subscriptions().all(|(name, configs)| {
+                self.get(name)
+                    .is_some_and(|compiled| compiled.configs == *configs)
+            });
+        if unchanged {
+            return false;
+        }
+        let mut previous: HashMap<String, CompiledSubscription> = std::mem::take(&mut self.entries)
+            .into_iter()
+            .map(|compiled| (compiled.name.clone(), compiled))
+            .collect();
+        for (name, configs) in image.client_metrics_subscriptions() {
+            let compiled = match previous.remove(name.as_str()) {
+                Some(compiled) if compiled.configs == *configs => compiled,
+                _ => {
+                    #[cfg(test)]
+                    {
+                        self.compilations += 1;
+                    }
+                    CompiledSubscription::new(name, configs)
+                }
+            };
+            self.entries.push(compiled);
+        }
+        self.by_name = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(position, compiled)| (compiled.name.clone(), position))
+            .collect();
+        true
+    }
+
+    fn get(&self, name: &str) -> Option<&CompiledSubscription> {
+        self.by_name
+            .get(name)
+            .and_then(|&position| self.entries.get(position))
+    }
+
+    /// Kafka's `ClientMetricsManager.createClientInstance`: the push interval
+    /// starts at `default_interval_ms` (Kafka's
+    /// [`config::INTERVAL_MS_DEFAULT`] unless the operator moved it) and every
+    /// matched subscription lowers it, whether or not it names any metric.
+    pub(crate) fn compute(
+        &self,
+        attrs: &ClientAttributes,
+        default_interval_ms: i32,
+    ) -> ComputedSubscription {
+        let mut matched_metrics: Vec<String> = Vec::new();
+        let mut push_interval_ms = default_interval_ms;
+        let mut any_star = false;
+
+        for compiled in &self.entries {
+            let Some(rules) = &compiled.rules else {
+                continue;
+            };
+            if !rules.iter().all(|r| selector_matches(r, attrs)) {
+                continue;
+            }
+            for m in &compiled.metrics {
+                if m == ALL_METRICS {
+                    any_star = true;
+                }
+                if !matched_metrics.contains(m) {
+                    matched_metrics.push(m.clone());
+                }
+            }
+            push_interval_ms = push_interval_ms.min(config::effective_interval_ms(
+                &compiled.configs,
+                default_interval_ms,
+            ));
+        }
+
+        let metrics = if any_star {
+            vec![ALL_METRICS.to_string()]
+        } else {
+            matched_metrics
+        };
+        ComputedSubscription {
+            metrics,
+            push_interval_ms,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn compilations(&self) -> usize { self.compilations }
+}
+
+/// [`Subscriptions::compute`] over the subscriptions of `image`, compiled for
+/// this one call.
+#[cfg(test)]
 pub(crate) fn compute_subscription(
     image: &MetadataImage,
     attrs: &ClientAttributes,
     default_interval_ms: i32,
 ) -> ComputedSubscription {
-    let mut matched_metrics: Vec<String> = Vec::new();
-    let mut push_interval_ms = default_interval_ms;
-    let mut any_star = false;
-
-    for (_name, configs) in image.client_metrics_subscriptions() {
-        let rules = match configs.get(config::KEY_MATCH) {
-            Some(v) => match config::parse_match_rules(v) {
-                Ok(r) => r,
-                Err(_) => continue,
-            },
-            None => Vec::new(),
-        };
-        if !rules.iter().all(|r| selector_matches(r, attrs)) {
-            continue;
-        }
-        let metrics = configs
-            .get(config::KEY_METRICS)
-            .map_or_else(Vec::new, |v| config::parse_metrics(v));
-        if metrics.iter().any(|m| m == ALL_METRICS) {
-            any_star = true;
-        }
-        for m in metrics {
-            if !matched_metrics.contains(&m) {
-                matched_metrics.push(m);
-            }
-        }
-        push_interval_ms =
-            push_interval_ms.min(config::effective_interval_ms(configs, default_interval_ms));
-    }
-
-    let metrics = if any_star {
-        vec![ALL_METRICS.to_string()]
-    } else {
-        matched_metrics
-    };
-    ComputedSubscription {
-        metrics,
-        push_interval_ms,
-    }
+    Subscriptions::from_image(image).compute(attrs, default_interval_ms)
 }
 
 fn selector_matches(rule: &config::MatchRule, attrs: &ClientAttributes) -> bool {
@@ -89,7 +198,7 @@ pub(crate) fn subscription_id(sub: &ComputedSubscription, client_instance_id: Uu
     let rendered = format!("[{}]{}", sorted.join(", "), sub.push_interval_ms);
     // CRC32C output is u32; reinterpreting as i32 is intentional — the value
     // is used only for equality checks, not arithmetic.
-    let crc = crc32c::crc32c(rendered.as_bytes()).cast_signed();
+    let crc = crc_fast::crc32_iscsi(rendered.as_bytes()).cast_signed();
     crc ^ uuid_hashcode(client_instance_id)
 }
 
@@ -116,6 +225,10 @@ mod tests {
         krabka_metadata::{ClientMetricsConfigRecord, MetadataImage, MetadataRecord},
         uuid::Uuid,
     };
+
+    /// `subscription_id` of `[a., b.]` at 60000 ms for instance id 7, as the
+    /// `crc32c` crate computed it before the switch to `crc-fast`.
+    const PINNED_SUBSCRIPTION_ID: i32 = 1_450_358_637;
 
     /// The subscription of a broker that keeps Kafka's default interval.
     fn compute_subscription(
@@ -444,6 +557,89 @@ mod tests {
                 "row {name}"
             );
         }
+    }
+
+    /// The id is pinned: brokers of two versions in one cluster must hand a
+    /// client the same id for the same subscription, so the CRC-32C
+    /// implementation behind it must not change the value.
+    #[test]
+    fn subscription_id_is_pinned() {
+        let sub = ComputedSubscription {
+            metrics: vec!["b.".into(), "a.".into()],
+            push_interval_ms: 60_000,
+        };
+        let rendered = b"[a., b.]60000";
+        let instance = Uuid::from_u128(7);
+        check!(crc_fast::crc32_iscsi(rendered) == crc32c::crc32c(rendered));
+        check!(subscription_id(&sub, instance) == PINNED_SUBSCRIPTION_ID);
+    }
+
+    /// A subscription is compiled when it first appears and again only when
+    /// its configs change; an unchanged image reports no change.
+    #[test]
+    fn match_rules_compile_once_per_subscription_change() {
+        let java_only = [
+            ConfigEntry {
+                key: "metrics",
+                value: "a.",
+            },
+            ConfigEntry {
+                key: "match",
+                value: "client_software_name=apache-kafka-.*",
+            },
+        ];
+        let mut img = img_with("s1", &java_only);
+        apply_config(&mut img, "s2", &[ConfigEntry {
+            key: "metrics",
+            value: "b.",
+        }]);
+        let mut subscriptions = Subscriptions::default();
+        let first = subscriptions.observe(&img);
+        let unchanged = subscriptions.observe(&img);
+        let computed = subscriptions.compute(&attrs(), config::INTERVAL_MS_DEFAULT);
+        check!((first, unchanged, subscriptions.compilations()) == (true, false, 2));
+        let mut metrics = computed.metrics;
+        metrics.sort();
+        check!(metrics == ["a.", "b."]);
+
+        apply_config(&mut img, "s2", &[ConfigEntry {
+            key: "metrics",
+            value: "c.",
+        }]);
+        let changed = subscriptions.observe(&img);
+        let computed = subscriptions.compute(&attrs(), config::INTERVAL_MS_DEFAULT);
+        check!((changed, subscriptions.compilations()) == (true, 3));
+        let mut metrics = computed.metrics;
+        metrics.sort();
+        check!(metrics == ["a.", "c."]);
+    }
+
+    /// A subscription whose `match` does not compile matches no client and
+    /// does not lower the interval, before and after it is cached.
+    #[test]
+    fn an_unparsable_match_matches_no_client() {
+        let img = img_with("bad", &[
+            ConfigEntry {
+                key: "metrics",
+                value: "*",
+            },
+            ConfigEntry {
+                key: "interval.ms",
+                value: "1000",
+            },
+            ConfigEntry {
+                key: "match",
+                value: "client_id=(",
+            },
+        ]);
+        let subscriptions = Subscriptions::from_image(&img);
+        check!(
+            subscriptions.compute(&attrs(), config::INTERVAL_MS_DEFAULT)
+                == ComputedSubscription {
+                    metrics: vec![],
+                    push_interval_ms: config::INTERVAL_MS_DEFAULT,
+                }
+        );
     }
 
     #[test]

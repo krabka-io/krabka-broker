@@ -222,7 +222,7 @@ async fn main() -> Result<()> {
     // exactly once before any TLS code runs. The `kube` and `reqwest`
     // rustls features both rely on this. Failing to install means TLS
     // operations panic with "no process-level CryptoProvider available".
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let cli = Cli::parse();
     let consumer_build_retry_policy = resolve_consumer_build_retry_policy(&cli)?;

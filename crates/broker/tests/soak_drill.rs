@@ -78,7 +78,7 @@ async fn drill(args: &[&str]) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_drill_reads_back_every_record_a_surviving_source_acknowledged() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let security = manifest_dir().join("tests/fixtures/security");
     let secured: SocketAddr = format!("127.0.0.1:{}", free_port()).parse().unwrap();
     let broker = start_configured(|config| {

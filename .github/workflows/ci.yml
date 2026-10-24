@@ -1477,21 +1477,27 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Every Bazel command in this job passes `--config=release` (`-c opt`,
+      # fat LTO, one codegen unit; see `.bazelrc`), and passes it identically:
+      # the image the docker test runs, the image `push` uploads and the
+      # manifest the digest step hashes must be one build, so a flag that
+      # differs between them would test or record a different image from the
+      # one shipped. `release.yml` builds the ARM64 half with the same config.
       - name: test the delivery image
-        run: bazel test -c opt --config=docker //packaging:image_docker_test
+        run: bazel test --config=release --config=docker //packaging:image_docker_test
       - name: push
-        run: bazel run -c opt //packaging:push -- --tag "${GITHUB_SHA}"
+        run: bazel run --config=release //packaging:push -- --tag "${GITHUB_SHA}"
 
       # The benchmark driver image, built the same way. `bench/manifests/driver`
       # runs it as a Kubernetes Job, and `BENCH_DRIVER_IMAGE` names the tag.
       # The `ci` job's `build` step builds it on every pull request.
       - name: push the benchmark driver image
-        run: bazel run -c opt //bench:driver_push -- --tag "${GITHUB_SHA}"
+        run: bazel run --config=release //bench:driver_push -- --tag "${GITHUB_SHA}"
 
       - name: record the delivery image digest
         run: |
-          bazel build -c opt //packaging:image_manifest_blob
-          manifest="$(bazel cquery -c opt //packaging:image_manifest_blob --output=files)"
+          bazel build --config=release //packaging:image_manifest_blob
+          manifest="$(bazel cquery --config=release //packaging:image_manifest_blob --output=files)"
           printf 'sha256:%s\n' "$(sha256sum "${manifest}" | cut -d ' ' -f 1)" >delivery-image.digest
           aspect check-delivery-image --expected delivery-image.digest \
             --image "ghcr.io/krabka-io/krabka-broker:${GITHUB_SHA}"

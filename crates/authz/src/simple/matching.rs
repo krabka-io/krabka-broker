@@ -8,7 +8,7 @@
 //! in the decision loop.
 
 use {
-    crate::cidr::Cidr,
+    crate::{cidr::Cidr, host_format::jdk_host_address_is},
     krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType},
     krabka_verified::{
         AclOperationKind, AclPatternKind, acl_identity_match, acl_operation_match,
@@ -18,13 +18,24 @@ use {
     std::net::IpAddr,
 };
 
-pub(super) fn matches_principal(entry: &AclEntry, user_pattern: &str) -> bool {
-    acl_identity_match(entry.principal == "User:*", entry.principal == user_pattern)
+/// The principal type of every authenticated krabka caller, as Kafka's
+/// `KafkaPrincipal.USER_TYPE` writes it into a stored ACL principal.
+const USER_PRINCIPAL_PREFIX: &str = "User:";
+
+/// True when `entry`'s principal is `User:*` or `User:<user_name>`.
+///
+/// The stored principal is split into its type and name rather than compared
+/// against a formatted `User:<user_name>`, so a request allocates nothing.
+pub(super) fn matches_principal(entry: &AclEntry, user_name: &str) -> bool {
+    let stored_name = entry.principal.strip_prefix(USER_PRINCIPAL_PREFIX);
+    acl_identity_match(stored_name == Some("*"), stored_name == Some(user_name))
 }
 
-/// True when `entry`'s host applies to a request from `host` (the JDK
-/// `getHostAddress()` text of the peer, as `SimpleAclAuthorizer::authorize`
-/// derives it) whose original address is `peer_ip`.
+/// True when `entry`'s host applies to a request from the peer `peer_ip`.
+///
+/// A literal host is compared against the JDK `getHostAddress()` text of the
+/// peer, as Kafka derives it; that text is streamed into the comparison, and
+/// only for an entry whose host is not the wildcard.
 ///
 /// A stored host is the wildcard, a literal address compared as text, or --
 /// KIP-1276, when `cidr_hosts_supported` -- a CIDR range compared against
@@ -33,13 +44,12 @@ pub(super) fn matches_principal(entry: &AclEntry, user_pattern: &str) -> bool {
 /// comparison, exactly as `CreateAcls`, `DescribeAcls` and `DeleteAcls`
 /// filters treat it. Where CIDR hosts are not supported, as in Kafka 4.3.1,
 /// a host containing `/` is only ever compared as text.
-pub(super) fn matches_host(
-    entry: &AclEntry,
-    host: &str,
-    peer_ip: IpAddr,
-    cidr_hosts_supported: bool,
-) -> bool {
-    if acl_identity_match(entry.host == "*", entry.host == host) {
+pub(super) fn matches_host(entry: &AclEntry, peer_ip: IpAddr, cidr_hosts_supported: bool) -> bool {
+    let wildcard = entry.host == "*";
+    if acl_identity_match(
+        wildcard,
+        !wildcard && jdk_host_address_is(peer_ip, &entry.host),
+    ) {
         return true;
     }
     cidr_hosts_supported
@@ -116,7 +126,7 @@ fn operation_kind(operation: AclOperation) -> AclOperationKind {
 #[cfg(test)]
 mod tests {
     use {
-        super::{matches_operation, matches_resource},
+        super::{matches_operation, matches_principal, matches_resource},
         crate::{
             AuthorizationResult, Authorizer, SimpleAclAuthorizer,
             simple::test_support::{
@@ -246,6 +256,39 @@ mod tests {
         expected: bool,
     ) {
         assert2::assert!(matches_operation(stored, requested, permission) == expected);
+    }
+
+    /// A stored principal applies when its type is `User` and its name is the
+    /// caller's or `*`: the name is compared whole, and another principal
+    /// type never matches.
+    #[yare::parameterized(
+        exact = { "User:alice", true },
+        wildcard = { "User:*", true },
+        other_user = { "User:bob", false },
+        longer_name = { "User:alice2", false },
+        shorter_name = { "User:alic", false },
+        other_type = { "Group:alice", false },
+        other_type_wildcard = { "Group:*", false },
+        lowercase_type = { "user:alice", false },
+        no_type = { "alice", false },
+        bare_wildcard = { "*", false },
+    )]
+    fn principal_matches_type_and_name(principal: &str, expected: bool) {
+        let entry = topic_acl().principal(principal).call();
+        assert2::assert!(matches_principal(&entry, "alice") == expected);
+    }
+
+    /// A caller whose name contains the `:` separator still matches only its
+    /// own `User:<name>` entry.
+    #[test]
+    fn principal_name_with_separator_matches_whole() {
+        let entry = topic_acl().principal("User:a:b").call();
+        assert2::assert!(
+            (
+                matches_principal(&entry, "a:b"),
+                matches_principal(&entry, "a")
+            ) == (true, false)
+        );
     }
 
     #[test]

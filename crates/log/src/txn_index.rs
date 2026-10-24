@@ -208,6 +208,32 @@ impl TxnIndex {
         ) == Some((entry.start_offset.0, entry.last_offset.0))
     }
 
+    /// Kafka's `TransactionIndex.collectAbortedTxns`: push every aborted
+    /// transaction whose offset range overlaps `[start, end)` onto `out`, in
+    /// index order, and return whether the search is complete.
+    ///
+    /// An entry's `last_stable_offset` is the first offset of any transaction
+    /// still open when it aborted. Once that reaches `end`, every transaction
+    /// that overlaps the range had completed by then, and its entry is no
+    /// later than this one, so the search stops here and skips the rest of
+    /// this index and every later segment's.
+    pub fn collect_aborted(&self, start: Offset, end: Offset, out: &mut Vec<AbortedTxn>) -> bool {
+        for entry in &self.entries {
+            if krabka_verified::aborted_transaction_overlaps(
+                entry.start_offset.0,
+                entry.last_offset.0,
+                start.0,
+                end.0,
+            ) {
+                out.push(*entry);
+            }
+            if entry.last_stable_offset >= end {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Aborted transactions whose offset range overlaps `[start, end)`.
     pub fn aborted_in_range(
         &self,
@@ -672,5 +698,53 @@ mod tests {
         assert2::check!(index.on_disk() == exists);
         assert2::check!(path.exists() == exists);
         assert2::check!(TxnIndex::open(path).unwrap().on_disk() == exists);
+    }
+
+    /// Kafka's `TransactionIndex.collectAbortedTxns`: an entry that overlaps
+    /// the range is taken, and the first entry whose last stable offset
+    /// reaches the range's end completes the search, after it is taken.
+    #[yare::parameterized(
+        nothing_completes = { 0, 30, &[0, 1, 2], false },
+        the_first_entry_completes = { 0, 5, &[0], true },
+        a_later_entry_completes = { 0, 12, &[0, 1], true },
+        the_completing_entry_lies_before_the_range = { 10, 11, &[], true },
+        an_empty_range = { 10, 10, &[], true },
+    )]
+    fn collect_aborted_stops_at_the_first_complete_entry(
+        start: i64,
+        end: i64,
+        taken: &[usize],
+        complete: bool,
+    ) {
+        let entries = [
+            aborted_txn()
+                .producer(1)
+                .bounds(Offset(0)..=Offset(4))
+                .stable(5)
+                .call(),
+            aborted_txn()
+                .producer(2)
+                .bounds(Offset(6)..=Offset(9))
+                .stable(12)
+                .call(),
+            aborted_txn()
+                .producer(3)
+                .bounds(Offset(3)..=Offset(20))
+                .stable(21)
+                .call(),
+        ];
+        let IndexFixture {
+            dir: _dir,
+            path: _path,
+            index,
+        } = populated_index("00.txnindex", &entries);
+        let mut out = vec![entries[2]];
+
+        let actual = index.collect_aborted(Offset(start), Offset(end), &mut out);
+
+        let expected: Vec<AbortedTxn> = std::iter::once(entries[2])
+            .chain(taken.iter().map(|&at| entries[at]))
+            .collect();
+        assert2::check!((actual, out) == (complete, expected));
     }
 }

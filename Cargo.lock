@@ -3478,6 +3478,7 @@ dependencies = [
  "bytes",
  "clap",
  "codspeed-criterion-compat",
+ "crc-fast",
  "crc32c",
  "dashmap",
  "derive_more",
@@ -3532,6 +3533,8 @@ dependencies = [
  "prometheus-client",
  "proptest",
  "prost 0.14.4",
+ "prost-reflect",
+ "protox-parse",
  "qubit-clock",
  "rcgen",
  "refined_type",
@@ -3569,6 +3572,7 @@ dependencies = [
  "wiremock",
  "yare",
  "zerocopy",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -3824,6 +3828,7 @@ dependencies = [
  "bytes",
  "codspeed-criterion-compat",
  "compio",
+ "crc-fast",
  "crc32c",
  "derive_more",
  "krabka-compression",

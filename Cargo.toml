@@ -28,6 +28,15 @@ debug = "none"
 # Split debug info into a separate file (reduces linker work)
 split-debuginfo = "packed"
 
+# The same settings as Bazel's `build:release` in `.bazelrc`, which builds the
+# shipped images. `panic` stays `unwind`: the broker catches panics in blocking
+# work, rollover flushes and O_DIRECT writes and turns them into errors, and a
+# panicking tokio task must not take the process down.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
 [workspace.dependencies]
 bon = "3.10.2"
 # Error type for the two tool binaries -- `krabka-docgen` and
@@ -45,6 +54,11 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 base64 = "0.23"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
+# CRC-32C for the batch and producer-snapshot checksums the broker computes
+# itself. The same backend krabka-protocol uses for batch validation: it picks
+# AVX-512 VPCLMULQDQ, PCLMULQDQ or aarch64 PMULL at runtime, about 15x the
+# SSE4.2-only `crc32c` crate on a 16 KiB batch. `crc32c` stays as a test oracle.
+crc-fast = { version = "1.10", default-features = false, features = ["std"] }
 crc32c = "0.6"
 crc32fast = "1"
 dashmap = "6"
@@ -55,8 +69,16 @@ derive_more = { version = "2", features = ["debug", "display", "from", "into", "
 # KIP-714: `CLIENT_METRICS` `match` patterns are `java.util.regex.Pattern`s,
 # lookaround and backreferences included, which the `regex` crate refuses.
 fancy-regex = "0.19"
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# gzip runs on zlib-rs rather than miniz_oxide: about 2.5x faster deflate and
+# 1.2x faster inflate on this workload. Feature unification also switches
+# krabka-compression's gzip codec. `runtime_detection` lets zlib-rs pick its
+# AVX2/AVX-512 kernels at runtime.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 futures-util = { version = "0.3", features = ["sink"] }
+# Not called directly. The broker depends on it only to turn on the `avx512`
+# kernels (CRC-32 folding, adler32, compare256) in the zlib-rs that backs
+# flate2's gzip; zlib-rs still dispatches on the CPU at runtime.
+zlib-rs = { version = "0.6", default-features = false, features = ["rust-allocator", "avx512"] }
 hex = "0.4"
 indexmap = "2.14"
 # The local host name, which a controller bound to a wildcard address
@@ -143,7 +165,10 @@ ring = "0.17"
 # `process` is for `getrlimit` and `setrlimit`: the broker binary raises its
 # open-file limit at start, as the JVM does for a Kafka broker.
 rustix = { version = "1", default-features = false, features = ["std", "fs", "process"] }
-rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
+# `aws_lc_rs` rather than `ring`: aws-lc's AES-GCM has VAES/VPCLMULQDQ
+# AVX-512 kernels, about 1.5x ring's on 16 KiB TLS records. aws-lc-rs was
+# already in the graph through object_store and reqwest.
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
 # rustls-pemfile retired upstream (RUSTSEC-2025-0134, archived 2025-08).
 # Use the PEM parsers in `rustls-pki-types` (same code; pull explicitly).
 rustls-pki-types = { version = "1.15", features = ["alloc"] }
@@ -152,6 +177,10 @@ serde = { version = "1", features = ["derive"] }
 serde-wincode = "=0.1.2"
 serde_json = "1"
 jsonschema = { version = "0.59", default-features = false }
+# KFC-7 Protobuf body validation: the descriptor pool a cached schema closure
+# keeps. The same versions krabka-schema-serde resolves.
+prost-reflect = "0.16"
+protox-parse = "0.9"
 sha2 = "0.11"
 # Jepsen-style exhaustive concurrency-correctness model checking (KRaft
 # consensus). Dev-dependency only — never linked into a shipped binary.
@@ -177,7 +206,8 @@ tracing = "0.1"
 tracing-core = "0.1"
 tracing-opentelemetry = { version = "0.34", default-features = false }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-twox-hash = { version = "2.1", default-features = false, features = ["xxhash3_64"] }
+# `std` turns on XXH3's runtime AVX2 (x86_64) dispatch.
+twox-hash = { version = "2.1", default-features = false, features = ["std", "xxhash3_64"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 yare = "3"
 # wincode + serde-wincode replace bincode for serde-derived wire shapes.

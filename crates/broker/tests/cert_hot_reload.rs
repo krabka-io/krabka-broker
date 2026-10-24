@@ -76,7 +76,7 @@ async fn handshake_against(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reload_tls_swaps_served_cert() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let CertFixture {
         log_dir: _log_dir,
@@ -132,7 +132,7 @@ async fn reload_tls_swaps_served_cert() {
 /// The test uses a 100 ms tick to stay fast.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn periodic_watcher_reloads_on_mtime_change() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let mut fixture = cert_fixture();
     fixture.cfg.tls_reload_interval = krabka_units::millis(100);

@@ -195,6 +195,7 @@ mod tests {
                 verbatim_from,
             },
             name,
+            segment::Segment,
             test_support::{aborted_txn, open_log},
         },
         bytes::Bytes,
@@ -595,5 +596,119 @@ mod tests {
                 Some(log.lso().0) == krabka_verified::first_unstable_offset(&starts, end.0)
             );
         }
+    }
+
+    /// One step of a transactional layout.
+    #[derive(Clone, Copy)]
+    enum TxnStep {
+        /// A transactional batch of this many records from this producer.
+        Data(i64, usize),
+        Abort(i64),
+        Commit(i64),
+        /// Start a new segment.
+        Roll,
+        /// The high watermark reaches the log end, releasing completed
+        /// transactions from the last-stable-offset computation.
+        Replicate,
+    }
+
+    fn txn_layout(steps: &[TxnStep]) -> TempLog {
+        let TempLog { dir, mut log } = test_log();
+        for &step in steps {
+            match step {
+                TxnStep::Data(pid, records) => {
+                    let values = vec!["v"; records];
+                    append_transaction(&mut log, pid, 0, &values);
+                }
+                TxnStep::Abort(pid) => {
+                    log.append(&mut abort_marker(pid, 0)).unwrap();
+                }
+                TxnStep::Commit(pid) => {
+                    log.append(&mut commit_marker(pid, 0)).unwrap();
+                }
+                TxnStep::Roll => {
+                    log.roll().unwrap();
+                }
+                TxnStep::Replicate => {
+                    let end = log.log_end_offset();
+                    log.release_replicated_transactions(end);
+                }
+            }
+        }
+        TempLog { dir, log }
+    }
+
+    /// The search before the early stop: every overlapping entry in every
+    /// index from the first segment that reaches `start`.
+    fn aborted_by_full_scan(log: &Log, start: Offset, end: Offset) -> Vec<AbortedTxn> {
+        let mut aborted = Vec::new();
+        if let Some(first_base) = log
+            .segments
+            .iter()
+            .find(|segment| segment.last_offset() >= start)
+            .map(Segment::base_offset)
+        {
+            for index in log
+                .sealed_txn_indexes
+                .range(first_base..)
+                .map(|(_, index)| index)
+            {
+                aborted.extend(index.aborted_in_range(start, end).copied());
+            }
+        }
+        aborted.extend(log.active_txn_index.aborted_in_range(start, end).copied());
+        aborted
+    }
+
+    /// Starting at the first segment that reaches the fetch and stopping
+    /// where an entry's last stable offset passes the range's end finds
+    /// exactly what a scan of every later index finds, for every range over
+    /// layouts that spread transactions across segments.
+    #[yare::parameterized(
+        one_abort_per_segment = { &[
+            TxnStep::Data(1, 3), TxnStep::Abort(1), TxnStep::Replicate, TxnStep::Roll,
+            TxnStep::Data(2, 2), TxnStep::Abort(2), TxnStep::Replicate, TxnStep::Roll,
+            TxnStep::Data(1, 4), TxnStep::Abort(1), TxnStep::Replicate, TxnStep::Roll,
+            TxnStep::Data(3, 1), TxnStep::Abort(3), TxnStep::Replicate,
+        ] },
+        interleaved_producers = { &[
+            TxnStep::Data(1, 2), TxnStep::Data(2, 2), TxnStep::Abort(2), TxnStep::Roll,
+            TxnStep::Data(3, 2), TxnStep::Data(1, 1), TxnStep::Abort(1), TxnStep::Replicate,
+            TxnStep::Roll, TxnStep::Abort(3), TxnStep::Data(2, 3), TxnStep::Replicate,
+            TxnStep::Roll, TxnStep::Abort(2),
+        ] },
+        a_long_transaction_spans_segments = { &[
+            TxnStep::Data(9, 2), TxnStep::Data(1, 2), TxnStep::Abort(1), TxnStep::Replicate,
+            TxnStep::Roll, TxnStep::Data(2, 2), TxnStep::Abort(2), TxnStep::Replicate,
+            TxnStep::Roll, TxnStep::Data(9, 2), TxnStep::Abort(9), TxnStep::Replicate,
+            TxnStep::Roll, TxnStep::Data(3, 2), TxnStep::Abort(3), TxnStep::Replicate,
+        ] },
+        commits_between_aborts_without_replication = { &[
+            TxnStep::Data(1, 2), TxnStep::Commit(1), TxnStep::Data(2, 2), TxnStep::Abort(2),
+            TxnStep::Roll, TxnStep::Data(1, 1), TxnStep::Abort(1), TxnStep::Roll,
+            TxnStep::Data(2, 2), TxnStep::Commit(2), TxnStep::Data(3, 2), TxnStep::Abort(3),
+        ] },
+        segments_without_aborts = { &[
+            TxnStep::Data(1, 2), TxnStep::Commit(1), TxnStep::Replicate, TxnStep::Roll,
+            TxnStep::Data(2, 2), TxnStep::Abort(2), TxnStep::Replicate, TxnStep::Roll,
+            TxnStep::Data(3, 2), TxnStep::Commit(3), TxnStep::Replicate, TxnStep::Roll,
+            TxnStep::Data(4, 2), TxnStep::Commit(4), TxnStep::Replicate, TxnStep::Roll,
+            TxnStep::Data(5, 1), TxnStep::Abort(5),
+        ] },
+    )]
+    fn aborted_search_stops_without_changing_its_result(steps: &[TxnStep]) {
+        let TempLog { dir: _dir, log } = txn_layout(steps);
+        let end = log.log_end_offset().0;
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        for start in 0..=end + 1 {
+            for upper in 0..=end + 2 {
+                let (start, upper) = (Offset(start), Offset(upper));
+                actual.push(log.aborted_in_range(start, upper));
+                expected.push(aborted_by_full_scan(&log, start, upper));
+            }
+        }
+        assert2::assert!(actual == expected);
+        assert2::assert!(expected.iter().any(|aborted| !aborted.is_empty()));
     }
 }

@@ -720,24 +720,32 @@ impl Log {
 
     /// Return all aborted transactions whose offset range overlaps
     /// `[start, end)`, including entries in sealed segments.
+    ///
+    /// Kafka's `UnifiedLog.collectAbortedTransactions`: the search starts at
+    /// the first segment that reaches `start` and stops at the first index
+    /// that reports it complete (see [`TxnIndex::collect_aborted`]).
     #[must_use]
     pub fn aborted_in_range(&self, start: Offset, end: Offset) -> Vec<AbortedTxn> {
         let mut aborted = Vec::new();
-        if let Some(first_base) = self
+        // Segment last offsets rise with their base offsets.
+        let first = self
             .segments
-            .iter()
-            .find(|segment| segment.last_offset() >= start)
+            .partition_point(|segment| segment.last_offset() < start);
+        let sealed = self
+            .segments
+            .get(first)
             .map(Segment::base_offset)
-        {
-            for index in self
-                .sealed_txn_indexes
-                .range(first_base..)
-                .map(|(_, index)| index)
-            {
-                aborted.extend(index.aborted_in_range(start, end).copied());
+            .into_iter()
+            .flat_map(|first_base| {
+                self.sealed_txn_indexes
+                    .range(first_base..)
+                    .map(|(_, index)| index)
+            });
+        for index in sealed.chain(std::iter::once(&self.active_txn_index)) {
+            if index.collect_aborted(start, end, &mut aborted) {
+                break;
             }
         }
-        aborted.extend(self.active_txn_index.aborted_in_range(start, end).copied());
         aborted
     }
 

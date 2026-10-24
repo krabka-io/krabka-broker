@@ -86,7 +86,7 @@ struct TlsBroker {
 
 impl TlsBroker {
     async fn start() -> Self {
-        drop(rustls::crypto::ring::default_provider().install_default());
+        drop(rustls::crypto::aws_lc_rs::default_provider().install_default());
         let dir = tempfile::tempdir().expect("tempdir");
         let served = Identity::new("localhost", &["localhost"]);
         let cert_chain_path = dir.path().join("static-cert.pem");

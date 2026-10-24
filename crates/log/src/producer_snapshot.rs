@@ -335,7 +335,7 @@ fn encode(entries: &HashMap<ProducerId, ProducerSnapshotEntry>) -> Result<Vec<u8
         buffer.put_i64(entry.current_txn_first_offset.map_or(-1, |offset| offset.0));
     }
 
-    let crc = crc32c::crc32c(&buffer[HEADER_LEN..]);
+    let crc = crc_fast::crc32_iscsi(&buffer[HEADER_LEN..]);
     buffer[2..6].copy_from_slice(&crc.to_be_bytes());
     Ok(buffer)
 }
@@ -435,7 +435,7 @@ pub fn decode(
     }
 
     let stored = u32::from_be_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]);
-    let computed = crc32c::crc32c(&bytes[HEADER_LEN..]);
+    let computed = crc_fast::crc32_iscsi(&bytes[HEADER_LEN..]);
     if stored != computed {
         return Err(SnapshotDecodeError::ChecksumMismatch { stored, computed });
     }
@@ -764,6 +764,30 @@ mod tests {
         let crc = crc32c::crc32c(&bytes[HEADER_LEN..]);
         bytes[2..6].copy_from_slice(&crc.to_be_bytes());
         bytes
+    }
+
+    /// The stored checksum is CRC-32C as the `crc32c` crate computes it, over
+    /// a snapshot large enough (well past 16 KiB) to take `crc_fast`'s wide
+    /// SIMD path rather than its short-input tail.
+    #[test]
+    fn stored_crc_matches_the_crc32c_oracle_over_a_large_snapshot() {
+        let entries: HashMap<ProducerId, ProducerSnapshotEntry> = (0..1_000_i64)
+            .map(|id| {
+                let entry = ProducerSnapshotEntry {
+                    producer_id: ProducerId(id),
+                    timestamp: 1_234_567 + id,
+                    ..sample_entry()
+                };
+                (entry.producer_id, entry)
+            })
+            .collect();
+
+        let bytes = encode(&entries).unwrap();
+
+        assert2::assert!(bytes.len() > 16 * 1024);
+        let stored = u32::from_be_bytes(bytes[2..6].try_into().unwrap());
+        assert2::assert!(stored == crc32c::crc32c(&bytes[HEADER_LEN..]));
+        assert2::assert!(decode(&bytes, Offset(102)).unwrap() == entries);
     }
 
     #[test]

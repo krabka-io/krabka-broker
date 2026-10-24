@@ -109,7 +109,7 @@ fn sasl_two_listener_config(
 /// two-listener config above. It returns `(handle, config, tempdir)`
 /// triples in broker id order.
 async fn start_two_node_sasl() -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     init_tracing_with("warn");
 
     let ReservedListeners {

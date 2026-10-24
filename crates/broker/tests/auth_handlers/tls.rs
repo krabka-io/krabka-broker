@@ -213,7 +213,7 @@ fn dev_tls_config(
 
 fn tls_fixture() -> TlsFixture {
     // Installing before broker startup also permits the first client-side TLS build.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let log_dir = tempfile::tempdir().unwrap();
     let pem_dir = tempfile::tempdir().unwrap();
     let PemPaths {

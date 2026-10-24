@@ -69,10 +69,16 @@ pub(super) async fn validate_batch_schemas(
         return Err(vec![schema_rejection(metrics, topic_name, 0, &reason)]);
     };
 
+    // The subjects depend only on the topic and the role, so they are derived
+    // once for the batch rather than once per record.
+    let key_subject = validator.subject(topic_name, Role::Key);
+    let value_subject = validator.subject(topic_name, Role::Value);
     let check = SchemaCheck {
         validator,
         gate,
         topic_name,
+        key_subject: &key_subject,
+        value_subject: &value_subject,
         metrics,
     };
     let mut errors = Vec::new();
@@ -168,6 +174,10 @@ struct SchemaCheck<'a> {
     validator: &'a Arc<SchemaValidator>,
     gate: SchemaGate,
     topic_name: &'a str,
+    /// The subject a checked key must be registered under.
+    key_subject: &'a str,
+    /// The subject a checked value must be registered under.
+    value_subject: &'a str,
     metrics: &'a BrokerMetrics,
 }
 
@@ -194,17 +204,17 @@ impl SchemaCheck<'_> {
         let batch_index = i32::try_from(index).unwrap_or(i32::MAX);
         let mut tally = SchemaTally::default();
         for (role, field) in [(SchemaFieldRole::Key, key), (SchemaFieldRole::Value, value)] {
-            let role =
+            let subject =
                 match schema_field_action(self.gate.key, self.gate.value, role, field.is_some()) {
                     SchemaFieldAction::Skip => continue,
-                    SchemaFieldAction::CheckKey => Role::Key,
-                    SchemaFieldAction::CheckValue => Role::Value,
+                    SchemaFieldAction::CheckKey => self.key_subject,
+                    SchemaFieldAction::CheckValue => self.value_subject,
                 };
             let Some(field) = field else { continue };
             tally.applicable += 1;
             match self
                 .validator
-                .check(self.topic_name, role, self.gate.mode, field, self.metrics)
+                .check_subject(subject, self.gate.mode, field, self.metrics)
                 .await
             {
                 Ok(()) => tally.admitted += 1,
