@@ -702,6 +702,26 @@ async fn complete_single_admitted(
     topic_results: &mut [TopicProduceResponse],
     awaiting: &mut Vec<PendingPartition>,
 ) -> Result<(), BrokerError> {
+    let completed = complete_timed_partition(partition, answer, services).await?;
+    record_partition_cpu(
+        services.metrics,
+        &completed.topic_name,
+        completed.idx,
+        completed
+            .admit_micros
+            .saturating_add(completed.stage_micros),
+    );
+    finish_completed_partition(completed, services.metrics, topic_results, awaiting);
+    Ok(())
+}
+
+/// Time one append and charge failed work immediately. Successful work is
+/// charged by the caller, after accounting for any overlap with other lanes.
+async fn complete_timed_partition(
+    partition: AdmittedPartition,
+    answer: Option<i16>,
+    services: PartitionServices<'_>,
+) -> Result<CompletedPartition, BrokerError> {
     let AdmittedPartition {
         topic_row,
         partition_row,
@@ -713,27 +733,23 @@ async fn complete_single_admitted(
     let started = std::time::Instant::now();
     let outcome = complete_partition(*batch, answer, services).await;
     let stage_micros = elapsed_micros(started);
-    record_partition_cpu(
-        services.metrics,
-        &topic_name,
-        idx,
-        micros.saturating_add(stage_micros),
-    );
-    finish_completed_partition(
-        CompletedPartition {
-            topic_row,
-            partition_row,
-            topic_name,
+    let outcome = outcome.inspect_err(|_| {
+        record_partition_cpu(
+            services.metrics,
+            &topic_name,
             idx,
-            admit_micros: micros,
-            stage_micros,
-            outcome: outcome?,
-        },
-        services.metrics,
-        topic_results,
-        awaiting,
-    );
-    Ok(())
+            micros.saturating_add(stage_micros),
+        );
+    })?;
+    Ok(CompletedPartition {
+        topic_row,
+        partition_row,
+        topic_name,
+        idx,
+        admit_micros: micros,
+        stage_micros,
+        outcome,
+    })
 }
 
 /// Settle one appended row, or retain its wait for the request's common
@@ -828,41 +844,15 @@ struct LaneOutcome {
 async fn complete_lane(lane: Vec<LaneEntry>, services: PartitionServices<'_>) -> LaneOutcome {
     let mut completed = Vec::with_capacity(lane.len());
     for (partition, answer) in lane {
-        let AdmittedPartition {
-            topic_row,
-            partition_row,
-            topic_name,
-            idx,
-            micros,
-            batch,
-        } = partition;
-        let started = std::time::Instant::now();
-        let outcome = complete_partition(*batch, answer, services).await;
-        let stage_micros = elapsed_micros(started);
-        let outcome = match outcome {
-            Ok(outcome) => outcome,
+        match complete_timed_partition(partition, answer, services).await {
+            Ok(partition) => completed.push(partition),
             Err(error) => {
-                record_partition_cpu(
-                    services.metrics,
-                    &topic_name,
-                    idx,
-                    micros.saturating_add(stage_micros),
-                );
                 return LaneOutcome {
                     completed,
                     error: Some(error),
                 };
             }
-        };
-        completed.push(CompletedPartition {
-            topic_row,
-            partition_row,
-            topic_name,
-            idx,
-            admit_micros: micros,
-            stage_micros,
-            outcome,
-        });
+        }
     }
     LaneOutcome {
         completed,
