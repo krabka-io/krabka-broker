@@ -7,6 +7,7 @@ use {
     super::{ClientAttributes, ComputedSubscription},
     crate::client_metrics::config::{self, ALL_METRICS, MatchRule},
     krabka_metadata::MetadataImage,
+    krabka_protocol::records::crc32c,
     std::collections::{BTreeMap, HashMap},
     uuid::Uuid,
 };
@@ -198,7 +199,7 @@ pub(crate) fn subscription_id(sub: &ComputedSubscription, client_instance_id: Uu
     let rendered = format!("[{}]{}", sorted.join(", "), sub.push_interval_ms);
     // CRC32C output is u32; reinterpreting as i32 is intentional — the value
     // is used only for equality checks, not arithmetic.
-    let crc = crc_fast::crc32_iscsi(rendered.as_bytes()).cast_signed();
+    let crc = crc32c(rendered.as_bytes()).cast_signed();
     crc ^ uuid_hashcode(client_instance_id)
 }
 
@@ -570,7 +571,7 @@ mod tests {
         };
         let rendered = b"[a., b.]60000";
         let instance = Uuid::from_u128(7);
-        check!(crc_fast::crc32_iscsi(rendered) == crc32c::crc32c(rendered));
+        check!(crc32c(rendered) == crc32c::crc32c(rendered));
         check!(subscription_id(&sub, instance) == PINNED_SUBSCRIPTION_ID);
     }
 

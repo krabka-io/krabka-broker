@@ -122,7 +122,6 @@ zerocopy.workspace = true
 # JSON Schema generation for FileConfig — consumed by krabka-docgen.
 schemars = { workspace = true }
 # KIP-714: stable subscription-id via CRC32C over sorted metric-prefix set.
-crc-fast = { workspace = true }
 # KIP-714: decode OTLP MetricsData protobuf payloads in PushTelemetry handler.
 prost = { workspace = true }
 hex = { workspace = true }
@@ -191,7 +190,7 @@ nix = { version = "0.31", default-features = false, features = ["zerocopy"] }
 
 [dev-dependencies]
 # An independent CRC-32C oracle for the checksums the broker computes with
-# `crc-fast`.
+# `krabka_protocol::records::crc32c`.
 crc32c = { workspace = true }
 # Trait mocks for the KIP-939 reaper orchestration unit tests
 # (`txn::coordinator::ReaperBackend`).
