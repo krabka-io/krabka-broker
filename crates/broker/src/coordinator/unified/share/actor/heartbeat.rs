@@ -331,7 +331,8 @@ mod tests {
             metadata,
             log,
             StreamsGroupConfig::default(),
-        )?);
+        )
+        .expect("valid test assignor configuration"));
         let handle = coord.get_or_create_share("g");
         assert_single_member_limit(
             &handle,
