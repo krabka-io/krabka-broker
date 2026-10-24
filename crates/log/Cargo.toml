@@ -80,7 +80,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # runs, it is criterion exactly. `ci.yml`'s `bench` job executes this suite
 # beside `krabka-broker`'s six and `krabka-remote-storage`'s one, nightly and
 # on demand.
-criterion = { version = "5.0.2", package = "codspeed-criterion-compat" }
+criterion = { version = "6.0.0", package = "codspeed-criterion-compat" }
 
 [[bench]]
 name = "log"

@@ -266,7 +266,7 @@ wiremock = "0.6"
 # `ci.yml`'s `bench` job is what executes these, nightly and on demand, against
 # a criterion `main` baseline it carries between runs. `krabka-log` declares
 # the same dependency for `benches/log.rs`.
-criterion = { version = "5.0.2", package = "codspeed-criterion-compat" }
+criterion = { version = "6.0.0", package = "codspeed-criterion-compat" }
 stats_alloc = "0.1.10"
 
 # The produce hot path: `prepare_batch`'s verbatim-versus-owned decision and
