@@ -46,25 +46,28 @@ fn configure_introspection_validator(
     custom_claim_check: Option<jsonpath_rust::parser::model::JpQuery>,
     groups_claim: Option<jsonpath_rust::parser::model::JpQuery>,
     cfg: &mut BrokerConfig,
-) {
-    let client_id = oauth.introspection_client_id.clone().unwrap_or_else(|| {
-        panic!("[oauthbearer]: introspection endpoint requires introspection_client_id")
-    });
+) -> Result<(), FileConfigError> {
+    let client_id = oauth.introspection_client_id.clone().ok_or_else(|| {
+        FileConfigError::InvalidConfig(
+            "[oauthbearer]: introspection endpoint requires introspection_client_id".into(),
+        )
+    })?;
     let secret_path = oauth
         .introspection_client_secret_path
         .clone()
-        .unwrap_or_else(|| {
-            panic!(
+        .ok_or_else(|| {
+            FileConfigError::InvalidConfig(
                 "[oauthbearer]: introspection endpoint requires introspection_client_secret_path"
+                    .into(),
             )
-        });
+        })?;
     let client_secret = std::fs::read_to_string(&secret_path)
-        .unwrap_or_else(|error| {
-            panic!(
+        .map_err(|error| {
+            FileConfigError::InvalidConfig(format!(
                 "[oauthbearer]: failed to read client secret {}: {error}",
                 secret_path.display()
-            )
-        })
+            ))
+        })?
         .trim_end_matches(['\n', '\r'])
         .to_owned();
     let timeout = oauth
@@ -80,7 +83,11 @@ fn configure_introspection_validator(
         oauth.idp_tls_trust.as_deref(),
         timeout,
     )
-    .unwrap_or_else(|error| panic!("failed to build OAuth introspection client: {error}"));
+    .map_err(|error| {
+        FileConfigError::InvalidConfig(format!(
+            "[oauthbearer]: failed to build OAuth introspection client: {error}"
+        ))
+    })?;
     cfg.oauthbearer_validator = krabka_security::OAuthBearerValidator::Introspection(
         krabka_security::IntrospectionValidator {
             client,
@@ -100,6 +107,7 @@ fn configure_introspection_validator(
             groups_claim_delimiter: oauth.groups_claim_delimiter.clone(),
         },
     );
+    Ok(())
 }
 
 /// RFC 7662 introspection needs an HTTP client stack, which wasm32-wasip1 does
@@ -111,10 +119,10 @@ fn configure_introspection_validator(
     _custom_claim_check: Option<jsonpath_rust::parser::model::JpQuery>,
     _groups_claim: Option<jsonpath_rust::parser::model::JpQuery>,
     _cfg: &mut BrokerConfig,
-) {
-    panic!(
+) -> Result<(), FileConfigError> {
+    Err(FileConfigError::InvalidConfig(format!(
         "[oauthbearer]: introspection_endpoint_uri {endpoint:?} is set, but token introspection is unavailable on this platform"
-    );
+    )))
 }
 
 /// Whether any resolved listener offers SASL/OAUTHBEARER. A listener's own
@@ -151,20 +159,30 @@ pub(super) fn apply_oauthbearer(
     // and harmlessly carried for the unsecured validator.
     cfg.oauthbearer_idp_tls_trust
         .clone_from(&oauth.idp_tls_trust);
-    // Compile the JsonPath expression once at load time;
-    // a malformed expression panics with a descriptive error.
-    let custom_claim_check_compiled = oauth.custom_claim_check.as_deref().map(|expr| {
-        jsonpath_rust::parser::parse_json_path(expr).unwrap_or_else(|e| {
-            panic!("[oauthbearer]: invalid custom_claim_check JsonPath expression {expr:?}: {e}")
+    // Compile the JsonPath expressions once at load time.
+    let custom_claim_check_compiled = oauth
+        .custom_claim_check
+        .as_deref()
+        .map(|expr| {
+            jsonpath_rust::parser::parse_json_path(expr).map_err(|error| {
+                FileConfigError::InvalidConfig(format!(
+                    "[oauthbearer]: invalid custom_claim_check JsonPath expression {expr:?}: {error}"
+                ))
+            })
         })
-    });
+        .transpose()?;
 
-    // Compile groups_claim JsonPath at load time.
-    let groups_claim_compiled = oauth.groups_claim.as_deref().map(|expr| {
-        jsonpath_rust::parser::parse_json_path(expr).unwrap_or_else(|e| {
-            panic!("[oauthbearer]: invalid groups_claim JsonPath expression {expr:?}: {e}")
+    let groups_claim_compiled = oauth
+        .groups_claim
+        .as_deref()
+        .map(|expr| {
+            jsonpath_rust::parser::parse_json_path(expr).map_err(|error| {
+                FileConfigError::InvalidConfig(format!(
+                    "[oauthbearer]: invalid groups_claim JsonPath expression {expr:?}: {error}"
+                ))
+            })
         })
-    });
+        .transpose()?;
 
     let unsecured_required_scope = oauth
         .unsecured_required_scope
@@ -184,9 +202,10 @@ pub(super) fn apply_oauthbearer(
         oauth.introspection_endpoint_uri.as_ref(),
     ) {
         (Some(_), Some(_)) => {
-            panic!(
+            return Err(FileConfigError::InvalidConfig(
                 "[oauthbearer]: jwks_endpoint_uri and introspection_endpoint_uri are mutually exclusive; configure exactly one"
-            );
+                    .into(),
+            ));
         }
         (Some(_), None) => {
             // Signed-JWT validation. The empty key handle is
@@ -261,7 +280,7 @@ pub(super) fn apply_oauthbearer(
                 custom_claim_check_compiled.clone(),
                 groups_claim_compiled.clone(),
                 cfg,
-            );
+            )?;
         }
         (None, None) => {
             // Unsecured-JWS validation (development only), behind an
@@ -660,7 +679,6 @@ introspection_client_secret_path = '{}'
     }
 
     #[test]
-    #[should_panic(expected = "mutually exclusive")]
     fn apply_to_oauthbearer_rejects_both_jwks_and_introspection_set() {
         let ClientSecret {
             dir: _dir,
@@ -676,11 +694,11 @@ introspection_client_secret_path = '{}'
 "#,
             secret_path.display()
         );
-        let _cfg = configured_unwrap_parse(&toml).unwrap();
+        let error = configured_unwrap_parse(&toml).expect_err("endpoints are exclusive");
+        assert!(error.to_string().contains("mutually exclusive"));
     }
 
     #[test]
-    #[should_panic(expected = "introspection_client_id")]
     fn apply_to_oauthbearer_introspection_requires_client_id() {
         let ClientSecret {
             dir: _dir,
@@ -694,18 +712,98 @@ introspection_client_secret_path = '{}'
 "#,
             secret_path.display()
         );
-        let _cfg = configured_unwrap_parse(&toml).unwrap();
+        let error = configured_unwrap_parse(&toml).expect_err("client id is required");
+        assert!(error.to_string().contains("introspection_client_id"));
     }
 
     #[test]
-    #[should_panic(expected = "introspection_client_secret_path")]
     fn apply_to_oauthbearer_introspection_requires_client_secret_path() {
         let toml = r#"
 [oauthbearer]
 introspection_endpoint_uri = "https://idp.example/introspect"
 introspection_client_id = "kafka-broker"
 "#;
-        let _cfg = configured_unwrap_parse(toml).unwrap();
+        let error = configured_unwrap_parse(toml).expect_err("secret path is required");
+        assert!(
+            error
+                .to_string()
+                .contains("introspection_client_secret_path")
+        );
+    }
+
+    #[yare::parameterized(
+        custom_claim = { "custom_claim_check = '$['", "custom_claim_check" },
+        groups_claim = { "groups_claim = '$['", "groups_claim" },
+    )]
+    fn invalid_jsonpath_claims_return_file_config_errors(option: &str, field: &str) {
+        let error = configured_unwrap_parse(&format!("[oauthbearer]\n{option}\n"))
+            .expect_err("invalid JsonPath must be a configuration error");
+        assert2::assert!(error.to_string().contains(field));
+        assert2::assert!(error.to_string().contains("JsonPath expression"));
+    }
+
+    #[test]
+    fn unreadable_introspection_secret_returns_error_without_secret_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml = format!(
+            r#"
+[oauthbearer]
+introspection_endpoint_uri = "https://idp.example/introspect"
+introspection_client_id = "broker"
+introspection_client_secret_path = '{}'
+"#,
+            dir.path().display()
+        );
+
+        let error =
+            configured_unwrap_parse(&toml).expect_err("a directory is not a readable secret file");
+        assert!(error.to_string().contains("failed to read client secret"));
+    }
+
+    #[test]
+    fn introspection_client_build_error_does_not_disclose_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret_contents = "never-print-this-secret";
+        let secret_path = dir.path().join("client-secret");
+        let ca_path = dir.path().join("invalid-ca.pem");
+        std::fs::write(&secret_path, secret_contents).unwrap();
+        std::fs::write(&ca_path, "not a PEM certificate").unwrap();
+        let toml = format!(
+            r#"
+[oauthbearer]
+introspection_endpoint_uri = "https://idp.example/introspect"
+introspection_client_id = "broker"
+introspection_client_secret_path = '{}'
+idp_tls_trust = '{}'
+"#,
+            secret_path.display(),
+            ca_path.display()
+        );
+
+        let error = configured_unwrap_parse(&toml).expect_err("invalid TLS trust must be returned");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to build OAuth introspection client")
+        );
+        assert!(!error.to_string().contains(secret_contents));
+    }
+
+    #[test]
+    fn apply_before_runtime_overlay_returns_oauth_configuration_errors() {
+        let file: FileConfig = toml::from_str(
+            r#"
+[oauthbearer]
+introspection_endpoint_uri = "https://idp.example/introspect"
+"#,
+        )
+        .expect("valid TOML");
+        let mut cfg = BrokerConfig::default();
+
+        let error = file
+            .apply_before_runtime_overlay(&mut cfg)
+            .expect_err("missing introspection credentials must be returned");
+        assert!(error.to_string().contains("introspection_client_id"));
     }
 
     #[yare::parameterized(
