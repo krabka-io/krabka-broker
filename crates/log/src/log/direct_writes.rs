@@ -12,17 +12,19 @@ use {
         Log,
         test_support::{
             NO_LIMIT, TempLog, append_samples, assert_log_end_offset, configured_test_log,
-            sample_batch, verbatim_from,
+            install_stamps, sample_batch, verbatim_from,
         },
     },
     crate::{
         DeliveryPolicy, LeaderEpoch, VerbatimBatch,
         config::{LogConfig, SegmentAllocation},
         io::{DirectFile, IoTarget, LogIo},
+        leader_epoch_checkpoint::EpochEntry,
         name,
         test_support::{BatchSpan, span},
     },
     krabka_ids::Offset,
+    krabka_protocol::records::TimestampType,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes, mebibytes},
     std::{
         fs::{File, OpenOptions},
@@ -208,6 +210,158 @@ fn the_newest_bytes_are_read_from_memory() {
     assert2::assert!(raw.last_offset == Some(Offset(8)));
     assert2::assert!(raw.bytes.len() == usize::try_from(newest_len).unwrap());
     assert2::assert!(raw.bytes.iter().any(|&byte| byte != 0));
+}
+
+#[test]
+fn inline_direct_reads_require_the_index_floor_and_payload_in_cache() {
+    let disk = Arc::new(AlignedDisk::default());
+    let TempLog { dir, mut log } = direct_log(&disk, bytes(1));
+    let mut config = direct(bytes(1));
+    config.index_interval = bytes(1);
+    log.set_config(config);
+    assert2::assert!(!log.read_may_block(Offset(0)));
+    for _ in 0..3 {
+        append_samples(&mut log, 1, 3);
+        log.sync().unwrap();
+    }
+
+    // Only the last batch is cached. Finding its first record still reads the preceding index entry's header. Its last record has an exact index entry inside the cache.
+    for (offset, blocks) in [(0, true), (6, true), (8, false), (9, false), (10, false)] {
+        assert2::assert!(log.read_may_block(Offset(offset)) == blocks, "{offset}");
+    }
+    let expected = log.read_raw(Offset(8), Offset(9), NO_LIMIT).unwrap().bytes;
+    OpenOptions::new()
+        .write(true)
+        .open(name::log_path(dir.path(), 0))
+        .unwrap()
+        .set_len(0)
+        .unwrap();
+    assert2::assert!(log.read_raw(Offset(8), Offset(9), NO_LIMIT).unwrap().bytes == expected);
+}
+
+#[test]
+fn direct_read_placement_tracks_truncation_and_mode_changes() {
+    let disk = Arc::new(AlignedDisk::default());
+    let TempLog { dir: _dir, mut log } = direct_log(&disk, mebibytes(1));
+    append_samples(&mut log, 3, 3);
+    for offset in 0..=9 {
+        assert2::assert!(!log.read_may_block(Offset(offset)));
+    }
+    log.truncate_to(Offset(3)).unwrap();
+    assert2::assert!(!log.read_may_block(Offset(0)));
+    assert2::assert!(!log.read_may_block(Offset(3)));
+
+    log.set_config(LogConfig::default());
+    append_samples(&mut log, 1, 3);
+    assert2::assert!(log.read_may_block(Offset(0)));
+    assert2::assert!(log.read_may_block(Offset(3)));
+    assert2::assert!(!log.read_may_block(Offset(6)));
+    assert2::assert!(log.roll().unwrap());
+    append_samples(&mut log, 1, 3);
+    assert2::assert!(log.read_may_block(Offset(3)));
+    assert2::assert!(!log.read_may_block(Offset(6)));
+}
+
+#[test]
+fn direct_inline_appends_require_initialized_storage_and_a_current_epoch() {
+    let disk = Arc::new(AlignedDisk::default());
+    let TempLog { dir: _dir, mut log } = direct_log(&disk, mebibytes(1));
+    let mut batch = verbatim_from(&sample_batch(3), LeaderEpoch(0)).batch;
+    for epoch in [0, 1] {
+        batch.leader_epoch = LeaderEpoch(epoch);
+        assert2::assert!(log.verbatim_append_may_block(&batch));
+        log.append_verbatim(&batch).unwrap();
+        log.sync().unwrap();
+        assert2::assert!(!log.verbatim_append_may_block(&batch));
+    }
+
+    batch.is_transactional = true;
+    assert2::assert!(log.verbatim_append_may_block(&batch));
+    let mut control = sample_batch(3);
+    control.attributes = control.attributes.with_control(true);
+    let control = verbatim_from(&control, LeaderEpoch(1)).batch;
+    assert2::assert!(log.verbatim_append_may_block(&control));
+    install_stamps(&mut log, 10, 1);
+    batch.is_transactional = false;
+    assert2::assert!(log.verbatim_append_may_block(&batch));
+}
+
+#[test]
+fn a_reconciled_frontier_does_not_hide_follower_epoch_checkpoint_io() {
+    let disk = Arc::new(AlignedDisk::default());
+    let TempLog { dir: _dir, mut log } = direct_log(&disk, mebibytes(1));
+    let mut batch = verbatim_from(&sample_batch(3), LeaderEpoch(0)).batch;
+    log.append_verbatim(&batch).unwrap();
+    log.sync().unwrap();
+
+    batch.leader_epoch = LeaderEpoch(1);
+    log.assign_epoch_start_offset(batch.leader_epoch, Offset(10))
+        .unwrap();
+    log.reconcile_next_offset(Offset(10));
+    assert2::assert!(log.verbatim_append_may_block(&batch));
+
+    log.clear_reconciled_next_offset();
+    log.append_verbatim_at(&batch, Offset(3)).unwrap();
+    assert2::assert!(!log.verbatim_append_may_block(&batch));
+    assert2::assert!(
+        log.epoch_checkpoint().entries()
+            == [(0, 0), (1, 3)].map(|(epoch, start)| EpochEntry {
+                epoch: LeaderEpoch(epoch),
+                start_offset: Offset(start),
+            })
+    );
+}
+
+#[test]
+fn direct_inline_appends_defer_storage_work_after_policy_changes() {
+    let disk = Arc::new(AlignedDisk::default());
+    let TempLog { dir: _dir, mut log } = direct_log(&disk, mebibytes(1));
+    let batch = verbatim_from(&sample_batch(3), LeaderEpoch(0)).batch;
+    log.append_verbatim(&batch).unwrap();
+    log.sync().unwrap();
+    let base = direct(mebibytes(1));
+    let policies = [
+        LogConfig {
+            segment_size: mebibytes(2),
+            ..base.clone()
+        },
+        LogConfig {
+            segment_size: bytes(1),
+            ..base.clone()
+        },
+        LogConfig {
+            flush_on_append: true,
+            ..base.clone()
+        },
+        LogConfig {
+            flush_messages: Some(10),
+            ..base.clone()
+        },
+        LogConfig {
+            flush_interval: Some(krabka_units::secs(60)),
+            ..base.clone()
+        },
+        LogConfig {
+            message_timestamp_type: TimestampType::LogAppendTime,
+            ..base.clone()
+        },
+        LogConfig {
+            delivery_policy: DeliveryPolicy::Scheduled,
+            ..base.clone()
+        },
+        LogConfig {
+            segment_allocation: SegmentAllocation::OnWrite,
+            ..base.clone()
+        },
+    ];
+    for config in policies {
+        log.set_config(config);
+        assert2::assert!(log.verbatim_append_may_block(&batch));
+        log.set_config(base.clone());
+        assert2::assert!(!log.verbatim_append_may_block(&batch));
+    }
+    assert2::assert!(log.roll().unwrap());
+    assert2::assert!(log.verbatim_append_may_block(&batch));
 }
 
 #[krabka_macros::sendfile_cfg]

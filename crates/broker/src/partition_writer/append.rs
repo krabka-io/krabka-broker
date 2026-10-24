@@ -305,10 +305,7 @@ fn append_produce_batch_at(
     (results, leo, control_entries)
 }
 
-/// Run [`append_produce_batch`] under `log`'s lock: on the calling task when
-/// the group only writes into the page cache, and away from async polling
-/// when its append may fsync or roll the segment, or the lock is held; see
-/// [`run_page_cache_io`].
+/// Run [`append_produce_batch`] under `log`'s lock: on the calling task for page-cache writes or one verbatim append that fits an initialized direct queue. Flushes, segment setup, backpressure, and lock contention use blocking placement; see [`run_page_cache_io`].
 pub(crate) async fn run_produce_append_batch(
     log: &Arc<Mutex<Log>>,
     high_watermark: Option<Offset>,
@@ -332,17 +329,23 @@ pub(crate) async fn run_produce_append_batch_at(
     .await
 }
 
-/// The body of both produce-group appends: `append` runs under `log`'s lock,
-/// inline when the group's footprint stays in the page cache.
+/// The body of both produce-group appends: `append` runs under `log`'s lock, inline when its storage work can stay in memory.
 async fn run_group_append(
     log: &Arc<Mutex<Log>>,
     datas: CheckedBatches,
     append: impl FnOnce(&mut Log, CheckedBatches) -> AppendOutcome + Send + 'static,
 ) -> Result<AppendOutcome, BrokerError> {
     let footprint = group_footprint(&datas.0);
+    let verbatim = match datas.0.as_slice() {
+        [ProduceData::Verbatim(batch)] => Some(batch.clone()),
+        _ => None,
+    };
     run_page_cache_io(
         log,
-        |log| !append_may_block(log, footprint),
+        |log| !match &verbatim {
+            Some(batch) => log.verbatim_append_may_block(batch),
+            None => append_may_block(log, footprint),
+        },
         move |log| append(log, datas),
     )
     .await
