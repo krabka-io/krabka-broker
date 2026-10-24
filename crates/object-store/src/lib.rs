@@ -31,6 +31,7 @@ pub mod fault;
 #[cfg(not(target_family = "wasm"))]
 mod multipart;
 mod ops;
+mod prefix;
 mod read;
 #[cfg(target_family = "wasm")]
 mod unavailable;
@@ -38,9 +39,7 @@ mod unavailable;
 mod worm;
 
 #[cfg(feature = "clap")]
-pub use archive_args::{
-    ArchiveArgs, ArchiveArgsError, DEFAULT_S3_REGION, normalize_prefix, prefixed_key,
-};
+pub use archive_args::{ArchiveArgs, ArchiveArgsError, DEFAULT_S3_REGION};
 #[cfg(not(target_family = "wasm"))]
 pub use multipart::{IncompleteMultipartUpload, list_s3_multipart_uploads};
 #[cfg(target_family = "wasm")]
@@ -56,6 +55,7 @@ pub use {
     },
     error::ObjectStoreError,
     ops::{ObjectOps, ObjectStoreClient, PutMode, PutOutcome, PutRequest},
+    prefix::{normalize_prefix, prefixed_key},
     read::read_capped,
 };
 

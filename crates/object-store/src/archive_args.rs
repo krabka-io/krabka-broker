@@ -11,7 +11,7 @@
 //! source to the other.
 
 use {
-    crate::{GcsConfig, ObjectStoreConfig, S3Config},
+    crate::{GcsConfig, ObjectStoreConfig, S3Config, normalize_prefix},
     clap::{ArgGroup, Args},
     object_store::path::Path,
     std::path::PathBuf,
@@ -199,25 +199,6 @@ impl ArchiveArgs {
     /// `--archive-prefix`, through [`normalize_prefix`].
     #[must_use]
     pub fn normalized_prefix(&self) -> Option<String> { normalize_prefix(self.prefix.as_deref()) }
-}
-
-/// Trim the whitespace and separators an operator copies out of a console URL,
-/// so `/tier/`, `tier`, and ` tier/ ` all address the same archive root, and
-/// map an empty prefix onto no prefix at all.
-#[must_use]
-pub fn normalize_prefix(prefix: Option<&str>) -> Option<String> {
-    let trimmed = prefix?.trim().trim_matches('/');
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
-}
-
-/// The absolute object key for a path relative to the archive root, under a
-/// prefix [`normalize_prefix`] already produced.
-#[must_use]
-pub fn prefixed_key(prefix: Option<&str>, relative: &str) -> Path {
-    match prefix {
-        Some(prefix) => Path::from(format!("{prefix}/{relative}")),
-        None => Path::from(relative),
-    }
 }
 
 #[cfg(test)]
