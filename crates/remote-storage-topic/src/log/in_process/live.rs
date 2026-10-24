@@ -13,8 +13,7 @@ use {
     super::{InProcessInner, SubscriptionState},
     crate::log::{MetadataEventRecord, MetadataEventStream},
     futures_util::{StreamExt, stream::unfold},
-    std::collections::VecDeque,
-    std::sync::Arc,
+    std::{collections::VecDeque, sync::Arc},
     tokio::sync::broadcast,
 };
 
@@ -36,6 +35,36 @@ enum Forward {
 /// function re-routes a passing record into the `inject` FIFO instead of
 /// emitting it here. The record then sits behind that partition's
 /// already-injected backlog rather than races it through `stream::select`.
+fn forward_action(
+    state: &SubscriptionState,
+    record: MetadataEventRecord,
+) -> Option<MetadataEventRecord> {
+    let action = {
+        let mut assigned = state.assigned.lock().expect("assigned mutex poisoned");
+        match assigned.get_mut(&record.partition) {
+            Some(cur) if record.offset >= cur.next => {
+                cur.next = record.offset.saturating_add(1);
+                if cur.via_inject {
+                    Forward::Inject
+                } else {
+                    Forward::Emit
+                }
+            }
+            _ => Forward::Drop,
+        }
+    };
+    match action {
+        Forward::Emit => Some(record),
+        Forward::Inject => {
+            // Queue behind backlog; if the receiver is gone the stream is
+            // being dropped anyway.
+            let _ = state.inject.send(record);
+            None
+        }
+        Forward::Drop => None,
+    }
+}
+
 pub(super) fn filtered_broadcast(
     rx: broadcast::Receiver<MetadataEventRecord>,
     state: Arc<SubscriptionState>,
@@ -46,17 +75,7 @@ pub(super) fn filtered_broadcast(
         |(mut rx, state, inner, mut pending)| async move {
             loop {
                 if let Some(record) = pending.pop_front() {
-                    let emit = {
-                        let mut assigned = state.assigned.lock().expect("assigned mutex poisoned");
-                        match assigned.get_mut(&record.partition) {
-                            Some(cur) if record.offset >= cur.next => {
-                                cur.next = record.offset.saturating_add(1);
-                                true
-                            }
-                            _ => false,
-                        }
-                    };
-                    if emit {
+                    if let Some(record) = forward_action(&state, record) {
                         return Some((record, (rx, state, inner, pending)));
                     }
                     continue;
@@ -64,29 +83,8 @@ pub(super) fn filtered_broadcast(
 
                 match rx.recv().await {
                     Ok(record) => {
-                        let action = {
-                            let mut assigned =
-                                state.assigned.lock().expect("assigned mutex poisoned");
-                            match assigned.get_mut(&record.partition) {
-                                Some(cur) if record.offset >= cur.next => {
-                                    cur.next = record.offset.saturating_add(1);
-                                    if cur.via_inject {
-                                        Forward::Inject
-                                    } else {
-                                        Forward::Emit
-                                    }
-                                }
-                                _ => Forward::Drop,
-                            }
-                        };
-                        match action {
-                            Forward::Emit => return Some((record, (rx, state, inner, pending))),
-                            Forward::Inject => {
-                                // Queue behind backlog; if the receiver is gone
-                                // the stream is being dropped anyway.
-                                let _ = state.inject.send(record);
-                            }
-                            Forward::Drop => {}
+                        if let Some(record) = forward_action(&state, record) {
+                            return Some((record, (rx, state, inner, pending)));
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
