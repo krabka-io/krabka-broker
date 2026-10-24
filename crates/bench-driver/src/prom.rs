@@ -191,34 +191,13 @@ impl PromClient {
         let cpu = self
             .query_range_sum(&cpu_q, start_s, end_s, step_s)
             .await
-            .unwrap_or_default();
+            .context("capture broker CPU time series")?;
         let mem = self
             .query_range_sum(&mem_q, start_s, end_s, step_s)
             .await
-            .unwrap_or_default();
+            .context("capture broker memory time series")?;
 
-        let range_start_ms = nonnegative_f64_to_u64((start_s * 1000.0).round());
-        let mut by_ts: BTreeMap<u64, ResourcePoint> = BTreeMap::new();
-        for PromPoint { unix_s, value } in cpu {
-            by_ts
-                .entry(nonnegative_f64_to_u64((unix_s * 1000.0).round()))
-                .or_default()
-                .cpu_cores = value;
-        }
-        for PromPoint { unix_s, value } in mem {
-            by_ts
-                .entry(nonnegative_f64_to_u64((unix_s * 1000.0).round()))
-                .or_default()
-                .mem_bytes = nonnegative_f64_to_u64(value);
-        }
-        Ok(by_ts
-            .into_iter()
-            .map(|(ts_ms, point)| BrokerSample {
-                t_offset_ms: TimeOffsetMs(ts_ms.saturating_sub(range_start_ms)),
-                cpu_cores: point.cpu_cores,
-                mem_working_set: ByteSize::from_bytes(point.mem_bytes),
-            })
-            .collect())
+        join_resource_series(cpu, mem, nonnegative_f64_to_u64((start_s * 1000.0).round()))
     }
 
     /// Captures broker resource usage for the given stack over a window that
@@ -361,11 +340,48 @@ pub struct PromPoint {
     pub value: f64,
 }
 
-/// The CPU and memory readings that share one timestamp.
-#[derive(Debug, Default)]
-struct ResourcePoint {
-    cpu_cores: f64,
-    mem_bytes: u64,
+/// Join CPU and memory observations without inventing values for missing data.
+fn join_resource_series(
+    cpu: Vec<PromPoint>,
+    mem: Vec<PromPoint>,
+    range_start_ms: u64,
+) -> Result<Vec<BrokerSample>> {
+    let cpu: BTreeMap<_, _> = cpu
+        .into_iter()
+        .map(|PromPoint { unix_s, value }| {
+            (nonnegative_f64_to_u64((unix_s * 1000.0).round()), value)
+        })
+        .collect();
+    let mem: BTreeMap<_, _> = mem
+        .into_iter()
+        .map(|PromPoint { unix_s, value }| {
+            (
+                nonnegative_f64_to_u64((unix_s * 1000.0).round()),
+                nonnegative_f64_to_u64(value),
+            )
+        })
+        .collect();
+
+    if cpu.is_empty() {
+        return Err(anyhow!("no observations for broker CPU time series"));
+    }
+    if mem.is_empty() {
+        return Err(anyhow!("no observations for broker memory time series"));
+    }
+    if !cpu.keys().eq(mem.keys()) {
+        return Err(anyhow!(
+            "incomplete broker resource time series: CPU and memory observations are not aligned"
+        ));
+    }
+
+    Ok(cpu
+        .into_iter()
+        .map(|(ts_ms, cpu_cores)| BrokerSample {
+            t_offset_ms: TimeOffsetMs(ts_ms.saturating_sub(range_start_ms)),
+            cpu_cores,
+            mem_working_set: ByteSize::from_bytes(mem[&ts_ms]),
+        })
+        .collect())
 }
 
 #[derive(Debug, Deserialize)]
@@ -398,9 +414,99 @@ struct PromResult {
 mod tests {
     use {super::*, assert2::assert};
 
+    async fn local_prometheus(
+        responses: Vec<(u16, &'static str)>,
+    ) -> (PromClient, tokio::task::JoinHandle<()>) {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for (status, body) in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                let reason = if status == 200 {
+                    "OK"
+                } else {
+                    "Internal Server Error"
+                };
+                let response = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let client = PromClient::new(format!("http://{address}"), secs(1)).unwrap();
+        (client, server)
+    }
+
+    const CPU_ONE: &str = r#"{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1000.0,"0"]]}]}}"#;
+    const MEMORY_ONE: &str = r#"{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1000.0,"64"]]}]}}"#;
+    const EMPTY: &str = r#"{"status":"success","data":{"resultType":"matrix","result":[]}}"#;
+
     #[test]
     fn prometheus_request_timeout_constructs_prom_client() {
         assert!(PromClient::new("http://prometheus.example", secs(1)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn range_query_http_failure_is_reported() {
+        let (client, server) = local_prometheus(vec![(500, "")]).await;
+        let error = client
+            .capture_resource_series(Stack::Krabka, "ns", 1.0, 2.0, 15)
+            .await
+            .expect_err("HTTP failures must not become zero samples");
+        assert!(format!("{error:#}").contains("prometheus non-2xx (range)"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn empty_range_result_is_reported_as_missing_observations() {
+        let (client, server) = local_prometheus(vec![(200, EMPTY), (200, MEMORY_ONE)]).await;
+        let error = client
+            .capture_resource_series(Stack::Krabka, "ns", 1.0, 2.0, 15)
+            .await
+            .expect_err("an empty CPU matrix is missing data, not a zero measurement");
+        assert!(error.to_string().contains("no observations for broker CPU"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unaligned_cpu_and_memory_timestamps_are_reported() {
+        let memory_at_next_step = r#"{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1015.0,"64"]]}]}}"#;
+        let (client, server) =
+            local_prometheus(vec![(200, CPU_ONE), (200, memory_at_next_step)]).await;
+        let error = client
+            .capture_resource_series(Stack::Krabka, "ns", 1.0, 2.0, 15)
+            .await
+            .expect_err("unaligned observations must not create partial zero samples");
+        assert!(error.to_string().contains("observations are not aligned"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn aligned_zero_cpu_and_measured_memory_are_preserved() {
+        let (client, server) = local_prometheus(vec![(200, CPU_ONE), (200, MEMORY_ONE)]).await;
+        let samples = client
+            .capture_resource_series(Stack::Krabka, "ns", 1.0, 2.0, 15)
+            .await
+            .expect("aligned observations are complete");
+        assert!(samples.len() == 1);
+        assert!(samples[0].cpu_cores == 0.0);
+        assert!(samples[0].mem_working_set.bytes_u64() == 64);
+        server.await.unwrap();
     }
 
     /// A matched series keeps its value, whatever that value is. A real zero

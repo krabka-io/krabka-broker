@@ -898,7 +898,7 @@ async fn capture_resources(
             Resource::default()
         }
     };
-    let broker_samples = client
+    let broker_samples = match client
         .capture_resource_series(
             cfg.stack,
             &cfg.namespace,
@@ -907,7 +907,14 @@ async fn capture_resources(
             15,
         )
         .await
-        .unwrap_or_default();
+    {
+        Ok(samples) => samples,
+        Err(error) => {
+            warn!(%error, "prometheus resource time-series capture failed");
+            notes.push(format!("prometheus-resource-series-failed: {error}"));
+            Vec::new()
+        }
+    };
     ResourceCapture {
         resource,
         broker_samples,
