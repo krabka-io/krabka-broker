@@ -441,6 +441,8 @@ jobs:
                 curl -LsSf --retry 5 https://get.nexte.st/latest/linux \
                   | tar zxf - -C "${CARGO_HOME:-${HOME}/.cargo}/bin"
               fi
+              # Coordinator fixtures open 50 partitions; use the permitted FD limit.
+              ulimit -Sn "$(ulimit -Hn)"
               cargo nextest run --workspace --profile ci \
                 --show-progress none --status-level fail --final-status-level fail
             fi
