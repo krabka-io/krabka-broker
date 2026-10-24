@@ -7,8 +7,10 @@ use {
     super::{FlushConfig, FlushPartition},
     crate::{
         diskless::{
+            DISKLESS_WAL_V2_PREFIX,
             index_log::DisklessIndexLog,
-            wal_index::{WalFlushRecord, WalIndexCache, WalIndexEntry},
+            prefixed_object_key,
+            wal_index::{WalFlushRecord, WalIndexEntry},
             wal_object::{WalObjectBuilder, parse_wal_object},
         },
         error::BrokerError,
@@ -20,21 +22,23 @@ use {
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
     object_store::{ObjectStore, ObjectStoreExt, PutPayload, path::Path},
     std::{sync::Arc, time::Duration},
-    tokio::sync::Mutex as AsyncMutex,
     uuid::Uuid,
 };
 
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct FlushTarget {
+    pub(crate) object_store: Arc<dyn ObjectStore>,
+    pub(crate) broker_id: i32,
+}
+
 pub(crate) async fn flush_once(
-    object_store: Arc<dyn ObjectStore>,
-    broker_id: i32,
+    target: FlushTarget,
     metrics: &BrokerMetrics,
     index_log: &DisklessIndexLog,
-    cache: Arc<AsyncMutex<WalIndexCache>>,
     partitions: &[FlushPartition],
     config: &FlushConfig,
     is_current_leader: impl Fn(&FlushPartition) -> bool,
 ) -> Result<Option<WalFlushRecord>, BrokerError> {
+    let cache = index_log.cache();
     let mut builder = WalObjectBuilder::new();
     for partition in partitions {
         if !is_current_leader(partition) {
@@ -86,9 +90,20 @@ pub(crate) async fn flush_once(
         return Ok(None);
     }
     metrics.diskless_wal_flush_attempts_total.inc();
-    let object_key = format!("diskless-wal/{broker_id}/{}.ckwl", Uuid::new_v4());
+    let relative_key = format!(
+        "{DISKLESS_WAL_V2_PREFIX}/{}/{}.ckwl",
+        target.broker_id,
+        Uuid::new_v4()
+    );
+    let object_key = prefixed_object_key(config.object_prefix.as_deref(), &relative_key);
     let object = builder.finish();
-    if let Err(error) = object_store
+    // A different broker may list and reclaim this prefix while upload or
+    // index publication is delayed. Commit the reservation first; any failure
+    // from this point leaves it behind, which can leak an object but cannot
+    // make a live object appear reclaimable.
+    index_log.reserve_object(&object_key).await?;
+    if let Err(error) = target
+        .object_store
         .put(
             &Path::from(object_key.clone()),
             PutPayload::from(object.clone()),
@@ -124,6 +139,9 @@ pub(crate) async fn flush_once(
         metrics.diskless_wal_flush_failures_total.inc();
         return Err(error);
     }
+    index_log
+        .release_object_reservation(&record.object_key)
+        .await?;
 
     for partition in partitions {
         if !is_current_leader(partition) {
@@ -301,11 +319,12 @@ mod tests {
         let topic_id = Uuid::from_u128(11);
         let cache = index.cache();
         let record = flush_once(
-            store.clone(),
-            7,
+            FlushTarget {
+                object_store: store.clone(),
+                broker_id: 7,
+            },
             &BrokerMetrics::new(),
             &index,
-            cache.clone(),
             &[FlushPartition {
                 topic_id,
                 handle: Arc::clone(&handle),
@@ -323,6 +342,37 @@ mod tests {
         assert!(cache.lock().await.flushed_frontier(topic_id, 0) == Some(3));
         assert!(store.head(&Path::from(record.object_key)).await.is_ok());
         assert!(handle.log.lock().unwrap().log_start_offset() == Offset(2));
+    }
+
+    #[tokio::test]
+    async fn reservation_is_written_before_level_two_and_released_after_index_publish() {
+        let dir = tempdir().unwrap();
+        let handle = orders_partition(dir.path());
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let index = test_index_log().await;
+        let record = flush_once(
+            FlushTarget {
+                object_store: store,
+                broker_id: 7,
+            },
+            &BrokerMetrics::new(),
+            &index,
+            &[FlushPartition {
+                topic_id: Uuid::from_u128(11),
+                handle,
+                high_watermark: Offset(3),
+            }],
+            &FlushConfig::default(),
+            |_| true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let cache = index.cache();
+        let cache = cache.lock().await;
+        assert!(cache.reserved_objects().is_empty());
+        assert!(cache.references_object(&record.object_key));
     }
 
     /// The local log is trimmed only behind index records that were published
@@ -352,11 +402,12 @@ mod tests {
         let config = FlushConfig::default();
         let flush = || {
             flush_once(
-                Arc::new(InMemory::new()),
-                7,
+                FlushTarget {
+                    object_store: Arc::new(InMemory::new()),
+                    broker_id: 7,
+                },
                 &metrics,
                 &index,
-                index.cache(),
                 &partitions,
                 &config,
                 |_| true,
@@ -366,6 +417,7 @@ mod tests {
         let error = flush().await.expect_err("the index publish is refused");
         assert!(error.to_string().contains("diskless index publish"));
         assert!(handle.log.lock().unwrap().log_start_offset() == Offset(0));
+        assert!(index.cache().lock().await.reserved_objects().len() == 1);
 
         log.heal();
         flush()
@@ -373,6 +425,7 @@ mod tests {
             .unwrap()
             .expect("the retry flushes the same records");
         assert!(handle.log.lock().unwrap().log_start_offset() == Offset(2));
+        assert!(index.cache().lock().await.reserved_objects().is_empty());
     }
 
     #[tokio::test]
@@ -391,11 +444,12 @@ mod tests {
         );
 
         flush_once(
-            Arc::new(InMemory::new()),
-            7,
+            FlushTarget {
+                object_store: Arc::new(InMemory::new()),
+                broker_id: 7,
+            },
             &metrics,
             &index,
-            index.cache(),
             &[FlushPartition {
                 topic_id,
                 handle,
@@ -432,11 +486,12 @@ mod tests {
         let metrics = BrokerMetrics::new();
 
         let error = flush_once(
-            store,
-            7,
+            FlushTarget {
+                object_store: store,
+                broker_id: 7,
+            },
             &metrics,
             &index,
-            index.cache(),
             &[FlushPartition {
                 topic_id: Uuid::from_u128(11),
                 handle,
@@ -448,6 +503,7 @@ mod tests {
         .await
         .expect_err("the object-store root became a file");
         assert!(error.to_string().contains("diskless wal put"));
+        assert!(!index.cache().lock().await.reserved_objects().is_empty());
 
         krabka_macros::metric_registry_fixture!(metrics, body, registry; unwrap());
         assert!(body.contains("krabka_broker_diskless_wal_flush_failures_total 1"));
@@ -468,14 +524,14 @@ mod tests {
 
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let index = test_index_log().await;
-        let cache = index.cache();
         let topic_id = Uuid::from_u128(11);
         let record = flush_once(
-            store,
-            7,
+            FlushTarget {
+                object_store: store,
+                broker_id: 7,
+            },
             &BrokerMetrics::new(),
             &index,
-            cache,
             &[FlushPartition {
                 topic_id,
                 handle: Arc::clone(&handle),
@@ -536,7 +592,6 @@ mod tests {
         let second = test_partition().root(dir.path()).partition(1).call();
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let index = test_index_log().await;
-        let cache = index.cache();
         let config = FlushConfig {
             max_size: ByteSize::from_bytes(1),
             trim_safety_lag: None,
@@ -544,11 +599,12 @@ mod tests {
         };
 
         let record = flush_once(
-            store,
-            7,
+            FlushTarget {
+                object_store: store,
+                broker_id: 7,
+            },
             &BrokerMetrics::new(),
             &index,
-            cache,
             &[
                 FlushPartition {
                     topic_id: Uuid::from_u128(11),

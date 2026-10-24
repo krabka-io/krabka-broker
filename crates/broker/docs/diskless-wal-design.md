@@ -59,7 +59,7 @@ This is what the crash model calls a stateless appender: the reservation is a co
 
 The flusher runs on every broker, in [`diskless/flusher.rs`](../src/diskless/flusher.rs), and acts only on the diskless partitions the broker currently leads. It waits for the index projection to replay the index topic before its first tick. A tick that ran earlier would read a stale frontier, upload a prefix the store already holds under a fresh key, and leave the earlier object unreferenced forever.
 
-One tick, in [`diskless/flusher/object_flush.rs`](../src/diskless/flusher/object_flush.rs), builds one combined object from the committed tails: for each led partition, the raw bytes from the flushed frontier (or the local log start) up to the high watermark, subject to the per-object size budget. The object goes to `diskless-wal/<broker_id>/<uuid>.ckwl`. The tick then publishes one keyed `WalFlushRecord` per batch to `__diskless_wal_index`, waits until its own records come back through the projection, and only then trims each partition's local log. A failed tick moves no frontier, so the next tick retries the same tail.
+One tick, in [`diskless/flusher/object_flush.rs`](../src/diskless/flusher/object_flush.rs), builds one combined object from the committed tails: for each led partition, the raw bytes from the flushed frontier (or the local log start) up to the high watermark, subject to the per-object size budget. New objects go to `krabka-diskless-wal-v2/<broker_id>/<uuid>.ckwl`; legacy `diskless-wal/` objects remain readable and reclaimable. The tick reserves the new key before PUT, then publishes one keyed `WalFlushRecord` per batch to `__diskless_wal_index`, waits until its own records come back through the projection, and only then trims each partition's local log. A failed tick moves no frontier, so the next tick retries the same tail.
 
 The object framing in [`diskless/wal_object.rs`](../src/diskless/wal_object.rs) is `[CKWL magic + version] + runs + manifest + [footer length + magic]`, little-endian and Krabka-private. The runs are verbatim v2 batches, so a cold read can hand the bytes to a client unchanged.
 
@@ -194,7 +194,7 @@ buys a flusher that can keep packing many partitions into one object.
 
 ### Reclaim waits for a grace period and a projection check
 
-Every broker sweeps the shared `diskless-wal/` prefix every 30 seconds and deletes an object that no projected range references, but only after the object has been unreferenced for five minutes and only after a second check under the projection lock. The grace period lets an independent index consumer apply a replacement before any broker deletes the old object. The `diskless_object_reclaimable` kernel states the rule.
+Every broker sweeps the shared `krabka-diskless-wal-v2/` prefix every 30 seconds and deletes an object that no projected range or reservation references, but only after the object has been unreferenced for five minutes and only after a second check under the projection lock. While its local metadata image is below feature level 2, a broker does not sweep the legacy `diskless-wal/` prefix; once level 2 is applied, it sweeps both roots. This keeps old reclaimers from discovering newly reserved objects while rolling upgrades still have registered legacy writers. The `diskless_object_reclaimable` kernel states the rule.
 
 ### The flusher waits for the index replay before its first tick
 

@@ -569,6 +569,7 @@ fn enabling_elr_writes_kafkas_safety_config_records() {
 /// `UNSAFE_DOWNGRADE`, and with either it is written, since no
 /// `metadata changed` check applies outside `metadata.version`.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
     let kv = krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE;
     let mv = "metadata.version";
@@ -581,7 +582,7 @@ fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
         };
         remote_feature_image().image(image).ranges(features).call()
     };
-    let cases = [
+    let cases = vec![
         (
             "finalize level 1 on an unfinalized cluster",
             image(&[FeatureLevel {
@@ -633,12 +634,36 @@ fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
                 name: mv,
                 level: 30,
             }]),
-            named_update(kv, 2, UPGRADE),
+            named_update(kv, 3, UPGRADE),
             Err(invalid(
                 kv,
-                2,
-                "Local controller 1 only supports versions 0-1",
+                3,
+                "Local controller 1 only supports versions 0-2",
             )),
+        ),
+        (
+            "finalize reservation safety level 2 after every broker advertises it",
+            with_broker(
+                &[FeatureLevel {
+                    name: mv,
+                    level: 30,
+                }],
+                Some((0, 2)),
+            ),
+            named_update(kv, 2, UPGRADE),
+            Ok(plan(vec![feature_record(kv, 2)], &[kv])),
+        ),
+        (
+            "do not finalize reservation safety while an old broker advertises only level 1",
+            with_broker(
+                &[FeatureLevel {
+                    name: mv,
+                    level: 30,
+                }],
+                Some((0, 1)),
+            ),
+            named_update(kv, 2, UPGRADE),
+            Err(invalid(kv, 2, "Broker 2 only supports versions 0-1")),
         ),
         (
             "re-finalizing the current level",
@@ -692,6 +717,38 @@ fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
             ]),
             named_update(kv, 0, UNSAFE),
             Ok(plan(vec![feature_record(kv, 0)], &[kv])),
+        ),
+        (
+            "once reservation safety is finalized it cannot be lowered",
+            image(&[
+                FeatureLevel {
+                    name: mv,
+                    level: 30,
+                },
+                FeatureLevel { name: kv, level: 2 },
+            ]),
+            named_update(kv, 1, SAFE),
+            Err(invalid(
+                kv,
+                1,
+                "krabka.version cannot be lowered after diskless reservation safety is activated.",
+            )),
+        ),
+        (
+            "unsafe downgrade cannot disable reservation safety",
+            image(&[
+                FeatureLevel {
+                    name: mv,
+                    level: 30,
+                },
+                FeatureLevel { name: kv, level: 2 },
+            ]),
+            named_update(kv, 0, UNSAFE),
+            Err(invalid(
+                kv,
+                0,
+                "krabka.version cannot be lowered after diskless reservation safety is activated.",
+            )),
         ),
         (
             "a downgrade a narrower broker still supports",

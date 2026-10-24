@@ -38,10 +38,10 @@ pub use self::{
     },
     routing::{
         ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
-        ControllerAdminRouter, ControllerApiVersion, LATEST_PRODUCTION_METADATA_VERSION,
-        RaftShardRouter, RegistrationAdmission, RegistrationAdmissionFuture, ShardRouteFuture,
-        UnstableApiVersions, UnstableFeatureVersions, supported_feature_range,
-        supported_feature_ranges,
+        ControllerAdminRouter, ControllerApiVersion, DISKLESS_RESERVATION_FEATURE_LEVEL,
+        LATEST_PRODUCTION_METADATA_VERSION, RaftShardRouter, RegistrationAdmission,
+        RegistrationAdmissionFuture, ShardRouteFuture, UnstableApiVersions,
+        UnstableFeatureVersions, supported_feature_range, supported_feature_ranges,
     },
 };
 

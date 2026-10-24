@@ -13,6 +13,9 @@ use {
 
 #[derive(Debug, Clone, krabka_macros::FieldDefaults)]
 pub(crate) struct FlushConfig {
+    /// Optional tenant namespace applied to generated diskless object keys.
+    #[default(None)]
+    pub(crate) object_prefix: Option<String>,
     #[default(DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL.to_std())]
     pub(crate) interval: Duration,
     #[default(DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE)]
@@ -30,6 +33,7 @@ pub(crate) struct FlushConfig {
 impl FlushConfig {
     pub(crate) fn from_broker(config: &BrokerConfig) -> Self {
         Self {
+            object_prefix: None,
             interval: config.diskless_wal_flush_interval.to_std(),
             max_size: config.diskless_wal_flush_max_size,
             trim_safety_lag: Some(config.diskless_wal_trim_safety_lag),

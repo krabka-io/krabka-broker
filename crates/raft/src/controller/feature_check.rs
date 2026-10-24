@@ -68,12 +68,19 @@ pub(super) fn unsupported_feature_level(
     image: &MetadataImage,
     unstable: UnstableFeatureVersions,
 ) -> Option<String> {
+    unsupported_feature_level_with(image, |feature| supported_feature_range(feature, unstable))
+}
+
+fn unsupported_feature_level_with(
+    image: &MetadataImage,
+    supported_range: impl Fn(&dyn krabka_metadata::Feature) -> (i16, i16),
+) -> Option<String> {
     image.finalized_features().iter().find_map(|(name, level)| {
         // `QuorumFeatures.localSupportedFeature`: a feature this controller
         // does not know is `DISABLED`, supported at level 0 only.
         let LevelRange { min, max } =
             krabka_metadata::feature(name).map_or(UNKNOWN_FEATURE_RANGE, |feature| {
-                let (min, max) = supported_feature_range(feature, unstable);
+                let (min, max) = supported_range(feature);
                 LevelRange { min, max }
             });
         (!(min..=max).contains(level)).then(|| {
@@ -191,6 +198,20 @@ mod tests {
         check!(
             unsupported_feature_level(&image_at(levels), unstable) == expected,
             "{what}"
+        );
+    }
+
+    /// Before level 2 was introduced, the metadata registry advertised
+    /// `krabka.version` only through level 1. The startup replay check using
+    /// that legacy range refuses a level-2 metadata image, so an old broker
+    /// cannot start into the reservation protocol.
+    #[test]
+    fn a_pre_reservation_controller_refuses_level_two_on_startup() {
+        let feature = krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE;
+        check!(
+            unsupported_feature_level_with(&image_at(&[finalized(feature, 2)]), |feature| feature
+                .supported_range(),)
+                == Some(refusal(feature, 2, "0-1"))
         );
     }
 }
