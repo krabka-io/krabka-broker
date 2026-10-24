@@ -24,7 +24,8 @@ with `cargo clippy --workspace --all-targets`.
 """
 
 def config(ctx: ConfigContext):
-    ctx.tasks["delivery"].args.bazel_flags = ["-c", "opt"]
+    # The flags ci.yml's `delivery` job builds the shipped images with.
+    ctx.tasks["delivery"].args.bazel_flags = ["--config=release"]
 
     # Register the clippy aspect so `aspect lint` runs it natively, without
     # needing Bazel's `--config=lint`.

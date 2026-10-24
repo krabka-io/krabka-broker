@@ -6,7 +6,13 @@
 # Keep the action environment hermetic so build-script outputs are reproducible.
 build --incompatible_strict_action_env
 
-# Release builds: measured against the ordinary `-c opt` broker build.
+# Release builds: measured against the ordinary `-c opt` broker build (see
+# docs/operations/performance-kafka-4.3.1.md). Every shipped image is built with
+# this config: ci.yml's `delivery` job for the AMD64 image and the benchmark
+# driver, release.yml for the ARM64 half. Each job hashes the manifest it built
+# and checks the pushed image against that digest, so its build, cquery and
+# push must pass the same flags; and the two halves of a release index should
+# come from one config, so do not pass this to one of them alone.
 build:release --compilation_mode=opt
 build:release --@rules_rust//rust/settings:lto=thin
 build:release --@rules_rust//rust/settings:codegen_units=1
