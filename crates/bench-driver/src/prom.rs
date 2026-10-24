@@ -504,7 +504,7 @@ mod tests {
             .await
             .expect("aligned observations are complete");
         assert!(samples.len() == 1);
-        assert!(samples[0].cpu_cores == 0.0);
+        assert2::assert!(samples[0].cpu_cores.to_bits() == 0);
         assert!(samples[0].mem_working_set.bytes_u64() == 64);
         server.await.unwrap();
     }
