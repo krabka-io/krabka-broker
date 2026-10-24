@@ -16,6 +16,7 @@
 
 use {
     crate::report::described_error,
+    krabka_log::parse_barrier_marker,
     krabka_protocol::{
         krabka::barrier as api,
         owned::{
@@ -270,7 +271,7 @@ fn check_batch(
     let Some(record) = batch.records.first() else {
         return Err(format!("the control batch at {offset} holds no record"));
     };
-    let marker = krabka_broker::parse_barrier_marker(record)
+    let marker = parse_barrier_marker(record)
         .map_err(|e| format!("the control batch at {offset} is not a barrier marker: {e}"))?;
     if marker.group != group {
         return Err(format!(

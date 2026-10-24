@@ -135,7 +135,7 @@ pub(crate) mod barrier;
 // The barrier marker's read half is public: `krabka-barrier verify` and any
 // recovery tool has to read a marker back out of the log, and a second decoder
 // beside this one would be a second thing to drift.
-pub use barrier::marker::{BarrierMarker, parse_barrier_marker};
+pub use krabka_log::{BarrierMarker, parse_barrier_marker};
 /// Where blocking work runs: in place, on the blocking pool, or inline on
 /// `wasm32-wasip1`, which has no threads.
 pub(crate) mod blocking;
@@ -218,7 +218,7 @@ mod profiling_server;
 pub(crate) mod oauth_introspection;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod oauth_jwks;
-pub mod operator_keys;
+pub use krabka_audit::operator_keys;
 mod partition;
 pub(crate) mod partition_registry;
 mod partition_writer;

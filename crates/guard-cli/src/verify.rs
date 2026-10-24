@@ -35,11 +35,8 @@
 //! exit codes.
 
 use {
-    crate::signing::freeze_signing_bytes,
-    krabka_broker::{
-        freeze_signing_input,
-        operator_keys::{OperatorKeyEntry, OperatorKeys},
-    },
+    crate::signing::{freeze_signing_bytes, freeze_signing_input},
+    krabka_audit::operator_keys::{OperatorKeyEntry, OperatorKeys},
     krabka_protocol::krabka::freeze::DescribedTopicFreeze,
     std::path::{Path, PathBuf},
 };
@@ -440,7 +437,7 @@ mod tests {
         check!(keys.len() == 1);
         check!(
             keys.get("alice-yubi")
-                .map(krabka_broker::operator_keys::OperatorKey::principal)
+                .map(krabka_audit::operator_keys::OperatorKey::principal)
                 == Some(ALICE)
         );
     }

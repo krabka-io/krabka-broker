@@ -24,10 +24,10 @@ use {
 /// other refusal is a refusal.
 #[must_use]
 pub fn exit_for_code(code: i16) -> i32 {
-    use krabka_broker::codes;
+    use crate::broker_codes as codes;
 
     match code {
-        codes::NONE => 0,
+        0 => 0,
         codes::BREAK_GLASS_APPROVAL_REQUIRED => EXIT_NO_APPROVAL,
         codes::OPERATOR_SIGNATURE_INVALID | codes::OPERATOR_SIGNATURE_REQUIRED => {
             EXIT_BAD_SIGNATURE
@@ -42,7 +42,7 @@ pub fn exit_for_code(code: i16) -> i32 {
 /// names the krabka-private codes that no Kafka reference lists.
 #[must_use]
 pub fn code_name(code: i16) -> String {
-    use krabka_broker::codes;
+    use crate::broker_codes as codes;
 
     let note = match code {
         codes::BREAK_GLASS_APPROVAL_REQUIRED => {

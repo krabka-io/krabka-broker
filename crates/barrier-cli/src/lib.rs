@@ -17,6 +17,7 @@
 //! range. A JVM `AdminClient` cannot send those, which is why the cuts are also
 //! published to `__barrier_state` where any consumer can read them.
 
+mod broker_codes;
 mod cli;
 mod dispatch;
 mod report;
