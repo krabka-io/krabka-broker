@@ -322,16 +322,19 @@ mod tests {
     async fn member_limit_rejects_only_new_members() {
         let (metadata, _id) = metadata_with_topic().call();
         let log = Arc::new(InMemoryOffsetsLog::default());
-        let coord = Arc::new(GroupCoordinator::new(
-            NextGenConfig::assigning_at_once(),
-            ShareGroupConfig {
-                max_size: 1,
-                ..ShareGroupConfig::assigning_at_once()
-            },
-            metadata,
-            log,
-            StreamsGroupConfig::default(),
-        ));
+        let coord = Arc::new(
+            GroupCoordinator::new(
+                NextGenConfig::assigning_at_once(),
+                ShareGroupConfig {
+                    max_size: 1,
+                    ..ShareGroupConfig::assigning_at_once()
+                },
+                metadata,
+                log,
+                StreamsGroupConfig::default(),
+            )
+            .expect("valid test assignor configuration"),
+        );
         let handle = coord.get_or_create_share("g");
         assert_single_member_limit(
             &handle,

@@ -91,13 +91,16 @@ pub(crate) fn make_coord_with_log() -> (Arc<GroupCoordinator>, Arc<InMemoryOffse
     use crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog;
     let metadata: Arc<dyn MetadataProvider> = Arc::new(ImageMetadatalessProvider);
     let offsets_log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = Arc::new(GroupCoordinator::new(
-        NextGenConfig::assigning_at_once(),
-        ShareGroupConfig::assigning_at_once(),
-        metadata,
-        offsets_log.clone(),
-        StreamsGroupConfig::default(),
-    ));
+    let coord = Arc::new(
+        GroupCoordinator::new(
+            NextGenConfig::assigning_at_once(),
+            ShareGroupConfig::assigning_at_once(),
+            metadata,
+            offsets_log.clone(),
+            StreamsGroupConfig::default(),
+        )
+        .expect("valid test assignor configuration"),
+    );
     (coord, offsets_log)
 }
 
@@ -150,13 +153,16 @@ pub(crate) fn snapshot_of(topics: &[(&str, u8, i32)]) -> reconciler::ReconcileIn
 pub(crate) fn make_coord_with_metadata(
     metadata: Arc<dyn MetadataProvider>,
 ) -> Arc<GroupCoordinator> {
-    Arc::new(GroupCoordinator::new(
-        NextGenConfig::assigning_at_once(),
-        ShareGroupConfig::assigning_at_once(),
-        metadata,
-        Arc::new(InMemoryOffsetsLog::default()),
-        StreamsGroupConfig::default(),
-    ))
+    Arc::new(
+        GroupCoordinator::new(
+            NextGenConfig::assigning_at_once(),
+            ShareGroupConfig::assigning_at_once(),
+            metadata,
+            Arc::new(InMemoryOffsetsLog::default()),
+            StreamsGroupConfig::default(),
+        )
+        .expect("valid test assignor configuration"),
+    )
 }
 
 /// A metadata source over `image`, with node 1 reported as the controller
