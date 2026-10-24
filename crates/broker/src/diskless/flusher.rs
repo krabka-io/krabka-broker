@@ -29,7 +29,7 @@ mod test_support;
 
 pub(crate) use self::{
     config::FlushConfig,
-    object_flush::{FlushTarget, flush_once_with_reservation_gate},
+    object_flush::{FlushTarget, flush_once},
 };
 
 pub(crate) struct FlushPartition {
@@ -102,12 +102,13 @@ pub(crate) async fn run(
         context.index_log.clone(),
         Arc::clone(&context.object_store),
         RECLAIM_GRACE,
+        config.object_prefix.clone(),
     );
     tokio::select! {
         biased;
         () = shutdown.cancelled() => return flusher_shut_down(),
         () = &mut projection_unusable => return FlusherExit::ProjectionUnavailable,
-        () = reclaimer.sweep() => {}
+        () = reclaimer.sweep(legacy_reclamation_enabled(&context)) => {}
     }
     context.ready.store(true, Ordering::Release);
     let mut ticker = tokio::time::interval(config.interval);
@@ -147,15 +148,24 @@ pub(crate) async fn run(
                 rotation = rotation.wrapping_add(1);
             }
             _ = reclaim_ticker.tick() => {
+                let allow_legacy_namespace = legacy_reclamation_enabled(&context);
                 tokio::select! {
                     biased;
                     () = shutdown.cancelled() => return flusher_shut_down(),
                     () = &mut projection_unusable => return FlusherExit::ProjectionUnavailable,
-                    () = reclaimer.sweep() => {}
+                    () = reclaimer.sweep(allow_legacy_namespace) => {}
                 }
             }
         }
     }
+}
+
+fn legacy_reclamation_enabled(context: &FlusherContext) -> bool {
+    crate::features::feature_enabled(
+        &context.image_rx.borrow(),
+        krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE,
+        krabka_raft::DISKLESS_RESERVATION_FEATURE_LEVEL,
+    )
 }
 
 fn flusher_shut_down() -> FlusherExit {
@@ -182,12 +192,7 @@ async fn flush_tick(
         let start = rotation % partitions.len();
         partitions.rotate_left(start);
     }
-    let reservations_enabled = crate::features::feature_enabled(
-        &image,
-        krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE,
-        krabka_raft::DISKLESS_RESERVATION_FEATURE_LEVEL,
-    );
-    flush_once_with_reservation_gate(
+    flush_once(
         FlushTarget {
             object_store: Arc::clone(&context.object_store),
             broker_id: context.broker_id,
@@ -196,7 +201,6 @@ async fn flush_tick(
         &context.index_log,
         &partitions,
         config,
-        reservations_enabled,
         |partition| partition.handle.current_leader.load(Ordering::Relaxed) == context.node_id,
     )
     .await
@@ -241,18 +245,27 @@ mod tests {
         },
         crate::{
             diskless::{
+                DISKLESS_WAL_V1_PREFIX, DISKLESS_WAL_V2_PREFIX,
                 index_log::test_support::{PacedReplayLog, ReplayPace, three_record_flush},
                 wal_index::WalIndexCache,
             },
             test_support::{StorageMode, single_partition_topic, topic_freeze_record},
         },
         assert2::assert,
+        futures_util::{TryStreamExt as _, stream::BoxStream},
         krabka_metadata::{MetadataRecord, TopicRecord},
         krabka_object_store::fault::{FaultInjectingStore, FaultPolicy, OpFault, StoreOp},
         krabka_remote_storage_topic::MetadataEventLog,
         krabka_units::{ByteSize, convert::ByteSizeExt as _},
-        object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path},
-        std::time::{Duration, Instant},
+        object_store::{
+            CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+            ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+            RenameOptions, memory::InMemory, path::Path, prefix::PrefixStore,
+        },
+        std::{
+            fmt,
+            time::{Duration, Instant},
+        },
         tempfile::tempdir,
     };
 
@@ -261,7 +274,96 @@ mod tests {
             context.index_log.clone(),
             Arc::clone(&context.object_store),
             grace,
+            None,
         )
+    }
+
+    async fn sweep_twice(reclaimer: &mut Reclaimer, observed: Instant, elapsed: Duration) {
+        reclaimer.sweep_at(observed, true).await;
+        reclaimer.sweep_at(observed + elapsed, true).await;
+    }
+
+    #[derive(Debug, Default)]
+    struct VisibleBlockedPutStore {
+        inner: InMemory,
+        visible: tokio::sync::Notify,
+        finish_put: tokio::sync::Notify,
+    }
+
+    impl fmt::Display for VisibleBlockedPutStore {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("VisibleBlockedPutStore")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for VisibleBlockedPutStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            options: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            let result = self.inner.put_opts(location, payload, options).await?;
+            self.visible.notify_one();
+            self.finish_put.notified().await;
+            Ok(result)
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            options: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, options).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.inner.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.inner.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+
+        async fn rename_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: RenameOptions,
+        ) -> object_store::Result<()> {
+            self.inner.rename_opts(from, to, options).await
+        }
     }
 
     // Keep field evaluation order, including metrics and readiness allocation.
@@ -423,7 +525,7 @@ mod tests {
         .expire_retention_breached_ranges(image, partitions, now_ms)
         .await
         .unwrap();
-        test_reclaimer(context, Duration::ZERO).sweep().await;
+        test_reclaimer(context, Duration::ZERO).sweep(true).await;
     }
 
     /// The id of the `orders` topic, and an image that holds it.
@@ -498,6 +600,212 @@ mod tests {
         let cache = cache.lock().await;
         assert!(cache.flushed_frontier(topic_id, 0).is_none());
         assert!(cache.flushed_frontier(topic_id, 1) == Some(3));
+    }
+
+    #[tokio::test]
+    async fn lagging_writer_reservation_protects_a_visible_delayed_put_from_v2_peer() {
+        let dir = tempdir().unwrap();
+        let partitions = Arc::new(PartitionRegistry::new());
+        partitions.insert(
+            "orders".into(),
+            krabka_ids::PartitionIndex(0),
+            test_partition().root(dir.path()).partition(0).call(),
+        );
+        let mut local_image = orders_image(1).image;
+        local_image.apply(&MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE.into(),
+                level: 1,
+            },
+        ));
+        assert!(crate::features::feature_enabled(
+            &local_image,
+            krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE,
+            1,
+        ));
+        assert!(!crate::features::feature_enabled(
+            &local_image,
+            krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE,
+            krabka_raft::DISKLESS_RESERVATION_FEATURE_LEVEL,
+        ));
+        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(local_image));
+        let mut peer_image = MetadataImage::new(Uuid::nil());
+        peer_image.apply(&MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE.into(),
+                level: krabka_raft::DISKLESS_RESERVATION_FEATURE_LEVEL,
+            },
+        ));
+        assert!(crate::features::feature_enabled(
+            &peer_image,
+            krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE,
+            krabka_raft::DISKLESS_RESERVATION_FEATURE_LEVEL,
+        ));
+        let event_log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
+        let index_log = DisklessIndexLog::start(event_log.clone()).await.unwrap();
+        let store = Arc::new(VisibleBlockedPutStore::default());
+        let context = test_context(
+            partitions,
+            image_rx,
+            store.clone(),
+            index_log.clone(),
+            || Arc::new(AtomicBool::new(false)),
+        );
+        let put_visible = store.visible.notified();
+        tokio::pin!(put_visible);
+        let flush =
+            tokio::spawn(async move { flush_tick(&context, &FlushConfig::default(), 0).await });
+        put_visible.await;
+
+        let reservations = index_log.cache().lock().await.reserved_objects();
+        assert!(reservations.len() == 1);
+        let object_key = format!(
+            "{DISKLESS_WAL_V2_PREFIX}/7/{}.ckwl",
+            reservations.iter().next().unwrap()
+        );
+        assert!(store.head(&Path::from(object_key.clone())).await.is_ok());
+        let legacy_listing = store
+            .list(Some(&Path::from("diskless-wal")))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert!(legacy_listing.is_empty());
+
+        let unreserved_key = format!("{DISKLESS_WAL_V2_PREFIX}/7/{}.ckwl", Uuid::new_v4());
+        store
+            .inner
+            .put(
+                &Path::from(unreserved_key.clone()),
+                PutPayload::from_static(b"orphan"),
+            )
+            .await
+            .unwrap();
+        let peer_index = DisklessIndexLog::start(event_log).await.unwrap();
+        assert!(
+            peer_index
+                .wait_until_caught_up(Duration::from_secs(1))
+                .await
+        );
+        let peer_store: Arc<dyn ObjectStore> = store.clone();
+        let mut reclaimer = Reclaimer::new(peer_index, peer_store, Duration::from_mins(1), None);
+        let observed = Instant::now();
+        sweep_twice(&mut reclaimer, observed, Duration::from_mins(6)).await;
+
+        assert!(store.head(&Path::from(object_key)).await.is_ok());
+        assert!(store.head(&Path::from(unreserved_key)).await.is_err());
+        store.finish_put.notify_one();
+        flush.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn tenant_prefix_keeps_versioned_objects_outside_legacy_listing() {
+        let store = PrefixStore::new(InMemory::new(), Path::from("tenant/cluster"));
+        let key = format!("{DISKLESS_WAL_V2_PREFIX}/7/{}.ckwl", Uuid::new_v4());
+        store
+            .put(&Path::from(key.clone()), PutPayload::from_static(b"wal"))
+            .await
+            .unwrap();
+
+        let legacy = store
+            .list(Some(&Path::from(DISKLESS_WAL_V1_PREFIX)))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        let versioned = store
+            .list(Some(&Path::from(DISKLESS_WAL_V2_PREFIX)))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        assert!(legacy.is_empty());
+        assert!(versioned.len() == 1 && versioned[0].location.to_string() == key);
+        assert!(store.head(&Path::from(key)).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn configured_object_prefix_is_applied_to_both_reclaimer_roots() {
+        let object_prefix = "tenant/cluster";
+        let relative_key = format!("{DISKLESS_WAL_V2_PREFIX}/7/{}.ckwl", Uuid::new_v4());
+        let object_key = Path::from(crate::diskless::prefixed_object_key(
+            Some(object_prefix),
+            &relative_key,
+        ));
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        store
+            .put(&object_key, PutPayload::from_static(b"object"))
+            .await
+            .unwrap();
+        let legacy_root = Path::from(crate::diskless::prefixed_object_key(
+            Some(object_prefix),
+            DISKLESS_WAL_V1_PREFIX,
+        ));
+        assert!(
+            store
+                .list(Some(&legacy_root))
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let index = test_index_log().await;
+        let mut reclaimer = Reclaimer::new(
+            index,
+            Arc::clone(&store),
+            Duration::from_mins(1),
+            Some(object_prefix.to_owned()),
+        );
+        let observed = Instant::now();
+        reclaimer.sweep_at(observed, true).await;
+        reclaimer
+            .sweep_at(observed + Duration::from_mins(2), true)
+            .await;
+        assert!(store.head(&object_key).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn legacy_objects_wait_for_level_two_while_versioned_reclaim_runs() {
+        // This gate assumes the registration validation contract: a broker
+        // applies level 2 only after no registered legacy writer remains. It
+        // does not fence a detached process after that process is deregistered.
+        let legacy_key = format!("{DISKLESS_WAL_V1_PREFIX}/7/{}.ckwl", Uuid::new_v4());
+        let versioned_key = format!("{DISKLESS_WAL_V2_PREFIX}/7/{}.ckwl", Uuid::new_v4());
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        for key in [&legacy_key, &versioned_key] {
+            store
+                .put(
+                    &Path::from(key.as_str()),
+                    PutPayload::from_static(b"object"),
+                )
+                .await
+                .unwrap();
+        }
+        let mut reclaimer = Reclaimer::new(
+            test_index_log().await,
+            Arc::clone(&store),
+            Duration::from_mins(1),
+            None,
+        );
+        let observed = Instant::now();
+        reclaimer.sweep_at(observed, false).await;
+        reclaimer
+            .sweep_at(observed + Duration::from_mins(2), false)
+            .await;
+        assert!(store.head(&Path::from(legacy_key.as_str())).await.is_ok());
+        assert!(
+            store
+                .head(&Path::from(versioned_key.as_str()))
+                .await
+                .is_err()
+        );
+
+        reclaimer
+            .sweep_at(observed + Duration::from_mins(3), true)
+            .await;
+        reclaimer
+            .sweep_at(observed + Duration::from_mins(5), true)
+            .await;
+        assert!(store.head(&Path::from(legacy_key.as_str())).await.is_err());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -590,9 +898,9 @@ mod tests {
                 .unwrap();
             wait_for_object(&cache, topic_id, key).await;
         }
-        let mut reclaimer = Reclaimer::new(index, Arc::clone(&store), Duration::from_mins(1));
+        let mut reclaimer = Reclaimer::new(index, Arc::clone(&store), Duration::from_mins(1), None);
         let observed = Instant::now();
-        reclaimer.sweep_at(observed).await;
+        reclaimer.sweep_at(observed, true).await;
         assert!(
             store
                 .head(&Path::from("diskless-wal/9/old.ckwl"))
@@ -600,7 +908,9 @@ mod tests {
                 .is_ok(),
             "the grace period protects lagging projections"
         );
-        reclaimer.sweep_at(observed + Duration::from_mins(1)).await;
+        reclaimer
+            .sweep_at(observed + Duration::from_mins(1), true)
+            .await;
 
         assert!(
             store
@@ -642,10 +952,10 @@ mod tests {
 
         let stale_cache = stale.cache();
         assert!(!stale_cache.lock().await.references_object(&object_key));
-        let mut reclaimer = Reclaimer::new(stale, Arc::clone(&store), Duration::ZERO);
+        let mut reclaimer = Reclaimer::new(stale, Arc::clone(&store), Duration::ZERO, None);
         reclaimer.freshness_timeout = Duration::from_millis(10);
         reclaimer
-            .sweep_at(Instant::now() + Duration::from_mins(10))
+            .sweep_at(Instant::now() + Duration::from_mins(10), true)
             .await;
 
         assert!(
@@ -687,10 +997,10 @@ mod tests {
             reclaimer_index.clone(),
             Arc::clone(&store),
             Duration::from_mins(1),
+            None,
         );
         let observed = Instant::now();
-        reclaimer.sweep_at(observed).await;
-        reclaimer.sweep_at(observed + Duration::from_mins(6)).await;
+        sweep_twice(&mut reclaimer, observed, Duration::from_mins(6)).await;
         assert!(
             store.head(&Path::from(object_key.clone())).await.is_ok(),
             "a peer may delay index publication longer than the grace period"
@@ -719,7 +1029,9 @@ mod tests {
             )
         })
         .await;
-        reclaimer.sweep_at(observed + Duration::from_mins(7)).await;
+        reclaimer
+            .sweep_at(observed + Duration::from_mins(7), true)
+            .await;
         assert!(store.head(&Path::from(object_key)).await.is_ok());
     }
 
@@ -742,8 +1054,8 @@ mod tests {
         index: &DisklessIndexLog,
         store: &Arc<dyn ObjectStore>,
     ) -> tokio::task::JoinHandle<()> {
-        let mut reclaimer = Reclaimer::new(index.clone(), Arc::clone(store), Duration::ZERO);
-        tokio::spawn(async move { reclaimer.sweep().await })
+        let mut reclaimer = Reclaimer::new(index.clone(), Arc::clone(store), Duration::ZERO, None);
+        tokio::spawn(async move { reclaimer.sweep(true).await })
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -840,8 +1152,8 @@ mod tests {
         .tombstone_deleted_topics(&image)
         .await
         .unwrap();
-        Reclaimer::new(index, Arc::clone(&store), Duration::ZERO)
-            .sweep()
+        Reclaimer::new(index, Arc::clone(&store), Duration::ZERO, None)
+            .sweep(true)
             .await;
 
         assert!(cache.lock().await.lookup(topic_id, 0, 0).is_none());
@@ -1568,7 +1880,7 @@ mod tests {
             .lookup(topic_id, 0, 0)
             .unwrap()
             .object_key;
-        assert!(object_key.starts_with("diskless-wal/7/"));
+        assert!(object_key.starts_with(&format!("{DISKLESS_WAL_V2_PREFIX}/7/")));
         assert!(store.head(&Path::from(object_key)).await.is_ok());
     }
 }

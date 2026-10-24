@@ -197,6 +197,16 @@ fn check_orders_offsets(target: &std::path::Path, start: Offset, end: Offset) {
     check!(log.log_end_offset() == end);
 }
 
+async fn restore_and_check_full_diskless(
+    archive: &std::path::Path,
+    target: &std::path::Path,
+    capture: &std::path::Path,
+) {
+    let report = restore(&args(archive, target, capture)).await.unwrap();
+    check!(report.diskless.as_ref().unwrap().partitions[0].recovery_cutoff == 2);
+    check_orders_offsets(target, Offset(1), Offset(2));
+}
+
 /// The two test directories, the path a capture is to be written to, and the capture itself.
 struct UnwrittenFixture {
     archive: tempfile::TempDir,
@@ -236,11 +246,27 @@ async fn referenced_wal_restores_at_original_offsets_and_orphans_are_ignored() {
         capture_path,
     } = restore_fixture(true, false);
     std::fs::write(archive.path().join("orphan.ckwl"), b"uncommitted garbage").unwrap();
-    let report = restore(&args(archive.path(), target.path(), &capture_path))
-        .await
-        .unwrap();
-    check!(report.diskless.as_ref().unwrap().partitions[0].recovery_cutoff == 2);
-    check_orders_offsets(target.path(), Offset(1), Offset(2));
+    restore_and_check_full_diskless(archive.path(), target.path(), &capture_path).await;
+}
+
+#[tokio::test]
+async fn versioned_namespace_object_restores_at_original_offsets() {
+    let RestoreFixture {
+        archive,
+        target,
+        capture_path,
+    } = restore_fixture(true, false);
+    let key = "krabka-diskless-wal-v2/1/a.ckwl";
+    let old_path = archive.path().join("diskless-wal/1/a.ckwl");
+    let new_path = archive.path().join(key);
+    std::fs::create_dir_all(new_path.parent().unwrap()).unwrap();
+    std::fs::rename(old_path, new_path).unwrap();
+    let mut capture: DisklessWalCapture =
+        serde_json::from_slice(&std::fs::read(&capture_path).unwrap()).unwrap();
+    capture.partitions[0].ranges[0].object_key = key.into();
+    write_capture(&capture_path, &capture);
+
+    restore_and_check_full_diskless(archive.path(), target.path(), &capture_path).await;
 }
 
 #[tokio::test]

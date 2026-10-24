@@ -1,7 +1,10 @@
 //! Reclaim unreferenced diskless objects under their index publication fences.
 
 use {
-    super::index_log::DisklessIndexLog,
+    super::{
+        DISKLESS_WAL_V1_PREFIX, DISKLESS_WAL_V2_PREFIX, index_log::DisklessIndexLog,
+        prefixed_object_key,
+    },
     futures_util::TryStreamExt as _,
     object_store::{ObjectStore, ObjectStoreExt as _, path::Path},
     std::{
@@ -22,6 +25,7 @@ pub(super) struct Reclaimer {
     object_store: Arc<dyn ObjectStore>,
     first_seen: HashMap<String, Instant>,
     grace: Duration,
+    object_prefix: Option<String>,
     pub(super) freshness_timeout: Duration,
 }
 
@@ -30,19 +34,23 @@ impl Reclaimer {
         index_log: DisklessIndexLog,
         object_store: Arc<dyn ObjectStore>,
         grace: Duration,
+        object_prefix: Option<String>,
     ) -> Self {
         Self {
             index_log,
             object_store,
             first_seen: HashMap::new(),
             grace,
+            object_prefix,
             freshness_timeout: RECLAIM_FRESHNESS_TIMEOUT,
         }
     }
 
-    pub(super) async fn sweep(&mut self) { self.sweep_at(Instant::now()).await; }
+    pub(super) async fn sweep(&mut self, allow_legacy_namespace: bool) {
+        self.sweep_at(Instant::now(), allow_legacy_namespace).await;
+    }
 
-    pub(super) async fn sweep_at(&mut self, now: Instant) {
+    pub(super) async fn sweep_at(&mut self, now: Instant, allow_legacy_namespace: bool) {
         if !self
             .index_log
             .wait_for_fresh_view(self.freshness_timeout)
@@ -56,19 +64,27 @@ impl Reclaimer {
             let cache = cache.lock().await;
             (cache.referenced_objects(), cache.reserved_objects())
         };
-        let prefix = Path::from("diskless-wal");
-        let objects = match self
-            .object_store
-            .list(Some(&prefix))
-            .try_collect::<Vec<_>>()
-            .await
-        {
-            Ok(objects) => objects,
-            Err(error) => {
-                tracing::warn!(%error, "diskless WAL reclaim listing failed; retrying");
-                return;
-            }
+        let mut objects = Vec::new();
+        let prefixes: &[&str] = if allow_legacy_namespace {
+            &[DISKLESS_WAL_V1_PREFIX, DISKLESS_WAL_V2_PREFIX]
+        } else {
+            &[DISKLESS_WAL_V2_PREFIX]
         };
+        for prefix in prefixes {
+            let prefix = Path::from(prefixed_object_key(self.object_prefix.as_deref(), prefix));
+            match self
+                .object_store
+                .list(Some(&prefix))
+                .try_collect::<Vec<_>>()
+                .await
+            {
+                Ok(mut listed) => objects.append(&mut listed),
+                Err(error) => {
+                    tracing::warn!(%error, "diskless WAL reclaim listing failed; retrying");
+                    return;
+                }
+            }
+        }
         let mut unreferenced = HashSet::new();
         for object in objects {
             let object_key = object.location.to_string();

@@ -149,7 +149,7 @@ fn expected_capture(
 async fn capture_reads_committed_index_state_to_the_high_watermarks_without_producing() {
     let index = InProcessMetadataEventLog::new(3);
     // p0: a live range, then a broker's replay fence.
-    let live = flush("diskless-wal/1/a.ckwl", entry(4, 7, 6));
+    let live = flush("krabka-diskless-wal-v2/1/a.ckwl", entry(4, 7, 6));
     index
         .publish_keyed(0, live.key, Some(live.value))
         .await
@@ -189,7 +189,7 @@ async fn capture_reads_committed_index_state_to_the_high_watermarks_without_prod
                 delete_floor: 0,
                 recovery_cutoff: 8,
                 ranges: vec![CapturedWalRange {
-                    object_key: "diskless-wal/1/a.ckwl".to_owned(),
+                    object_key: "krabka-diskless-wal-v2/1/a.ckwl".to_owned(),
                     entry: entry(4, 7, 6),
                 }],
             })

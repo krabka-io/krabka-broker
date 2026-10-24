@@ -317,7 +317,10 @@ mod tests {
         crate::{
             broker::spawn_partition,
             config::{RemoteStorageBackend, RlmmKind},
-            diskless::wal_index::{WalFlushRecord, WalIndexEntry},
+            diskless::{
+                DISKLESS_WAL_V2_PREFIX,
+                wal_index::{WalFlushRecord, WalIndexEntry},
+            },
             testing::single_value_batch,
         },
         assert2::assert,
@@ -331,7 +334,7 @@ mod tests {
             primitives::uuid::Uuid as WireUuid,
             records::{Record, RecordBatch},
         },
-        object_store::{ObjectStoreExt, PutPayload, path::Path},
+        object_store::{ObjectStoreExt, PutPayload, path::Path, prefix::PrefixStore},
     };
 
     #[bon::builder]
@@ -698,10 +701,14 @@ mod tests {
         let byte_start = u64::try_from(object.len()).unwrap();
         object.extend_from_slice(&second);
 
-        let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+        let store: Arc<dyn ObjectStore> = Arc::new(PrefixStore::new(
+            object_store::memory::InMemory::new(),
+            Path::from("tenant/cluster"),
+        ));
+        let object_key = format!("{DISKLESS_WAL_V2_PREFIX}/o");
         store
             .put(
-                &Path::from("diskless-wal/o"),
+                &Path::from(object_key.clone()),
                 PutPayload::from(object.freeze()),
             )
             .await
@@ -709,7 +716,7 @@ mod tests {
 
         let mut cache = WalIndexCache::default();
         cache.apply(&super::super::wal_index::WalFlushRecord {
-            object_key: "diskless-wal/o".into(),
+            object_key,
             format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![super::super::wal_index::WalIndexEntry {
                 topic_id,

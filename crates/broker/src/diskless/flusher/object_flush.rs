@@ -7,7 +7,9 @@ use {
     super::{FlushConfig, FlushPartition},
     crate::{
         diskless::{
+            DISKLESS_WAL_V2_PREFIX,
             index_log::DisklessIndexLog,
+            prefixed_object_key,
             wal_index::{WalFlushRecord, WalIndexEntry},
             wal_object::{WalObjectBuilder, parse_wal_object},
         },
@@ -28,35 +30,12 @@ pub(crate) struct FlushTarget {
     pub(crate) broker_id: i32,
 }
 
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
 pub(crate) async fn flush_once(
     target: FlushTarget,
     metrics: &BrokerMetrics,
     index_log: &DisklessIndexLog,
     partitions: &[FlushPartition],
     config: &FlushConfig,
-    is_current_leader: impl Fn(&FlushPartition) -> bool,
-) -> Result<Option<WalFlushRecord>, BrokerError> {
-    flush_once_with_reservation_gate(
-        target,
-        metrics,
-        index_log,
-        partitions,
-        config,
-        true,
-        is_current_leader,
-    )
-    .await
-}
-
-pub(crate) async fn flush_once_with_reservation_gate(
-    target: FlushTarget,
-    metrics: &BrokerMetrics,
-    index_log: &DisklessIndexLog,
-    partitions: &[FlushPartition],
-    config: &FlushConfig,
-    reservations_enabled: bool,
     is_current_leader: impl Fn(&FlushPartition) -> bool,
 ) -> Result<Option<WalFlushRecord>, BrokerError> {
     let cache = index_log.cache();
@@ -111,15 +90,18 @@ pub(crate) async fn flush_once_with_reservation_gate(
         return Ok(None);
     }
     metrics.diskless_wal_flush_attempts_total.inc();
-    let object_key = format!("diskless-wal/{}/{}.ckwl", target.broker_id, Uuid::new_v4());
+    let relative_key = format!(
+        "{DISKLESS_WAL_V2_PREFIX}/{}/{}.ckwl",
+        target.broker_id,
+        Uuid::new_v4()
+    );
+    let object_key = prefixed_object_key(config.object_prefix.as_deref(), &relative_key);
     let object = builder.finish();
     // A different broker may list and reclaim this prefix while upload or
     // index publication is delayed. Commit the reservation first; any failure
     // from this point leaves it behind, which can leak an object but cannot
     // make a live object appear reclaimable.
-    if reservations_enabled {
-        index_log.reserve_object(&object_key).await?;
-    }
+    index_log.reserve_object(&object_key).await?;
     if let Err(error) = target
         .object_store
         .put(
@@ -157,11 +139,9 @@ pub(crate) async fn flush_once_with_reservation_gate(
         metrics.diskless_wal_flush_failures_total.inc();
         return Err(error);
     }
-    if reservations_enabled {
-        index_log
-            .release_object_reservation(&record.object_key)
-            .await?;
-    }
+    index_log
+        .release_object_reservation(&record.object_key)
+        .await?;
 
     for partition in partitions {
         if !is_current_leader(partition) {
@@ -365,12 +345,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reservation_rows_are_not_written_before_feature_level_two() {
+    async fn reservation_is_written_before_level_two_and_released_after_index_publish() {
         let dir = tempdir().unwrap();
         let handle = orders_partition(dir.path());
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let index = test_index_log().await;
-        let record = flush_once_with_reservation_gate(
+        let record = flush_once(
             FlushTarget {
                 object_store: store,
                 broker_id: 7,
@@ -383,7 +363,6 @@ mod tests {
                 high_watermark: Offset(3),
             }],
             &FlushConfig::default(),
-            false,
             |_| true,
         )
         .await
@@ -438,6 +417,7 @@ mod tests {
         let error = flush().await.expect_err("the index publish is refused");
         assert!(error.to_string().contains("diskless index publish"));
         assert!(handle.log.lock().unwrap().log_start_offset() == Offset(0));
+        assert!(index.cache().lock().await.reserved_objects().len() == 1);
 
         log.heal();
         flush()
@@ -445,6 +425,7 @@ mod tests {
             .unwrap()
             .expect("the retry flushes the same records");
         assert!(handle.log.lock().unwrap().log_start_offset() == Offset(2));
+        assert!(index.cache().lock().await.reserved_objects().is_empty());
     }
 
     #[tokio::test]

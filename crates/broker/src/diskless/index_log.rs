@@ -382,10 +382,7 @@ impl DisklessIndexLog {
     /// Commit an object reservation before its bytes are put. The existing
     /// v1 delete-floor wire shape keeps rolling 1.x readers compatible.
     pub(crate) async fn reserve_object(&self, object_key: &str) -> Result<(), BrokerError> {
-        let object_id = object_id_from_key(object_key).ok_or_else(|| {
-            BrokerError::Txn(format!("invalid diskless object key: {object_key}"))
-        })?;
-        let key = WalObjectReservationKey::new(object_id).to_bytes();
+        let (object_id, key) = object_reservation_key(object_key)?;
         let floor_key = WalDeleteFloorKey::from_bytes(&key).expect("reservation uses floor key");
         let value = WalDeleteFloorRecord {
             topic_id: floor_key.topic_id,
@@ -403,27 +400,18 @@ impl DisklessIndexLog {
             .await
             .map_err(|error| BrokerError::Txn(format!("diskless object reservation: {error}")))?;
 
-        let mut applied = self.applied.clone();
-        tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                if self
-                    .cache
-                    .lock()
-                    .await
-                    .reserved_objects()
-                    .contains(&object_id)
-                {
-                    return true;
-                }
-                if applied.changed().await.is_err() {
-                    return false;
-                }
-            }
-        })
-        .await
-        .unwrap_or(false)
-        .then_some(())
-        .ok_or_else(|| BrokerError::Txn("diskless object reservation projection timed out".into()))
+        if self
+            .wait_for_projection(Duration::from_secs(30), |cache| {
+                cache.reserved_objects().contains(&object_id)
+            })
+            .await
+        {
+            Ok(())
+        } else {
+            Err(BrokerError::Txn(
+                "diskless object reservation projection timed out".into(),
+            ))
+        }
     }
 
     /// Release a reservation only after every range record for the object has
@@ -432,10 +420,7 @@ impl DisklessIndexLog {
         &self,
         object_key: &str,
     ) -> Result<(), BrokerError> {
-        let object_id = object_id_from_key(object_key).ok_or_else(|| {
-            BrokerError::Txn(format!("invalid diskless object key: {object_key}"))
-        })?;
-        let key = WalObjectReservationKey::new(object_id).to_bytes();
+        let (object_id, key) = object_reservation_key(object_key)?;
         self.log
             .publish_keyed(index_partition(&key, self.log.partition_count()), key, None)
             .await
@@ -476,10 +461,19 @@ impl DisklessIndexLog {
         record: &WalFlushRecord,
         timeout: Duration,
     ) -> bool {
+        self.wait_for_projection(timeout, |cache| cache.contains_record(record))
+            .await
+    }
+
+    async fn wait_for_projection(
+        &self,
+        timeout: Duration,
+        mut predicate: impl FnMut(&WalIndexCache) -> bool,
+    ) -> bool {
         let mut applied = self.applied.clone();
         tokio::time::timeout(timeout, async {
             loop {
-                if self.cache.lock().await.contains_record(record) {
+                if predicate(&*self.cache.lock().await) {
                     return true;
                 }
                 if applied.changed().await.is_err() {
@@ -745,6 +739,13 @@ fn index_partition(key: &[u8], partitions: i32) -> i32 {
 fn object_id_from_key(object_key: &str) -> Option<uuid::Uuid> {
     let filename = object_key.rsplit('/').next()?;
     uuid::Uuid::parse_str(filename.strip_suffix(".ckwl")?).ok()
+}
+
+fn object_reservation_key(object_key: &str) -> Result<(uuid::Uuid, bytes::Bytes), BrokerError> {
+    let object_id = object_id_from_key(object_key)
+        .ok_or_else(|| BrokerError::Txn(format!("invalid diskless object key: {object_key}")))?;
+    let key = WalObjectReservationKey::new(object_id).to_bytes();
+    Ok((object_id, key))
 }
 
 #[cfg(test)]
