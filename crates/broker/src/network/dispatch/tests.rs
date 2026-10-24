@@ -420,9 +420,7 @@ async fn assert_gated_version(case: GatedVersion) {
     .await;
     let label = format!("{name} v{frame_version} {unstable:?} {legacy:?}");
     check!(outcomes == vec![Outcome::Closed], "{label}");
-    let metric = ApiKeyLabel {
-        api_key: name.into(),
-    };
+    let metric = ApiKeyLabel { api_key: name };
     check!(
         (metrics
             .unsupported_api_requests

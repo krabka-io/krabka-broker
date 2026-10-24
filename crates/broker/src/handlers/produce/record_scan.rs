@@ -81,6 +81,7 @@ fn skip_nullable(fields: &mut &[u8], length: i32) -> Option<()> {
 mod tests {
     use {
         super::{headerless_max_timestamp, read_varlong},
+        krabka_compression::RecordDecompressionPolicy,
         krabka_protocol::records::{HEADER_LEN, Record, RecordBatch, validate_one_v2_batch},
         proptest::prelude::*,
     };
@@ -103,9 +104,10 @@ mod tests {
         bytes[17..21].copy_from_slice(&crc.to_be_bytes());
         let batch = validate_one_v2_batch(&bytes).unwrap();
         let mut maximum = -1;
-        let reference = batch.validate_records_with(Default::default(), |record| {
-            maximum = maximum.max(base.wrapping_add(record.timestamp_delta));
-        });
+        let reference =
+            batch.validate_records_with(RecordDecompressionPolicy::default(), |record| {
+                maximum = maximum.max(base.wrapping_add(record.timestamp_delta));
+            });
         if let Some(found) = fast {
             assert2::assert!(reference.is_ok());
             assert2::assert!(found == maximum);
