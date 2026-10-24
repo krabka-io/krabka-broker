@@ -3,12 +3,14 @@
 use {
     super::wal_index::{
         WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexCache, WalIndexEntry,
-        WalIndexKey,
+        WalIndexKey, WalObjectReservationKey,
     },
     crate::{error::BrokerError, metrics::BrokerMetrics},
     bytes::Bytes,
     futures_util::StreamExt,
-    krabka_remote_storage::diskless::index::{REPLAY_FENCE_KEY, wal_index_key_version},
+    krabka_remote_storage::diskless::index::{
+        REPLAY_FENCE_KEY, WAL_OBJECT_RESERVATION_PARTITION, wal_index_key_version,
+    },
     krabka_remote_storage_topic::{KeyedEvent, MetadataEventLog, PartitionStart},
     std::{
         collections::HashMap,
@@ -44,6 +46,7 @@ pub(crate) struct DisklessIndexLog {
     cache: Arc<Mutex<WalIndexCache>>,
     progress: watch::Receiver<ReplayProgress>,
     applied: watch::Receiver<u64>,
+    consumed_offsets: watch::Receiver<Vec<i64>>,
     valid: Arc<AtomicBool>,
     object_fences: Arc<StdMutex<ObjectFences>>,
 }
@@ -113,6 +116,9 @@ impl DisklessIndexLog {
             invalid: false,
         });
         let (applied_tx, applied_rx) = watch::channel(0u64);
+        let partition_count =
+            usize::try_from(log.partition_count()).expect("partition count non-negative");
+        let (consumed_tx, consumed_rx) = watch::channel(vec![-1; partition_count]);
         let valid = Arc::new(AtomicBool::new(true));
 
         let pump_cache = cache.clone();
@@ -120,6 +126,7 @@ impl DisklessIndexLog {
         let object_fences = Arc::new(StdMutex::new(ObjectFences::default()));
         let pump_object_fences = Arc::clone(&object_fences);
         tokio::spawn(async move {
+            let consumed_tx = consumed_tx.clone();
             let mut delivered: HashMap<i32, u64> =
                 pending.keys().map(|partition| (*partition, 0)).collect();
             while let Some(event) = stream.next().await {
@@ -127,13 +134,20 @@ impl DisklessIndexLog {
                 // the two projections stay independent however the index
                 // topic's partitions interleave them.
                 let floor_key = event.key.as_deref().and_then(WalDeleteFloorKey::from_bytes);
+                let reservation_key = event
+                    .key
+                    .as_deref()
+                    .and_then(WalObjectReservationKey::from_bytes);
                 let range_key = event.key.as_deref().and_then(WalIndexKey::from_bytes);
                 // A key that is neither, and not the replay fence, is of a key
                 // version this build does not read. Skipping it would leave a
                 // range or floor out of the projection, so it is as unsafe as
                 // an unkeyed record.
                 let unknown_key = event.key.as_deref().filter(|key| {
-                    *key != REPLAY_FENCE_KEY && floor_key.is_none() && range_key.is_none()
+                    *key != REPLAY_FENCE_KEY
+                        && floor_key.is_none()
+                        && reservation_key.is_none()
+                        && range_key.is_none()
                 });
                 if let Some(key) = unknown_key {
                     invalidate_projection(&metrics, &pump_valid, &progress_tx);
@@ -145,7 +159,15 @@ impl DisklessIndexLog {
                          unsafe"
                     );
                 } else if event.tombstone {
-                    if let Some(key) = floor_key {
+                    if let Some(key) = reservation_key {
+                        pump_cache
+                            .lock()
+                            .await
+                            .release_object_reservation(key.object_id());
+                        applied_tx.send_modify(|generation| {
+                            *generation = generation.wrapping_add(1);
+                        });
+                    } else if let Some(key) = floor_key {
                         pump_cache.lock().await.clear_delete_floor(key);
                     } else if let Some(key) = range_key {
                         pump_cache.lock().await.remove(key);
@@ -153,23 +175,55 @@ impl DisklessIndexLog {
                 } else if event.key.as_deref() != Some(REPLAY_FENCE_KEY) {
                     let result = if let Some(key) = floor_key {
                         WalDeleteFloorRecord::from_bytes(&event.payload)
-                            .map(|record| (Some((key, record.floor)), None))
+                            .map(|record| (Some((key, record.floor)), reservation_key, None))
                     } else {
                         WalFlushRecord::from_bytes(&event.payload)
-                            .map(|record| (None, Some(record)))
+                            .map(|record| (None, None, Some(record)))
                     };
                     match result {
-                        Ok((Some((key, floor)), None)) => {
-                            pump_cache.lock().await.raise_delete_floor(
-                                key.topic_id,
-                                key.partition,
-                                floor,
-                            );
-                            applied_tx.send_modify(|generation| {
-                                *generation = generation.wrapping_add(1);
-                            });
+                        Ok((Some((key, floor)), reservation_key, None)) => {
+                            if let Some(reservation_key) = reservation_key {
+                                if key.partition != WAL_OBJECT_RESERVATION_PARTITION || floor != 0 {
+                                    invalidate_projection(&metrics, &pump_valid, &progress_tx);
+                                } else {
+                                    // The value must match its compacted key;
+                                    // this namespace is otherwise a normal v1
+                                    // delete-floor record to old readers.
+                                    let Ok(record) =
+                                        WalDeleteFloorRecord::from_bytes(&event.payload)
+                                    else {
+                                        unreachable!("the record was decoded above")
+                                    };
+                                    if record.topic_id != key.topic_id
+                                        || record.partition != key.partition
+                                        || WalObjectReservationKey::new(reservation_key.object_id())
+                                            .to_bytes()
+                                            .as_ref()
+                                            != event.key.as_deref().unwrap_or_default()
+                                    {
+                                        invalidate_projection(&metrics, &pump_valid, &progress_tx);
+                                        continue;
+                                    }
+                                    pump_cache
+                                        .lock()
+                                        .await
+                                        .reserve_object(reservation_key.object_id());
+                                    applied_tx.send_modify(|generation| {
+                                        *generation = generation.wrapping_add(1);
+                                    });
+                                }
+                            } else {
+                                pump_cache.lock().await.raise_delete_floor(
+                                    key.topic_id,
+                                    key.partition,
+                                    floor,
+                                );
+                                applied_tx.send_modify(|generation| {
+                                    *generation = generation.wrapping_add(1);
+                                });
+                            }
                         }
-                        Ok((None, Some(record))) => {
+                        Ok((None, None, Some(record))) => {
                             // Every index record is keyed (`publish_flush`);
                             // an unkeyed one has no range it is the latest
                             // for, so the projection can no longer be trusted.
@@ -205,6 +259,12 @@ impl DisklessIndexLog {
                         _ => unreachable!("decode result has exactly one record kind"),
                     }
                 }
+                consumed_tx.send_modify(|offsets| {
+                    let index = usize::try_from(event.partition).expect("partition non-negative");
+                    if let Some(offset) = offsets.get_mut(index) {
+                        *offset = (*offset).max(event.offset);
+                    }
+                });
                 let Some(target) = pending.get(&event.partition).copied() else {
                     continue;
                 };
@@ -232,6 +292,7 @@ impl DisklessIndexLog {
             cache,
             progress: progress_rx,
             applied: applied_rx,
+            consumed_offsets: consumed_rx,
             valid,
             object_fences,
         })
@@ -265,6 +326,128 @@ impl DisklessIndexLog {
 
     #[must_use]
     pub(crate) fn cache(&self) -> Arc<Mutex<WalIndexCache>> { self.cache.clone() }
+
+    /// Reconcile the live projection through a fence committed to every index
+    /// partition. A failed or stalled partition makes destructive callers
+    /// decline the sweep.
+    pub(crate) async fn wait_for_fresh_view(&self, timeout: Duration) -> bool {
+        if !self.is_valid() {
+            return false;
+        }
+        let mut targets = vec![-1; usize::try_from(self.log.partition_count()).unwrap_or(0)];
+        for partition in 0..self.log.partition_count() {
+            let offset = match self
+                .log
+                .publish_keyed(
+                    partition,
+                    Bytes::from_static(REPLAY_FENCE_KEY),
+                    Some(Bytes::new()),
+                )
+                .await
+            {
+                Ok(offset) => offset,
+                Err(error) => {
+                    tracing::warn!(%error, partition, "diskless index freshness fence failed");
+                    return false;
+                }
+            };
+            targets[usize::try_from(partition).expect("partition non-negative")] = offset;
+        }
+        let mut consumed = self.consumed_offsets.clone();
+        tokio::time::timeout(timeout, async {
+            loop {
+                if !self.is_valid() {
+                    return false;
+                }
+                let reached = {
+                    let offsets = consumed.borrow_and_update();
+                    offsets.len() == targets.len()
+                        && offsets
+                            .iter()
+                            .zip(&targets)
+                            .all(|(seen, target)| seen >= target)
+                };
+                if reached {
+                    return true;
+                }
+                if consumed.changed().await.is_err() {
+                    return false;
+                }
+            }
+        })
+        .await
+        .unwrap_or(false)
+    }
+
+    /// Commit an object reservation before its bytes are put. The existing
+    /// v1 delete-floor wire shape keeps rolling 1.x readers compatible.
+    pub(crate) async fn reserve_object(&self, object_key: &str) -> Result<(), BrokerError> {
+        let object_id = object_id_from_key(object_key).ok_or_else(|| {
+            BrokerError::Txn(format!("invalid diskless object key: {object_key}"))
+        })?;
+        let key = WalObjectReservationKey::new(object_id).to_bytes();
+        let floor_key = WalDeleteFloorKey::from_bytes(&key).expect("reservation uses floor key");
+        let value = WalDeleteFloorRecord {
+            topic_id: floor_key.topic_id,
+            partition: floor_key.partition,
+            floor: 0,
+        }
+        .to_bytes()
+        .map_err(BrokerError::Txn)?;
+        self.log
+            .publish_keyed(
+                index_partition(&key, self.log.partition_count()),
+                key,
+                Some(value),
+            )
+            .await
+            .map_err(|error| BrokerError::Txn(format!("diskless object reservation: {error}")))?;
+
+        let mut applied = self.applied.clone();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if self
+                    .cache
+                    .lock()
+                    .await
+                    .reserved_objects()
+                    .contains(&object_id)
+                {
+                    return true;
+                }
+                if applied.changed().await.is_err() {
+                    return false;
+                }
+            }
+        })
+        .await
+        .unwrap_or(false)
+        .then_some(())
+        .ok_or_else(|| BrokerError::Txn("diskless object reservation projection timed out".into()))
+    }
+
+    /// Release a reservation only after every range record for the object has
+    /// been acknowledged and applied locally.
+    pub(crate) async fn release_object_reservation(
+        &self,
+        object_key: &str,
+    ) -> Result<(), BrokerError> {
+        let object_id = object_id_from_key(object_key).ok_or_else(|| {
+            BrokerError::Txn(format!("invalid diskless object key: {object_key}"))
+        })?;
+        let key = WalObjectReservationKey::new(object_id).to_bytes();
+        self.log
+            .publish_keyed(index_partition(&key, self.log.partition_count()), key, None)
+            .await
+            .map_err(|error| {
+                BrokerError::Txn(format!("diskless object reservation tombstone: {error}"))
+            })?;
+        self.cache
+            .lock()
+            .await
+            .release_object_reservation(object_id);
+        Ok(())
+    }
 
     /// Fence a projection addition against reclamation of `object_key`.
     ///
@@ -557,6 +740,11 @@ fn index_partition(key: &[u8], partitions: i32) -> i32 {
     });
     i32::try_from(hash % u32::try_from(partitions).expect("positive partition count"))
         .expect("index partition fits i32")
+}
+
+fn object_id_from_key(object_key: &str) -> Option<uuid::Uuid> {
+    let filename = object_key.rsplit('/').next()?;
+    uuid::Uuid::parse_str(filename.strip_suffix(".ckwl")?).ok()
 }
 
 #[cfg(test)]

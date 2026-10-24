@@ -5,7 +5,8 @@ use {
             CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture, WalCaptureProjection,
         },
         index::{
-            REPLAY_FENCE_KEY, WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexKey,
+            REPLAY_FENCE_KEY, WAL_OBJECT_RESERVATION_PARTITION, WalDeleteFloorKey,
+            WalDeleteFloorRecord, WalFlushRecord, WalIndexKey, WalObjectReservationKey,
         },
     },
     assert2::check,
@@ -80,6 +81,28 @@ fn index_keys_encode_to_the_golden_bytes_and_decode_back() {
     check!(WalDeleteFloorKey::from_bytes(GOLDEN_RANGE_KEY) == None);
     check!(WalIndexKey::from_bytes(REPLAY_FENCE_KEY) == None);
     check!(WalDeleteFloorKey::from_bytes(REPLAY_FENCE_KEY) == None);
+}
+
+#[test]
+fn object_reservation_reuses_the_1x_delete_floor_wire_format() {
+    let object_id = Uuid::new_v4();
+    let reservation = WalObjectReservationKey::new(object_id);
+    let key_bytes = reservation.to_bytes();
+    let floor_key = WalDeleteFloorKey::from_bytes(&key_bytes).unwrap();
+    let old_reader_value = WalDeleteFloorRecord {
+        topic_id: floor_key.topic_id,
+        partition: floor_key.partition,
+        floor: 0,
+    };
+
+    check!(WalObjectReservationKey::from_bytes(&key_bytes) == Some(reservation));
+    check!(floor_key.partition == WAL_OBJECT_RESERVATION_PARTITION);
+    check!(floor_key.topic_id.get_version_num() == 8);
+    check!(old_reader_value.to_bytes().unwrap()[..2] == 0i16.to_be_bytes());
+    check!(
+        WalDeleteFloorRecord::from_bytes(&old_reader_value.to_bytes().unwrap())
+            == Ok(old_reader_value)
+    );
 }
 
 /// `golden` with its leading two-byte version replaced by `version`.

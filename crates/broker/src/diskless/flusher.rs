@@ -27,7 +27,10 @@ mod object_flush;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::{config::FlushConfig, object_flush::flush_once};
+pub(crate) use self::{
+    config::FlushConfig,
+    object_flush::{FlushTarget, flush_once_with_reservation_gate},
+};
 
 pub(crate) struct FlushPartition {
     pub(crate) topic_id: Uuid,
@@ -179,14 +182,21 @@ async fn flush_tick(
         let start = rotation % partitions.len();
         partitions.rotate_left(start);
     }
-    flush_once(
-        Arc::clone(&context.object_store),
-        context.broker_id,
+    let reservations_enabled = crate::features::feature_enabled(
+        &image,
+        krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE,
+        krabka_raft::DISKLESS_RESERVATION_FEATURE_LEVEL,
+    );
+    flush_once_with_reservation_gate(
+        FlushTarget {
+            object_store: Arc::clone(&context.object_store),
+            broker_id: context.broker_id,
+        },
         &context.metrics,
         &context.index_log,
-        context.index_log.cache(),
         &partitions,
         config,
+        reservations_enabled,
         |partition| partition.handle.current_leader.load(Ordering::Relaxed) == context.node_id,
     )
     .await
@@ -604,6 +614,113 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn stale_open_index_view_cannot_reclaim_a_peer_reference() {
+        let topic_id = Uuid::from_u128(14);
+        let object_key = format!("diskless-wal/9/{}.ckwl", Uuid::new_v4());
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        store
+            .put(
+                &Path::from(object_key.clone()),
+                PutPayload::from_static(b"object"),
+            )
+            .await
+            .unwrap();
+
+        let log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
+        let stale = DisklessIndexLog::start(PacedReplayLog::new(log.clone(), ReplayPace::Never))
+            .await
+            .unwrap();
+        let peer = DisklessIndexLog::start(log).await.unwrap();
+        peer.reserve_object(&object_key).await.unwrap();
+        peer.publish_flush(&three_record_flush(topic_id, &object_key))
+            .await
+            .unwrap();
+        wait_for_object(&peer.cache(), topic_id, &object_key).await;
+
+        let stale_cache = stale.cache();
+        assert!(!stale_cache.lock().await.references_object(&object_key));
+        let mut reclaimer = Reclaimer::new(stale, Arc::clone(&store), Duration::ZERO);
+        reclaimer.freshness_timeout = Duration::from_millis(10);
+        reclaimer
+            .sweep_at(Instant::now() + Duration::from_mins(10))
+            .await;
+
+        assert!(
+            store.head(&Path::from(object_key)).await.is_ok(),
+            "a projection that cannot reach current partition fences must not delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn replayed_reservation_protects_an_object_during_delayed_peer_publication() {
+        let topic_id = Uuid::from_u128(15);
+        let object_key = format!("diskless-wal/7/{}.ckwl", Uuid::new_v4());
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
+        let writer = DisklessIndexLog::start(log.clone()).await.unwrap();
+        writer.reserve_object(&object_key).await.unwrap();
+
+        // The writer can stop after recording the reservation and after its
+        // bytes land. A different broker replays that v1-compatible record.
+        store
+            .put(
+                &Path::from(object_key.clone()),
+                PutPayload::from_static(b"object"),
+            )
+            .await
+            .unwrap();
+        let reclaimer_index = DisklessIndexLog::start(log).await.unwrap();
+        assert!(
+            reclaimer_index
+                .wait_until_caught_up(Duration::from_secs(1))
+                .await
+        );
+        wait_for_cache(&reclaimer_index.cache(), |cache| {
+            cache.references_object(&object_key)
+        })
+        .await;
+
+        let mut reclaimer = Reclaimer::new(
+            reclaimer_index.clone(),
+            Arc::clone(&store),
+            Duration::from_mins(1),
+        );
+        let observed = Instant::now();
+        reclaimer.sweep_at(observed).await;
+        reclaimer.sweep_at(observed + Duration::from_mins(6)).await;
+        assert!(
+            store.head(&Path::from(object_key.clone())).await.is_ok(),
+            "a peer may delay index publication longer than the grace period"
+        );
+
+        writer
+            .publish_flush(&three_record_flush(topic_id, &object_key))
+            .await
+            .unwrap();
+        wait_for_object(&reclaimer_index.cache(), topic_id, &object_key).await;
+        writer
+            .release_object_reservation(&object_key)
+            .await
+            .unwrap();
+        wait_for_cache(&reclaimer_index.cache(), |cache| {
+            !cache.reserved_objects().contains(
+                &Uuid::parse_str(
+                    object_key
+                        .rsplit('/')
+                        .next()
+                        .unwrap()
+                        .strip_suffix(".ckwl")
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+        })
+        .await;
+        reclaimer.sweep_at(observed + Duration::from_mins(7)).await;
+        assert!(store.head(&Path::from(object_key)).await.is_ok());
     }
 
     struct StoredReclaimer {

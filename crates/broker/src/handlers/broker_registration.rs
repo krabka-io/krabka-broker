@@ -490,6 +490,46 @@ mod tests {
         }
     }
 
+    /// A broker from the pre-reservation release advertises `krabka.version`
+    /// only through level 1. After level 2 is finalized, registration rejects
+    /// it, so it cannot rejoin and run the old object reclaimer.
+    #[test]
+    fn a_1x_broker_cannot_register_after_diskless_reservation_safety_is_finalized() {
+        let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
+        for (name, level) in [
+            ("metadata.version", 25),
+            (
+                krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE,
+                krabka_raft::DISKLESS_RESERVATION_FEATURE_LEVEL,
+            ),
+        ] {
+            image.apply(&MetadataRecord::V1FeatureLevel(
+                krabka_metadata::FeatureLevelRecord {
+                    name: name.into(),
+                    level,
+                },
+            ));
+        }
+        let old_broker = BrokerRegistrationRequest {
+            features: vec![
+                Feature {
+                    name: "metadata.version".into(),
+                    min_supported_version: 7,
+                    max_supported_version: 30,
+                    ..Default::default()
+                },
+                Feature {
+                    name: krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE.into(),
+                    min_supported_version: 0,
+                    max_supported_version: 1,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert2::check!(validate_features(&old_broker, &image) == Err(codes::UNSUPPORTED_VERSION));
+    }
+
     /// krabka-io/krabka-broker#822: the KIP-858 directory checks of
     /// `ClusterControlManager.registerBroker`. Broker 1 already registered
     /// directory 500, and broker 2 is registering.

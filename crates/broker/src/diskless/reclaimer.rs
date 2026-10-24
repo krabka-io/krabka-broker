@@ -15,12 +15,14 @@ use {
 pub(super) const RECLAIM_INTERVAL: Duration = Duration::from_secs(30);
 /// Allow independent index consumers to apply replacements before deleting objects.
 pub(super) const RECLAIM_GRACE: Duration = Duration::from_mins(5);
+const RECLAIM_FRESHNESS_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) struct Reclaimer {
     index_log: DisklessIndexLog,
     object_store: Arc<dyn ObjectStore>,
     first_seen: HashMap<String, Instant>,
     grace: Duration,
+    pub(super) freshness_timeout: Duration,
 }
 
 impl Reclaimer {
@@ -34,13 +36,26 @@ impl Reclaimer {
             object_store,
             first_seen: HashMap::new(),
             grace,
+            freshness_timeout: RECLAIM_FRESHNESS_TIMEOUT,
         }
     }
 
     pub(super) async fn sweep(&mut self) { self.sweep_at(Instant::now()).await; }
 
     pub(super) async fn sweep_at(&mut self, now: Instant) {
-        let referenced = self.index_log.cache().lock().await.referenced_objects();
+        if !self
+            .index_log
+            .wait_for_fresh_view(self.freshness_timeout)
+            .await
+        {
+            tracing::warn!("diskless WAL index view is not current; skipping destructive reclaim");
+            return;
+        }
+        let (referenced, reservations) = {
+            let cache = self.index_log.cache();
+            let cache = cache.lock().await;
+            (cache.referenced_objects(), cache.reserved_objects())
+        };
         let prefix = Path::from("diskless-wal");
         let objects = match self
             .object_store
@@ -57,7 +72,7 @@ impl Reclaimer {
         let mut unreferenced = HashSet::new();
         for object in objects {
             let object_key = object.location.to_string();
-            if referenced.contains(&object_key) {
+            if referenced.contains(&object_key) || reserved_object(&object_key, &reservations) {
                 self.first_seen.remove(&object_key);
                 continue;
             }
@@ -92,4 +107,14 @@ impl Reclaimer {
         self.first_seen
             .retain(|object_key, _| unreferenced.contains(object_key));
     }
+}
+
+fn reserved_object(object_key: &str, reservations: &HashSet<uuid::Uuid>) -> bool {
+    let Some(filename) = object_key.rsplit('/').next() else {
+        return false;
+    };
+    filename
+        .strip_suffix(".ckwl")
+        .and_then(|uuid| uuid::Uuid::parse_str(uuid).ok())
+        .is_some_and(|object_id| reservations.contains(&object_id))
 }

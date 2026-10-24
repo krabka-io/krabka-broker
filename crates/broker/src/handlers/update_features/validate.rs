@@ -156,6 +156,16 @@ fn plan_update(
         };
         (current, kind, dependency)
     };
+    if name == krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE
+        && current >= krabka_raft::DISKLESS_RESERVATION_FEATURE_LEVEL
+        && level < krabka_raft::DISKLESS_RESERVATION_FEATURE_LEVEL
+    {
+        return Err(UpdateError::invalid_update_version(
+            name,
+            level,
+            "krabka.version cannot be lowered after diskless reservation safety is activated.",
+        ));
+    }
     let not_supported = reason_not_supported(image, local_controller, name, level);
     let decision = feature_update_decision(FeatureUpdateFacts {
         update_type: update_type(update.upgrade_type),
