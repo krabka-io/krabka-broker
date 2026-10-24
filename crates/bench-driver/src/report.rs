@@ -139,7 +139,13 @@ fn render_group(out: &mut String, key: &CellKey, runs: &[RunOutput]) {
     // letting the reader take the resource rows at face value.
     let unmeasured = runs
         .iter()
-        .filter(|r| r.notes.iter().any(|n| n.starts_with("prometheus-")))
+        .filter(|r| {
+            r.notes.iter().any(|n| {
+                n == "prometheus-url-not-set"
+                    || n.starts_with("prometheus-client-failed:")
+                    || n.starts_with("prometheus-capture-failed:")
+            })
+        })
         .count();
     if unmeasured > 0 {
         push_fmt(
@@ -970,6 +976,25 @@ mod tests {
         for needle in ["small-msg-saturate", "producer msgs/s", "1.50×"] {
             assert2::assert!(md.contains(needle));
         }
+    }
+
+    #[test]
+    fn time_series_failure_is_reported_without_marking_scalar_resource_rows_missing() {
+        let dir = tempdir().unwrap();
+        let mut krabka = fake_run(Stack::Krabka, 600_000);
+        krabka
+            .notes
+            .push("prometheus-resource-series-failed: timestamps are not aligned".into());
+        write_run(dir.path().join("krabka.json"), &krabka);
+        write_run(
+            dir.path().join("kafka.json"),
+            &fake_run(Stack::Kafka, 400_000),
+        );
+
+        let md = render_markdown(dir.path(), true).unwrap();
+
+        assert2::assert!(md.contains("prometheus-resource-series-failed"));
+        assert2::assert!(!md.contains("Resource rows are incomplete"));
     }
 
     #[test]
