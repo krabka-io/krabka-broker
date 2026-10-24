@@ -480,7 +480,7 @@ jobs:
           targets: wasm32-wasip1
           components: clippy
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # The runner ships clang, but its `llvm-ar` has a version suffix and no
       # unversioned name on PATH, so the archiver is resolved rather than
@@ -1296,7 +1296,7 @@ jobs:
         with:
           toolchain: ${{ steps.toolchain.outputs.channel }}
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Its own namespace: the bench profile's artifacts are not the ones
           # `cargo`'s clippy and nextest run leaves behind.
