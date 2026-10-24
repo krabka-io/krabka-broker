@@ -1,5 +1,7 @@
 //! Diskless WAL object-store flusher.
 
+#[cfg(test)]
+use crate::diskless::prefixed_object_key;
 use {
     super::{
         index_log::DisklessIndexLog,
@@ -8,8 +10,8 @@ use {
         wal_index::WalFlushRecord,
     },
     crate::{
-        error::BrokerError, metrics::BrokerMetrics, partition::Partition,
-        partition_registry::PartitionRegistry, time_util::now_ms,
+        error::BrokerError, features::feature_enabled, metrics::BrokerMetrics,
+        partition::Partition, partition_registry::PartitionRegistry, time_util::now_ms,
     },
     krabka_log::Offset,
     krabka_metadata::{MetadataImage, NodeId},
@@ -161,7 +163,7 @@ pub(crate) async fn run(
 }
 
 fn legacy_reclamation_enabled(context: &FlusherContext) -> bool {
-    crate::features::feature_enabled(
+    feature_enabled(
         &context.image_rx.borrow(),
         krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE,
         krabka_raft::DISKLESS_RESERVATION_FEATURE_LEVEL,
@@ -726,16 +728,13 @@ mod tests {
     async fn configured_object_prefix_is_applied_to_both_reclaimer_roots() {
         let object_prefix = "tenant/cluster";
         let relative_key = format!("{DISKLESS_WAL_V2_PREFIX}/7/{}.ckwl", Uuid::new_v4());
-        let object_key = Path::from(crate::diskless::prefixed_object_key(
-            Some(object_prefix),
-            &relative_key,
-        ));
+        let object_key = Path::from(prefixed_object_key(Some(object_prefix), &relative_key));
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         store
             .put(&object_key, PutPayload::from_static(b"object"))
             .await
             .unwrap();
-        let legacy_root = Path::from(crate::diskless::prefixed_object_key(
+        let legacy_root = Path::from(prefixed_object_key(
             Some(object_prefix),
             DISKLESS_WAL_V1_PREFIX,
         ));
