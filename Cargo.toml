@@ -180,7 +180,7 @@ jsonschema = { version = "0.59", default-features = false }
 # KFC-7 Protobuf body validation: the descriptor pool a cached schema closure
 # keeps. The same versions krabka-schema-serde resolves.
 prost-reflect = "0.16"
-protox-parse = "0.9"
+protox-parse = "0.10"
 sha2 = "0.11"
 # Jepsen-style exhaustive concurrency-correctness model checking (KRaft
 # consensus). Dev-dependency only — never linked into a shipped binary.
