@@ -28,6 +28,15 @@ debug = "none"
 # Split debug info into a separate file (reduces linker work)
 split-debuginfo = "packed"
 
+# The same settings as Bazel's `build:release` in `.bazelrc`, which builds the
+# shipped images. `panic` stays `unwind`: the broker catches panics in blocking
+# work, rollover flushes and O_DIRECT writes and turns them into errors, and a
+# panicking tokio task must not take the process down.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
 [workspace.dependencies]
 bon = "3.10.2"
 # Error type for the two tool binaries -- `krabka-docgen` and

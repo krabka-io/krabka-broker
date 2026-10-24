@@ -1478,7 +1478,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # Every Bazel command in this job passes `--config=release` (`-c opt`,
-      # thin LTO, one codegen unit; see `.bazelrc`), and passes it identically:
+      # fat LTO, one codegen unit; see `.bazelrc`), and passes it identically:
       # the image the docker test runs, the image `push` uploads and the
       # manifest the digest step hashes must be one build, so a flag that
       # differs between them would test or record a different image from the

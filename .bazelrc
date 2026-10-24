@@ -14,7 +14,9 @@ build --incompatible_strict_action_env
 # push must pass the same flags; and the two halves of a release index should
 # come from one config, so do not pass this to one of them alone.
 build:release --compilation_mode=opt
-build:release --@rules_rust//rust/settings:lto=thin
+# Fat LTO and one codegen unit, as `[profile.release]` in Cargo.toml. Panics
+# keep unwinding: the broker catches some and turns them into errors.
+build:release --@rules_rust//rust/settings:lto=fat
 build:release --@rules_rust//rust/settings:codegen_units=1
 
 # The @llvm toolchain passes `--unwindlib=none` on link actions deliberately, to

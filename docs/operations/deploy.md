@@ -9,7 +9,7 @@ flags and files below are the ones the binary on this branch reads. Run
 The container image is the supported form. `bazel run --config=release //packaging:image_load`
 builds it from locked Wolfi packages and loads it into the local daemon as
 `docker.io/krabka-io/krabka-broker:dev`; CI pushes the same image to
-`ghcr.io/krabka-io/krabka-broker`. `--config=release` is `-c opt` with thin LTO
+`ghcr.io/krabka-io/krabka-broker`. `--config=release` is `-c opt` with fat LTO
 and one codegen unit, the flags CI and the release workflow build the published
 images with. Plain `-c opt` builds faster and yields a slower, larger binary.
 The image runs as `nonroot` (65532), has
