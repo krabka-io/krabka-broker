@@ -115,14 +115,14 @@ fn configure_introspection_validator(
 #[cfg(target_family = "wasm")]
 fn configure_introspection_validator(
     _oauth: &FileOAuthBearerConfig,
-    endpoint: &str,
+    _endpoint: &str,
     _custom_claim_check: Option<jsonpath_rust::parser::model::JpQuery>,
     _groups_claim: Option<jsonpath_rust::parser::model::JpQuery>,
     _cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
-    Err(FileConfigError::InvalidConfig(format!(
-        "[oauthbearer]: introspection_endpoint_uri {endpoint:?} is set, but token introspection is unavailable on this platform"
-    )))
+    Err(FileConfigError::InvalidConfig(
+        "[oauthbearer]: token introspection is unavailable on this platform".into(),
+    ))
 }
 
 /// Whether any resolved listener offers SASL/OAUTHBEARER. A listener's own
