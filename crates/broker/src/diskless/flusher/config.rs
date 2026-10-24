@@ -6,6 +6,7 @@ use {
     crate::config::{
         BrokerConfig, DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL, DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE,
         DEFAULT_DISKLESS_WAL_INDEX_PROJECTION_TIMEOUT, DEFAULT_DISKLESS_WAL_TRIM_SAFETY_LAG,
+        RemoteStorageBackend,
     },
     krabka_units::{ByteSize, convert::TimeExt as _},
     std::time::Duration,
@@ -13,6 +14,9 @@ use {
 
 #[derive(Debug, Clone, krabka_macros::FieldDefaults)]
 pub(crate) struct FlushConfig {
+    /// Namespace for new WAL objects. Persisted object keys remain absolute,
+    /// so older unprefixed keys continue to be read exactly as recorded.
+    pub(crate) object_prefix: Option<String>,
     #[default(DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL.to_std())]
     pub(crate) interval: Duration,
     #[default(DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE)]
@@ -30,6 +34,15 @@ pub(crate) struct FlushConfig {
 impl FlushConfig {
     pub(crate) fn from_broker(config: &BrokerConfig) -> Self {
         Self {
+            object_prefix: match config.remote_storage_backend.as_ref() {
+                Some(RemoteStorageBackend::S3(config)) => {
+                    krabka_object_store::normalize_prefix(config.prefix.as_deref())
+                }
+                Some(RemoteStorageBackend::Gcs(config)) => {
+                    krabka_object_store::normalize_prefix(config.prefix.as_deref())
+                }
+                Some(RemoteStorageBackend::Local { .. }) | None => None,
+            },
             interval: config.diskless_wal_flush_interval.to_std(),
             max_size: config.diskless_wal_flush_max_size,
             trim_safety_lag: Some(config.diskless_wal_trim_safety_lag),
@@ -68,5 +81,20 @@ mod tests {
         assert!(config.max_size == krabka_units::mebibytes(4));
         assert!(config.trim_safety_lag == Some(0));
         assert!(config.index_projection_timeout == Duration::from_secs(3));
+    }
+
+    #[test]
+    fn cloud_prefix_is_normalized_for_diskless_keys() {
+        let config = BrokerConfig {
+            remote_storage_backend: Some(RemoteStorageBackend::S3(
+                krabka_remote_storage::S3Config {
+                    prefix: Some(" /clusters/one/ ".to_owned()),
+                    ..krabka_remote_storage::S3Config::default()
+                },
+            )),
+            ..BrokerConfig::default()
+        };
+
+        assert!(FlushConfig::from_broker(&config).object_prefix.as_deref() == Some("clusters/one"));
     }
 }
