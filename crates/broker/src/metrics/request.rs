@@ -23,7 +23,7 @@ use {
 /// The `api_key` label every per-API family in this module shares.
 fn api_key_label(api_key: ApiKeyCode) -> ApiKeyLabel {
     ApiKeyLabel {
-        api_key: api_key_label_name(api_key).to_string(),
+        api_key: api_key_label_name(api_key),
     }
 }
 
@@ -33,7 +33,7 @@ impl BrokerMetrics {
     /// `"Unknown"`.
     pub fn record_api_request(&self, api_key: ApiKeyCode) {
         let lbl = ApiKeyLabel {
-            api_key: api_key_label_name(api_key).to_string(),
+            api_key: api_key_label_name(api_key),
         };
         self.api_requests.get_or_create(&lbl).inc();
     }
@@ -44,7 +44,7 @@ impl BrokerMetrics {
     /// `record_api_request`.
     pub fn record_unsupported_api_request(&self, api_key: ApiKeyCode) {
         let lbl = ApiKeyLabel {
-            api_key: api_key_label_name(api_key).to_string(),
+            api_key: api_key_label_name(api_key),
         };
         self.unsupported_api_requests.get_or_create(&lbl).inc();
     }
@@ -57,7 +57,7 @@ impl BrokerMetrics {
     /// per frame with the elapsed seconds of the full handler round-trip.
     pub fn observe_request_duration(&self, api_key: i16, seconds: f64) {
         let lbl = ApiKeyLabel {
-            api_key: api_key_label_name(api_key).to_string(),
+            api_key: api_key_label_name(api_key),
         };
         self.request_duration_seconds
             .get_or_create(&lbl)
@@ -211,7 +211,7 @@ impl BrokerMetrics {
     /// `unsupported_api_requests` family.
     pub fn record_request_error(&self, api_key: i16) {
         let lbl = ApiKeyLabel {
-            api_key: api_key_label_name(api_key).to_string(),
+            api_key: api_key_label_name(api_key),
         };
         self.request_errors.get_or_create(&lbl).inc();
     }
@@ -411,12 +411,8 @@ mod tests {
         m.record_unsupported_api_request(0); // Produce, unsupported
         m.record_unsupported_api_request(999); // unknown label coverage
 
-        let produce = ApiKeyLabel {
-            api_key: "Produce".into(),
-        };
-        let unknown = ApiKeyLabel {
-            api_key: "Unknown".into(),
-        };
+        let produce = ApiKeyLabel { api_key: "Produce" };
+        let unknown = ApiKeyLabel { api_key: "Unknown" };
         // `record_unsupported_api_request` does NOT also bump
         // `api_requests`; the dispatcher already did that for the
         // request in question via `record_api_request`.
@@ -453,15 +449,9 @@ mod tests {
         m.record_api_request(1); // Fetch
         m.record_api_request(12_345); // out-of-range → Unknown
 
-        let produce = ApiKeyLabel {
-            api_key: "Produce".into(),
-        };
-        let fetch = ApiKeyLabel {
-            api_key: "Fetch".into(),
-        };
-        let unknown = ApiKeyLabel {
-            api_key: "Unknown".into(),
-        };
+        let produce = ApiKeyLabel { api_key: "Produce" };
+        let fetch = ApiKeyLabel { api_key: "Fetch" };
+        let unknown = ApiKeyLabel { api_key: "Unknown" };
         for (label, want) in [(&produce, 2), (&fetch, 1), (&unknown, 1)] {
             let got = m.api_requests.get_or_create(label).get();
             assert!(got == want, "api_key {:?}", label.api_key);
@@ -482,12 +472,8 @@ mod tests {
         m.in_flight_requests.dec();
         m.active_connections.set(5);
 
-        let produce = ApiKeyLabel {
-            api_key: "Produce".into(),
-        };
-        let fetch = ApiKeyLabel {
-            api_key: "Fetch".into(),
-        };
+        let produce = ApiKeyLabel { api_key: "Produce" };
+        let fetch = ApiKeyLabel { api_key: "Fetch" };
         // Histogram Family exposes sample count via the encoded `_count`;
         // assert the render + the error/gauge values here.
         assert!(m.request_errors.get_or_create(&fetch).get() == 2);

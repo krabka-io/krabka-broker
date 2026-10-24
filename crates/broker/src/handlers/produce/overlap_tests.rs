@@ -17,6 +17,7 @@ use {
     },
     assert2::{assert, check},
     bytes::Bytes,
+    krabka_log::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord},
     krabka_protocol::{
         owned::produce_response::{PartitionProduceResponse, TopicProduceResponse},
@@ -193,6 +194,100 @@ async fn wide_request(topics: &[&str]) -> WideRequest {
         partitions,
         request,
     }
+}
+
+/// A request can have only one admitted row even when an earlier row was
+/// refused. Direct completion must retain that row's position, writer wait
+/// and acks=all gate.
+#[yare::parameterized(
+    leader_idle = { 1, false },
+    leader_busy = { 1, true },
+    all_idle = { -1, false },
+    all_busy = { -1, true },
+)]
+#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn one_admitted_partition_keeps_its_response_slot_and_ack_gate(acks: i16, busy: bool) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let image = wide_image(&["orders"]);
+    let fixture = PipelineFixture::new(krabka_ids::NodeId(1));
+    let part = fixture
+        .register_partition(dir.path(), "orders", &image)
+        .await;
+    let Request {
+        admitted,
+        mut topic_results,
+    } = admit(
+        &fixture,
+        &image,
+        &[Entry {
+            topic: "orders",
+            topic_row: 1,
+            base_sequence: 0,
+        }],
+        acks,
+    )
+    .await;
+    let refused = PartitionProduceResponse {
+        error_code: codes::TOPIC_AUTHORIZATION_FAILED,
+        base_offset: -1,
+        ..Default::default()
+    };
+    topic_results.insert(
+        0,
+        expected_rows(&["refused"], vec![refused.clone()]).remove(0),
+    );
+    let busy_guard = if busy {
+        Some(part.writer_gate.writer_busy().await)
+    } else {
+        None
+    };
+    let mut awaiting = Vec::new();
+    let (completed, ()) = tokio::join!(
+        complete_admitted(
+            admitted,
+            fixture.services(&image),
+            no_transaction(),
+            &mut topic_results,
+            &mut awaiting,
+        ),
+        async {
+            if busy {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                check!(part.log_end_offset() == Offset(0));
+            }
+            drop(busy_guard);
+        },
+    );
+    completed.expect("append");
+    check!(part.log_end_offset() == Offset(1));
+    if busy {
+        let charged = fixture
+            .metrics
+            .partition_cpu_micros
+            .get_or_create(&PartitionLabel {
+                topic: "orders".into(),
+                partition: 0,
+            })
+            .get();
+        check!(charged >= 10_000, "the writer wait is charged");
+    }
+    if acks == -1 {
+        assert2::assert!(awaiting.len() == 1);
+        let pending = awaiting.pop().unwrap();
+        assert2::assert!((pending.topic_row, pending.partition_row) == (1, 0));
+        topic_results[1].partition_responses[0] = pending
+            .ack
+            .finish(
+                std::time::Instant::now() + PATIENCE,
+                |_, _| Ok(1),
+                std::future::pending(),
+            )
+            .await;
+    }
+    assert2::assert!(awaiting.is_empty());
+    assert2::assert!(
+        topic_results == expected_rows(&["refused", "orders"], vec![refused, appended(0)])
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

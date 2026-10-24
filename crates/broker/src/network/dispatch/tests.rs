@@ -385,7 +385,7 @@ async fn unsupported_versions_close_the_connection_except_api_versions() {
     }
 
     let unknown = ApiKeyLabel {
-        api_key: UNKNOWN_LABEL.into(),
+        api_key: UNKNOWN_LABEL,
     };
     check!(metrics.api_requests.get_or_create(&unknown).get() == 1);
 }
@@ -705,9 +705,7 @@ async fn a_gated_pre_auth_request_counts_a_failed_authentication_under_its_mecha
         check!(
             metrics
                 .api_requests
-                .get_or_create(&ApiKeyLabel {
-                    api_key: "Produce".to_string(),
-                })
+                .get_or_create(&ApiKeyLabel { api_key: "Produce" })
                 .get()
                 == 0,
             "{case}"

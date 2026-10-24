@@ -267,6 +267,23 @@ pub(super) async fn verify_admitted(
     answers
 }
 
+/// Verify a single admitted partition without building the request-wide
+/// producer groups. Non-transactional batches need no coordinator allocation.
+pub(super) async fn verify_single_admitted(
+    batch: &AdmittedBatch,
+    txn_coordinator: &Arc<TxnCoordinator>,
+    image: &krabka_metadata::MetadataImage,
+    transaction: TransactionRequest<'_>,
+) -> Option<i16> {
+    let check = batch.coordinator_check()?;
+    verify_with_coordinator(txn_coordinator, image, transaction, check.producer, vec![
+        check.partition,
+    ])
+    .await
+    .into_iter()
+    .next()
+}
+
 async fn local_replica_is_ready(
     part: &Arc<Partition>,
     image: &krabka_metadata::MetadataImage,

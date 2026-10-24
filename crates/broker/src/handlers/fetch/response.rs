@@ -41,28 +41,33 @@ pub(super) struct GroupedResponses {
 pub(super) fn group_into_topic_responses(pending: Vec<PendingRead>) -> GroupedResponses {
     let mut responses: Vec<FetchableTopicResponse> = Vec::new();
     let mut cpu_micros: Vec<Vec<u64>> = Vec::new();
-    for p in pending {
-        let continues_previous = responses
-            .last()
-            .is_some_and(|topic| topic.topic_id == p.topic_id && topic.topic == p.topic_name);
-        if !continues_previous {
-            responses.push(FetchableTopicResponse {
-                topic: p.topic_name,
-                topic_id: p.topic_id,
-                partitions: Vec::new(),
-                ..Default::default()
-            });
-            cpu_micros.push(Vec::new());
+    let mut pending = pending.into_iter();
+    while let Some(first) = pending.next() {
+        // Only adjacent rows of the same topic form an entry. Counting that
+        // run before moving it avoids growing and copying both output arrays
+        // repeatedly on a fetch with many partitions.
+        let following = pending
+            .as_slice()
+            .iter()
+            .take_while(|read| {
+                read.topic_id == first.topic_id && read.topic_name == first.topic_name
+            })
+            .count();
+        let mut partitions = Vec::with_capacity(following + 1);
+        let mut micros = Vec::with_capacity(following + 1);
+        partitions.push(first.out);
+        micros.push(first.cpu_micros);
+        for read in pending.by_ref().take(following) {
+            partitions.push(read.out);
+            micros.push(read.cpu_micros);
         }
-        responses
-            .last_mut()
-            .expect("an entry was just pushed")
-            .partitions
-            .push(p.out);
-        cpu_micros
-            .last_mut()
-            .expect("an entry was just pushed")
-            .push(p.cpu_micros);
+        responses.push(FetchableTopicResponse {
+            topic: first.topic_name.to_string(),
+            topic_id: first.topic_id,
+            partitions,
+            ..Default::default()
+        });
+        cpu_micros.push(micros);
     }
     GroupedResponses {
         responses,
@@ -251,7 +256,7 @@ mod tests {
 
     fn row(topic: &str, topic_id: u8, out: PartitionData) -> PendingRead {
         PendingRead {
-            topic_name: topic.to_owned(),
+            topic_name: topic.into(),
             topic_id: WireUuid([topic_id; 16]),
             partition_index: out.partition_index,
             current_leader_epoch: -1,

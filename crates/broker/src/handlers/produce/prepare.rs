@@ -7,15 +7,16 @@ use {
     super::{
         framing::{NextBatch, PartitionPayload, V2_HEADER_LEN, next_batch},
         owned_decode::decode_owned_batch,
+        record_scan::headerless_max_timestamp,
         topic_settings::{TimestampPolicy, TimestampWindow},
     },
     crate::{codes, metrics::BrokerMetrics, partition::EncodedBatch, time_util::now_ms},
     bytes::{Bytes, BytesMut},
-    krabka_compression::RecordDecompressionPolicy,
+    krabka_compression::{CompressionType, RecordDecompressionPolicy},
     krabka_protocol::{
         owned::produce_response::BatchIndexAndErrorMessage,
         records::{
-            Attributes, CRC_COVERAGE_START, RecordBatch, RecordsError, RecordsPayload,
+            Attributes, CRC_COVERAGE_START, HEADER_LEN, RecordBatch, RecordsError, RecordsPayload,
             TimestampType, ValidatedBatch, validate_one_v2_batch,
         },
     },
@@ -334,8 +335,24 @@ pub(super) fn prepare_batch(
     let mut invalid_timestamp_records = Vec::new();
     let recomputes_max_timestamp = timestamps.recomputes_max_timestamp();
     let mut max_timestamp = RecordMaxTimestamp::default();
-    if timestamps.bounds_records() || compacted_topic || recomputes_max_timestamp {
-        let now_ms = timestamps.bounds_records().then(now_ms);
+    let record_now = timestamps.bounds_records().then(now_ms);
+    let fast_maximum = if attributes.compression() == CompressionType::None {
+        headerless_max_timestamp(
+            &bytes[HEADER_LEN..],
+            validated.header.records_count.get(),
+            header.base_timestamp,
+            |timestamp, has_key| {
+                (!compacted_topic || has_key)
+                    && record_now.is_none_or(|now| !timestamps.rejects_record(timestamp, now))
+            },
+        )
+    } else {
+        None
+    };
+    if let Some(maximum) = fast_maximum {
+        max_timestamp.observe(maximum);
+    } else if timestamps.bounds_records() || compacted_topic || recomputes_max_timestamp {
+        let now_ms = record_now;
         let mut index = 0_i32;
         validated
             .validate_records_with(policy, |record| {
