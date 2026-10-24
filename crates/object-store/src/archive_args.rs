@@ -202,7 +202,7 @@ impl ArchiveArgs {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check, clap::Parser};
+    use {super::*, crate::prefixed_key, assert2::check, clap::Parser, object_store::path::Path};
 
     #[derive(Parser, Debug)]
     struct Cli {

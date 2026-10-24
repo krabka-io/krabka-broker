@@ -197,6 +197,16 @@ fn check_orders_offsets(target: &std::path::Path, start: Offset, end: Offset) {
     check!(log.log_end_offset() == end);
 }
 
+async fn restore_and_check_full_diskless(
+    archive: &std::path::Path,
+    target: &std::path::Path,
+    capture: &std::path::Path,
+) {
+    let report = restore(&args(archive, target, capture)).await.unwrap();
+    check!(report.diskless.as_ref().unwrap().partitions[0].recovery_cutoff == 2);
+    check_orders_offsets(target, Offset(1), Offset(2));
+}
+
 /// The two test directories, the path a capture is to be written to, and the capture itself.
 struct UnwrittenFixture {
     archive: tempfile::TempDir,
@@ -236,11 +246,7 @@ async fn referenced_wal_restores_at_original_offsets_and_orphans_are_ignored() {
         capture_path,
     } = restore_fixture(true, false);
     std::fs::write(archive.path().join("orphan.ckwl"), b"uncommitted garbage").unwrap();
-    let report = restore(&args(archive.path(), target.path(), &capture_path))
-        .await
-        .unwrap();
-    check!(report.diskless.as_ref().unwrap().partitions[0].recovery_cutoff == 2);
-    check_orders_offsets(target.path(), Offset(1), Offset(2));
+    restore_and_check_full_diskless(archive.path(), target.path(), &capture_path).await;
 }
 
 #[tokio::test]
@@ -258,12 +264,7 @@ async fn a_prefixed_persisted_key_restores_without_reapplying_the_prefix() {
     capture.partitions[0].ranges[0].object_key = "clusters/one/diskless-wal/1/a.ckwl".to_owned();
     write_capture(&capture_path, &capture);
 
-    let report = restore(&args(archive.path(), target.path(), &capture_path))
-        .await
-        .unwrap();
-
-    check!(report.diskless.as_ref().unwrap().partitions[0].recovery_cutoff == 2);
-    check_orders_offsets(target.path(), Offset(1), Offset(2));
+    restore_and_check_full_diskless(archive.path(), target.path(), &capture_path).await;
 }
 
 #[tokio::test]
