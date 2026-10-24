@@ -9,83 +9,52 @@
 //! `max.message.bytes` alone, and so is a record that the producer sent
 //! uncompressed however large it is.
 //!
-//! krabka has already decompressed the batch by the time this runs
-//! ([`super::prepare::prepare_batch`] parses every record of it under the
-//! broker-wide `RecordDecompressionPolicy`), so the check is not an allocation
-//! guard here. It is the limit the operator set, answered the way Kafka
-//! answers it. A verbatim batch is walked a second time to read the record
-//! sizes; that second decompression is paid only by a compressed batch on a
-//! topic whose limit is below Kafka's default, which is a limit an operator
-//! chose on purpose. ponytail: threading the limit into
-//! `ValidatedBatch::validate_records_with` would make it one pass, at the cost
-//! of a change in krabka-protocol.
+//! krabka parses every record of a batch under the broker-wide
+//! `RecordDecompressionPolicy` anyway, so the check is not an allocation guard
+//! here. It is the limit the operator set, answered the way Kafka answers it.
+//! [`super::prepare::prepare_batch_within`] applies it in the walk that
+//! validates the records, so a verbatim batch is CRC-checked and decompressed
+//! once, and it answers only once every other check of that function passed.
 
 use {
-    super::prepare::{PreparedBatch, PreparedSource},
     crate::{api_catalog::UnstableApiVersions, config_keys::resolve_max_decompressed_record_bytes},
-    krabka_compression::{CompressionType, RecordDecompressionPolicy},
-    krabka_protocol::records::validate_one_v2_batch,
+    krabka_metadata::{MetadataImage, NodeId},
 };
 
-/// Whether `prepared` breaks the topic's `max.decompressed.message.bytes`,
-/// which `(image, node, topic)` resolve: a compressed batch with a record whose
-/// body is larger. Kafka 4.3.1 has no such limit, so a broker not serving
-/// trunk's keys (`unstable`) never refuses on it, and the lookup is skipped for
-/// a batch the producer did not compress.
-pub(super) fn exceeds_decompressed_limit(
-    prepared: &PreparedBatch,
-    image: &krabka_metadata::MetadataImage,
-    node: krabka_metadata::NodeId,
+/// The topic's `max.decompressed.message.bytes`, which `(image, node, topic)`
+/// resolve, or `None` when nothing limits a record. Kafka 4.3.1 has no such
+/// limit, so a broker not serving trunk's keys (`unstable`) never refuses on
+/// it and skips the lookup.
+pub(super) fn decompressed_record_limit(
+    image: &MetadataImage,
+    node: NodeId,
     topic: &str,
     unstable: UnstableApiVersions,
-    policy: RecordDecompressionPolicy,
-) -> bool {
-    unstable == UnstableApiVersions::Enabled
-        && prepared.attributes.compression() != CompressionType::None
-        && resolve_max_decompressed_record_bytes(image, node, topic)
-            .is_some_and(|limit| has_oversized_record(prepared, limit, policy))
+) -> Option<usize> {
+    if unstable == UnstableApiVersions::Enabled {
+        resolve_max_decompressed_record_bytes(image, node, topic)
+    } else {
+        None
+    }
 }
 
-/// Whether `prepared` is a compressed batch with a record whose body is larger
-/// than `limit` bytes.
-///
-/// A batch the producer did not compress never has one: Kafka's iterator reads
-/// it in place and bounds it by `max.message.bytes` alone. `policy` is the
-/// decompression bound the verbatim walk runs under; a batch that fails it
-/// here already failed [`super::prepare::prepare_batch`], so a failure reads as
-/// "not oversized" and leaves the verdict to the paths that own it.
-fn has_oversized_record(
-    prepared: &PreparedBatch,
-    limit: usize,
-    policy: RecordDecompressionPolicy,
-) -> bool {
-    if prepared.attributes.compression() == CompressionType::None {
-        return false;
-    }
-    match &prepared.source {
-        PreparedSource::Owned(batch) => {
-            batch.records.iter().any(|record| record.body_len() > limit)
-        }
-        PreparedSource::Verbatim(bytes) => {
-            let Ok(batch) = validate_one_v2_batch(bytes) else {
-                return false;
-            };
-            let mut oversized = false;
-            let walked = batch.validate_records_with(policy, |record| {
-                oversized |= record.body_len() > limit;
-            });
-            walked.is_ok() && oversized
-        }
-    }
-}
+/// Whether a record whose body is `body_len` bytes breaks `limit`: Kafka
+/// refuses a body strictly larger than the limit.
+pub(super) fn exceeds_record_limit(body_len: usize, limit: usize) -> bool { body_len > limit }
 
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
-        assert2::check,
-        bytes::BytesMut,
-        krabka_protocol::records::{Attributes, RecordBatch},
+        super::super::{
+            framing::PartitionPayload,
+            prepare::{DecodeEnv, prepare_batch_within},
+            test_support::encode_batch,
+            topic_settings::TimestampPolicy,
+        },
+        crate::{codes, metrics::BrokerMetrics},
+        krabka_compression::{CompressionType, RecordDecompressionPolicy},
+        krabka_protocol::records::{Attributes, Record, RecordBatch},
+        std::{cell::Cell, sync::Arc},
     };
 
     krabka_macros::record_limit_fixture!(record);
@@ -101,56 +70,102 @@ mod tests {
         }
     }
 
-    fn prepared(batch: &RecordBatch, verbatim: bool) -> PreparedBatch {
-        let source = if verbatim {
-            let mut buf = BytesMut::new();
-            batch.encode(&mut buf).expect("encode");
-            PreparedSource::Verbatim(buf.freeze())
-        } else {
-            PreparedSource::Owned(batch.clone())
-        };
-        PreparedBatch {
-            source,
-            encoded: None,
-            attributes: batch.attributes,
-            producer_id: -1,
-            producer_epoch: -1,
-            base_sequence: -1,
-            last_offset_delta: 0,
-            max_timestamp: 0,
-            keyless_records: Vec::new(),
-            invalid_timestamp_records: Vec::new(),
-        }
+    /// What [`prepare_batch_within`] answers for `wire` under `limit`, and how
+    /// many times it asked for the limit. `topic_compression` other than the
+    /// batch's own codec sends the batch down the owned path.
+    fn prepare(
+        wire: &RecordBatch,
+        topic_compression: Option<CompressionType>,
+        version: i16,
+        limit: Option<usize>,
+    ) -> (Result<(), i16>, usize) {
+        let metrics = BrokerMetrics::new();
+        let topic: Arc<str> = Arc::from("t");
+        let lookups = Cell::new(0);
+        let answer = prepare_batch_within(
+            PartitionPayload::Slice(encode_batch(wire)),
+            topic_compression,
+            TimestampPolicy::default(),
+            false,
+            DecodeEnv {
+                topic_name: &topic,
+                metrics: &metrics,
+                policy: RecordDecompressionPolicy::default(),
+            },
+            version,
+            || {
+                lookups.set(lookups.get() + 1);
+                limit
+            },
+        );
+        (answer.map(|_| ()), lookups.get())
     }
 
     /// The limit refuses a compressed record above it, on the verbatim and the
-    /// owned path alike, and never an uncompressed one.
+    /// owned path alike, and never an uncompressed one, whose path does not
+    /// even look the limit up.
+    ///
+    /// The record body is 114 bytes with a 100-byte value: its attributes
+    /// byte, a two-byte timestamp delta, a one-byte offset delta, `1 + 3` bytes
+    /// of key, `2 + 100` of value, a one-byte header count, and one header of
+    /// `1 + 1` bytes of key with a null value. A limit of 114 admits it and 113
+    /// refuses it.
     #[yare::parameterized(
-        gzip_verbatim_below_limit = { CompressionType::Gzip, true, 113, true },
-        gzip_verbatim_at_limit = { CompressionType::Gzip, true, 114, false },
-        gzip_owned_below_limit = { CompressionType::Gzip, false, 113, true },
-        gzip_owned_at_limit = { CompressionType::Gzip, false, 114, false },
-        zstd_verbatim_below_limit = { CompressionType::Zstd, true, 50, true },
-        uncompressed_verbatim = { CompressionType::None, true, 50, false },
-        uncompressed_owned = { CompressionType::None, false, 50, false },
+        gzip_verbatim_below_limit = { CompressionType::Gzip, None, Some(113), Err(codes::INVALID_RECORD), 1 },
+        gzip_verbatim_at_limit = { CompressionType::Gzip, None, Some(114), Ok(()), 1 },
+        gzip_verbatim_no_limit = { CompressionType::Gzip, None, None, Ok(()), 1 },
+        gzip_owned_below_limit = { CompressionType::Gzip, Some(CompressionType::Zstd), Some(113), Err(codes::INVALID_RECORD), 1 },
+        gzip_owned_at_limit = { CompressionType::Gzip, Some(CompressionType::Zstd), Some(114), Ok(()), 1 },
+        zstd_verbatim_below_limit = { CompressionType::Zstd, None, Some(50), Err(codes::INVALID_RECORD), 1 },
+        uncompressed_verbatim = { CompressionType::None, None, Some(50), Ok(()), 0 },
+        uncompressed_owned = { CompressionType::None, Some(CompressionType::Gzip), Some(50), Ok(()), 0 },
     )]
     fn only_a_compressed_batch_is_held_to_the_limit(
         codec: CompressionType,
-        verbatim: bool,
-        limit: usize,
-        expected: bool,
+        topic_compression: Option<CompressionType>,
+        limit: Option<usize>,
+        expected: Result<(), i16>,
+        expected_lookups: usize,
     ) {
-        // The record body is 114 bytes with a 100-byte value: its attributes
-        // byte, a two-byte timestamp delta, a one-byte offset delta, `1 + 3`
-        // bytes of key, `2 + 100` of value, a one-byte header count, and one
-        // header of `1 + 1` bytes of key with a null value. Its encoding is
-        // that behind a two-byte length prefix, so a limit of 114 admits it and
-        // 113 refuses it.
-        let policy = RecordDecompressionPolicy::default();
-        check!(
-            has_oversized_record(&prepared(&batch(codec, 100), verbatim), limit, policy)
-                == expected,
-            "{codec:?} verbatim={verbatim} limit={limit}"
-        );
+        let found = prepare(&batch(codec, 100), topic_compression, 13, limit);
+        assert2::assert!(found == (expected, expected_lookups));
+    }
+
+    /// A batch the other checks refuse keeps their code: the limit answers
+    /// last, as it did when it ran after `prepare_batch`.
+    #[yare::parameterized(
+        zstd_before_first_zstd_version = { CompressionType::Zstd, None, 6, Err(codes::UNSUPPORTED_COMPRESSION_TYPE), 0 },
+        zstd_owned_before_first_zstd_version = { CompressionType::Zstd, Some(CompressionType::Gzip), 6, Err(codes::UNSUPPORTED_COMPRESSION_TYPE), 0 },
+    )]
+    fn other_refusals_come_before_the_limit(
+        codec: CompressionType,
+        topic_compression: Option<CompressionType>,
+        version: i16,
+        expected: Result<(), i16>,
+        expected_lookups: usize,
+    ) {
+        let found = prepare(&batch(codec, 100), topic_compression, version, Some(1));
+        assert2::assert!(found == (expected, expected_lookups));
+    }
+
+    /// A refused record anywhere in a batch refuses it, after the records
+    /// before and after it parsed.
+    #[test]
+    fn a_later_oversized_record_refuses_the_batch() {
+        let wire = RecordBatch {
+            attributes: Attributes::default().with_compression(CompressionType::Lz4),
+            last_offset_delta: 2,
+            records: [1, 100, 1]
+                .into_iter()
+                .zip(0..)
+                .map(|(value_len, offset_delta)| Record {
+                    offset_delta,
+                    ..record(value_len)
+                })
+                .collect(),
+            ..Default::default()
+        };
+        assert2::assert!(prepare(&wire, None, 13, Some(113)) == (Err(codes::INVALID_RECORD), 1));
+        assert2::assert!(prepare(&wire, None, 13, Some(114)) == (Ok(()), 1));
     }
 }

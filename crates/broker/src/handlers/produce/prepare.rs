@@ -7,7 +7,8 @@ use {
     super::{
         framing::{NextBatch, PartitionPayload, V2_HEADER_LEN, next_batch},
         owned_decode::decode_owned_batch,
-        record_scan::headerless_max_timestamp,
+        record_limit::exceeds_record_limit,
+        record_scan::uncompressed_max_timestamp,
         topic_settings::{TimestampPolicy, TimestampWindow},
     },
     crate::{codes, metrics::BrokerMetrics, partition::EncodedBatch, time_util::now_ms},
@@ -16,8 +17,8 @@ use {
     krabka_protocol::{
         owned::produce_response::BatchIndexAndErrorMessage,
         records::{
-            Attributes, CRC_COVERAGE_START, HEADER_LEN, RecordBatch, RecordsError, RecordsPayload,
-            TimestampType, ValidatedBatch, validate_one_v2_batch,
+            Attributes, CRC_COVERAGE_START, HEADER_LEN, Record, RecordBatch, RecordsError,
+            RecordsPayload, TimestampType, ValidatedBatch, validate_one_v2_batch,
         },
     },
     krabka_verified::produce::{ProduceBatchAdmission, produce_batch_admission},
@@ -272,6 +273,72 @@ pub(super) fn prepare_batch(
     env: DecodeEnv<'_>,
     version: i16,
 ) -> Result<PreparedBatch, i16> {
+    prepare_batch_within(
+        payload,
+        topic_compression,
+        timestamps,
+        compacted_topic,
+        env,
+        version,
+        || None,
+    )
+}
+
+/// [`prepare_batch`] held to Kafka trunk's `max.decompressed.message.bytes`:
+/// a batch the producer compressed is `INVALID_RECORD` when one of its records
+/// has a body larger than the limit `record_limit` resolves.
+///
+/// The check rides the walk that validates the records, so a verbatim batch
+/// is CRC-checked and decompressed once. It answers only after that walk and
+/// every other check here has passed, so a batch they refuse keeps their
+/// code. `record_limit` is called only for a compressed batch, at most once,
+/// and `None` means no limit. See [`super::record_limit`].
+pub(super) fn prepare_batch_within(
+    payload: PartitionPayload,
+    topic_compression: Option<krabka_compression::CompressionType>,
+    timestamps: TimestampPolicy,
+    compacted_topic: bool,
+    env: DecodeEnv<'_>,
+    version: i16,
+    record_limit: impl Fn() -> Option<usize>,
+) -> Result<PreparedBatch, i16> {
+    let prepared = prepare_source(
+        payload,
+        topic_compression,
+        timestamps,
+        compacted_topic,
+        env,
+        version,
+        &record_limit,
+    )?;
+    // The verbatim walk applied the limit already; an owned batch holds its
+    // records decoded.
+    if let PreparedSource::Owned(batch) = &prepared.source
+        && prepared.attributes.compression() != CompressionType::None
+        && record_limit().is_some_and(|limit| {
+            batch
+                .records
+                .iter()
+                .map(Record::body_len)
+                .any(|body_len| exceeds_record_limit(body_len, limit))
+        })
+    {
+        return Err(codes::INVALID_RECORD);
+    }
+    Ok(prepared)
+}
+
+/// The body of [`prepare_batch_within`]: every check but the record limit on
+/// an owned batch.
+fn prepare_source(
+    payload: PartitionPayload,
+    topic_compression: Option<krabka_compression::CompressionType>,
+    timestamps: TimestampPolicy,
+    compacted_topic: bool,
+    env: DecodeEnv<'_>,
+    version: i16,
+    record_limit: &impl Fn() -> Option<usize>,
+) -> Result<PreparedBatch, i16> {
     let DecodeEnv {
         topic_name,
         metrics,
@@ -336,8 +403,13 @@ pub(super) fn prepare_batch(
     let recomputes_max_timestamp = timestamps.recomputes_max_timestamp();
     let mut max_timestamp = RecordMaxTimestamp::default();
     let record_now = timestamps.bounds_records().then(now_ms);
-    let fast_maximum = if attributes.compression() == CompressionType::None {
-        headerless_max_timestamp(
+    let compressed = attributes.compression() != CompressionType::None;
+    let record_limit = if compressed { record_limit() } else { None };
+    let mut oversized = false;
+    let fast_maximum = if compressed {
+        None
+    } else {
+        uncompressed_max_timestamp(
             &bytes[HEADER_LEN..],
             validated.header.records_count.get(),
             header.base_timestamp,
@@ -346,16 +418,21 @@ pub(super) fn prepare_batch(
                     && record_now.is_none_or(|now| !timestamps.rejects_record(timestamp, now))
             },
         )
-    } else {
-        None
     };
     if let Some(maximum) = fast_maximum {
         max_timestamp.observe(maximum);
-    } else if timestamps.bounds_records() || compacted_topic || recomputes_max_timestamp {
+    } else if timestamps.bounds_records()
+        || compacted_topic
+        || recomputes_max_timestamp
+        || record_limit.is_some()
+    {
         let now_ms = record_now;
         let mut index = 0_i32;
         validated
             .validate_records_with(policy, |record| {
+                if let Some(limit) = record_limit {
+                    oversized |= exceeds_record_limit(record.body_len(), limit);
+                }
                 let timestamp = record_timestamp(header.base_timestamp, record.timestamp_delta);
                 max_timestamp.observe(timestamp);
                 // Kafka's `LogValidator.validateRecord` checks the key first
@@ -380,6 +457,9 @@ pub(super) fn prepare_batch(
         validated
             .validate_records(policy)
             .map_err(|_| codes::INVALID_RECORD)?;
+    }
+    if oversized {
+        return Err(codes::INVALID_RECORD);
     }
     let (header, bytes) = if recomputes_max_timestamp && max_timestamp.0 != header.max_timestamp {
         (
