@@ -74,7 +74,7 @@ yare = { workspace = true }
 # criterion under another name, the same pin `krabka-log` and `krabka-broker`
 # use. `ci.yml`'s `bench` job executes this suite beside `krabka-broker`'s
 # six and `krabka-log`'s one, nightly and on demand.
-criterion = { version = "5.0.2", package = "codspeed-criterion-compat" }
+criterion = { version = "6.0.0", package = "codspeed-criterion-compat" }
 
 [[bench]]
 name = "remote_epoch_index"
