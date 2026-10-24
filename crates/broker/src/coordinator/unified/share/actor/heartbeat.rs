@@ -331,7 +331,7 @@ mod tests {
             metadata,
             log,
             StreamsGroupConfig::default(),
-        ));
+        )?);
         let handle = coord.get_or_create_share("g");
         assert_single_member_limit(
             &handle,

@@ -341,22 +341,25 @@ mod tests {
         use crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog;
 
         let metadata: Arc<dyn MetadataProvider> = Arc::new(ImageMetadatalessProvider);
-        let coord = Arc::new(GroupCoordinator::new(
-            NextGenConfig {
-                actor_mailbox_capacity: 3,
-                ..NextGenConfig::default()
-            },
-            ShareGroupConfig {
-                actor_mailbox_capacity: 5,
-                ..ShareGroupConfig::default()
-            },
-            metadata,
-            Arc::new(InMemoryOffsetsLog::default()),
-            StreamsGroupConfig {
-                actor_mailbox_capacity: 7,
-                ..StreamsGroupConfig::default()
-            },
-        ));
+        let coord = Arc::new(
+            GroupCoordinator::new(
+                NextGenConfig {
+                    actor_mailbox_capacity: 3,
+                    ..NextGenConfig::default()
+                },
+                ShareGroupConfig {
+                    actor_mailbox_capacity: 5,
+                    ..ShareGroupConfig::default()
+                },
+                metadata,
+                Arc::new(InMemoryOffsetsLog::default()),
+                StreamsGroupConfig {
+                    actor_mailbox_capacity: 7,
+                    ..StreamsGroupConfig::default()
+                },
+            )
+            .expect("valid test assignor configuration"),
+        );
 
         assert!(coord.get_or_create_classic("classic").tx.max_capacity() == 3);
         assert!(coord.get_or_create_share("share").tx.max_capacity() == 5);

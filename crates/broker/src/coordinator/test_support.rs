@@ -193,13 +193,16 @@ pub(crate) fn coordinator_with_config(
     metadata: Arc<dyn MetadataProvider>,
     offsets_log: Arc<dyn OffsetsLog>,
 ) -> Arc<GroupCoordinator> {
-    Arc::new(GroupCoordinator::new(
-        config,
-        ShareGroupConfig::default(),
-        metadata,
-        offsets_log,
-        StreamsGroupConfig::default(),
-    ))
+    Arc::new(
+        GroupCoordinator::new(
+            config,
+            ShareGroupConfig::default(),
+            metadata,
+            offsets_log,
+            StreamsGroupConfig::default(),
+        )
+        .expect("valid test assignor configuration"),
+    )
 }
 
 /// A nontransactional offset record with the ordinary unversioned fixture fields.

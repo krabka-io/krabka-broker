@@ -396,13 +396,16 @@ fn coordinator_image() -> MetadataImage {
 
 /// A coordinator with an in-memory offsets log, so a commit costs no disk.
 fn coordinator(metadata: Arc<dyn MetadataSource>) -> Arc<GroupCoordinator> {
-    Arc::new(GroupCoordinator::new(
-        NextGenConfig::default(),
-        ShareGroupConfig::default(),
-        Arc::new(ImageMetadataProvider::new(metadata)),
-        Arc::new(InMemoryOffsetsLog::default()),
-        StreamsGroupConfig::default(),
-    ))
+    Arc::new(
+        GroupCoordinator::new(
+            NextGenConfig::default(),
+            ShareGroupConfig::default(),
+            Arc::new(ImageMetadataProvider::new(metadata)),
+            Arc::new(InMemoryOffsetsLog::default()),
+            StreamsGroupConfig::default(),
+        )
+        .expect("valid test assignor configuration"),
+    )
 }
 
 /// A poller wired to a local-only cluster: every partition it samples is led
