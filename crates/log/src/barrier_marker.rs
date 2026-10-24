@@ -84,7 +84,11 @@ mod tests {
 
         let mut value = Vec::with_capacity(20 + group.len());
         value.extend_from_slice(&0i16.to_be_bytes());
-        value.extend_from_slice(&(group.len() as i16).to_be_bytes());
+        value.extend_from_slice(
+            &i16::try_from(group.len())
+                .expect("test group length fits marker")
+                .to_be_bytes(),
+        );
         value.extend_from_slice(group.as_bytes());
         value.extend_from_slice(&epoch.to_be_bytes());
         value.extend_from_slice(&triggered_at.to_be_bytes());

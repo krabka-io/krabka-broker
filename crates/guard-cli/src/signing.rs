@@ -77,6 +77,7 @@ pub struct FreezeSigningInput<'a> {
 }
 
 /// Project the signed values from a described freeze returned by the broker.
+#[must_use]
 pub fn freeze_signing_input<'a>(
     cluster_id: &'a str,
     entry: &'a DescribedTopicFreeze,

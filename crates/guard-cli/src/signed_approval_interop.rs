@@ -3,6 +3,7 @@
 
 use {
     crate::{cli::Cli, command::dispatch},
+    assert2::assert,
     clap::Parser as _,
     krabka_broker::{
         Broker, BrokerConfig,
@@ -53,9 +54,9 @@ async fn client(bootstrap: SocketAddr, username: &str) -> Client {
         .expect("authenticated client connects")
 }
 
-async fn cli(client: &Client, args: &[&str]) -> i32 {
+async fn cli(client: &Client, command_args: &[&str]) -> i32 {
     let mut argv = vec!["krabka-guard", "--bootstrap-server", "test-client"];
-    argv.extend_from_slice(args);
+    argv.extend_from_slice(command_args);
     let parsed = Cli::try_parse_from(argv).expect("test CLI arguments parse");
     dispatch(client, parsed.command)
         .await
@@ -75,7 +76,7 @@ async fn signed_approval_interoperates_and_rejects_self_approval_and_tampering()
         protocol: ListenerProtocol::SaslPlaintext,
         tls_config: None,
         sasl_mechanisms: Some(vec![SaslMechanism::Plain]),
-        principal_mapper: Default::default(),
+        principal_mapper: krabka_broker::SslPrincipalMapper::default(),
     }];
     config.inter_broker_listener_name = "SASL_PLAINTEXT".to_owned();
     config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
@@ -102,7 +103,7 @@ async fn signed_approval_interoperates_and_rejects_self_approval_and_tampering()
     let alice = client(bootstrap, "alice").await;
     let bob = client(bootstrap, "bob").await;
 
-    assert_eq!(
+    assert!(
         cli(&alice, &[
             "break-glass",
             "propose",
@@ -115,8 +116,8 @@ async fn signed_approval_interoperates_and_rejects_self_approval_and_tampering()
             "--ttl",
             "30m",
         ],)
-        .await,
-        0,
+        .await
+            == 0
     );
     let described = alice
         .send(DescribeBreakGlassRequest::default())
@@ -142,7 +143,7 @@ async fn signed_approval_interoperates_and_rejects_self_approval_and_tampering()
         "--key-id",
         "bob-yubi",
     ];
-    assert_eq!(cli(&alice, &self_approval).await, crate::EXIT_REFUSED);
+    assert!(cli(&alice, &self_approval).await == crate::EXIT_REFUSED);
 
     let tampered = [
         "break-glass",
@@ -154,7 +155,7 @@ async fn signed_approval_interoperates_and_rejects_self_approval_and_tampering()
         "--key-id",
         "bob-yubi",
     ];
-    assert_eq!(cli(&bob, &tampered).await, crate::EXIT_BAD_SIGNATURE);
+    assert!(cli(&bob, &tampered).await == crate::EXIT_BAD_SIGNATURE);
 
     let successful = [
         "break-glass",
@@ -166,5 +167,5 @@ async fn signed_approval_interoperates_and_rejects_self_approval_and_tampering()
         "--key-id",
         "bob-yubi",
     ];
-    assert_eq!(cli(&bob, &successful).await, 0);
+    assert!(cli(&bob, &successful).await == 0);
 }
