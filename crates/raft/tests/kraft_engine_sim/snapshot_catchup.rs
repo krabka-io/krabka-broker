@@ -260,16 +260,18 @@ async fn follower_that_pruned_independently_redirects_a_lagging_fetch_to_the_lea
     // follower's HWM advance on its applied Fetch response checkpoints and
     // prunes exactly as the leader's does, with the leader never touched.
     let follower_ctrl = net.get(follower).unwrap();
-    await_until(Duration::from_secs(10), || {
-        (follower_ctrl.quorum_snapshot().log_start_offset > 0).then_some(())
+    let follower_dir = dirs[&follower].path().to_path_buf();
+    // Checkpoint installation precedes retention cleanup on the engine task.
+    let names = await_until(Duration::from_secs(10), || {
+        let names = checkpoint_names(&follower_dir);
+        (follower_ctrl.quorum_snapshot().log_start_offset > 0 && (1..=2).contains(&names.len()))
+            .then_some(names)
     })
     .await;
     // Retention keeps the latest checkpoint and the one before it (#365), so a
-    // node that has rolled at least once holds two and never more. Names are
+    // node that has rolled holds at most two after cleanup. Names are
     // fixed-width and zero-padded, so the greatest name is the latest id, and
     // that is the one a Fetch below the log start points at.
-    let follower_dir = dirs[&follower].path().to_path_buf();
-    let names = checkpoint_names(&follower_dir);
     assert2::assert!((1..=2).contains(&names.len()), "{names:?}");
     let latest = names.last().expect("a checkpoint exists").clone();
 

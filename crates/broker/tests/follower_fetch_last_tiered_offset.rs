@@ -46,16 +46,17 @@ use {
             offsets::{list_offset_partition, single_partition_list_offsets},
             tiered::produce_records,
             topic_id_for,
-            topics::{assigned_topic, create_topic_request_with_setup, topic_configs},
         },
     },
     assert2::{assert, check},
     krabka_broker::{BrokerHandle, metrics::PartitionLabel},
+    krabka_client_admin::{AdminClient, CreateTopicSpec, TopicMutationOptions},
     krabka_client_core::Client,
     krabka_protocol::owned::alter_partition_reassignments_request::{
         AlterPartitionReassignmentsRequest, ReassignablePartition, ReassignableTopic,
     },
     std::{
+        collections::BTreeMap,
         path::Path,
         time::{Duration, Instant},
     },
@@ -131,31 +132,25 @@ fn sealed_bytes(partition_dir: &Path) -> u64 {
 }
 
 /// Creates `topic` on broker 1 alone, tiered, with partial local retention.
-async fn create_tiered_topic(admin: &Client, leader: &BrokerHandle, topic: &str) {
+async fn create_tiered_topic(admin: &mut AdminClient, leader: &BrokerHandle, topic: &str) {
     let response = admin
-        .send(
-            create_topic_request_with_setup()
-                .topic(
-                    krabka_protocol::owned::create_topics_request::CreatableTopic {
-                        configs: topic_configs([
-                            ("remote.storage.enable", "true"),
-                            ("local.retention.bytes", LOCAL_RETENTION_BYTES),
-                            ("retention.bytes", "-1"),
-                            ("retention.ms", "-1"),
-                        ]),
-                        ..assigned_topic()
-                            .name(topic.into())
-                            .replicas(vec![krabka_metadata::NodeId(1)])
-                            .call()
-                    },
-                )
-                .timeout(10_000)
-                .call(),
+        .create_topics(
+            &[CreateTopicSpec::builder()
+                .name(topic)
+                .configs(BTreeMap::from([
+                    ("remote.storage.enable".into(), "true".into()),
+                    ("local.retention.bytes".into(), LOCAL_RETENTION_BYTES.into()),
+                    ("retention.bytes".into(), "-1".into()),
+                    ("retention.ms".into(), "-1".into()),
+                ]))
+                .replica_assignments(BTreeMap::from([(0, vec![1])]))
+                .build()],
+            TopicMutationOptions::with_timeout(krabka_units::secs(10)),
         )
         .await
         .expect("CreateTopics");
     assert!(
-        response.topics[0].error_code == 0,
+        response[0].error.is_none(),
         "CreateTopics failed: {response:?}"
     );
     leader
@@ -326,6 +321,9 @@ async fn a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag() {
     })
     .await;
     let admin = ready_admin([&b1, &b2, &b3], "kip1023-admin").await;
+    let mut topic_admin = AdminClient::connect(&[b1.listen_addr().to_string()])
+        .await
+        .expect("topic admin client");
     let new_replica_client = connect_owned(
         &format!("127.0.0.1:{}", b3.listen_addr().port()),
         "kip1023-new-replica",
@@ -336,7 +334,7 @@ async fn a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag() {
     // Every partition is archived before the first replica joins, so the
     // cases share one wait for the copy pass.
     for case in &CASES {
-        create_tiered_topic(&admin, &b1, case.topic).await;
+        create_tiered_topic(&mut topic_admin, &b1, case.topic).await;
         let topic_id = topic_id_for(&admin, case.topic).await;
         produce_records()
             .client(&admin)
@@ -417,6 +415,7 @@ async fn a_new_replica_starts_at_the_last_tiered_offset_only_with_the_flag() {
     }
 
     drop(admin);
+    drop(topic_admin);
     drop(new_replica_client);
     drop(controller);
     b1.shutdown().await;
