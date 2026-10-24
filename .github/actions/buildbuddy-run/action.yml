@@ -133,6 +133,10 @@ runs:
         SNAPSHOT_SAVE: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'none-available' || 'always' }}
         REMOTE_PRELUDE: |
           set -euo pipefail
+          # The VM's /tmp is size-limited; test logs need the workspace disk.
+          TMPDIR="$(mktemp -d "${PWD}/../krabka-ci-tmp.XXXXXX")"
+          export TMPDIR
+          trap 'rm -rf -- "${TMPDIR}"' EXIT
           {
             echo "build:rbe --remote_executor=grpcs://remote.buildbuddy.io"
             echo "build:rbe --extra_execution_platforms=//bazel:rbe_linux_x86_64"

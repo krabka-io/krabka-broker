@@ -31,7 +31,7 @@ use {
         time::{Duration, Instant},
     },
     tempfile::TempDir,
-    tokio::net::TcpListener,
+    tokio::net::{TcpListener, TcpSocket, TcpStream},
 };
 
 mod support;
@@ -236,10 +236,18 @@ async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_serv
         nodes.next().expect("node 1"),
         nodes.next().expect("node 2"),
     );
+    // Reserve the stopped controller's port without accepting connections.
+    let pending_controller = TcpSocket::new_v4().expect("controller socket");
+    pending_controller
+        .bind("127.0.0.1:0".parse().unwrap())
+        .expect("reserve controller port");
+    second.controller_addr = pending_controller.local_addr().expect("controller address");
     let (first_controller, second_controller) = (first.controller_addr, second.controller_addr);
     // Every node names both controllers, as the system test does, while 3002
     // is not running yet: its port refuses, and it is in its own list.
     drop(second.controller.take());
+    assert!(TcpListener::bind(second_controller).await.is_err());
+    assert!(TcpStream::connect(second_controller).await.is_err());
     let bootstrap = [first_controller, second_controller];
 
     // The standalone controller is the whole voter set and elects itself.
@@ -273,6 +281,11 @@ async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_serv
 
     // A controller formatted to join no initial quorum observes it.
     let log_dir = format(&second, &["--no-initial-controllers"]).await;
+    second.controller = Some(
+        pending_controller
+            .listen(1024)
+            .expect("controller listener"),
+    );
     let StartedNode {
         handle: second,
         dir: second_dir,
