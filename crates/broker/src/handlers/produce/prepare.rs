@@ -265,6 +265,10 @@ impl PreparedBatch {
 /// [`decode_owned_batch`] up-converts the legacy v0-2 payloads.
 ///
 /// The function returns the response error *code* on a bad field.
+///
+/// The produce pipeline calls [`prepare_batch_within`]; this form, with no
+/// record limit, serves the tests and the `hot_path` benchmark seam.
+#[cfg(any(test, feature = "test-helpers"))]
 pub(super) fn prepare_batch(
     payload: PartitionPayload,
     topic_compression: Option<krabka_compression::CompressionType>,

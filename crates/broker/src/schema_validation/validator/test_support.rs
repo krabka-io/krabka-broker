@@ -9,7 +9,9 @@
 use {
     super::{RejectReason, SchemaValidator, UNAVAILABLE_TTL_MS},
     crate::{metrics::BrokerMetrics, schema_validation::ValidationMode},
-    krabka_units::{minutes, secs},
+    krabka_units::{Time, minutes, secs},
+    qubit_clock::ManualMonotonicClock,
+    std::{sync::Arc, time::SystemTime},
     wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
@@ -124,6 +126,27 @@ pub(super) fn configured_validator(
 
 pub(super) fn validator(url: String) -> SchemaValidator {
     configured_validator(url, false).expect("validator")
+}
+
+/// A validator and the manual timeline that drives its clock.
+pub(super) struct ClockedValidator {
+    pub(super) timeline: Arc<ManualMonotonicClock>,
+    pub(super) validator: SchemaValidator,
+}
+
+/// A validator whose cache entries expire after `expire_after` on a manual
+/// timeline, so a test moves past a TTL by advancing the timeline rather
+/// than racing a real sleep.
+pub(super) fn clocked_validator(url: String, expire_after: Time) -> ClockedValidator {
+    let timeline = ManualMonotonicClock::new_shared();
+    let clock = timeline.new_wall_clock(SystemTime::now());
+    let validator =
+        SchemaValidator::with_clock(url, false, 100, expire_after, secs(5), None, clock)
+            .expect("validator");
+    ClockedValidator {
+        timeline,
+        validator,
+    }
 }
 
 pub(super) async fn status_registry(status: u16) -> MockServer {

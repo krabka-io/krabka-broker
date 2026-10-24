@@ -158,16 +158,12 @@ mod tests {
     use {
         super::*,
         crate::schema_validation::validator::test_support::{
-            KNOWN_ID, configured_validator, framed, no_metrics, registry, response_endpoint,
-            status_registry, validator, value_check,
+            ClockedValidator, KNOWN_ID, clocked_validator, configured_validator, framed,
+            no_metrics, registry, response_endpoint, status_registry, validator, value_check,
         },
         assert2::{assert, check},
-        krabka_units::{millis, secs},
-        qubit_clock::ManualMonotonicClock,
-        std::{
-            sync::Arc,
-            time::{Duration, SystemTime},
-        },
+        krabka_units::millis,
+        std::{sync::Arc, time::Duration},
         wiremock::{Mock, MockServer, ResponseTemplate, matchers::method},
     };
 
@@ -460,6 +456,22 @@ mod tests {
         .compilations()
     }
 
+    /// Check a matching and a mismatched record three times each: every
+    /// answer must repeat the first, and the schema must compile only once.
+    async fn checks_compile_once(v: &SchemaValidator, matching: &[u8], mismatched: &[u8]) {
+        let mut rejections = Vec::new();
+        for _ in 0..3 {
+            let accepted = value_check(v, ValidationMode::Full, matching).await;
+            check!(accepted.is_ok(), "{accepted:?}");
+            assert!(let Err(reason) = value_check(v, ValidationMode::Full, mismatched).await);
+            check!(reason.label() == "body_mismatch", "{reason}");
+            rejections.push(reason);
+        }
+
+        check!(rejections.windows(2).all(|pair| pair[0] == pair[1]));
+        check!(compilations(v).await == 1);
+    }
+
     #[tokio::test]
     async fn a_schema_is_compiled_once_for_every_record_that_names_it() {
         let server = registry(1).await;
@@ -468,17 +480,7 @@ mod tests {
         let matching = framed(KNOWN_ID, &[0x02, b'a']);
         let mismatched = framed(KNOWN_ID, &[0xFF; 6]);
 
-        let mut rejections = Vec::new();
-        for _ in 0..3 {
-            let accepted = value_check(&v, ValidationMode::Full, &matching).await;
-            check!(accepted.is_ok(), "{accepted:?}");
-            assert!(let Err(reason) = value_check(&v, ValidationMode::Full, &mismatched).await);
-            check!(reason.label() == "body_mismatch", "{reason}");
-            rejections.push(reason);
-        }
-
-        check!(rejections.windows(2).all(|pair| pair[0] == pair[1]));
-        check!(compilations(&v).await == 1);
+        checks_compile_once(&v, &matching, &mismatched).await;
     }
 
     #[tokio::test]
@@ -513,17 +515,7 @@ mod tests {
         // Field number 0 is illegal in every protobuf message.
         let mismatched = framed(KNOWN_ID, &[0x00, 0x00, 0x01]);
 
-        let mut rejections = Vec::new();
-        for _ in 0..3 {
-            let accepted = value_check(&v, ValidationMode::Full, &matching).await;
-            check!(accepted.is_ok(), "{accepted:?}");
-            assert!(let Err(reason) = value_check(&v, ValidationMode::Full, &mismatched).await);
-            check!(reason.label() == "body_mismatch", "{reason}");
-            rejections.push(reason);
-        }
-
-        check!(rejections.windows(2).all(|pair| pair[0] == pair[1]));
-        check!(compilations(&v).await == 1);
+        checks_compile_once(&v, &matching, &mismatched).await;
     }
 
     #[tokio::test]
@@ -531,11 +523,10 @@ mod tests {
         // Two registry answers, one per TTL, and one compile for each: the
         // compiled form lives and dies with the cache entry that holds it.
         let server = registry(2).await;
-        let timeline = ManualMonotonicClock::new_shared();
-        let clock = timeline.new_wall_clock(SystemTime::now());
-        let v =
-            SchemaValidator::with_clock(server.uri(), false, 100, millis(10), secs(5), None, clock)
-                .expect("validator");
+        let ClockedValidator {
+            timeline,
+            validator: v,
+        } = clocked_validator(server.uri(), millis(10));
         let field = framed(KNOWN_ID, &[0x02, b'a']);
 
         check!(value_check(&v, ValidationMode::Full, &field).await.is_ok());

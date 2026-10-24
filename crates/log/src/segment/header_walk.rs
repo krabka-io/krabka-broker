@@ -371,22 +371,13 @@ mod tests {
             DEFAULT_INDEX_INTERVAL,
             bytes(u32::try_from(4 * window).unwrap()),
         ] {
-            let dir = tempdir().unwrap();
-            let mut seg = Segment::create(dir.path(), Offset(10)).unwrap();
-            let mut positions = Vec::new();
-            for batch in 0..count {
-                positions.push(seg.log_size);
-                let base = 10 + 3 * i64::try_from(batch).unwrap();
-                seg.append(
-                    &sample_batch()
-                        .offset(base)
-                        .records(3)
-                        .timestamp(1_000)
-                        .call(),
-                    interval,
-                )
-                .unwrap();
-            }
+            let (
+                TempSegment {
+                    dir: _dir,
+                    segment: seg,
+                },
+                positions,
+            ) = three_record_segment(count, interval, false);
             for batch in [
                 0,
                 1,
@@ -493,6 +484,18 @@ mod tests {
         count: usize,
         interval: krabka_units::prelude::ByteSize,
     ) -> (TempSegment, Vec<u64>) {
+        three_record_segment(count, interval, true)
+    }
+
+    /// A segment of `count` three-record batches from offset 10, and the
+    /// position of each batch. Uniform batches share one timestamp and the
+    /// sample payload; varied ones step the timestamp and grow the first
+    /// record's value, so batch boundaries fall at varied places in a window.
+    fn three_record_segment(
+        count: usize,
+        interval: krabka_units::prelude::ByteSize,
+        varied: bool,
+    ) -> (TempSegment, Vec<u64>) {
         use bytes::Bytes;
 
         let dir = tempdir().unwrap();
@@ -500,12 +503,19 @@ mod tests {
         let mut positions = Vec::new();
         for batch in 0..count {
             positions.push(seg.log_size);
+            let step = if varied {
+                i64::try_from(batch).unwrap()
+            } else {
+                0
+            };
             let mut sample = sample_batch()
                 .offset(10 + 3 * i64::try_from(batch).unwrap())
                 .records(3)
-                .timestamp(1_000 + i64::try_from(batch).unwrap())
+                .timestamp(1_000 + step)
                 .call();
-            sample.records[0].value = Some(Bytes::from(vec![b'x'; batch % 97]));
+            if varied {
+                sample.records[0].value = Some(Bytes::from(vec![b'x'; batch % 97]));
+            }
             seg.append(&sample, interval).unwrap();
         }
         (TempSegment { dir, segment: seg }, positions)

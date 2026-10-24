@@ -281,37 +281,18 @@ mod tests {
     use {
         super::*,
         crate::schema_validation::validator::test_support::{
-            KNOWN_ID, framed, no_metrics, registry, response_endpoint, unavailable_ttl_ms,
-            validator, value_check,
+            ClockedValidator, KNOWN_ID, clocked_validator, framed, no_metrics, registry,
+            response_endpoint, unavailable_ttl_ms, validator, value_check,
         },
         assert2::{assert, check},
         krabka_schema_serde::subject::Role,
-        krabka_units::{millis, minutes, secs},
-        qubit_clock::ManualMonotonicClock,
-        std::time::{Duration, SystemTime},
+        krabka_units::{millis, minutes},
+        std::time::Duration,
         wiremock::{
             Mock, MockServer, ResponseTemplate,
             matchers::{method, path},
         },
     };
-
-    /// A validator and the manual timeline that drives its clock.
-    struct ClockedValidator {
-        timeline: Arc<ManualMonotonicClock>,
-        validator: SchemaValidator,
-    }
-
-    fn clocked_validator(uri: String) -> ClockedValidator {
-        let timeline = ManualMonotonicClock::new_shared();
-        let clock = timeline.new_wall_clock(SystemTime::now());
-        let validator =
-            SchemaValidator::with_clock(uri, false, 100, minutes(5), secs(5), None, clock)
-                .expect("validator");
-        ClockedValidator {
-            timeline,
-            validator,
-        }
-    }
 
     #[tokio::test]
     async fn an_unregistered_id_is_rejected_and_the_rejection_is_cached() {
@@ -351,11 +332,10 @@ mod tests {
     async fn a_cache_entry_expires_on_its_ttl() {
         // Two calls: one before the TTL passes and one after.
         let server = registry(2).await;
-        let timeline = ManualMonotonicClock::new_shared();
-        let clock = timeline.new_wall_clock(SystemTime::now());
-        let v =
-            SchemaValidator::with_clock(server.uri(), false, 100, millis(10), secs(5), None, clock)
-                .expect("validator");
+        let ClockedValidator {
+            timeline,
+            validator: v,
+        } = clocked_validator(server.uri(), millis(10));
         let field = framed(KNOWN_ID, b"anything");
 
         check!(value_check(&v, ValidationMode::Id, &field).await.is_ok());
@@ -445,7 +425,7 @@ mod tests {
         let ClockedValidator {
             timeline,
             validator: v,
-        } = clocked_validator(server.uri());
+        } = clocked_validator(server.uri(), minutes(5));
         let field = framed(KNOWN_ID, b"anything");
 
         let got = value_check(&v, ValidationMode::Id, &field).await;
@@ -476,7 +456,7 @@ mod tests {
         let ClockedValidator {
             timeline,
             validator: v,
-        } = clocked_validator(server.uri());
+        } = clocked_validator(server.uri(), minutes(5));
         let field = framed(KNOWN_ID, b"anything");
 
         for _ in 0..2 {
