@@ -370,13 +370,12 @@ jobs:
     # "Free space left: 0 MB" from the runner itself, which is also why the
     # job's log could not be uploaded afterwards.
     #
-    # `line-tables-only` keeps what a failing test needs -- a backtrace with
-    # file and line -- and drops the type and variable descriptions that make
-    # up the bulk of the bytes. It applies to this job only, so local builds
-    # and every other lane keep full debug info, and it changes nothing about
-    # which tests run or what they assert.
+    # Even line tables filled the 100 GB remote disk once test fixtures ran.
+    # Omit debug info in this lane to leave room for their logs. Debug
+    # assertions, overflow checks and test selection keep their defaults.
+    # Local builds and other lanes keep their existing debug info.
     env:
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - name: Keep temporary files off the size-limited /tmp tmpfs
         run: echo "TMPDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
@@ -411,7 +410,7 @@ jobs:
           # clears a target directory that the snapshot has let grow.
           disk: 100GB
           env: |
-            CARGO_PROFILE_DEV_DEBUG=line-tables-only
+            CARGO_PROFILE_DEV_DEBUG=0
             CARGO_INCREMENTAL=0
             RUN_NEXTEST=${{ env.TRUSTED_RUN }}
           script: |
