@@ -98,6 +98,7 @@ pub(crate) async fn run(
     let mut reclaimer = Reclaimer::new(
         context.index_log.clone(),
         Arc::clone(&context.object_store),
+        config.object_prefix.clone(),
         RECLAIM_GRACE,
     );
     tokio::select! {
@@ -250,6 +251,7 @@ mod tests {
         Reclaimer::new(
             context.index_log.clone(),
             Arc::clone(&context.object_store),
+            None,
             grace,
         )
     }
@@ -580,7 +582,7 @@ mod tests {
                 .unwrap();
             wait_for_object(&cache, topic_id, key).await;
         }
-        let mut reclaimer = Reclaimer::new(index, Arc::clone(&store), Duration::from_mins(1));
+        let mut reclaimer = Reclaimer::new(index, Arc::clone(&store), None, Duration::from_mins(1));
         let observed = Instant::now();
         reclaimer.sweep_at(observed).await;
         assert!(
@@ -606,6 +608,42 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn reclaimer_only_sweeps_its_configured_cloud_prefix() {
+        let store = Arc::new(InMemory::new());
+        for key in [
+            "clusters/one/diskless-wal/7/unreferenced.ckwl",
+            "clusters/two/diskless-wal/8/live.ckwl",
+        ] {
+            store
+                .put(&Path::from(key), PutPayload::from_static(b"object"))
+                .await
+                .unwrap();
+        }
+        let index = test_index_log().await;
+        let mut reclaimer = Reclaimer::new(
+            index,
+            store.clone(),
+            Some("clusters/one".to_owned()),
+            Duration::ZERO,
+        );
+
+        reclaimer.sweep().await;
+
+        assert!(
+            store
+                .head(&Path::from("clusters/one/diskless-wal/7/unreferenced.ckwl"))
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .head(&Path::from("clusters/two/diskless-wal/8/live.ckwl"))
+                .await
+                .is_ok()
+        );
+    }
+
     struct StoredReclaimer {
         index: DisklessIndexLog,
         cache: Arc<tokio::sync::Mutex<WalIndexCache>>,
@@ -625,7 +663,7 @@ mod tests {
         index: &DisklessIndexLog,
         store: &Arc<dyn ObjectStore>,
     ) -> tokio::task::JoinHandle<()> {
-        let mut reclaimer = Reclaimer::new(index.clone(), Arc::clone(store), Duration::ZERO);
+        let mut reclaimer = Reclaimer::new(index.clone(), Arc::clone(store), None, Duration::ZERO);
         tokio::spawn(async move { reclaimer.sweep().await })
     }
 
@@ -723,7 +761,7 @@ mod tests {
         .tombstone_deleted_topics(&image)
         .await
         .unwrap();
-        Reclaimer::new(index, Arc::clone(&store), Duration::ZERO)
+        Reclaimer::new(index, Arc::clone(&store), None, Duration::ZERO)
             .sweep()
             .await;
 

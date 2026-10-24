@@ -152,7 +152,7 @@ The group coordinator writes a `__consumer_offsets` group record only where Kafk
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | Tiered segment | KIP-405 layout | Kafka segment, index and checkpoint files | Kafka's | Kafka's rules | Kafka's rules |
 | WORM manifest | `<segment>.manifest` | krabka JSON, and a canonical big-endian layout that the chain hashes | `format_version` 2 | A version other than 2 is refused. | None. The writer always writes 2. |
-| Diskless WAL object | WAL object key | krabka binary, magic `CKWL` | `OBJECT_VERSION` 1, `u16` little-endian | A version other than 1 is refused. | None |
+| Diskless WAL object | Absolute WAL object key, including the configured bucket prefix for new cloud objects | krabka binary, magic `CKWL` | `OBJECT_VERSION` 1, `u16` little-endian | A version other than 1 is refused. Existing unprefixed keys remain readable as recorded. | None |
 | Backup capture manifest | `restore-inputs/<capture-id>/manifest.json` | krabka JSON | `version` 0 | A missing or other version is refused. | None |
 | Captured metadata checkpoint | `restore-inputs/<capture-id>/cluster-metadata.checkpoint` | Kafka KIP-630 | As the metadata snapshot | As the metadata snapshot | As the metadata snapshot |
 | Captured RLMM snapshot | `restore-inputs/<capture-id>/rlmm-snapshot` | As the RLMM snapshot | As the RLMM snapshot | As the RLMM snapshot | None |
