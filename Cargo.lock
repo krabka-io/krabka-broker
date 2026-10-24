@@ -3534,6 +3534,8 @@ dependencies = [
  "prometheus-client",
  "proptest",
  "prost 0.14.4",
+ "prost-reflect",
+ "protox-parse",
  "qubit-clock",
  "rcgen",
  "refined_type",

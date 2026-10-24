@@ -30,6 +30,7 @@ use {
 
 mod cache;
 mod check;
+mod compiled;
 mod references;
 mod reject;
 #[cfg(test)]

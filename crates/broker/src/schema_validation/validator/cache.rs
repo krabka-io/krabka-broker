@@ -6,9 +6,12 @@
 //! keeping the two apart means the caching policy, including the shorter TTL
 //! for a registry that could not answer, reads in one place.
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use {
     super::{
         SchemaValidator, UNAVAILABLE_TTL_MS,
+        compiled::CompiledSchema,
         references::{MAX_REFERENCE_BYTES, ReferenceSources, reference_sources_ordered},
         reject::RejectReason,
     },
@@ -18,12 +21,15 @@ use {
     qubit_clock::WallClock as _,
     std::{
         collections::{HashMap, HashSet},
-        sync::Arc,
+        sync::{Arc, OnceLock},
     },
 };
 
 /// What the registry said about one schema id.
-#[derive(Debug, Clone)]
+///
+/// Cached behind an [`Arc`], so a cache hit shares the entry rather than
+/// copying its subject set once per record.
+#[derive(Debug)]
 pub(super) struct SchemaEntry {
     /// Every subject this id is registered under. The subject check is a
     /// membership test against this set.
@@ -34,12 +40,73 @@ pub(super) struct SchemaEntry {
     pub(super) body: Option<Arc<SchemaBody>>,
 }
 
-#[derive(Debug, Clone)]
+/// A schema's text, its references and, once a `Full` check has needed it,
+/// the compiled form of the three.
+///
+/// The text never changes for the life of the cache entry that holds it, so
+/// the compiled form is built once, on first use, and shared by every later
+/// check. It is dropped with the entry, so a TTL expiry or an LRU eviction
+/// recompiles from the registry's fresh answer.
+#[derive(derive_more::Debug)]
 pub(super) struct SchemaBody {
     pub(super) kind: SchemaKind,
     pub(super) schema: String,
     pub(super) references: HashMap<String, String>,
     pub(super) reference_order: Vec<String>,
+    #[debug(skip)]
+    compiled: OnceLock<CompiledSchema>,
+    /// How many times `compiled` was built. A test seam: the assertion that
+    /// a schema is compiled once per entry and not once per record.
+    #[cfg(test)]
+    #[debug(skip)]
+    compilations: AtomicUsize,
+}
+
+impl SchemaBody {
+    pub(super) fn new(
+        kind: SchemaKind,
+        schema: String,
+        references: HashMap<String, String>,
+        reference_order: Vec<String>,
+    ) -> Self {
+        Self {
+            kind,
+            schema,
+            references,
+            reference_order,
+            compiled: OnceLock::new(),
+            #[cfg(test)]
+            compilations: AtomicUsize::new(0),
+        }
+    }
+
+    /// Check `body` against this schema, compiling it on the first call.
+    ///
+    /// # Errors
+    ///
+    /// As the per-format check: a [`SchemaSerdeError::Schema`] for a schema
+    /// that does not compile, and a [`SchemaSerdeError::Deserialize`] for a
+    /// body that is not an instance of it.
+    pub(super) fn validate(
+        &self,
+        message_index: &[i32],
+        body: &[u8],
+    ) -> Result<(), SchemaSerdeError> {
+        let compiled = self.compiled.get_or_init(|| {
+            #[cfg(test)]
+            self.compilations.fetch_add(1, Ordering::Relaxed);
+            CompiledSchema::compile(
+                self.kind,
+                &self.schema,
+                &self.references,
+                &self.reference_order,
+            )
+        });
+        compiled.validate(message_index, body)
+    }
+
+    #[cfg(test)]
+    pub(super) fn compilations(&self) -> usize { self.compilations.load(Ordering::Relaxed) }
 }
 
 /// One cached answer, positive or negative, with the instant it goes stale.
@@ -47,7 +114,7 @@ pub(super) struct SchemaBody {
 pub(super) struct Cached {
     /// `Err` is a negative cache entry: the id is not registered, or the
     /// registry could not say. Both are worth remembering for the TTL.
-    entry: Result<SchemaEntry, RejectReason>,
+    entry: Result<Arc<SchemaEntry>, RejectReason>,
     expires_at_ms: i64,
 }
 
@@ -62,7 +129,7 @@ impl SchemaValidator {
         subject: &str,
         mode: ValidationMode,
         metrics: &BrokerMetrics,
-    ) -> Result<SchemaEntry, RejectReason> {
+    ) -> Result<Arc<SchemaEntry>, RejectReason> {
         let now = time_util::epoch_millis(self.clock.now());
         // Expired entries are not evicted eagerly; the read just declines
         // them. Lazy eviction is good enough at LRU capacities in the tens of
@@ -105,7 +172,8 @@ impl SchemaValidator {
                     "schema registry operation exceeded {:?}",
                     self.operation_timeout
                 )))
-            });
+            })
+            .map(Arc::new);
         // A registry that could not answer is remembered only briefly, so the
         // next produce re-asks instead of inheriting a stale outage. Bounded by
         // `expire_after` so a shorter configured TTL still wins.
@@ -168,12 +236,12 @@ impl SchemaValidator {
             )
             .await
             .map_err(|e| Self::fetch_error(id, &e))?;
-            Some(Arc::new(SchemaBody {
-                kind: fetched.kind,
-                schema: fetched.schema,
+            Some(Arc::new(SchemaBody::new(
+                fetched.kind,
+                fetched.schema,
                 references,
                 reference_order,
-            }))
+            )))
         } else {
             None
         };
@@ -338,12 +406,14 @@ mod tests {
             .await
             .expect("first lookup")
             .body
+            .clone()
             .expect("full lookup has a body");
         let second = v
             .entry(KNOWN_ID, "orders-value", ValidationMode::Full, &metrics)
             .await
             .expect("cached lookup")
             .body
+            .clone()
             .expect("cached full lookup has a body");
 
         check!(Arc::ptr_eq(&first, &second));
