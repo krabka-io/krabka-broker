@@ -7,8 +7,8 @@
 //! two with [`tokio::task::block_in_place`] and a captured runtime
 //! [`tokio::runtime::Handle`]. That is acceptable for a tail authorization
 //! check, which takes under a millisecond on a cache hit and low double-digit
-//! milliseconds on a miss. A cache miss on a single-threaded
-//! runtime would deadlock, but the broker is multi-thread.
+//! milliseconds on a miss. Cache misses require a multi-thread runtime;
+//! unsupported calling contexts follow `allow_on_error` instead of panicking.
 //!
 //! Cache semantics: the authorizer caches decisions on BOTH success and error.
 //! Negative caching is deliberate. Under `allow_on_error = false` an
@@ -90,10 +90,9 @@ pub struct OpaAuthorizer {
 }
 
 impl OpaAuthorizer {
-    /// Build a new OPA authorizer. The caller MUST call this from inside a
-    /// tokio runtime, because the constructor captures the current `Handle`
-    /// to drive async HTTP from the synchronous [`Authorizer::authorize`]
-    /// entry point.
+    /// Build a new OPA authorizer. The caller must use a multi-thread Tokio
+    /// runtime both here and when invoking [`Authorizer::authorize`] on a
+    /// cache miss. Unsupported runtimes are rejected or follow `allow_on_error`.
     ///
     /// # Errors
     ///
@@ -103,6 +102,8 @@ impl OpaAuthorizer {
     /// * [`OpaConfigError::InvalidCacheTtl`] if the cache TTL is not positive.
     /// * [`OpaConfigError::NoTokioRuntime`] if no tokio runtime is
     ///   active on the current thread.
+    /// * [`OpaConfigError::UnsupportedRuntime`] if the active runtime is
+    ///   single-threaded.
     pub fn new(
         super_users: HashSet<String>,
         url: String,
@@ -152,6 +153,9 @@ impl OpaAuthorizer {
         let cache = Mutex::new(LruCache::new(capacity));
         let runtime =
             tokio::runtime::Handle::try_current().map_err(|_| OpaConfigError::NoTokioRuntime)?;
+        if runtime.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
+            return Err(OpaConfigError::UnsupportedRuntime);
+        }
         Ok(Self {
             super_users,
             http_client,
@@ -232,6 +236,11 @@ impl Authorizer for OpaAuthorizer {
         // 3. Sync→async bridge. `block_in_place` releases the current
         //    worker for other tasks; the captured runtime drives the
         //    HTTP call on its own threads.
+        if !tokio::runtime::Handle::try_current().is_ok_and(|runtime| {
+            runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+        }) {
+            return self.error_decision();
+        }
         let decision = tokio::task::block_in_place(|| self.runtime.block_on(self.call_opa(req)));
         // 4. Cache the decision — both successes AND errors. Negative
         //    caching keeps OPA outages from amplifying broker load;
@@ -279,4 +288,7 @@ pub enum OpaConfigError {
     /// `authorize`.
     #[error("OPA authorizer requires an active tokio runtime")]
     NoTokioRuntime,
+    /// A current-thread Tokio runtime cannot safely drive the synchronous-to-async bridge.
+    #[error("OPA authorizer requires a multi-thread tokio runtime")]
+    UnsupportedRuntime,
 }

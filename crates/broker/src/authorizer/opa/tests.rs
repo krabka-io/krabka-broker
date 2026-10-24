@@ -68,6 +68,50 @@ fn authorizer(super_users: HashSet<String>, url: String, allow_on_error: bool) -
     OpaAuthorizer::new(super_users, url, allow_on_error, 100, minutes(1), secs(5)).unwrap()
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn current_thread_runtime_rejects_authorizer_construction() {
+    let result = OpaAuthorizer::new(
+        HashSet::new(),
+        "http://localhost/v1/data/kafka/authz/allow".into(),
+        false,
+        100,
+        minutes(1),
+        secs(5),
+    );
+    assert!(matches!(result, Err(OpaConfigError::UnsupportedRuntime)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn current_thread_invocation_follows_configured_error_policy_without_panicking() {
+    let mock = MockServer::start().await;
+    mount_decision()
+        .mock(&mock)
+        .allow(true)
+        .expected_calls(0)
+        .call()
+        .await;
+    for (allow_on_error, expected) in [
+        (false, AuthorizationResult::Deny),
+        (true, AuthorizationResult::Allow),
+    ] {
+        let auth = authorizer(HashSet::new(), opa_url(&mock), allow_on_error);
+        let result = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async move {
+                    let principal = test_principal("alice");
+                    let host = host();
+                    auth.authorize(&img(), &req(&principal, &host, "t"))
+                })
+        })
+        .join()
+        .expect("current-thread invocation must not panic");
+        assert!(result == expected);
+    }
+}
+
 struct RequestFixture {
     image: MetadataImage,
     principal: Principal,
