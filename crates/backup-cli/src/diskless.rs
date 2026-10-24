@@ -300,6 +300,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn capture_preserves_prefixed_and_legacy_absolute_object_keys() {
+        let index = InProcessMetadataEventLog::new(1);
+        publish_flush(&index, "diskless-wal/1/legacy.ckwl", entry(0, 0)).await;
+        publish_flush(
+            &index,
+            "clusters/one/diskless-wal/1/current.ckwl",
+            entry(1, 1),
+        )
+        .await;
+        let log = ScriptedLog::new(index, Fault::None);
+
+        let capture = capture_projection_within(&log, &orders(), 5, CAPTURE_TIMEOUT)
+            .await
+            .unwrap();
+
+        assert!(
+            capture.partitions[0]
+                .ranges
+                .iter()
+                .map(|range| range.object_key.as_str())
+                .collect::<Vec<_>>()
+                == [
+                    "diskless-wal/1/legacy.ckwl",
+                    "clusters/one/diskless-wal/1/current.ckwl",
+                ]
+        );
+    }
+
+    #[tokio::test]
     async fn a_record_that_does_not_project_stops_the_read_where_it_is() {
         let index = InProcessMetadataEventLog::new(1);
         publish_flush(&index, "diskless-wal/1/a.ckwl", entry(0, 3)).await;

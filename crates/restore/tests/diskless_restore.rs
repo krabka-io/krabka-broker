@@ -244,6 +244,29 @@ async fn referenced_wal_restores_at_original_offsets_and_orphans_are_ignored() {
 }
 
 #[tokio::test]
+async fn a_prefixed_persisted_key_restores_without_reapplying_the_prefix() {
+    let UnwrittenFixture {
+        archive,
+        target,
+        capture_path,
+        mut capture,
+    } = unwritten_fixture(true, false);
+    let old_path = archive.path().join("diskless-wal/1/a.ckwl");
+    let new_path = archive.path().join("clusters/one/diskless-wal/1/a.ckwl");
+    std::fs::create_dir_all(new_path.parent().unwrap()).unwrap();
+    std::fs::rename(old_path, &new_path).unwrap();
+    capture.partitions[0].ranges[0].object_key = "clusters/one/diskless-wal/1/a.ckwl".to_owned();
+    write_capture(&capture_path, &capture);
+
+    let report = restore(&args(archive.path(), target.path(), &capture_path))
+        .await
+        .unwrap();
+
+    check!(report.diskless.as_ref().unwrap().partitions[0].recovery_cutoff == 2);
+    check_orders_offsets(target.path(), Offset(1), Offset(2));
+}
+
+#[tokio::test]
 async fn diskless_restore_rejects_an_offset_bound_below_the_delete_floor() {
     let RestoreFixture {
         archive,

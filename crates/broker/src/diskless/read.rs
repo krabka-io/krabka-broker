@@ -733,6 +733,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cold_reads_use_persisted_prefixed_and_legacy_object_keys_verbatim() {
+        for object_key in [
+            "diskless-wal/7/legacy.ckwl",
+            "clusters/one/diskless-wal/7/current.ckwl",
+        ] {
+            let topic_id = Uuid::from_u128(941);
+            let encoded = encode_batches(&[batch(0, b"persisted")]);
+            let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+            store
+                .put(&Path::from(object_key), PutPayload::from(encoded.clone()))
+                .await
+                .unwrap();
+            let mut cache = WalIndexCache::default();
+            cache.apply(&WalFlushRecord {
+                object_key: object_key.to_owned(),
+                format_version: WalFlushRecord::FORMAT_VERSION,
+                entries: vec![WalIndexEntry {
+                    topic_id,
+                    partition: 0,
+                    first_offset: 0,
+                    last_offset: 0,
+                    byte_start: 0,
+                    byte_len: u32::try_from(encoded.len()).unwrap(),
+                    max_timestamp_ms: 0,
+                }],
+            });
+            let handle = DisklessReadHandle::new(Arc::new(AsyncMutex::new(cache)), store);
+
+            assert!(
+                handle
+                    .read_records(topic_id, 0, 0, usize::MAX)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    == encoded,
+                "object key {object_key}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn max_bytes_and_store_failure_map_the_whole_fetch_partition() {
         let dir = tempfile::tempdir().unwrap();
         let object_dir = tempfile::tempdir().unwrap();

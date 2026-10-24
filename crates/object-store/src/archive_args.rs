@@ -13,7 +13,6 @@
 use {
     crate::{GcsConfig, ObjectStoreConfig, S3Config, normalize_prefix},
     clap::{ArgGroup, Args},
-    object_store::path::Path,
     std::path::PathBuf,
 };
 
