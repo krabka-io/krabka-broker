@@ -201,10 +201,14 @@ impl FetchSessionCache {
 mod tests {
     use {
         super::*,
-        crate::fetch_session::test_support::{
-            AllocatedCache, ManualCache, NAME_FETCH_VERSION, RequestSessionId, SessionRequestSetup,
-            SessionSlotCount, TICK, TopicAddressing, allocate_session, allocated_cache, error_code,
-            forgotten_topic, manual_cache, req, seed_resolved_partition, session_key, topic,
+        crate::fetch_session::{
+            RECENTLY_FORGOTTEN_CAP, RECENTLY_FORGOTTEN_TTL,
+            test_support::{
+                AllocatedCache, ManualCache, NAME_FETCH_VERSION, RequestSessionId,
+                SessionRequestSetup, SessionSlotCount, TICK, TopicAddressing, allocate_session,
+                allocated_cache, error_code, forgotten_topic, manual_cache, req,
+                seed_resolved_partition, session_key, topic,
+            },
         },
         assert2::{assert, check},
         krabka_protocol::{
@@ -723,7 +727,7 @@ mod tests {
         // Forgotten once more, then left alone past the TTL.
         assert!(forgotten_of(&forgets_one(4)).len() == 1);
         clock
-            .advance(crate::fetch_session::RECENTLY_FORGOTTEN_TTL + TICK)
+            .advance(RECENTLY_FORGOTTEN_TTL + TICK)
             .expect("advance the manual clock");
         assert!(forgotten_of(&names_nothing(5)).is_empty());
     }
@@ -733,7 +737,7 @@ mod tests {
     #[test]
     fn a_session_remembers_at_most_the_newest_forgotten_partitions() {
         let cache = FetchSessionCache::new(10);
-        let cap = i32::try_from(crate::fetch_session::RECENTLY_FORGOTTEN_CAP).unwrap();
+        let cap = i32::try_from(RECENTLY_FORGOTTEN_CAP).unwrap();
         let initial: Vec<_> = (0..=cap + 1)
             .map(|p| {
                 (

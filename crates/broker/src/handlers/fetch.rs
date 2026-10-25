@@ -80,13 +80,17 @@ use {
         broker::Broker,
         codes::CLUSTER_AUTHORIZATION_FAILED,
         error::BrokerError,
-        fetch_session::INVALID_SESSION_ID,
-        handlers::{ApiKeyCode, RequestContext},
+        fetch_session::{FetchSessionKey, INVALID_SESSION_ID},
+        handlers::{ApiKeyCode, RequestContext, requested_topic_name},
         metrics::RequestPhases,
         network::fetch_writer::records_to_serve,
+        partition::Partition,
         quota::ActiveClock,
         wal::quorum::wire::{KIP_595_FETCH_VERSION, decode_fetch_request},
     },
+    krabka_ids::PartitionIndex,
+    krabka_metadata::MetadataImage,
+    std::sync::Arc,
 };
 
 /// This handler's own wire api key, for the `api_key` label the request-phase
@@ -420,21 +424,19 @@ pub(crate) async fn handle(
 /// out over buffered records.
 fn forgotten_partition_wakes(
     broker: &Broker,
-    image: &krabka_metadata::MetadataImage,
+    image: &MetadataImage,
     req: &FetchRequest,
     is_follower_fetch: bool,
-    forgotten: &[crate::fetch_session::FetchSessionKey],
-) -> Vec<std::sync::Arc<crate::partition::Partition>> {
+    forgotten: &[FetchSessionKey],
+) -> Vec<Arc<Partition>> {
     if is_follower_fetch || req.min_bytes > 1 || req.max_wait_ms <= 0 {
         return Vec::new();
     }
     forgotten
         .iter()
         .filter_map(|key| {
-            let name = crate::handlers::requested_topic_name(image, &key.topic_name, key.topic_id);
-            broker
-                .partitions
-                .get(&name, krabka_ids::PartitionIndex(key.partition))
+            let name = requested_topic_name(image, &key.topic_name, key.topic_id);
+            broker.partitions.get(&name, PartitionIndex(key.partition))
         })
         .collect()
 }
