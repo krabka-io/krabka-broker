@@ -26,7 +26,7 @@ pub enum IngestionError {
 /// Who pushed a payload: the client's own identifiers, and the authenticated
 /// principal of its connection, which the client cannot choose.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PushSource<'a> {
+pub struct PushSource<'a> {
     pub instance: Uuid,
     pub client_id: &'a str,
     pub principal: &'a Principal,
@@ -81,10 +81,10 @@ impl ClientMetrics {
                     IngestionError::InvalidRecord
                 }
             })?;
-        let md = decoded.insert(MetricsData::decode(&raw[..]).map_err(|error| {
+        let md = MetricsData::decode(&raw[..]).map_err(|error| {
             tracing::debug!(error = %error, "client-metrics OTLP decode failed");
             IngestionError::InvalidRecord
-        })?);
+        })?;
         if !md
             .resource_metrics
             .iter()
@@ -96,14 +96,16 @@ impl ClientMetrics {
                     .any(|prefix| prefix == ALL_METRICS || metric.name.starts_with(prefix))
             })
         {
+            *decoded = Some(md);
             return Err(IngestionError::InvalidRecord);
         }
         let instance = instance.to_string();
-        let points = flatten_for_prometheus(md, &instance, client_id)
-            .map_err(|()| IngestionError::InvalidRecord)?;
+        let Ok(points) = flatten_for_prometheus(&md, &instance, client_id) else {
+            *decoded = Some(md);
+            return Err(IngestionError::InvalidRecord);
+        };
         self.prometheus
             .ingest(&principal.to_kafka().to_string(), &points);
-        let md = decoded.take().expect("decoded above");
         self.otlp.forward(md, &instance);
         Ok(())
     }

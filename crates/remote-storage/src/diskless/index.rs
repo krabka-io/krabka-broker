@@ -133,7 +133,9 @@ pub struct WalDeleteFloorKey {
 }
 
 /// Reserved delete-floor partition used to protect an uploaded object until
-/// its range records are committed. Its key/value remain readable by 1.x
+/// its range records are committed.
+///
+/// Its key/value remain readable by 1.x
 /// brokers: older readers project it as floor zero on a negative partition,
 /// which no data partition can address.
 pub const WAL_OBJECT_RESERVATION_PARTITION: i32 = i32::MIN;

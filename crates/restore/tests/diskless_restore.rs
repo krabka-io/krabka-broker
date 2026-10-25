@@ -198,11 +198,7 @@ fn check_orders_offsets(target: &Path, start: Offset, end: Offset) {
     check!(log.log_end_offset() == end);
 }
 
-async fn restore_and_check_full_diskless(
-    archive: &std::path::Path,
-    target: &std::path::Path,
-    capture: &std::path::Path,
-) {
+async fn restore_and_check_full_diskless(archive: &Path, target: &Path, capture: &Path) {
     let report = restore(&args(archive, target, capture)).await.unwrap();
     check!(report.diskless.as_ref().unwrap().partitions[0].recovery_cutoff == 2);
     check_orders_offsets(target, Offset(1), Offset(2));

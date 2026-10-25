@@ -127,7 +127,7 @@ async fn finalize_unstable_level(
         .submit_change(level)
         .await
         .expect("finalize the unstable level");
-    let at_level = std::fs::read(metadata_partition_dir(dir.path()).join("high-watermark"))
+    let at_level = fs::read(metadata_partition_dir(dir.path()).join("high-watermark"))
         .expect("read the high watermark the level committed under");
     if !then.is_empty() {
         controller
@@ -254,10 +254,10 @@ async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
     let high_watermark_path = metadata_dir.join("high-watermark");
     match high_watermark {
         // Version 0 of the file: the version, then the offset.
-        HighWatermarkFile::AtLogStart => std::fs::write(&high_watermark_path, "0\n0\n").unwrap(),
-        HighWatermarkFile::Missing => std::fs::remove_file(&high_watermark_path).unwrap(),
+        HighWatermarkFile::AtLogStart => fs::write(&high_watermark_path, "0\n0\n").unwrap(),
+        HighWatermarkFile::Missing => fs::remove_file(&high_watermark_path).unwrap(),
         HighWatermarkFile::BelowASupersedingLevel => {
-            std::fs::write(&high_watermark_path, at_level).unwrap();
+            fs::write(&high_watermark_path, at_level).unwrap();
         }
     }
     let before = protected_metadata_files(&metadata_dir);

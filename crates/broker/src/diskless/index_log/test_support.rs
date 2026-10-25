@@ -82,7 +82,7 @@ impl MetadataEventLog for PacedReplayLog {
 /// the projection has started: what its subscription delivers, as a broker
 /// whose index fetch loop wedges does, or the replay fences published on it,
 /// as a broker whose Produce to an index partition hangs does.
-pub(crate) struct StallableLog {
+pub struct StallableLog {
     inner: Arc<dyn MetadataEventLog>,
     delivery_stalled: Arc<AtomicBool>,
     fences_stalled: AtomicBool,
@@ -117,7 +117,7 @@ impl MetadataEventLog for StallableLog {
             let stalled = Arc::clone(&stalled);
             async move {
                 if stalled.load(Ordering::SeqCst) {
-                    std::future::pending::<()>().await;
+                    future::pending::<()>().await;
                 }
                 event
             }
@@ -132,7 +132,7 @@ impl MetadataEventLog for StallableLog {
         value: Option<Bytes>,
     ) -> Result<i64, MetadataLogError> {
         if self.fences_stalled.load(Ordering::SeqCst) && key.as_ref() == REPLAY_FENCE_KEY {
-            std::future::pending::<()>().await;
+            future::pending::<()>().await;
         }
         self.inner.publish_keyed(partition, key, value).await
     }

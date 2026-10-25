@@ -250,7 +250,7 @@ mod tests {
         },
         assert2::assert,
         futures_util::stream::BoxStream,
-        krabka_metadata::{MetadataRecord, TopicRecord},
+        krabka_metadata::{MetadataRecord, TopicRecord, krabka_version::KRABKA_VERSION_FEATURE},
         krabka_object_store::fault::{FaultInjectingStore, FaultPolicy, OpFault, StoreOp},
         krabka_remote_storage_topic::MetadataEventLog,
         krabka_units::{ByteSize, convert::ByteSizeExt as _},
@@ -265,7 +265,7 @@ mod tests {
         },
         tempfile::tempdir,
         tokio::{
-            sync::{Mutex, watch},
+            sync::{Mutex, Notify, watch},
             task::{self, JoinHandle},
             time,
         },
@@ -288,8 +288,8 @@ mod tests {
     #[derive(Debug, Default)]
     struct VisibleBlockedPutStore {
         inner: InMemory,
-        visible: tokio::sync::Notify,
-        finish_put: tokio::sync::Notify,
+        visible: Notify,
+        finish_put: Notify,
     }
 
     impl fmt::Display for VisibleBlockedPutStore {
@@ -615,7 +615,7 @@ mod tests {
         let mut image = orders_image(1).image;
         image.apply(&MetadataRecord::V1FeatureLevel(
             krabka_metadata::FeatureLevelRecord {
-                name: krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE.into(),
+                name: KRABKA_VERSION_FEATURE.into(),
                 level,
             },
         ));
@@ -627,7 +627,7 @@ mod tests {
     struct BlockedPut {
         _dir: tempfile::TempDir,
         store: Arc<VisibleBlockedPutStore>,
-        flush: tokio::task::JoinHandle<Result<Option<WalFlushRecord>, BrokerError>>,
+        flush: JoinHandle<Result<Option<WalFlushRecord>, BrokerError>>,
     }
 
     async fn flush_until_put(level: i16, index_log: &DisklessIndexLog) -> BlockedPut {
@@ -638,13 +638,12 @@ mod tests {
             krabka_ids::PartitionIndex(0),
             test_partition().root(dir.path()).partition(0).call(),
         );
-        let (_, image_rx) =
-            tokio::sync::watch::channel(Arc::new(orders_image_at_krabka_version(level)));
+        let (_, image_rx) = watch::channel(Arc::new(orders_image_at_krabka_version(level)));
         let store = Arc::new(VisibleBlockedPutStore::default());
         let context = test_context(
             partitions,
             image_rx,
-            store.clone(),
+            Arc::<VisibleBlockedPutStore>::clone(&store),
             index_log.clone(),
             || Arc::new(AtomicBool::new(false)),
         );
@@ -670,7 +669,11 @@ mod tests {
     #[tokio::test]
     async fn a_reservation_protects_a_visible_upload_whose_ranges_are_not_published_yet() {
         let event_log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(2);
-        let index_log = DisklessIndexLog::start(event_log.clone()).await.unwrap();
+        let index_log = DisklessIndexLog::start(Arc::<
+            krabka_remote_storage_topic::InProcessMetadataEventLog,
+        >::clone(&event_log))
+        .await
+        .unwrap();
         let BlockedPut { _dir, store, flush } =
             flush_until_put(DISKLESS_OBJECT_RESERVATION_LEVEL, &index_log).await;
 
@@ -696,7 +699,7 @@ mod tests {
                 .wait_until_caught_up(Duration::from_secs(1))
                 .await
         );
-        let peer_store: Arc<dyn ObjectStore> = store.clone();
+        let peer_store: Arc<dyn ObjectStore> = Arc::<VisibleBlockedPutStore>::clone(&store);
         let mut reclaimer = Reclaimer::new(peer_index, peer_store, None, Duration::from_mins(1));
         let observed = Instant::now();
         sweep_twice(&mut reclaimer, observed, Duration::from_mins(6)).await;
@@ -729,8 +732,12 @@ mod tests {
     async fn a_view_stalled_after_startup_never_reclaims_a_peers_live_object() {
         for reserve_objects in [false, true] {
             let log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(2);
-            let stalling = StallableLog::new(log.clone());
-            let stale = DisklessIndexLog::start(stalling.clone()).await.unwrap();
+            let stalling = StallableLog::new(Arc::<
+                krabka_remote_storage_topic::InProcessMetadataEventLog,
+            >::clone(&log));
+            let stale = DisklessIndexLog::start(Arc::<StallableLog>::clone(&stalling))
+                .await
+                .unwrap();
             assert!(stale.wait_until_caught_up(Duration::from_secs(1)).await);
             stalling.stall_delivery();
             let peer = DisklessIndexLog::start(log).await.unwrap();
@@ -794,7 +801,9 @@ mod tests {
         let log = StallableLog::new(krabka_remote_storage_topic::InProcessMetadataEventLog::new(
             2,
         ));
-        let index = DisklessIndexLog::start(log.clone()).await.unwrap();
+        let index = DisklessIndexLog::start(Arc::<StallableLog>::clone(&log))
+            .await
+            .unwrap();
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         store
             .put(&Path::from(ORPHAN), PutPayload::from_static(b"object"))
@@ -804,7 +813,7 @@ mod tests {
         let mut reclaimer = Reclaimer::new(index, Arc::clone(&store), None, Duration::ZERO)
             .with_freshness_timeout(Duration::from_millis(50));
 
-        tokio::time::timeout(Duration::from_secs(5), reclaimer.sweep())
+        time::timeout(Duration::from_secs(5), reclaimer.sweep())
             .await
             .expect("the sweep returns while fence publication stalls");
 
@@ -929,7 +938,11 @@ mod tests {
         let object_key = format!("diskless-wal/7/{}.ckwl", Uuid::new_v4());
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
-        let writer = DisklessIndexLog::start(log.clone()).await.unwrap();
+        let writer = DisklessIndexLog::start(Arc::<
+            krabka_remote_storage_topic::InProcessMetadataEventLog,
+        >::clone(&log))
+        .await
+        .unwrap();
         writer.reserve_object(&object_key).await.unwrap();
 
         // The writer can stop after recording the reservation and after its

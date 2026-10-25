@@ -217,8 +217,6 @@ pub struct ClientMetricsCollector {
 
 #[bon::bon]
 impl ClientMetricsCollector {
-    pub(super) fn is_live(age: Duration, ttl: Duration) -> bool { age < ttl }
-
     #[builder]
     pub(crate) fn new(
         ttl: Duration,
@@ -232,6 +230,10 @@ impl ClientMetricsCollector {
             stats,
         }
     }
+}
+
+impl ClientMetricsCollector {
+    pub(super) fn is_live(age: Duration, ttl: Duration) -> bool { age < ttl }
 
     /// The registry handles this collector reports into.
     pub(crate) fn stats(&self) -> &SeriesStats { &self.stats }
@@ -303,6 +305,7 @@ impl ClientMetricsCollector {
             tally.add(principal, &key, after);
             self.stats.accepted.inc_by(widen(after));
         }
+        drop(guard);
         self.stats.publish_retained(tally.total);
     }
 
@@ -340,8 +343,10 @@ impl ClientMetricsCollector {
             }
             keep
         });
+        let retained_now = retained(&guard);
+        drop(guard);
         self.stats.evict(ClientMetricsEviction::Disconnect, evicted);
-        self.stats.publish_retained(retained(&guard));
+        self.stats.publish_retained(retained_now);
     }
 
     /// The series a scrape would render now, stale ones included until the
@@ -815,7 +820,7 @@ mod tests {
                 thread::spawn(move || {
                     let principal = format!("User:p{}", thread % 4);
                     let instance = |round: u8| {
-                        Uuid::from_u128(u128::from(thread) << 8 | u128::from(round % 7))
+                        Uuid::from_u128((u128::from(thread) << 8) | u128::from(round % 7))
                     };
                     for round in 0..50_u8 {
                         let points = (0..20)

@@ -11,6 +11,8 @@
 //! and release of `preallocate` and the `O_DIRECT` handle its active segment
 //! writes through.
 
+#[cfg(any(target_os = "linux", test))]
+use std::iter;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
 use std::{
@@ -353,7 +355,7 @@ const WILL_NEED_CHUNK: u64 = 128 * 1024;
 #[cfg(any(target_os = "linux", test))]
 fn will_need_chunks(offset: u64, len: u64) -> impl Iterator<Item = (u64, u64)> {
     let end = offset.saturating_add(len);
-    std::iter::successors(Some(offset), |start| {
+    iter::successors(Some(offset), |start| {
         Some(start.saturating_add(WILL_NEED_CHUNK))
     })
     .take_while(move |start| *start < end)

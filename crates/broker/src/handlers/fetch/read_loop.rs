@@ -251,10 +251,13 @@ const FORGOTTEN_PARTITION: usize = usize::MAX;
 /// `max_wait_ms`, both of which the protocol allows.
 fn arm_forgotten_waits(forgotten: &[Arc<Partition>], waits: &mut Vec<Wait>) {
     for part in forgotten {
-        waits.push(Wait::new(FORGOTTEN_PARTITION, part.append_notify.clone()));
         waits.push(Wait::new(
             FORGOTTEN_PARTITION,
-            part.hw_advance_notify.clone(),
+            Arc::clone(&part.append_notify),
+        ));
+        waits.push(Wait::new(
+            FORGOTTEN_PARTITION,
+            Arc::clone(&part.hw_advance_notify),
         ));
     }
 }
@@ -1912,7 +1915,7 @@ mod tests {
         super::arm_forgotten_waits(&[Arc::clone(&forgotten)], &mut waits);
         let appender = Arc::clone(&forgotten);
         let append = tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            time::sleep(Duration::from_millis(50)).await;
             appender
                 .produce_batch(RecordBatch {
                     records: vec![Record {

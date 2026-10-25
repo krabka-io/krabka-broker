@@ -756,7 +756,7 @@ mod tests {
         ] {
             let topic_id = Uuid::from_u128(941);
             let encoded = encode_batches(&[batch(0, b"persisted")]);
-            let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
             store
                 .put(&Path::from(object_key), PutPayload::from(encoded.clone()))
                 .await

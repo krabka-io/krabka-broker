@@ -23,7 +23,7 @@ const MAX_HISTOGRAM_BUCKETS: usize = 128;
 /// The number of data points in `md` of the shapes the sink stores: the bound
 /// [`flatten_for_prometheus`] enforces, and the unit a rejected push counts
 /// in.
-pub(super) fn point_count(md: &opentelemetry_proto::tonic::metrics::v1::MetricsData) -> usize {
+pub(super) fn point_count(md: &MetricsData) -> usize {
     use opentelemetry_proto::tonic::metrics::v1::metric::Data;
     md.resource_metrics
         .iter()

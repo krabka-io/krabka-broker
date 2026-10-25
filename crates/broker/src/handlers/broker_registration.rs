@@ -363,6 +363,9 @@ mod tests {
     use {
         super::*,
         crate::test_support::broker_registration,
+        krabka_metadata::krabka_version::{
+            DISKLESS_OBJECT_RESERVATION_LEVEL, KRABKA_VERSION_FEATURE,
+        },
         krabka_protocol::{owned::broker_registration_request::Feature, primitives::uuid::Uuid},
         std::slice,
     };
@@ -505,10 +508,7 @@ mod tests {
         let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         for (name, level) in [
             ("metadata.version", 25),
-            (
-                krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE,
-                krabka_metadata::krabka_version::DISKLESS_OBJECT_RESERVATION_LEVEL,
-            ),
+            (KRABKA_VERSION_FEATURE, DISKLESS_OBJECT_RESERVATION_LEVEL),
         ] {
             image.apply(&MetadataRecord::V1FeatureLevel(
                 krabka_metadata::FeatureLevelRecord {
@@ -526,7 +526,7 @@ mod tests {
                     ..Default::default()
                 },
                 Feature {
-                    name: krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE.into(),
+                    name: KRABKA_VERSION_FEATURE.into(),
                     min_supported_version: 0,
                     max_supported_version: 1,
                     ..Default::default()

@@ -25,7 +25,9 @@ use {
     },
 };
 
-/// How long a session remembers a partition the client forgot. The Java
+/// How long a session remembers a partition the client forgot.
+///
+/// The Java
 /// consumer names a partition it forgot over buffered records again within a
 /// few polls, so a longer memory buys nothing there, and it only costs a
 /// consumer that unsubscribed from a busy partition early answers for that

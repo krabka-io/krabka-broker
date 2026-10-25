@@ -7,7 +7,9 @@
 //! broker last sent, which is the comparison KIP-227 needs to decide whether a
 //! partition belongs in the next response.
 
-use {indexmap::IndexMap, krabka_protocol::primitives::uuid::Uuid as WireUuid};
+use {
+    indexmap::IndexMap, krabka_protocol::primitives::uuid::Uuid as WireUuid, std::time::Duration,
+};
 
 /// The partitions of one fetch session, in the order an incremental fetch
 /// reads them.
@@ -71,7 +73,7 @@ pub struct ForgottenPartition {
     pub key: FetchSessionKey,
     /// `MonotonicClock::elapsed_since_origin` of the cache when the client
     /// forgot the partition.
-    pub forgotten_at: std::time::Duration,
+    pub forgotten_at: Duration,
 }
 
 /// What an incremental response sent for one cached partition.

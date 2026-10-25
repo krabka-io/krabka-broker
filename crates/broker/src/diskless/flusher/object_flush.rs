@@ -298,9 +298,14 @@ mod tests {
         assert2::assert,
         bytes::{Bytes, BytesMut},
         krabka_protocol::records::{Record, RecordBatch},
-        object_store::memory::InMemory,
-        std::sync::atomic::{AtomicUsize, Ordering},
+        krabka_remote_storage::diskless::index::REPLAY_FENCE_KEY,
+        object_store::{local::LocalFileSystem, memory::InMemory},
+        std::{
+            fs,
+            sync::atomic::{AtomicUsize, Ordering},
+        },
         tempfile::tempdir,
+        tokio::task,
     };
 
     #[test]
@@ -347,7 +352,7 @@ mod tests {
         let cache = index.cache();
         let record = flush_once(
             FlushTarget {
-                object_store: store.clone(),
+                object_store: Arc::clone(&store),
                 broker_id: 7,
                 reserve_objects: true,
             },
@@ -391,19 +396,17 @@ mod tests {
         let mut events = Vec::new();
         log.visit_range(0, 0, end, &mut |record| {
             let key = record.key.as_deref().unwrap_or_default();
-            events.push(
-                if key == krabka_remote_storage::diskless::index::REPLAY_FENCE_KEY {
-                    IndexEvent::ReplayFence
-                } else if WalObjectReservationKey::from_bytes(key).is_some() {
-                    if record.tombstone {
-                        IndexEvent::Release
-                    } else {
-                        IndexEvent::Reserve
-                    }
+            events.push(if key == REPLAY_FENCE_KEY {
+                IndexEvent::ReplayFence
+            } else if WalObjectReservationKey::from_bytes(key).is_some() {
+                if record.tombstone {
+                    IndexEvent::Release
                 } else {
-                    IndexEvent::Flush
-                },
-            );
+                    IndexEvent::Reserve
+                }
+            } else {
+                IndexEvent::Flush
+            });
             Ok(())
         })
         .await
@@ -423,7 +426,11 @@ mod tests {
             let dir = tempdir().unwrap();
             let handle = orders_partition(dir.path());
             let log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
-            let index = DisklessIndexLog::start(log.clone()).await.unwrap();
+            let index = DisklessIndexLog::start(Arc::<
+                krabka_remote_storage_topic::InProcessMetadataEventLog,
+            >::clone(&log))
+            .await
+            .unwrap();
             let record = flush_once(
                 FlushTarget {
                     object_store: Arc::new(InMemory::new()),
@@ -452,6 +459,7 @@ mod tests {
             let cache = cache.lock().await;
             assert!(cache.reserved_objects().is_empty());
             assert!(cache.references_object(&record.object_key));
+            drop(cache);
         }
     }
 
@@ -472,7 +480,9 @@ mod tests {
                 first_offset: 0,
             }])
             .call();
-        let index = DisklessIndexLog::start(log.clone()).await.unwrap();
+        let index = DisklessIndexLog::start(Arc::<GroupAckLog>::clone(&log))
+            .await
+            .unwrap();
         let partitions = [FlushPartition {
             topic_id,
             handle: Arc::clone(&handle),
@@ -542,12 +552,10 @@ mod tests {
             }],
             &FlushConfig::default(),
             |_| {
-                if checks.fetch_add(1, Ordering::Relaxed) == 0 {
-                    true
-                } else {
+                if checks.fetch_add(1, Ordering::Relaxed) != 0 {
                     metrics.remove_diskless_wal_shard(topic_id, krabka_ids::PartitionIndex(0), &[]);
-                    true
                 }
+                true
             },
         )
         .await
@@ -561,10 +569,10 @@ mod tests {
     async fn put_failure_is_exported_by_the_real_metric() {
         let dir = tempdir().unwrap();
         let store_root = dir.path().join("store");
-        std::fs::create_dir(&store_root).unwrap();
-        let store = object_store::local::LocalFileSystem::new_with_prefix(&store_root).unwrap();
-        std::fs::remove_dir(&store_root).unwrap();
-        std::fs::write(&store_root, b"not a directory").unwrap();
+        fs::create_dir(&store_root).unwrap();
+        let store = LocalFileSystem::new_with_prefix(&store_root).unwrap();
+        fs::remove_dir(&store_root).unwrap();
+        fs::write(&store_root, b"not a directory").unwrap();
         let store: Arc<dyn ObjectStore> = Arc::new(store);
         let handle = orders_partition(dir.path());
         let index = test_index_log().await;
@@ -663,7 +671,7 @@ mod tests {
 
         let (published, projected) = tokio::join!(
             async {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
                 index.publish_flush(&record).await
             },
             wait_for_committed_projection(&index, &record, Duration::from_secs(1)),
@@ -720,8 +728,8 @@ mod tests {
     async fn flush_persists_prefixed_absolute_key_for_reads_and_restore() {
         let dir = tempdir().unwrap();
         let handle = orders_partition(dir.path());
-        let store = Arc::new(object_store::memory::InMemory::new());
-        let store_dyn: Arc<dyn ObjectStore> = store.clone();
+        let store = Arc::new(InMemory::new());
+        let store_dyn: Arc<dyn ObjectStore> = Arc::<InMemory>::clone(&store);
         let index = test_index_log().await;
         let config = FlushConfig {
             object_prefix: Some("clusters/one".to_owned()),

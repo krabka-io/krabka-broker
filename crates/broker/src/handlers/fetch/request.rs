@@ -11,7 +11,7 @@ use {
     },
     krabka_metadata::AclOperation,
     krabka_protocol::{owned::fetch_request::FetchRequest, primitives::uuid::Uuid as WireUuid},
-    std::{collections::HashSet, sync::Arc},
+    std::{collections::HashSet, mem, sync::Arc},
 };
 
 /// Projection of `FetchRequest::topics` or of the cached session partitions.
@@ -113,7 +113,7 @@ pub(super) fn prepare_fetch(
         });
     }
     let forgotten = match &mut decision {
-        SessionDecision::Incremental { forgotten, .. } => std::mem::take(forgotten),
+        SessionDecision::Incremental { forgotten, .. } => mem::take(forgotten),
         _ => Vec::new(),
     };
     let effective_topics = match &decision {

@@ -214,9 +214,12 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         controller_leader_changes_total: _controller_leader_changes_total,
         controller_fencing_publications_total: _controller_fencing_publications_total,
         controller_event_queue_time_seconds: _controller_event_queue_time_seconds,
-        controller_event_queue_processing_time_seconds: _controller_event_queue_processing_time_seconds,
-        controller_event_queue_operations_started_total: _controller_event_queue_operations_started_total,
-        controller_event_queue_operations_timed_out_total: _controller_event_queue_operations_timed_out_total,
+        controller_event_queue_processing_time_seconds:
+            _controller_event_queue_processing_time_seconds,
+        controller_event_queue_operations_started_total:
+            _controller_event_queue_operations_started_total,
+        controller_event_queue_operations_timed_out_total:
+            _controller_event_queue_operations_timed_out_total,
         controller_event_queue_idle_seconds_total: _controller_event_queue_idle_seconds_total,
         isr_shrinks_total: _isr_shrinks_total,
         isr_expands_total: _isr_expands_total,

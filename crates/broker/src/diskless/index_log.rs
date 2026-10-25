@@ -92,38 +92,19 @@ impl DisklessIndexLog {
             .collect();
         let (mut stream, _assignment) = log.subscribe(starts);
 
-        let high_water_marks = log
-            .high_water_marks()
-            .await
-            .map_err(|error| BrokerError::Txn(format!("diskless index end offsets: {error}")))?;
-        let mut pending = HashMap::new();
-        for partition in 0..log.partition_count() {
-            let index = usize::try_from(partition).map_err(|_| {
-                BrokerError::Txn(format!("diskless index partition {partition} is negative"))
-            })?;
-            if high_water_marks.get(index).copied().unwrap_or(0) == 0 {
-                continue;
-            }
-            let offset = log
-                .publish_keyed(
-                    partition,
-                    Bytes::from_static(REPLAY_FENCE_KEY),
-                    Some(Bytes::new()),
-                )
-                .await
-                .map_err(|error| {
-                    BrokerError::Txn(format!("diskless index replay fence: {error}"))
-                })?;
-            pending.insert(partition, offset);
-        }
+        let mut pending = publish_replay_fences(&*log).await?;
         let (progress_tx, progress_rx) = watch::channel(ReplayProgress {
             slowest_pending: 0,
             caught_up: pending.is_empty(),
             invalid: false,
         });
         let (applied_tx, applied_rx) = watch::channel(0u64);
-        let partition_count =
-            usize::try_from(log.partition_count()).expect("partition count non-negative");
+        let partition_count = usize::try_from(log.partition_count()).map_err(|_| {
+            BrokerError::Txn(format!(
+                "diskless index partition count {} is negative",
+                log.partition_count()
+            ))
+        })?;
         let (consumed_tx, consumed_rx) = watch::channel(vec![-1; partition_count]);
         let valid = Arc::new(AtomicBool::new(true));
 
@@ -266,8 +247,10 @@ impl DisklessIndexLog {
                     }
                 }
                 consumed_tx.send_modify(|offsets| {
-                    let index = usize::try_from(event.partition).expect("partition non-negative");
-                    if let Some(offset) = offsets.get_mut(index) {
+                    // A negative partition addresses no slot, as one past the end does.
+                    if let Ok(index) = usize::try_from(event.partition)
+                        && let Some(offset) = offsets.get_mut(index)
+                    {
                         *offset = (*offset).max(event.offset);
                     }
                 });
@@ -341,7 +324,7 @@ impl DisklessIndexLog {
     /// to the flusher loop, never hold it up. Returns `false` when the view
     /// cannot be established in time or the projection is invalid.
     pub(crate) async fn wait_for_fresh_view(&self, timeout: Duration) -> bool {
-        tokio::time::timeout(timeout, self.fresh_view())
+        time::timeout(timeout, self.fresh_view())
             .await
             .unwrap_or(false)
     }
@@ -390,7 +373,11 @@ impl DisklessIndexLog {
     /// v1 delete-floor wire shape keeps rolling 1.x readers compatible.
     pub(crate) async fn reserve_object(&self, object_key: &str) -> Result<(), BrokerError> {
         let (object_id, key) = object_reservation_key(object_key)?;
-        let floor_key = WalDeleteFloorKey::from_bytes(&key).expect("reservation uses floor key");
+        let floor_key = WalDeleteFloorKey::from_bytes(&key).ok_or_else(|| {
+            BrokerError::Txn(format!(
+                "diskless object reservation key for {object_key} is not a delete-floor key"
+            ))
+        })?;
         let value = WalDeleteFloorRecord {
             topic_id: floor_key.topic_id,
             partition: floor_key.partition,
@@ -429,7 +416,11 @@ impl DisklessIndexLog {
     ) -> Result<(), BrokerError> {
         let (object_id, key) = object_reservation_key(object_key)?;
         self.log
-            .publish_keyed(index_partition(&key, self.log.partition_count())?, key, None)
+            .publish_keyed(
+                index_partition(&key, self.log.partition_count())?,
+                key,
+                None,
+            )
             .await
             .map_err(|error| {
                 BrokerError::Txn(format!("diskless object reservation tombstone: {error}"))
@@ -692,6 +683,36 @@ async fn lock_object_fence(
         .unwrap_or_else(PoisonError::into_inner)
         .get(object_key);
     fence.lock_owned().await
+}
+
+/// Publish a replay fence on every index partition that holds records, and
+/// return the offset of each fence by partition.
+async fn publish_replay_fences(
+    log: &dyn MetadataEventLog,
+) -> Result<HashMap<i32, i64>, BrokerError> {
+    let high_water_marks = log
+        .high_water_marks()
+        .await
+        .map_err(|error| BrokerError::Txn(format!("diskless index end offsets: {error}")))?;
+    let mut pending = HashMap::new();
+    for partition in 0..log.partition_count() {
+        let index = usize::try_from(partition).map_err(|_| {
+            BrokerError::Txn(format!("diskless index partition {partition} is negative"))
+        })?;
+        if high_water_marks.get(index).copied().unwrap_or(0) == 0 {
+            continue;
+        }
+        let offset = log
+            .publish_keyed(
+                partition,
+                Bytes::from_static(REPLAY_FENCE_KEY),
+                Some(Bytes::new()),
+            )
+            .await
+            .map_err(|error| BrokerError::Txn(format!("diskless index replay fence: {error}")))?;
+        pending.insert(partition, offset);
+    }
+    Ok(pending)
 }
 
 fn invalidate_projection(

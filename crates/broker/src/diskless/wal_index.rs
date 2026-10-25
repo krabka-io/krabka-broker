@@ -388,7 +388,7 @@ impl WalIndexCache {
 
 /// The UUID an object key `.../<uuid>.ckwl` names, which a reservation is
 /// keyed by.
-pub(crate) fn object_id_from_key(object_key: &str) -> Option<Uuid> {
+pub fn object_id_from_key(object_key: &str) -> Option<Uuid> {
     let filename = object_key.rsplit('/').next()?;
     Uuid::parse_str(filename.strip_suffix(".ckwl")?).ok()
 }

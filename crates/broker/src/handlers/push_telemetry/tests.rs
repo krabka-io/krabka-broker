@@ -474,7 +474,7 @@ async fn connection_churn_stays_under_the_ceiling_and_drains_to_zero() {
         let connections = (0..CONNECTIONS)
             .map(|index| {
                 (
-                    Uuid::from_u128((row + 1) << 64 | index),
+                    Uuid::from_u128(((row + 1) << 64) | index),
                     format!("{row}-{index}"),
                 )
             })

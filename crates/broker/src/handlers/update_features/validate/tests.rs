@@ -757,8 +757,8 @@ fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
 /// every broker that supports level 2 reads reservations at every level.
 #[test]
 fn krabka_version_reservation_level_finalizes_only_when_every_broker_supports_it() {
-    let kv = krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE;
-    let level = krabka_metadata::krabka_version::DISKLESS_OBJECT_RESERVATION_LEVEL;
+    let kv = krabka_version::KRABKA_VERSION_FEATURE;
+    let level = krabka_version::DISKLESS_OBJECT_RESERVATION_LEVEL;
     let mv = FeatureLevel {
         name: "metadata.version",
         level: 30,
