@@ -63,10 +63,13 @@ krabka-authz = { version = "1.0.8", path = "../authz" }
 krabka-remote-storage = { version = "1.0.8", path = "../remote-storage" }
 krabka-remote-storage-topic = { version = "1.0.8", path = "../remote-storage-topic" }
 krabka-object-store = { version = "1.0.8", path = "../object-store" }
-krabka-client-core = { version = "0.7.1" }
+# `gssapi`: the broker serves SASL/GSSAPI and dials other brokers with it.
+# Both turn on the Kerberos stack that brings in `rsa`; see
+# docs/operations/security/rustsec-2023-0071.md.
+krabka-client-core = { version = "0.7.1", features = ["gssapi"] }
 krabka-throttle = { version = "1.0.8", path = "../throttle" }
 krabka-units = { workspace = true }
-krabka-security.workspace = true
+krabka-security = { workspace = true, features = ["gssapi"] }
 qubit-clock = { workspace = true }
 arc-swap.workspace = true
 async-trait.workspace = true
