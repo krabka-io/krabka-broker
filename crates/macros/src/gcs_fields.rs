@@ -9,7 +9,7 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
     let [prefix_doc, path_doc, key_doc, adc_doc, endpoint_doc] = mode_docs(
         meta,
         [
-            "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket).",
+            "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket). Tiered segments and new diskless WAL objects are\nwritten under it, and the diskless reclaimer lists and deletes only\nbelow `<prefix>/diskless-wal/`. WAL objects written at the bucket root\nbefore a prefix was set stay readable at their recorded keys, and the\nreclaimer of a prefixed cluster never deletes them.",
             "Path to a service-account JSON key file. Omit (along with the\nother credential fields) to use Workload Identity / ADC.",
             "Inline service-account JSON key. Omit (along with the other\ncredential fields) to use Workload Identity / ADC.",
             "Path to an Application Default Credentials JSON file. Omit (along\nwith the other credential fields) to use Workload Identity / ADC.",

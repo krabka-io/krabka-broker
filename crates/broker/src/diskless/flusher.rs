@@ -609,38 +609,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reclaimer_only_sweeps_its_configured_cloud_prefix() {
-        let store = Arc::new(InMemory::new());
-        for key in [
-            "clusters/one/diskless-wal/7/unreferenced.ckwl",
-            "clusters/two/diskless-wal/8/live.ckwl",
-        ] {
-            store
-                .put(&Path::from(key), PutPayload::from_static(b"object"))
+    async fn clusters_sharing_a_store_under_disjoint_prefixes_keep_each_others_live_objects() {
+        const LEGACY_ROOT: &str = "diskless-wal/7/legacy.ckwl";
+        let topic_id = Uuid::from_u128(11);
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut reclaimers = Vec::new();
+        for cluster in ["clusters/one", "clusters/two"] {
+            let live = format!("{cluster}/diskless-wal/7/live.ckwl");
+            let orphan = format!("{cluster}/diskless-wal/7/orphan.ckwl");
+            for key in [&live, &orphan] {
+                store
+                    .put(&Path::from(key.as_str()), PutPayload::from_static(b"object"))
+                    .await
+                    .unwrap();
+            }
+            let index = test_index_log().await;
+            index
+                .publish_flush(&three_record_flush(topic_id, &live))
                 .await
                 .unwrap();
+            wait_for_object(&index.cache(), topic_id, &live).await;
+            reclaimers.push(Reclaimer::new(
+                index,
+                Arc::clone(&store),
+                Some(cluster.to_owned()),
+                Duration::ZERO,
+            ));
         }
-        let index = test_index_log().await;
-        let mut reclaimer = Reclaimer::new(
-            index,
-            store.clone(),
-            Some("clusters/one".to_owned()),
-            Duration::ZERO,
-        );
+        store
+            .put(&Path::from(LEGACY_ROOT), PutPayload::from_static(b"object"))
+            .await
+            .unwrap();
 
-        reclaimer.sweep().await;
+        for reclaimer in &mut reclaimers {
+            reclaimer.sweep().await;
+        }
 
         assert!(
-            store
-                .head(&Path::from("clusters/one/diskless-wal/7/unreferenced.ckwl"))
-                .await
-                .is_err()
-        );
-        assert!(
-            store
-                .head(&Path::from("clusters/two/diskless-wal/8/live.ckwl"))
-                .await
-                .is_ok()
+            object_keys(&store).await
+                == [
+                    "clusters/one/diskless-wal/7/live.ckwl",
+                    "clusters/two/diskless-wal/7/live.ckwl",
+                    LEGACY_ROOT,
+                ]
         );
     }
 
