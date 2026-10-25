@@ -118,7 +118,8 @@ def _test_broker_source_alone_skips_kubernetes_and_proofs(_ctx):
 
 def _test_packaging_and_cluster_config_need_kubernetes(_ctx):
     check_eq("manifest", touches_kubernetes(["packaging/k8s/statefulset.yaml"]), True)
-    check_eq("smoke script", touches_kubernetes(["packaging/k8s/kind-smoke.sh"]), True)
+    check_eq("smoke task", touches_kubernetes([".aspect/kind_smoke.axl"]), True)
+    check_eq("its tests", touches_kubernetes([".aspect/kind_smoke_test.axl"]), False)
     check_eq("image", touches_kubernetes(["packaging/base.apko.yaml"]), True)
     check_eq("cluster", touches_kubernetes([".github/kind.yaml"]), True)
 
