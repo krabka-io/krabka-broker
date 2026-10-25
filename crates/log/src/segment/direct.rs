@@ -331,8 +331,20 @@ impl Queue {
         }
     }
 
+    /// Keep a finished write's buffer for the next appends, while the spares
+    /// hold no more bytes than [`QUEUE_LIMIT`].
+    ///
+    /// A buffer grows to the largest append the segment saw, and a count
+    /// alone let one segment keep sixteen buffers of a 1 MiB batch's size: a
+    /// broker hosting a hundred such partitions held gigabytes of spares and
+    /// reached its memory limit. The bytes a segment may hold for writes not
+    /// yet on the disk are the queue limit, so its spares are bounded the
+    /// same way.
     fn give_back(&mut self, buf: AlignedBuf) {
-        if self.spare.len() < RING_WRITES_IN_FLIGHT {
+        let held: usize = self.spare.iter().map(AlignedBuf::capacity).sum();
+        if self.spare.len() < RING_WRITES_IN_FLIGHT
+            && held.saturating_add(buf.capacity()) <= QUEUE_LIMIT
+        {
             self.spare.push(buf);
         }
     }
@@ -1322,6 +1334,48 @@ mod tests {
         queue.finish(3072, 4096);
         check!(queue.written == 4096);
         check!(queue.finished.is_empty());
+    }
+
+    /// The spare buffers a segment keeps hold at most `QUEUE_LIMIT` bytes
+    /// between them, whatever their count, so a segment that writes 1 MiB
+    /// batches does not keep sixteen of them.
+    #[test]
+    fn spare_buffers_hold_at_most_the_queue_limit() {
+        let mut queue = Queue {
+            jobs: VecDeque::new(),
+            in_flight: 0,
+            queued_end: 0,
+            end: 0,
+            tail: Vec::new(),
+            tail_writing: false,
+            written: 0,
+            finished: BTreeMap::new(),
+            failure: None,
+            ready: false,
+            spare: Vec::new(),
+            ring: true,
+        };
+        let one_mib = |fill: usize| {
+            let mut buf = AlignedBuf::new(4096);
+            buf.resize(fill);
+            buf
+        };
+        for _ in 0..RING_WRITES_IN_FLIGHT {
+            queue.give_back(one_mib(1 << 20));
+        }
+        let held: usize = queue.spare.iter().map(AlignedBuf::capacity).sum();
+        check!(held <= QUEUE_LIMIT);
+        // Each buffer is a little over 1 MiB, its alignment slack included.
+        check!((7..=8).contains(&queue.spare.len()));
+        // Small buffers still fill the count up to the in-flight bound.
+        let mut small = Queue {
+            spare: Vec::new(),
+            ..queue
+        };
+        for _ in 0..RING_WRITES_IN_FLIGHT + 4 {
+            small.give_back(one_mib(4096));
+        }
+        check!(small.spare.len() == RING_WRITES_IN_FLIGHT);
     }
 
     /// One segment's whole-block writes run side by side, up to
