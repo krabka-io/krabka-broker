@@ -31,11 +31,12 @@
 //! process never runs on without its controller.
 //!
 //! At startup the guard reads the fully recovered image before the engine
-//! starts or repairs a downgrade checkpoint, with every feature level that the
-//! log holds above its recovered high watermark applied too. That high
-//! watermark comes from a cache file and can lag, so a level it misses would
-//! otherwise reach the engine, which would write to the log before it refused
-//! the level. At runtime the guard reads each image the engine publishes.
+//! starts or repairs a downgrade checkpoint, and then that image with every
+//! feature level that the log holds above its recovered high watermark
+//! applied. That high watermark comes from a cache file and can lag, so a
+//! level it misses would otherwise reach the engine, which would write to the
+//! log before it refused the level. At runtime the guard reads each image the
+//! engine publishes.
 //! The image keeps
 //! the last level of each feature, so a record that a later record superseded
 //! is not named. Kafka would name it, and refuses the same logs.

@@ -102,8 +102,14 @@ fn protected_metadata_files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         .collect()
 }
 
-/// Boot a node with the flag on, finalize the unstable level, and stop it.
-async fn finalize_unstable_level(dir: &TempDir, cluster_id: Uuid) {
+/// Boot a node with the flag on, commit `level`, then commit `then`, and stop
+/// it. Returns the high-watermark file as it was when `level` had committed.
+async fn finalize_unstable_level(
+    dir: &TempDir,
+    cluster_id: Uuid,
+    level: Vec<MetadataRecord>,
+    then: Vec<MetadataRecord>,
+) -> Vec<u8> {
     let controller = Controller::start(
         config()
             .dir(dir)
@@ -115,10 +121,19 @@ async fn finalize_unstable_level(dir: &TempDir, cluster_id: Uuid) {
     .expect("first boot");
     wait_for_leader(&controller).await;
     controller
-        .submit_change(finalize_unstable_metadata_version())
+        .submit_change(level)
         .await
         .expect("finalize the unstable level");
+    let at_level = std::fs::read(metadata_partition_dir(dir.path()).join("high-watermark"))
+        .expect("read the high watermark the level committed under");
+    if !then.is_empty() {
+        controller
+            .submit_change(then)
+            .await
+            .expect("commit the records after the level");
+    }
     controller.shutdown().await;
+    at_level
 }
 
 /// Start the node of `dir` with the flag off, and return its refusal.
@@ -143,7 +158,13 @@ async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
     let cluster_id = Uuid::new_v4();
 
     // The first boot has the flag on and finalizes the unstable level.
-    finalize_unstable_level(&dir, cluster_id).await;
+    finalize_unstable_level(
+        &dir,
+        cluster_id,
+        finalize_unstable_metadata_version(),
+        vec![],
+    )
+    .await;
 
     let metadata_dir = metadata_partition_dir(dir.path());
     let before = protected_metadata_files(&metadata_dir);
@@ -178,7 +199,26 @@ enum HighWatermarkFile {
     AtLogStart,
     /// The file is gone, so the restart starts from the log start.
     Missing,
+    /// The file records the level as committed, and an uncommitted record
+    /// that lowers it to a supported level follows. The engine starts from
+    /// the committed image, so that record must not hide the level from the
+    /// guard.
+    BelowASupersedingLevel,
 }
+
+/// A `share.version` record at `level`. Kafka 4.3's latest production level
+/// is 1, and 2 is unstable. A `metadata.version` downgrade would not do here:
+/// it commits with a KIP-1155 checkpoint, which a restart reads first.
+fn share_version(level: i16) -> MetadataRecord {
+    MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
+        name: "share.version".into(),
+        level,
+    })
+}
+
+const SHARE_VERSION_REFUSAL: &str = "Tried to apply FeatureLevelRecord \
+    FeatureLevelRecord(name='share.version', featureLevel=2), \
+    but this controller only supports versions 0-1";
 
 /// The high-watermark file is a cache, and a restart can recover a high
 /// watermark below the finalized level. The refusal must still come before
@@ -187,6 +227,7 @@ enum HighWatermarkFile {
 #[yare::parameterized(
     at_log_start = { HighWatermarkFile::AtLogStart },
     missing = { HighWatermarkFile::Missing },
+    below_a_superseding_level = { HighWatermarkFile::BelowASupersedingLevel },
 )]
 #[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
@@ -194,7 +235,17 @@ async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
 ) {
     let dir = TempDir::new().unwrap();
     let cluster_id = Uuid::new_v4();
-    finalize_unstable_level(&dir, cluster_id).await;
+    let (level, then, refusal) = match high_watermark {
+        HighWatermarkFile::AtLogStart | HighWatermarkFile::Missing => {
+            (finalize_unstable_metadata_version(), vec![], REFUSAL)
+        }
+        HighWatermarkFile::BelowASupersedingLevel => (
+            vec![share_version(2)],
+            vec![share_version(1)],
+            SHARE_VERSION_REFUSAL,
+        ),
+    };
+    let at_level = finalize_unstable_level(&dir, cluster_id, level, then).await;
 
     let metadata_dir = metadata_partition_dir(dir.path());
     let high_watermark_path = metadata_dir.join("high-watermark");
@@ -202,11 +253,14 @@ async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
         // Version 0 of the file: the version, then the offset.
         HighWatermarkFile::AtLogStart => std::fs::write(&high_watermark_path, "0\n0\n").unwrap(),
         HighWatermarkFile::Missing => std::fs::remove_file(&high_watermark_path).unwrap(),
+        HighWatermarkFile::BelowASupersedingLevel => {
+            std::fs::write(&high_watermark_path, at_level).unwrap();
+        }
     }
     let before = protected_metadata_files(&metadata_dir);
 
     let refused = refused_start(&dir, cluster_id).await;
-    check!(matches!(&refused, RaftError::FatalFault(message) if message == REFUSAL));
+    check!(matches!(&refused, RaftError::FatalFault(message) if message == refusal));
     check!(protected_metadata_files(&metadata_dir) == before);
 }
 

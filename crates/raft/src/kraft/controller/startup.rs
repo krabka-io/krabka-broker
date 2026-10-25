@@ -284,9 +284,9 @@ impl KraftController {
     ///
     /// # Errors
     /// Returns [`RaftError`] if the log/checkpoint cannot be opened or read, or
-    /// `validate_image` refuses the recovered metadata, with every feature
-    /// level the log holds above its high watermark, before checkpoint repair
-    /// or an engine task can start.
+    /// `validate_image` refuses the committed image, or that image with every
+    /// feature level the log holds above its high watermark, before
+    /// checkpoint repair or an engine task can start.
     #[tracing::instrument(
         level = "info",
         skip_all,
@@ -316,7 +316,7 @@ impl KraftController {
         metadata_log: MetadataLogConfig,
         mut activation: Activation,
         event_queue_recorder: Arc<dyn EventQueueRecorder>,
-        validate_image: impl FnOnce(&MetadataImage) -> Result<(), RaftError>,
+        validate_image: impl Fn(&MetadataImage) -> Result<(), RaftError>,
     ) -> Result<Self, RaftError> {
         std::fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
         let log = KraftLog::open(&data_dir, &metadata_log)?;
@@ -438,9 +438,14 @@ impl KraftController {
             voters: initial_state.voters.clone(),
         }));
 
-        // The guard reads every feature level the log holds, not only the
-        // committed ones: the high watermark recovered from its cache file can
-        // sit below a level that the engine would commit and then refuse.
+        // The guard reads the committed image, which the engine starts from,
+        // and then every feature level the log holds above the high
+        // watermark: the high watermark recovered from its cache file can sit
+        // below a level that the engine would commit and then refuse. The
+        // committed image is read on its own too, because an uncommitted
+        // record can supersede a committed level that the engine still
+        // starts at.
+        validate_image(&image)?;
         validate_image(&with_uncommitted_feature_levels(
             &log,
             &image,
