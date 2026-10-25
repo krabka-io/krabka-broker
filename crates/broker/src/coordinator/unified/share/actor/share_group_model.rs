@@ -347,11 +347,11 @@ impl Model for ShareModel {
                     }
                     Err(error) => match kind {
                         EpochKind::Stale => {
-                            assert2::assert!(error == crate::codes::FENCED_MEMBER_EPOCH);
+                            assert2::assert!(error == codes::FENCED_MEMBER_EPOCH);
                             state.witnesses |= WITNESS_STALE_FENCED;
                         }
                         EpochKind::Forward => {
-                            assert2::assert!(error == crate::codes::FENCED_MEMBER_EPOCH);
+                            assert2::assert!(error == codes::FENCED_MEMBER_EPOCH);
                             state.witnesses |= WITNESS_FORWARD_FENCED;
                         }
                         EpochKind::Current => return None,

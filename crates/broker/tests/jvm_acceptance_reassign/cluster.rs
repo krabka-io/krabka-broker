@@ -86,7 +86,7 @@ pub async fn offline_for_partition(
     let current = brokers[0]
         .partition_record_for_test(topic, 0)
         .expect(context);
-    let controller = brokers[0].wait_until_controller_leader().await.0;
+    let controller = brokers[0].wait_until_controller_leader().await.unwrap().0;
     let OfflineTarget { target, handles } = offline_target(brokers, &current, controller).await;
     (target, handles, current)
 }

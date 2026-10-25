@@ -264,7 +264,12 @@ impl BrokerHandle {
     /// Test-only: await until a non-zero controller leader is elected.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn wait_until_controller_leader(&self) -> krabka_raft::NodeId {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Startup`] when no leader is elected within the
+    /// test awaiter timeout, or the leader channel closes first.
+    pub async fn wait_until_controller_leader(&self) -> Result<krabka_raft::NodeId, BrokerError> {
         let mut rx = self.watch_leader_for_test();
         let res = time::timeout(TEST_AWAITER_TIMEOUT, async {
             loop {
@@ -279,12 +284,15 @@ impl BrokerHandle {
             }
         })
         .await;
-        let id = res.expect("wait_until_controller_leader timed out after 30s");
-        assert2::assert!(
-            id != krabka_raft::NodeId(0),
-            "leader channel closed before a leader was elected"
-        );
-        id
+        match res {
+            Err(_) => Err(BrokerError::Startup(
+                "wait_until_controller_leader timed out after 30s".to_owned(),
+            )),
+            Ok(krabka_raft::NodeId(0)) => Err(BrokerError::Startup(
+                "leader channel closed before a leader was elected".to_owned(),
+            )),
+            Ok(id) => Ok(id),
+        }
     }
 
     /// Test-only: await until this node's metadata image sees `>= n` brokers

@@ -136,7 +136,9 @@ impl TxnCoordinator {
         };
         let image = transport.controller.current_image();
         drop(self.refresh_leader_partitions(&image).await);
-        let coordinator_partition = self.partition_for(check.transactional_id);
+        let Some(coordinator_partition) = self.partition_for(check.transactional_id) else {
+            return Remote::Failed(codes::COORDINATOR_NOT_AVAILABLE);
+        };
         let Some(leader) = image
             .partition(bootstrap::TOPIC, coordinator_partition.get())
             .map(|partition| partition.leader)

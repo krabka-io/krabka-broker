@@ -103,7 +103,7 @@ impl DisklessCluster {
             broker.wait_until_brokers_registered(VOTERS).await;
         }
         for broker in self.brokers.iter().flatten() {
-            broker.wait_until_diskless_flusher_ready().await;
+            broker.wait_until_diskless_flusher_ready().await.unwrap();
         }
     }
 

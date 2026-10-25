@@ -5,6 +5,10 @@
 //! The hot fetch path runs through these functions for every read, which is
 //! why they live together in one small module.
 
+#[cfg(target_os = "wasi")]
+use rustix::io::pread;
+#[cfg(unix)]
+use std::os::unix::fs::FileExt;
 use {
     super::Segment,
     crate::{
@@ -15,7 +19,6 @@ use {
     std::{
         fs::File,
         io::{self, ErrorKind, IoSlice, Seek, SeekFrom},
-        os::unix::fs::FileExt,
     },
 };
 
@@ -91,8 +94,8 @@ fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
 // `std::os::wasi::fs::FileExt` is unstable (`wasi_ext`), so the positional
 // read goes through the safe `pread` wrapper of rustix on this target.
 #[cfg(target_os = "wasi")]
-fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
-    rustix::io::pread(file, buf, offset).map_err(Into::into)
+fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+    pread(file, buf, offset).map_err(Into::into)
 }
 
 /// A byte range of a `.log` file.

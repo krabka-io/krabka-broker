@@ -134,7 +134,7 @@ pub fn replay_offset_batch(producer_id: Option<i64>, records: Vec<Record>) -> Re
 
 /// A record of the offsets topic: its parsed key, and its value or `None` for
 /// a tombstone.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OffsetsRecord {
     pub key: NextGenKey,
     pub value: Option<Bytes>,
@@ -349,7 +349,7 @@ pub fn offset_record(
     };
     Record {
         key: Some(OffsetCommitValue::encode_key(group, topic, partition.0).unwrap()),
-        value: Some(value.encode_value()),
+        value: Some(value.encode_value().unwrap()),
         ..Default::default()
     }
 }

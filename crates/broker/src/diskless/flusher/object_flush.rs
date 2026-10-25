@@ -76,13 +76,15 @@ pub async fn flush_once<F: Fn(&FlushPartition) -> bool>(
         let Some(last_offset) = raw.last_offset else {
             continue;
         };
-        builder.append_run(
-            partition.topic_id,
-            partition.handle.index.get(),
-            raw.start_offset.0,
-            last_offset.0,
-            &raw.bytes,
-        );
+        builder
+            .append_run(
+                partition.topic_id,
+                partition.handle.index.get(),
+                raw.start_offset.0,
+                last_offset.0,
+                &raw.bytes,
+            )
+            .map_err(|error| BrokerError::Txn(format!("diskless wal object: {error}")))?;
     }
 
     if builder.is_empty() {
@@ -90,7 +92,13 @@ pub async fn flush_once<F: Fn(&FlushPartition) -> bool>(
     }
     metrics.diskless_wal_flush_attempts_total.inc();
     let object_key = format!("diskless-wal/{broker_id}/{}.ckwl", Uuid::new_v4());
-    let object = builder.finish();
+    let object = match builder.finish() {
+        Ok(object) => object,
+        Err(error) => {
+            metrics.diskless_wal_flush_failures_total.inc();
+            return Err(BrokerError::Txn(format!("diskless wal object: {error}")));
+        }
+    };
     if let Err(error) = object_store
         .put(
             &Path::from(object_key.clone()),
@@ -288,7 +296,9 @@ mod tests {
         for batch in &batches {
             batch.encode(&mut run).unwrap();
         }
-        let object = WalObjectBuilder::new().finish_with_run(topic_id, 0, 4, 5, &run);
+        let object = WalObjectBuilder::new()
+            .finish_with_run(topic_id, 0, 4, 5, &run)
+            .unwrap();
 
         let entries = batch_index_entries(&object, 4_242).unwrap();
 

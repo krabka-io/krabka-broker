@@ -86,7 +86,7 @@ async fn start_broker() -> StartedBroker {
     config.heartbeat_interval = krabka_units::millis(3_000);
     config.heartbeat_timeout = krabka_units::millis(9_000);
     let handle = Broker::start(config).await.expect("start broker");
-    handle.wait_until_controller_leader().await;
+    handle.wait_until_controller_leader().await.unwrap();
     handle.wait_until_brokers_registered(1).await;
     StartedBroker {
         broker: handle,

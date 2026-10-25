@@ -198,7 +198,7 @@ async fn an_append_writes_only_as_the_partition_leader() {
 
         let result = offsets_log.append("group", group_batch()).await;
 
-        let logged_epochs = epochs_in_log(&*log.lock().expect("the log is not poisoned"));
+        let logged_epochs = epochs_in_log(&log.lock().expect("the log is not poisoned"));
         assert!(outcome(result) == case.expected, "{}", case.what);
         assert!(logged_epochs == case.logged_epochs, "{}", case.what);
     }

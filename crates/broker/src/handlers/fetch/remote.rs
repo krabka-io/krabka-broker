@@ -820,6 +820,7 @@ mod tests {
             Arc::clone(&broker.producer_state),
             false,
         )
+        .unwrap()
     }
 
     struct TieredBroker {

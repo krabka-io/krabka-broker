@@ -45,7 +45,7 @@ use {
         primitives::uuid::Uuid as WireUuid,
         records::RecordsPayload,
     },
-    std::{net::SocketAddr, sync::Arc},
+    std::{collections::HashSet, net::SocketAddr, sync::Arc},
 };
 
 /// The share group that every request names.
@@ -266,7 +266,7 @@ async fn share_acknowledge_checks_group_read_before_topic_read() {
                         .epoch(0)
                         .partitions(FetchPartitions {
                             requested: &[(topic, 0)],
-                            forgotten: &std::collections::HashSet::new(),
+                            forgotten: &HashSet::new(),
                         })
                         .build(),
                 )

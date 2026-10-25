@@ -165,7 +165,9 @@ impl OffsetsLog for ProductionOffsetsLog {
         group_id: &str,
         batch: RecordBatch,
     ) -> Result<PendingWrite, BrokerError> {
-        let partition_id = partition_for_group(&self.controller.current_image(), group_id);
+        // `-1` is Kafka's no-partition sentinel: the group maps to none.
+        let partition_id = partition_for_group(&self.controller.current_image(), group_id)
+            .ok_or_else(|| uncommitted(-1, codes::COORDINATOR_NOT_AVAILABLE))?;
         let append = append_as_leader(
             (&self.partitions, &*self.controller, self.node_id),
             partition_id,

@@ -294,6 +294,7 @@ mod tests {
             file_config::{FileConfig, test_support::configured},
         },
         assert2::{assert, check},
+        krabka_units::{Time, convert::TimeExt},
     };
 
     /// Independent default provenance with the two explicitly varied expiry flags.
@@ -396,8 +397,7 @@ mod tests {
             check!(result.is_ok(), "{label}");
             let cfg = result.unwrap();
             check!(
-                cfg.txn_id_expiration_cleanup_interval
-                    == <krabka_units::Time as krabka_units::convert::TimeExt>::ZERO,
+                cfg.txn_id_expiration_cleanup_interval == <Time as TimeExt>::ZERO,
                 "{label}"
             );
         }

@@ -604,8 +604,7 @@ impl ShareCoordinator {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<Option<ShareStateSummary>, ShareErrorCode> {
-        let state_partition = self.state_partition_for(group, &topic_id, partition);
-        let active = self.active(state_partition).await?;
+        let active = self.active_for_key(group, &topic_id, partition).await?;
         let summary = self.summary(group, topic_id, partition).await;
         self.answer(active, Ok(summary))
             .await

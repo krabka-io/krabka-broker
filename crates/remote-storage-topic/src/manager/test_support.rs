@@ -177,7 +177,7 @@ pub struct SeededManager {
 
 pub async fn seeded_manager(log: Arc<dyn MetadataEventLog>) -> SeededManager {
     seed_log(Arc::clone(&log)).await;
-    let partition = metadata_partition_for(&tp(), log.partition_count());
+    let partition = metadata_partition_for(&tp(), log.partition_count()).unwrap();
     SeededManager {
         manager: start_manager(log),
         partition,

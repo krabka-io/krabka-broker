@@ -830,7 +830,8 @@ mod tests {
         // Both groups' records go into one batch on one partition, which is
         // what a single marker resolves; the group ids come off the record
         // keys, not from the partition.
-        let offsets_partition = partition_for_group(&broker.controller.current_image(), first);
+        let offsets_partition =
+            partition_for_group(&broker.controller.current_image(), first).unwrap();
         let part = broker
             .partitions
             .get(OFFSETS_TOPIC, PartitionIndex(offsets_partition))
@@ -847,7 +848,8 @@ mod tests {
                     expire_timestamp_ms: None,
                     topic_id: None,
                 }
-                .encode_value(),
+                .encode_value()
+                .unwrap(),
             ),
             ..Default::default()
         };

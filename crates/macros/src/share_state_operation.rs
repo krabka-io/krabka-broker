@@ -30,12 +30,13 @@ fn boundaries(meta: &TokenStream, signature: &Signature) -> Result<Boundaries, P
     let group = parameter_ident(&parameters[2], "expected named group id")?;
     let topic = parameter_ident(&parameters[3], "expected named topic id")?;
     let partition = parameter_ident(&parameters[4], "expected named partition id")?;
-    let state_partition = Ident::new("state_partition").with_span(Span::mixed_site());
     let result = Ident::new("result").with_span(Span::mixed_site());
     Ok(Boundaries {
         admission: moxy::template! {
-            let {{ state_partition }} = self.state_partition_for({{ group }}, &{{ topic }}, {{ partition }});
-            let {{ active }} = self.active({{ state_partition }}).await.map_err(ShareStateError::inactive)?;
+            let {{ active }} = self
+                .active_for_key({{ group }}, &{{ topic }}, {{ partition }})
+                .await
+                .map_err(ShareStateError::inactive)?;
             let {{ result }} =
         },
         answer: moxy::template! { ; self.answer({{ active }}, {{ result }}).await },
@@ -72,7 +73,7 @@ mod tests {
         let boundary = boundaries(&"active".parse().unwrap(), &signature).unwrap();
         assert!(
             compact(&boundary.admission)
-                .contains("self.active(state_partition).await.map_err(ShareStateError::inactive)?")
+                .contains("self.active_for_key(group,&topic_id,partition).await.map_err(ShareStateError::inactive)?")
         );
         assert!(compact(&boundary.answer).contains("self.answer(active,result).await"));
         assert!(boundaries(&"active extra".parse().unwrap(), &signature).is_err());
@@ -110,7 +111,7 @@ mod tests {
         let signature = function_signature(&"async fn erase(&self, view: &Image, group_key: &str, topic_key: Uuid, row: i32, extra: i16) -> Result<(), Error> {}".parse().unwrap()).unwrap();
         let boundary = boundaries(&"term_guard".parse().unwrap(), &signature).unwrap();
         let admission = compact(&boundary.admission);
-        assert!(admission.contains("state_partition_for(group_key,&topic_key,row)"));
+        assert!(admission.contains("active_for_key(group_key,&topic_key,row)"));
         assert!(admission.contains("letterm_guard="));
         assert!(compact(&boundary.answer).contains("self.answer(term_guard,result).await"));
     }

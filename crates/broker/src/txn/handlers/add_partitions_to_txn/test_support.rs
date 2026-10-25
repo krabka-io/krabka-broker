@@ -141,7 +141,7 @@ pub(in crate::txn::handlers) async fn start_coordinator(
     })
     .await;
     let broker = handle.broker_arc_for_test();
-    handle.wait_until_controller_leader().await;
+    handle.wait_until_controller_leader().await.unwrap();
     handle.wait_until_brokers_registered(1).await;
     handle.wait_until_transaction_coordinator_ready().await;
     seed_topic(&broker, "a", 1).await;

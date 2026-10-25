@@ -247,10 +247,11 @@ impl Fixture {
                 prev_head: ChainHead::GENESIS,
             };
             for (index, segment) in partition.segments.iter().enumerate() {
-                let metadata = segment
-                    .metadata
-                    .clone()
-                    .with_custom_metadata(WormChainRecord::request(stamp).to_custom_metadata());
+                let metadata = segment.metadata.clone().with_custom_metadata(
+                    WormChainRecord::request(stamp)
+                        .to_custom_metadata()
+                        .unwrap(),
+                );
                 let partition_dir = partition_dir_name(&metadata);
                 let objects = fs::read_dir(self.archive_root.path().join(&partition_dir))
                     .expect("read archive partition")

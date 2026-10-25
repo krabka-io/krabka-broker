@@ -130,7 +130,7 @@ impl MetadataProvider for ImageMetadatalessProvider {
 /// A metadata provider whose snapshot a test replaces, as the controller
 /// replaces the metadata image.
 #[derive(Debug, Default)]
-pub struct SwitchableMetadata(std::sync::Mutex<reconciler::ReconcileInput>);
+pub struct SwitchableMetadata(Mutex<reconciler::ReconcileInput>);
 
 impl SwitchableMetadata {
     pub(crate) fn new(input: reconciler::ReconcileInput) -> Arc<Self> {
@@ -814,7 +814,7 @@ pub fn deletion_replay_cases<R: Clone, S>(
 }
 
 /// Each protocol checks both its replay result and the cache populated by replay.
-pub fn check_replay_cases<R, S: PartialEq + std::fmt::Debug>(
+pub fn check_replay_cases<R, S: PartialEq + Debug>(
     rows: &[ReplayCase<'_, R, S>],
     replay: impl Fn(&GroupCoordinator, &R) -> Result<(), BrokerError>,
     seed: impl Fn(&GroupCoordinator) -> Option<S>,
@@ -940,7 +940,7 @@ pub fn consumer_join_request(
 }
 
 /// A session seen fifty milliseconds ago, preserving each expiry fixture's clock read.
-pub fn expired_session_last_seen() -> std::time::Instant {
+pub fn expired_session_last_seen() -> Instant {
     Instant::now()
         .checked_sub(Duration::from_millis(50))
         .expect("50ms is always within Instant range")

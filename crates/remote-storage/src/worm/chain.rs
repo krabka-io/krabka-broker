@@ -100,14 +100,13 @@ impl WormChainRecord {
 
     /// Encodes the record as the JSON bytes of a [`CustomMetadata`].
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `serde_json` cannot serialise the record. Every field is a
-    /// `UUID`, an integer, a fixed-size byte array, or a string, so no
-    /// serialisation of this type can fail.
-    #[must_use]
-    pub fn to_custom_metadata(&self) -> CustomMetadata {
-        let json = serde_json::to_vec(&WormChainRecordJson {
+    /// Returns [`WormError::MalformedChainRecord`] if `serde_json` cannot
+    /// serialise the record. Every field is a `UUID`, an integer, a fixed-size
+    /// byte array, or a string, so this does not happen in practice.
+    pub fn to_custom_metadata(&self) -> Result<CustomMetadata, WormError> {
+        serde_json::to_vec(&WormChainRecordJson {
             version: WORM_CHAIN_RECORD_VERSION,
             epoch_id: self.epoch_id,
             seq: self.seq,
@@ -115,8 +114,8 @@ impl WormChainRecord {
             head: self.head,
             manifest_version_id: self.manifest_version_id.clone(),
         })
-        .expect("WormChainRecord holds only infallibly serialisable fields");
-        CustomMetadata(json)
+        .map(CustomMetadata)
+        .map_err(|e| WormError::MalformedChainRecord(e.to_string()))
     }
 
     /// Decodes a record from a segment's [`CustomMetadata`].
@@ -292,6 +291,7 @@ mod tests {
         })
         .with_head(head(produced))
         .to_custom_metadata()
+        .unwrap()
     }
 
     #[test]
@@ -344,7 +344,8 @@ mod tests {
             prev_head: head(0xcc),
         })
         .with_head(head(0xdd))
-        .to_custom_metadata();
+        .to_custom_metadata()
+        .unwrap();
         let segments = [
             sample_metadata(
                 100,
@@ -374,7 +375,8 @@ mod tests {
             seq: ManifestSeq(7),
             prev_head: head(0xbb),
         })
-        .to_custom_metadata();
+        .to_custom_metadata()
+        .unwrap();
         let segments = [
             sample_metadata(
                 100,
@@ -452,7 +454,8 @@ mod tests {
             prev_head: head(0xaa),
         })
         .with_head(head(0xbb))
-        .to_custom_metadata();
+        .to_custom_metadata()
+        .unwrap();
         let segments = [sample_metadata(
             100,
             RemoteLogSegmentState::CopySegmentFinished,
@@ -473,7 +476,7 @@ mod tests {
         },
     )]
     fn chain_record_round_trips_through_custom_metadata(record: WormChainRecord) {
-        let encoded = record.to_custom_metadata();
+        let encoded = record.to_custom_metadata().unwrap();
         check!(WormChainRecord::from_custom_metadata(&encoded).unwrap() == record);
     }
 
@@ -523,7 +526,7 @@ mod tests {
 
     #[test]
     fn chain_record_encodes_to_the_golden_bytes_and_decodes_back() {
-        check!(golden_record().to_custom_metadata().0 == GOLDEN_RECORD.as_bytes());
+        check!(golden_record().to_custom_metadata().unwrap().0 == GOLDEN_RECORD.as_bytes());
         check!(
             WormChainRecord::from_custom_metadata(&CustomMetadata(
                 GOLDEN_RECORD.as_bytes().to_vec()

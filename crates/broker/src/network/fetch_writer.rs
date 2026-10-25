@@ -39,6 +39,8 @@
 //! emits, `sink` decides what a given stream can take, and `drain` writes the
 //! finished plan out with `sendfile` for the file-backed ops.
 
+#[krabka_macros::sendfile_cfg]
+use krabka_protocol::records::FileRegion;
 use {
     self::body_plan::{FetchWriteOp, fetch_response_write_plan},
     crate::{
@@ -47,9 +49,7 @@ use {
     },
     bytes::{BufMut, Bytes, BytesMut},
     krabka_protocol::{
-        api_key::ApiKey,
-        owned::fetch_response::FetchResponse,
-        records::{FileRegion, RecordsPayload},
+        api_key::ApiKey, owned::fetch_response::FetchResponse, records::RecordsPayload,
     },
 };
 

@@ -270,7 +270,7 @@ pub fn local_log_files(partition_dir: &Path) -> Vec<(i64, u64)> {
 /// The client address of the controller leader among `brokers`, where
 /// `kafka-reassign-partitions` sends a reassignment.
 pub async fn controller_leader_addr(brokers: [&BrokerHandle; 3]) -> String {
-    let controller_leader = brokers[0].wait_until_controller_leader().await;
+    let controller_leader = brokers[0].wait_until_controller_leader().await.unwrap();
     brokers
         .iter()
         .find(|handle| handle.node_id() == controller_leader.0)

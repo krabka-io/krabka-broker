@@ -3,6 +3,8 @@
 //! epoch from the metadata image. That publication is a locking protocol of its
 //! own, shared with produce admission, so it lives in its own module.
 
+#[cfg(any(test, feature = "test-helpers"))]
+use tokio::sync::RwLock;
 use {
     crate::{
         codes::{FENCED_LEADER_EPOCH, UNKNOWN_LEADER_EPOCH},
@@ -15,7 +17,7 @@ use {
         future::Future,
         sync::{Arc, PoisonError, atomic::Ordering},
     },
-    tokio::sync::{OwnedRwLockReadGuard, RwLock, RwLockWriteGuard},
+    tokio::sync::{OwnedRwLockReadGuard, RwLockWriteGuard},
 };
 
 #[cfg(test)]

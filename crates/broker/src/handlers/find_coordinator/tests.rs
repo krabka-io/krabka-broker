@@ -380,7 +380,7 @@ async fn denied_share_request_answers_cluster_authorization_failed_on_every_key(
 /// message of the code and `Node.noNode()`.
 #[tokio::test]
 async fn denied_group_key_answers_kafka_row_shape_per_version() {
-    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker); boot [start_broker_no_audit_with(|config| config.authorizer = std::sync::Arc::new(DenyAll))]; };
+    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker); boot [start_broker_no_audit_with(|config| config.authorizer = Arc::new(DenyAll))]; };
     let rows = vec![
         VersionedResponse {
             version: krabka_ids::ApiVersion(4),
@@ -744,7 +744,7 @@ async fn a_lookup_with_too_few_brokers_creates_nothing_until_enough_register() {
         config.offsets_topic_replication_factor = 2;
     })
     .await;
-    broker_handle.wait_until_controller_leader().await;
+    broker_handle.wait_until_controller_leader().await.unwrap();
     broker_handle.wait_until_brokers_registered(1).await;
     let broker = broker_handle.broker_arc_for_test();
     let topic = OFFSETS_TOPIC;

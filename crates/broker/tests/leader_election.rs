@@ -38,7 +38,7 @@ mod support;
 /// leader. It returns the 0-based cluster index of that broker.
 async fn find_controller_leader(cluster: &[(BrokerHandle, BrokerConfig, TempDir)]) -> usize {
     for (h, _, _) in cluster {
-        h.wait_until_controller_leader().await;
+        h.wait_until_controller_leader().await.unwrap();
     }
     for (i, (h, cfg, _)) in cluster.iter().enumerate() {
         if h.controller_leader_id() == Some(cfg.node_id) {

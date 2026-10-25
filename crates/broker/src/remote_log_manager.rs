@@ -838,7 +838,7 @@ fn topic_partition(
 }
 
 #[cfg(test)]
-pub(super) use copy_segment::{ProducerSnapshotExport, export_epoch_map, export_segment_data};
+pub use copy_segment::{ProducerSnapshotExport, export_epoch_map, export_segment_data};
 
 #[cfg(test)]
 mod tests {
@@ -1100,7 +1100,7 @@ mod tests {
                 controller,
                 archive: ArchiveMode::Mutable,
                 rsm,
-                rlmm: rlmm.clone(),
+                rlmm: Arc::clone(&rlmm),
                 index_cache: Arc::new(krabka_remote_storage::RemoteIndexCache::disabled()),
                 copy_quota: Arc::new(quota::RlmQuotaManager::unlimited()),
                 metrics: BrokerMetrics::new(),
@@ -1208,6 +1208,7 @@ mod tests {
                 local_sealed: sealed_ranges(&mut log),
                 local_log_start: log.local_log_start_offset(),
             };
+            drop(log);
             check!(observed == expected, "{sweep}");
         }
     }
@@ -1467,6 +1468,7 @@ mod tests {
             assert!(exports.len() >= 3, "test needs several sealed segments");
             let floor = exports[1].base_offset;
             log.set_log_start_offset(floor).expect("move the log start");
+            drop(log);
             (floor, exports.len())
         };
         let fixtures::RegisteredFixture {

@@ -240,7 +240,7 @@ mod tests {
     }
 
     async fn install_entry(coordinator: &TxnCoordinator, entry: TxnEntry) {
-        let coordinator_partition = coordinator.partition_for(&entry.transactional_id);
+        let coordinator_partition = coordinator.partition_for(&entry.transactional_id).unwrap();
         coordinator
             .lead_state_partition_for_test(coordinator_partition)
             .await;
@@ -254,7 +254,7 @@ mod tests {
         directory: &Path,
         transactional_id: &str,
     ) -> Arc<Partition> {
-        let index = coordinator.partition_for(transactional_id);
+        let index = coordinator.partition_for(transactional_id).unwrap();
         let opened = open_partition()
             .log_dir(directory)
             .topic(bootstrap::TOPIC)
@@ -297,7 +297,7 @@ mod tests {
                 == NOT_COORDINATOR
         );
         coordinator
-            .lead_state_partition_for_test(coordinator.partition_for("tid-a"))
+            .lead_state_partition_for_test(coordinator.partition_for("tid-a").unwrap())
             .await;
         check!(
             register_fixture(&coordinator, ProducerId(7), 3, requested.clone(), 3).await

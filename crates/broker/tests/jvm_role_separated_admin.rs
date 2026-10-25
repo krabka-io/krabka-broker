@@ -141,7 +141,7 @@ async fn start_role_separated() -> RoleSeparated {
         .await
         .expect("start controller-only node");
     dirs.push(controller_dir);
-    controller.wait_until_controller_leader().await;
+    controller.wait_until_controller_leader().await.unwrap();
 
     let mut brokers = Vec::with_capacity(2);
     for index in 1..3 {

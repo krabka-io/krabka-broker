@@ -319,7 +319,7 @@ mod tests {
             test_support::{OAuthTokenContents, oauth_token_file},
         },
         assert2::assert,
-        std::path::PathBuf,
+        std::{iter, path::PathBuf},
     };
 
     fn sasl_listener(name: &str, mechanisms: Vec<SaslMechanism>) -> ListenerSpec {
@@ -477,8 +477,7 @@ mod tests {
             inter_broker_credentials: Some(InterBrokerCredentials::OAuthBearer {
                 token_path: "/unused/token".into(),
             }),
-            plain_credentials: [("admin".to_owned(), "admin-secret".to_owned())]
-                .into_iter()
+            plain_credentials: iter::once(("admin".to_owned(), "admin-secret".to_owned()))
                 .collect(),
             ..BrokerConfig::default()
         };
@@ -496,8 +495,7 @@ mod tests {
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
             // A controller listener offering PLAIN needs a credential table to
             // reach the outbound-mismatch error this case is about.
-            plain_credentials: [("admin".to_owned(), "admin-secret".to_owned())]
-                .into_iter()
+            plain_credentials: iter::once(("admin".to_owned(), "admin-secret".to_owned()))
                 .collect(),
             inter_broker_credentials: Some(InterBrokerCredentials::OAuthBearer {
                 token_path: "/unused/token".into(),

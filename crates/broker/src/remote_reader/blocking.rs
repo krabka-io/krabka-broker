@@ -185,7 +185,7 @@ mod tests {
 
         let reactor_ticked = Arc::new(AtomicBool::new(false));
         let observed_tick = Arc::new(AtomicBool::new(false));
-        let tick = reactor_ticked.clone();
+        let tick = Arc::clone(&reactor_ticked);
         tokio::spawn(async move {
             time::sleep(Duration::from_millis(5)).await;
             tick.store(true, Ordering::Release);
@@ -195,7 +195,7 @@ mod tests {
             Arc::new(LocalTieredStorage::new(remote_dir.path())),
             Arc::new(SlowListRlmm {
                 reactor_ticked,
-                observed_tick: observed_tick.clone(),
+                observed_tick: Arc::clone(&observed_tick),
             }),
         );
 

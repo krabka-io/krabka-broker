@@ -47,8 +47,6 @@ use crate::{error::BrokerError, http_server::spawn};
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 #[cfg(not(target_family = "wasm"))]
 use std::net::SocketAddr;
-#[cfg(not(target_family = "wasm"))]
-use tokio_util::sync::CancellationToken;
 use {
     crate::metadata_source::MetadataSource,
     std::{
@@ -59,8 +57,9 @@ use {
             atomic::{AtomicBool, Ordering},
         },
     },
-    tokio::net::TcpListener,
 };
+#[cfg(not(target_family = "wasm"))]
+use {tokio::net::TcpListener, tokio_util::sync::CancellationToken};
 
 #[cfg(test)]
 mod tests;

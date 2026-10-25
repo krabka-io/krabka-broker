@@ -47,7 +47,7 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     // Send ElectLeaders to the current raft leader. Any broker answers it the
     // same way now that the election reads replicated state, but the leader is
     // the node whose view cannot lag, so it is the one this case drives.
-    let controller_id = cluster[0].0.wait_until_controller_leader().await;
+    let controller_id = cluster[0].0.wait_until_controller_leader().await.unwrap();
     let leader_index = cluster
         .iter()
         .position(|(_, cfg, _)| cfg.node_id == controller_id)

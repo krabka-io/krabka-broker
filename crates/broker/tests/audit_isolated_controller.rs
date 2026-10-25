@@ -40,7 +40,7 @@ async fn only_a_broker_holds_the_audit_partition_under_an_isolated_controller() 
     )
     .await
     .expect("controller-only start");
-    controller.wait_until_controller_leader().await;
+    controller.wait_until_controller_leader().await.unwrap();
     let controller_created = controller
         .controller_image_for_test()
         .topic(AUDIT_TOPIC)

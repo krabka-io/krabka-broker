@@ -149,7 +149,8 @@ async fn a_frozen_topic_is_refused_and_its_log_end_offset_does_not_move() {
             fixture.log_dir_status.clone(),
             Arc::clone(&fixture.producer_state),
             false,
-        );
+        )
+        .unwrap();
         let topic_id = image.topic(topic).expect("topic").topic_id;
         let record = image.partition(topic, 0).expect("partition");
         part.install_replication_target(Some(topic_id), record.leader.0, record.leader_epoch.0)

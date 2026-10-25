@@ -131,7 +131,7 @@ async fn background_recovery_case(case: &BackgroundCase) {
     let mut cluster = start_gated_cluster(3, case.mode).await;
     support::wait_for_all_brokers_registered(&cluster, 3).await;
 
-    let leader = cluster[0].0.wait_until_controller_leader().await;
+    let leader = cluster[0].0.wait_until_controller_leader().await.unwrap();
     let victim_index = (0..cluster.len())
         .find(|index| cluster[*index].1.node_id != leader)
         .expect("a non-controller node");

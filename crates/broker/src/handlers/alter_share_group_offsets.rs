@@ -283,7 +283,7 @@ mod tests {
                 GroupType, ShareGroupSeed,
                 share::{
                     actor::{ShareGroupActorHandle, ShareGroupActorMessage},
-                    persistence::ShareGroupStatePartitionMetadataValue,
+                    persistence::{ShareGroupStatePartitionMetadataValue, TopicPartitionsInfo},
                 },
             },
             handlers::{
@@ -627,7 +627,7 @@ mod tests {
                     .group_coordinator
                     .share_persister()
                     .expect("share persister")
-                    .read_summary("g-acl", topic_id, 0)
+                    .read_state_summary("g-acl", topic_id, 0)
                     .await
                     .expect("read state")
             } else {
@@ -663,7 +663,7 @@ mod tests {
                     .group_coordinator
                     .share_persister()
                     .expect("share persister")
-                    .read_summary("g-acl", topic_id, 0)
+                    .read_state_summary("g-acl", topic_id, 0)
                     .await
                     .expect("read state");
                 assert!(after == topic_id_before, "row {index} ({case})");
@@ -767,7 +767,7 @@ mod tests {
             .cloned()
             .expect("share persister");
         let (_, _, start_offset, _) = persister
-            .read_summary("g-new", topic_id, 0)
+            .read_state_summary("g-new", topic_id, 0)
             .await
             .expect("read state")
             .expect("state present");
@@ -783,7 +783,7 @@ mod tests {
             assert!(resp.error_code == codes::NONE, "{resp:?}");
         }
         let (_, _, start_offset_after, _) = persister
-            .read_summary("g-new", topic_id, 0)
+            .read_state_summary("g-new", topic_id, 0)
             .await
             .expect("read state")
             .expect("state present");
@@ -889,7 +889,7 @@ mod tests {
             );
 
             let (state_epoch, _, start_offset, _) = persister
-                .read_summary("g-reset", topic_id, 0)
+                .read_state_summary("g-reset", topic_id, 0)
                 .await
                 .expect("read state")
                 .expect("state present");
@@ -903,20 +903,18 @@ mod tests {
             assert!(
                 seed.state_partition_metadata
                     == ShareGroupStatePartitionMetadataValue {
-                        initialized: vec![
-                            crate::coordinator::unified::share::persistence::TopicPartitionsInfo {
-                                topic_id,
-                                topic_name: "reset-topic".to_owned(),
-                                partitions: vec![0],
-                            }
-                        ],
+                        initialized: vec![TopicPartitionsInfo {
+                            topic_id,
+                            topic_name: "reset-topic".to_owned(),
+                            partitions: vec![0],
+                        }],
                         ..Default::default()
                     }
             );
         }
 
         let state = persister
-            .read_summary("g-reset", topic_id, 9)
+            .read_state_summary("g-reset", topic_id, 9)
             .await
             .expect("read unrequested state");
         assert!(state.is_none());

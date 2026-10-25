@@ -57,17 +57,13 @@ pub fn map_partition_rows<T>(
 }
 mod submit_failure;
 
-// `krabka_macros::named_acl_gates!` declares these gates `pub(crate)`, so they
-// cannot be re-exported any wider than the crate.
-pub(crate) use self::acl_gates::{
-    cluster_action_denied, cluster_alter_configs_denied, cluster_alter_denied,
-    cluster_describe_denied, group_delete_denied, group_describe_denied, group_read_denied,
-};
 pub use self::{
     acl_gates::{
         acl_denied, acl_denied_quiet, allowed_topics, any_topic_describe_denied,
-        cluster_describe_image, cluster_shortcut_denied, config_resource_refusal, denied_topics,
-        requested_topic_name, topic_decisions,
+        cluster_action_denied, cluster_alter_configs_denied, cluster_alter_denied,
+        cluster_describe_denied, cluster_describe_image, cluster_shortcut_denied,
+        config_resource_refusal, denied_topics, group_delete_denied, group_describe_denied,
+        group_read_denied, requested_topic_name, topic_decisions,
     },
     admin_audit::{audit_admin, audit_admin_for, audit_admin_success, audit_resource},
     coordinator_routing::{

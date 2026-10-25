@@ -119,9 +119,9 @@ pub(super) fn manager_with_dlq(dlq: Arc<dyn DlqSink>) -> Arc<SharePartitionLeade
 fn build(
     controller: Arc<dyn MetadataSource>,
     reg: Arc<PartitionRegistry>,
-    #[builder(into, default = SessionCapacity (crate :: config :: BrokerConfig :: default () . share_session_cache_max_when_unlimited))]
+    #[builder(into, default = SessionCapacity(BrokerConfig::default().share_session_cache_max_when_unlimited))]
     capacity: SessionCapacity,
-    #[builder(default = Arc :: new (RecordingDlq :: default ()))] dlq: Arc<dyn DlqSink>,
+    #[builder(default = Arc::new(RecordingDlq::default()))] dlq: Arc<dyn DlqSink>,
 ) -> Arc<SharePartitionLeaderManager> {
     let setup = ManagerSetup { capacity, dlq };
     let ManagerSetup { capacity, dlq } = setup;

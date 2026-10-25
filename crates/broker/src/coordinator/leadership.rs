@@ -224,7 +224,7 @@ fn spawn_partition_load(
                 }
                 let image = metadata.current_image();
                 super::topic_deletion::after_partition_load(&coordinator, &image, |group_id| {
-                    partition_for_group(&image, group_id) == partition.get()
+                    partition_for_group(&image, group_id) == Some(partition.get())
                 })
                 .await;
                 return;
@@ -310,7 +310,7 @@ async fn unload_partition(
     );
     let group_ids: Vec<String> = known_group_ids
         .into_iter()
-        .filter(|group_id| partition_for_group(image, group_id) == partition.get())
+        .filter(|group_id| partition_for_group(image, group_id) == Some(partition.get()))
         .collect();
     for group_id in group_ids {
         if let Some((_, handle)) = coordinator.groups.remove(&group_id) {
@@ -686,7 +686,7 @@ mod tests {
         broker_handle.wait_until_group_coordinator_ready().await;
         let broker = broker_handle.broker_arc_for_test();
         let image = broker.controller.current_image();
-        let partition = PartitionIndex(partition_for_group(&image, "g"));
+        let partition = PartitionIndex(partition_for_group(&image, "g").unwrap());
         let epoch = image
             .partition(OFFSETS_TOPIC, partition.get())
             .unwrap()

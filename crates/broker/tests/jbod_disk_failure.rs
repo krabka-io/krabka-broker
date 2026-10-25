@@ -332,7 +332,7 @@ async fn heartbeat_with_offline_log_dirs_is_accepted() {
 
     // Wait until the broker has registered itself and elected a raft leader
     // (so the heartbeat handler reaches the leader branch, not NOT_CONTROLLER).
-    handle.wait_until_controller_leader().await;
+    handle.wait_until_controller_leader().await.unwrap();
     let broker_epoch = handle
         .controller_image_for_test()
         .broker(krabka_raft::NodeId(handle.node_id()))

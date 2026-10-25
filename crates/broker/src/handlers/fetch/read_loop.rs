@@ -990,6 +990,7 @@ mod tests {
             Arc::clone(&broker.producer_state),
             setup.storage == StorageMode::Diskless,
         )
+        .unwrap()
     }
 
     /// A local partition read planned against `Broker`'s "leader with no

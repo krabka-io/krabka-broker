@@ -66,8 +66,10 @@ fn fixture_with_second_base(
     let mut encoded = first.clone();
     encoded.extend_from_slice(&second);
     let mut builder = WalObjectBuilder::new();
-    builder.append_run(topic_id, 0, 0, second_base, &encoded);
-    let bytes = builder.finish();
+    builder
+        .append_run(topic_id, 0, 0, second_base, &encoded)
+        .unwrap();
+    let bytes = builder.finish().unwrap();
     let manifest = parse_wal_object(&bytes).unwrap().remove(0);
     if object {
         let path = root.join("diskless-wal/1");

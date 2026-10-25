@@ -986,7 +986,8 @@ mod tests {
                 broker.log_dir_status.clone(),
                 Arc::clone(&broker.producer_state),
                 false,
-            ),
+            )
+            .unwrap(),
         );
         let image = broker.controller.current_image();
         let consumer = super::FetchAuthorization::Consumer {

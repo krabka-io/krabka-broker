@@ -353,7 +353,7 @@ async fn a_preferred_replica_outside_the_isr_reports_code_80() {
 
     // Keep a registered non-controller broker offline so the injected
     // preferred replica cannot race back into the ISR before the JVM command.
-    let controller_leader = brokers.h1.wait_until_controller_leader().await.0;
+    let controller_leader = brokers.h1.wait_until_controller_leader().await.unwrap().0;
     let preferred = (2_u64..=3)
         .find(|node| *node != controller_leader)
         .expect("a non-bootstrap, non-controller broker");

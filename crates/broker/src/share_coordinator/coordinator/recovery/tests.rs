@@ -161,7 +161,8 @@ async fn recover_honors_nondefault_read_bound() {
         &topic_id,
         0,
         ShareCoordinatorConfig::default().state_topic_num_partitions,
-    );
+    )
+    .unwrap();
     open_state_partition(&registry, dir.path(), state_partition);
     let partition = registry
         .get(bootstrap::TOPIC, PartitionIndex(state_partition))
@@ -350,7 +351,7 @@ async fn state_records_are_stored_in_the_configured_codec_and_recover() {
             .await
             .unwrap();
 
-        let state_partition = coord.state_partition_for("g", &tid, 0);
+        let state_partition = coord.state_partition_for("g", &tid, 0).unwrap();
         let stored: Vec<CompressionType> = reg
             .get(bootstrap::TOPIC, state_partition)
             .expect("state partition open")
@@ -391,7 +392,7 @@ async fn led_state_partition(log_dir: &Path, topic_id: uuid::Uuid) -> LedStatePa
         registry: reg,
     } = coordinator(log_dir);
     lead_all(&coord).await;
-    let state_partition = coord.state_partition_for("g", &topic_id, 0);
+    let state_partition = coord.state_partition_for("g", &topic_id, 0).unwrap();
     let part = reg
         .get(bootstrap::TOPIC, state_partition)
         .expect("state partition open");
@@ -586,7 +587,9 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
         Arc::clone(&registry),
         ShareCoordinatorConfig::default(),
     ));
-    let state_partition = coordinator_a.state_partition_for("g", &topic_id, 0);
+    let state_partition = coordinator_a
+        .state_partition_for("g", &topic_id, 0)
+        .unwrap();
     open_state_partition(&registry, dir.path(), state_partition.get());
     let data_image = image_with_topic(topic_id, 1);
 
@@ -780,7 +783,7 @@ fn coordinator_for_topic(
         Arc::clone(registry),
         ShareCoordinatorConfig::default(),
     ));
-    let state_partition = coordinator.state_partition_for("g", &topic_id, 0);
+    let state_partition = coordinator.state_partition_for("g", &topic_id, 0).unwrap();
     CoordinatorForTopic {
         coordinator,
         state_partition,

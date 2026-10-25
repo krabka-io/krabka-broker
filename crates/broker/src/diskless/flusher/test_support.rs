@@ -90,7 +90,8 @@ pub(super) fn test_partition(
         LogDirRegistry::default(),
         Arc::new(ProducerState::new()),
         storage == StorageMode::Diskless,
-    );
+    )
+    .unwrap();
     handle.current_leader.store(leader.0, Ordering::Relaxed);
     handle
 }

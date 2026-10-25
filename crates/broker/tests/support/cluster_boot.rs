@@ -356,7 +356,7 @@ pub async fn wait_for_all_brokers_registered(
 pub async fn two_controller_followers(
     cluster: &[(BrokerHandle, BrokerConfig, TempDir)],
 ) -> (NodeId, usize, usize) {
-    let leader = cluster[0].0.wait_until_controller_leader().await;
+    let leader = cluster[0].0.wait_until_controller_leader().await.unwrap();
     let followers: Vec<usize> = (0..cluster.len())
         .filter(|&i| cluster[i].0.node_id() != leader.0)
         .collect();

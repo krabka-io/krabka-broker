@@ -40,6 +40,7 @@ use {
         collections::{BTreeMap, HashSet},
         fmt, fs,
         future::{self, Future},
+        iter,
         path::{Path, PathBuf},
         sync::PoisonError,
         time::Instant,
@@ -485,6 +486,7 @@ pub fn spawn_standalone_partition(
         Arc::new(ProducerState::new()),
         storage == StorageMode::Diskless,
     )
+    .unwrap()
 }
 
 /// Block an artifact rewrite or deletion using a real filesystem directory collision.
@@ -529,7 +531,7 @@ pub async fn start_controller() -> (BrokerHandle, SocketAddr, tempfile::TempDir)
     } = start_bound_controller(|_| {}).await;
     // Bind the handle after the directory so a failed readiness wait drops the broker first.
     let broker = controller;
-    broker.wait_until_controller_leader().await;
+    broker.wait_until_controller_leader().await.unwrap();
     (broker, controller_addr, dir)
 }
 
@@ -911,9 +913,7 @@ pub fn elr_model_image(topic: &str, replication_factor: i16, min_isr: usize) -> 
     }));
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: topic.to_owned(),
-        overrides: [(MIN_INSYNC_REPLICAS.to_owned(), min_isr.to_string())]
-            .into_iter()
-            .collect(),
+        overrides: iter::once((MIN_INSYNC_REPLICAS.to_owned(), min_isr.to_string())).collect(),
     }));
     image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
         node_id: DEFAULT_BROKER_CONFIG_NODE_ID,
@@ -2912,7 +2912,8 @@ pub async fn committed_partition(
         registry,
         Arc::new(ProducerState::new()),
         false,
-    );
+    )
+    .unwrap();
     part.current_leader.store(leader.0, Ordering::Relaxed);
     part.set_follower_hw(krabka_log::Offset(i64::MAX)).await;
     part
@@ -2967,9 +2968,7 @@ pub fn elr_topic_records(
         MetadataRecord::V1Partition(partition),
         MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic,
-            overrides: [(MIN_INSYNC_REPLICAS.to_owned(), min_isr.to_owned())]
-                .into_iter()
-                .collect(),
+            overrides: iter::once((MIN_INSYNC_REPLICAS.to_owned(), min_isr.to_owned())).collect(),
         }),
     ]
 }
@@ -3041,8 +3040,8 @@ pub fn described_creation_configs(
 /// A fresh log and deterministic timestamps bracketing its segment age limit.
 pub struct SegmentAgeFixture {
     pub(crate) log: krabka_log::Log,
-    pub(crate) config: krabka_log::LogConfig,
-    pub(crate) dir: tempfile::TempDir,
+    /// Keeps the log's directory alive for as long as the fixture.
+    pub(crate) _dir: tempfile::TempDir,
     pub(crate) roll_ms: i64,
     pub(crate) first_ms: i64,
 }
@@ -3052,10 +3051,9 @@ pub fn segment_age_fixture() -> SegmentAgeFixture {
     let dir = tempfile::tempdir().unwrap();
     let config = krabka_log::LogConfig::default();
     let roll_ms = config.segment_roll_interval.millis_i64_trunc();
-    let log = krabka_log::Log::open(dir.path(), config.clone()).unwrap();
+    let log = krabka_log::Log::open(dir.path(), config).unwrap();
     SegmentAgeFixture {
-        dir,
-        config,
+        _dir: dir,
         log,
         roll_ms,
         first_ms: 1_700_000_000_000,

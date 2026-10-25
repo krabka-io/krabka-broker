@@ -19,14 +19,18 @@
 
 #[cfg(not(target_family = "wasm"))]
 use crate::http_server::spawn;
-#[cfg(not(target_family = "wasm"))]
-use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
+#[cfg(target_family = "wasm")]
+use std::future;
 use {
     crate::metrics::SharedRegistry,
-    prometheus_client::encoding::text,
     std::{io, net::SocketAddr},
-    tokio::net::TcpListener,
     tokio_util::sync::CancellationToken,
+};
+#[cfg(not(target_family = "wasm"))]
+use {
+    axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get},
+    prometheus_client::encoding::text,
+    tokio::net::TcpListener,
 };
 
 /// Builds the public observability router. Profiling routes deliberately live
@@ -61,13 +65,13 @@ pub async fn run(
 /// `BrokerConfig::validate` refuses `metrics_listen_addr` on this platform,
 /// which has no `bind` and no HTTP server stack.
 #[cfg(target_family = "wasm")]
-pub(crate) fn run(
+pub fn run(
     addr: SocketAddr,
     _registry: SharedRegistry,
     _shutdown: CancellationToken,
-) -> std::future::Ready<std::io::Result<SocketAddr>> {
-    std::future::ready(Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
+) -> future::Ready<io::Result<SocketAddr>> {
+    future::ready(Err(io::Error::new(
+        io::ErrorKind::Unsupported,
         format!(
             "cannot serve metrics on {addr}: the metrics server is unavailable on this platform"
         ),

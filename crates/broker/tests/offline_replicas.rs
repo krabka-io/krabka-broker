@@ -248,7 +248,7 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
         extra,
         addr,
     } = start_two_dir_broker().await;
-    handle.wait_until_controller_leader().await;
+    handle.wait_until_controller_leader().await.unwrap();
     create_topic(addr).await;
     for partition in 0..PARTITIONS {
         handle.wait_until_partition_present(TOPIC, partition).await;

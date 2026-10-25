@@ -39,6 +39,7 @@ pub fn evicted_segments(input: &TokenStream) -> Result<TokenStream, ParseError> 
     let log = Ident::new("retained_log").with_span(Span::mixed_site());
     let active = Ident::new("active_base").with_span(Span::mixed_site());
     let sealed = Ident::new("sealed").with_span(Span::mixed_site());
+    let end = Ident::new("log_end").with_span(Span::mixed_site());
     Ok(moxy::template! {
         {
             {{ assertion }}!({{ removed }} == {{ exports }}.len());
@@ -46,7 +47,9 @@ pub fn evicted_segments(input: &TokenStream) -> Result<TokenStream, ParseError> 
             let {{ active }} = {{ exports }}.last().unwrap().last_offset + 1;
             {{ assertion }}!({{ log }}.local_log_start_offset() == {{ active }});
             let {{ sealed }} = sealed_ranges(&mut {{ log }});
-            {{ assertion }}!({{ sealed }} == vec![SealedRange::new({{ active }}, {{ log }}.log_end_offset() - 1)]);
+            let {{ end }} = {{ log }}.log_end_offset();
+            drop({{ log }});
+            {{ assertion }}!({{ sealed }} == vec![SealedRange::new({{ active }}, {{ end }} - 1)]);
         }
     })
 }

@@ -54,7 +54,15 @@ impl TxnCoordinator {
             return self.dispatch_local_markers(entry, marker_type).await;
         };
         let image = transport.controller.current_image();
-        let coordinator_partition = self.partition_for(&entry.transactional_id);
+        let coordinator_partition = match self.require_partition_for(&entry.transactional_id) {
+            Ok(partition) => partition,
+            Err(error) => {
+                return MarkerFanOut {
+                    written: Vec::new(),
+                    failure: Some(error),
+                };
+            }
+        };
         // Kafka sends the coordinator epoch that the partition was loaded at,
         // not the epoch of a later image.
         let Some(coordinator_epoch) = self.loaded_leader_epoch(coordinator_partition).await else {
@@ -244,7 +252,8 @@ mod tests {
             LogDirRegistry::default(),
             Arc::new(ProducerState::new()),
             false,
-        );
+        )
+        .unwrap();
         // The metadata reconcile installs this broker as the leader.
         local.install_leader_change(1, 0).await;
         coordinator

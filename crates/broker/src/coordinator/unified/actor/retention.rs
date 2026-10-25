@@ -366,7 +366,10 @@ mod tests {
         assert2::check,
         bytes::Bytes,
         krabka_log::Offset,
-        std::{collections::HashMap, time::Duration},
+        std::{
+            collections::{BTreeSet, HashMap},
+            time::Duration,
+        },
     };
 
     const RETENTION_MS: i64 = 1_000;
@@ -671,7 +674,7 @@ mod tests {
                     let mut group = ConsumerState::new("g");
                     for regex in ["b.*", "a.*"] {
                         group.set_resolved_regex(regex.into(), ResolvedRegularExpression {
-                            topics: std::collections::BTreeSet::new(),
+                            topics: BTreeSet::new(),
                             version: 1,
                             timestamp_ms: 2,
                         });

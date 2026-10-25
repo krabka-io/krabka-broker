@@ -64,7 +64,7 @@ pub async fn start_three_broker_plaintext_cluster_with_log_dirs(
 pub async fn controller_leader_addr(handles: &[&BrokerHandle]) -> SocketAddr {
     // Event-driven: await a non-zero elected controller leader on the first
     // handle's leader watch channel instead of polling `controller_leader_id`.
-    let leader_id = handles[0].wait_until_controller_leader().await;
+    let leader_id = handles[0].wait_until_controller_leader().await.unwrap();
     // We identify the leader by the node_id — it is the raft node id (u64)
     // which equals (broker_index + 1). The handles slice is ordered
     // [broker1, broker2, broker3], so handle[i] has node_id = i+1.

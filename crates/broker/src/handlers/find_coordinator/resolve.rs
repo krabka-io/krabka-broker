@@ -33,9 +33,9 @@ pub(super) fn resolve_transaction_keys(
     keys: Vec<String>,
 ) -> Vec<Coordinator> {
     keys.into_iter()
-        .map(|key| {
-            let partition = broker.txn_coordinator.partition_for(&key).get();
-            resolve_partition_coordinator(target, TOPIC, partition, key)
+        .map(|key| match broker.txn_coordinator.partition_for(&key) {
+            Some(partition) => resolve_partition_coordinator(target, TOPIC, partition.get(), key),
+            None => unavailable_coordinator(key),
         })
         .collect()
 }

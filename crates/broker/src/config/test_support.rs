@@ -8,6 +8,7 @@ use {
     },
     assert2::assert,
     krabka_security::{ListenerProtocol, SaslMechanism},
+    std::iter,
 };
 
 /// A rejection of a runtime config: the message `validate` reports, and the
@@ -66,9 +67,7 @@ pub fn base() -> BrokerConfig {
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain, SaslMechanism::ScramSha512],
         // PLAIN is enabled above, and `validate` refuses that with an empty
         // credential table.
-        plain_credentials: [("admin".to_owned(), "admin-secret".to_owned())]
-            .into_iter()
-            .collect(),
+        plain_credentials: iter::once(("admin".to_owned(), "admin-secret".to_owned())).collect(),
         ..BrokerConfig::default()
     }
 }

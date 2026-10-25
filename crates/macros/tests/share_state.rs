@@ -250,14 +250,14 @@ impl Drop for Active<'_> {
 }
 
 impl AdmissionDomain {
-    fn state_partition_for(&self, group: &str, topic: &[u8; 16], partition: i32) -> usize {
+    async fn active_for_key(
+        &self,
+        group: &str,
+        topic: &[u8; 16],
+        partition: i32,
+    ) -> Result<Active<'_>, ()> {
         assert!(group == "group" && topic[0] == 1 && partition == 2);
         self.events.borrow_mut().push("key");
-        0
-    }
-
-    async fn active(&self, partition: usize) -> Result<Active<'_>, ()> {
-        assert!(partition == 0);
         self.events.borrow_mut().push("acquire");
         task::yield_now().await;
         if self.admitted {

@@ -428,8 +428,8 @@ mod tests {
         // Wide metadata topic so the two user-partitions land in distinct
         // metadata partitions.
         let n = 16;
-        let mp_owned = metadata_partition_for(&owned, n);
-        let mp_other = metadata_partition_for(&not_owned, n);
+        let mp_owned = metadata_partition_for(&owned, n).unwrap();
+        let mp_other = metadata_partition_for(&not_owned, n).unwrap();
         assert!(mp_owned != mp_other, "test needs distinct metadata buckets");
 
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(n);
@@ -441,7 +441,7 @@ mod tests {
         // all-consuming writer.
         {
             let writer = TopicBasedRemoteLogMetadataManager::start(
-                log.clone(),
+                Arc::clone(&log),
                 runtime::Handle::current(),
                 writer_snap_dir.path().to_path_buf(),
                 Duration::from_hours(1),
@@ -452,14 +452,14 @@ mod tests {
                 .await;
             let id = krabka_remote_storage::RemoteLogSegmentId::new(owned.clone(), Uuid::new_v4());
             let md = synthetic_started_segment(id.clone(), 0, 99, 100);
-            let w2 = writer.clone();
+            let w2 = Arc::clone(&writer);
             let md2 = md.clone();
             task::spawn_blocking(move || {
                 w2.add_remote_log_segment_metadata(md2).unwrap();
             })
             .await
             .unwrap();
-            let w2 = writer.clone();
+            let w2 = Arc::clone(&writer);
             task::spawn_blocking(move || {
                 w2.update_remote_log_segment_metadata(
                     krabka_remote_storage::RemoteLogSegmentMetadataUpdate {
@@ -479,7 +479,7 @@ mod tests {
 
         // A fresh manager that consumes NOTHING until assigned.
         let m = TopicBasedRemoteLogMetadataManager::start(
-            log.clone(),
+            Arc::clone(&log),
             runtime::Handle::current(),
             mgr_snap_dir.path().to_path_buf(),
             Duration::from_hours(1),
@@ -489,7 +489,7 @@ mod tests {
         let ReaderWithDir {
             dir: _remote_dir,
             reader,
-        } = assigned_reader_with_metadata(|| m.clone());
+        } = assigned_reader_with_metadata(|| Arc::<TopicBasedRemoteLogMetadataManager>::clone(&m));
 
         // Unowned partition (never assigned) → the list path treats it as a
         // genuine miss: empty, not an error.

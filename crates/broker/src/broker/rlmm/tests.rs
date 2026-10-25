@@ -287,11 +287,11 @@ fn needed_metadata_partitions_covers_led_and_followed() {
         ));
     }
 
-    let got = needed_metadata_partitions(&image, krabka_audit::NodeId(7), 50);
+    let got = needed_metadata_partitions(&image, krabka_audit::NodeId(7), 50).unwrap();
 
     let mut expected = vec![
-        metadata_partition_for(&TopicIdPartition::new(topic_id, "orders", 0), 50),
-        metadata_partition_for(&TopicIdPartition::new(topic_id, "orders", 1), 50),
+        metadata_partition_for(&TopicIdPartition::new(topic_id, "orders", 0), 50).unwrap(),
+        metadata_partition_for(&TopicIdPartition::new(topic_id, "orders", 1), 50).unwrap(),
     ];
     expected.sort_unstable();
     expected.dedup();
@@ -334,10 +334,11 @@ async fn topic_assignment_uses_discovered_count_after_config_changes() {
         ..Default::default()
     };
     let first_image = image_for(0);
-    let first_expected = needed_metadata_partitions(&first_image, node, 3);
+    let first_expected = needed_metadata_partitions(&first_image, node, 3).unwrap();
     assert!(
         first_expected
             != needed_metadata_partitions(&first_image, node, changed_config.num_partitions)
+                .unwrap()
     );
     let snapshot_dir = tempdir().unwrap();
     let manager = TopicBasedRemoteLogMetadataManager::start(
@@ -360,7 +361,7 @@ async fn topic_assignment_uses_discovered_count_after_config_changes() {
     for (expected, next_image) in [
         (first_expected, None),
         (
-            needed_metadata_partitions(&image_for(1), node, 3),
+            needed_metadata_partitions(&image_for(1), node, 3).unwrap(),
             Some(image_for(1)),
         ),
     ] {

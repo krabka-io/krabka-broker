@@ -212,7 +212,7 @@ mod tests {
         ])
         .unwrap();
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
-        let mp = metadata_partition_for(&tp(), log.partition_count());
+        let mp = metadata_partition_for(&tp(), log.partition_count()).unwrap();
         log.publish(
             mp,
             MetadataEvent::AddSegment(started(10, 0, 99))
@@ -240,7 +240,7 @@ mod tests {
     async fn invalid_snapshot_cursor_discards_stale_dump_and_replays_from_zero() {
         let dir = snapshot_test_dir("invalid-cursor");
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
-        let mp = metadata_partition_for(&tp(), log.partition_count());
+        let mp = metadata_partition_for(&tp(), log.partition_count()).unwrap();
         let mut committed_offsets = vec![-1; 4];
         committed_offsets[usize::try_from(mp).unwrap()] = i64::MAX;
         let snapshot = Snapshot {
@@ -271,7 +271,7 @@ mod tests {
     async fn stale_snapshot_cursor_replays_the_exact_lifecycle_suffix() {
         let dir = snapshot_test_dir("stale-cursor");
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
-        let mp = metadata_partition_for(&tp(), log.partition_count());
+        let mp = metadata_partition_for(&tp(), log.partition_count()).unwrap();
 
         let writer = start_manager_in(Arc::clone(&log), dir.clone()).unwrap();
         writer.reconcile_assignment(&[mp]).await;
@@ -325,7 +325,7 @@ mod tests {
         let path = dir.join(SNAPSHOT_FILE_NAME);
         let snap = Snapshot::load(&path).unwrap().expect("snapshot written");
         // The orders partition's committed offset covers both events.
-        let p = metadata_partition_for(&tp(), 4);
+        let p = metadata_partition_for(&tp(), 4).unwrap();
         let idx = usize::try_from(p).unwrap();
         check!(
             snap.committed_offsets[idx] >= 1,
@@ -356,7 +356,7 @@ mod tests {
         }
 
         // Snapshot now records committed offset N for the orders partition.
-        let p = metadata_partition_for(&tp(), 4);
+        let p = metadata_partition_for(&tp(), 4).unwrap();
         let idx = usize::try_from(p).unwrap();
         let snap = Snapshot::load(&dir.join(SNAPSHOT_FILE_NAME))
             .unwrap()

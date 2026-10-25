@@ -72,7 +72,7 @@ mod state_machine;
 pub mod test_support;
 
 use crate::{
-    codes::{COORDINATOR_LOAD_IN_PROGRESS, NOT_COORDINATOR},
+    codes::{COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR},
     partition_registry::PartitionRegistry,
     share_coordinator::{
         bootstrap, config::ShareCoordinatorConfig, partitioner::partition_for_share_key,
@@ -489,7 +489,7 @@ impl ShareCoordinator {
     /// Removes every in-memory key that maps to `state_partition`.
     fn drop_partition_state(&self, state_partition: PartitionIndex) {
         self.state.retain(|(group, topic_id, partition), _| {
-            self.state_partition_for(group, topic_id, *partition) != state_partition
+            self.state_partition_for(group, topic_id, *partition) != Some(state_partition)
         });
     }
 
@@ -509,6 +509,26 @@ impl ShareCoordinator {
                     led.status
                 }
             })
+    }
+
+    /// [`Self::active`] for the state partition of the share key
+    /// `(group, topic_id, partition)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `COORDINATOR_NOT_AVAILABLE` when the configured partition count
+    /// is not positive, so the key maps to no state partition, and otherwise
+    /// the errors of [`Self::active`].
+    pub(super) async fn active_for_key(
+        &self,
+        group: &str,
+        topic_id: &uuid::Uuid,
+        partition: i32,
+    ) -> Result<Active<'_>, ShareErrorCode> {
+        let state_partition = self
+            .state_partition_for(group, topic_id, partition)
+            .ok_or(COORDINATOR_NOT_AVAILABLE)?;
+        self.active(state_partition).await
     }
 
     /// Returns a read guard on the leadership map, and the term of
@@ -631,19 +651,21 @@ impl ShareCoordinator {
     }
 
     /// Returns the `__share_group_state` partition index responsible for the
-    /// share key `(group, topic_id, partition)`.
+    /// share key `(group, topic_id, partition)`, or `None` when the configured
+    /// partition count is not positive.
     #[must_use]
     pub(crate) fn state_partition_for(
         &self,
         group: &str,
         topic_id: &uuid::Uuid,
         partition: i32,
-    ) -> PartitionIndex {
-        PartitionIndex(partition_for_share_key(
+    ) -> Option<PartitionIndex> {
+        partition_for_share_key(
             group,
             topic_id,
             partition,
             self.config.state_topic_num_partitions,
-        ))
+        )
+        .map(PartitionIndex)
     }
 }

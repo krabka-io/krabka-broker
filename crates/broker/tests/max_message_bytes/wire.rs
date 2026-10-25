@@ -187,9 +187,7 @@ pub use crate::support::produce::expected_partition_success as accepted;
 /// answers a 2049-byte batch with exactly this row: error code 10,
 /// `base_offset=-1`, `log_append_time_ms=-1`, `log_start_offset=-1`, no record
 /// errors and no error message.
-pub fn too_large() -> PartitionProduceResponse {
-    refused_before_append(codes::MESSAGE_TOO_LARGE)
-}
+pub fn too_large() -> PartitionProduceResponse { refused_before_append(codes::MESSAGE_TOO_LARGE) }
 
 /// The partition row a record set larger than `segment.bytes` answers with:
 /// `RECORD_LIST_TOO_LARGE` (18), Kafka's `RecordBatchTooLargeException`, with

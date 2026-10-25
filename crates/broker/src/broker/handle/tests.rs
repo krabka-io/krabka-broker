@@ -95,7 +95,7 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
             .is_ok()
     );
 
-    let leader = handle.wait_until_controller_leader().await;
+    let leader = handle.wait_until_controller_leader().await.unwrap();
     assert!(leader == krabka_raft::NodeId(handle.node_id()));
     assert!(handle.controller_leader_id() == Some(krabka_raft::NodeId(handle.node_id())));
 

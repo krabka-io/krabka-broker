@@ -339,11 +339,10 @@ impl Material {
                 builder.with_client_cert_verifier(verifier)
             }
         };
-        let mut config = builder
+        let config = builder
             .with_single_cert(self.certs.clone(), self.key.clone_key())
             .map_err(invalid)?;
-        export_secrets(&mut config);
-        Ok(Arc::new(config))
+        Ok(Arc::new(export_secrets(config)))
     }
 
     /// The subject DN and SANs of the leaf certificate.
@@ -358,16 +357,15 @@ impl Material {
 
 /// As in `TlsConfig::build_server_config`: on Linux, kTLS installs the
 /// traffic secrets rustls exports.
-fn export_secrets(config: &mut rustls::ServerConfig) {
-    #[cfg(target_os = "linux")]
-    {
-        config.enable_secret_extraction = true;
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = config;
-    }
+#[cfg(target_os = "linux")]
+fn export_secrets(mut config: rustls::ServerConfig) -> rustls::ServerConfig {
+    config.enable_secret_extraction = true;
+    config
 }
+
+/// Elsewhere there is no kTLS, so rustls exports nothing.
+#[cfg(not(target_os = "linux"))]
+const fn export_secrets(config: rustls::ServerConfig) -> rustls::ServerConfig { config }
 
 /// A `GeneralName` as Java's `X509Certificate.getSubjectAlternativeNames`
 /// prints it: `[type, value]`.

@@ -308,7 +308,7 @@ impl RemoteStorageManager for FakeWormArchive {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(metadata.remote_log_segment_id().id, sealed.bytes.to_vec());
-        Ok(Some(sealed.receipt.to_custom_metadata()))
+        Ok(Some(sealed.receipt.to_custom_metadata()?))
     }
 
     fn delete_log_segment_data(
@@ -385,7 +385,8 @@ pub fn leading_partition_over(index: PartitionIndex, log_dir: &Path, log: Log) -
         LogDirRegistry::default(),
         Arc::new(ProducerState::new()),
         false,
-    );
+    )
+    .unwrap();
     partition.current_leader.store(1, Ordering::Relaxed);
     partition.current_leader_epoch.store(0, Ordering::Release);
     // A sole replica has replicated everything it wrote: the high watermark

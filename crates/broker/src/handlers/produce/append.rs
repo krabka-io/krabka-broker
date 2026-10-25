@@ -741,38 +741,40 @@ mod tests {
                 })
                 .unwrap();
             let producer_state = Arc::new(ProducerState::new());
-            let pending = PendingAck::new(
-                PartitionProduceResponse {
-                    index: 0,
-                    base_offset: 0,
-                    ..Default::default()
-                },
-                Arc::clone(&partition),
-                Offset(1),
-                Some(AppendCommit {
-                    producer_state: Arc::clone(&producer_state),
-                    topic: "t".into(),
-                    partition: 0,
-                    pid: 42,
-                    epoch: 0,
-                    base_seq: 0,
-                    last_offset_delta: 0,
-                    max_timestamp: 0,
-                    is_transactional: false,
-                    base_offset: Offset(0),
-                }),
-                partition.lock_produce_transition().await,
-            );
             let (images, receiver) = watch::channel(Arc::new(image.clone()));
-            let changed = pending.leadership_changed(receiver);
-            let waiting = pending.finish(
-                Instant::now() + Duration::from_secs(30),
-                |partition, _| {
-                    assert!(partition.current_leader.load(Ordering::Acquire) == 1);
-                    Ok(2)
-                },
-                changed,
-            );
+            let waiting = {
+                let pending = PendingAck::new(
+                    PartitionProduceResponse {
+                        index: 0,
+                        base_offset: 0,
+                        ..Default::default()
+                    },
+                    Arc::clone(&partition),
+                    Offset(1),
+                    Some(AppendCommit {
+                        producer_state: Arc::clone(&producer_state),
+                        topic: "t".into(),
+                        partition: 0,
+                        pid: 42,
+                        epoch: 0,
+                        base_seq: 0,
+                        last_offset_delta: 0,
+                        max_timestamp: 0,
+                        is_transactional: false,
+                        base_offset: Offset(0),
+                    }),
+                    partition.lock_produce_transition().await,
+                );
+                let changed = pending.leadership_changed(receiver);
+                pending.finish(
+                    Instant::now() + Duration::from_secs(30),
+                    |partition, _| {
+                        assert!(partition.current_leader.load(Ordering::Acquire) == 1);
+                        Ok(2)
+                    },
+                    changed,
+                )
+            };
             tokio::pin!(waiting);
             assert!(futures_util::poll!(waiting.as_mut()).is_pending());
             let next_topic_id = if recreated {

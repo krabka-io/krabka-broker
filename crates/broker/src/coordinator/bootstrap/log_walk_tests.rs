@@ -153,7 +153,8 @@ async fn replay_carries_an_open_transactions_offsets_forward_as_pending() {
                     expire_timestamp_ms: None,
                     topic_id: None,
                 }
-                .encode_value(),
+                .encode_value()
+                .unwrap(),
             ),
             ..Default::default()
         }],
@@ -363,7 +364,7 @@ async fn replay_keeps_the_committed_topic_id() {
     let record = |partition: i32, delta: i32, entry: &OffsetEntry| Record {
         offset_delta: delta,
         key: Some(OffsetCommitValue::encode_key("g", "t", partition).unwrap()),
-        value: Some(OffsetCommitValue::from(entry).encode_value()),
+        value: Some(OffsetCommitValue::from(entry).encode_value().unwrap()),
         ..Default::default()
     };
 

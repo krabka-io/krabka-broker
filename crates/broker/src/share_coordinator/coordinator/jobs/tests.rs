@@ -65,7 +65,9 @@ async fn job_keys_are_bucketed_once_per_sweep() {
                 check!(bucket.keys.windows(2).all(|keys| keys[0] < keys[1]));
                 for (group, topic_id, partition) in &bucket.keys {
                     check!(
-                        coord.state_partition_for(group, topic_id, *partition)
+                        coord
+                            .state_partition_for(group, topic_id, *partition)
+                            .unwrap()
                             == bucket.term.partition
                     );
                 }
@@ -98,7 +100,7 @@ async fn job_keys_are_bucketed_once_per_sweep() {
             .iter()
             .filter(|entry| {
                 let (group, topic, partition) = entry.key();
-                coord.state_partition_for(group, topic, *partition) != inactive
+                coord.state_partition_for(group, topic, *partition).unwrap() != inactive
             })
             .count();
         check!(observed == expected, "{partitions}");
@@ -119,7 +121,7 @@ async fn collected_keys_do_not_authorize_a_new_load_generation() {
     let fresh = (0..10_000)
         .map(|index| (format!("replayed-{index}"), T1, 0))
         .find(|(group, topic, partition)| {
-            coord.state_partition_for(group, topic, *partition) == bucket.term.partition
+            coord.state_partition_for(group, topic, *partition).unwrap() == bucket.term.partition
         })
         .unwrap();
     coord.state.insert(
@@ -151,7 +153,7 @@ async fn collected_keys_include_an_initialize_in_the_same_generation() {
     let bucket = populated_bucket(&coord).await;
     let fresh = (0..10_000)
         .map(|index| format!("initialized-{index}"))
-        .find(|group| coord.state_partition_for(group, &T1, 0) == bucket.term.partition)
+        .find(|group| coord.state_partition_for(group, &T1, 0).unwrap() == bucket.term.partition)
         .unwrap();
     let image = image_with_topics(&[(T1, 1), (T2, 1)]);
     coord
@@ -207,7 +209,10 @@ async fn two_keys(dir: &Path, config: ShareCoordinatorConfig) -> TwoKeys {
 }
 
 fn records_of(coord: &ShareCoordinator, group: &str, topic_id: uuid::Uuid) -> Vec<LoggedRecord> {
-    logged_records(coord, coord.state_partition_for(group, &topic_id, 0))
+    logged_records(
+        coord,
+        coord.state_partition_for(group, &topic_id, 0).unwrap(),
+    )
 }
 
 fn snapshot_of_b(snapshot_epoch: i32, write_timestamp: i64) -> Logged {
@@ -245,7 +250,9 @@ async fn deleted_topic_keys_are_tombstoned() {
     check!(a_records == vec![Logged::Tombstone]);
     check!(coord.state_for_test("ga", T1, 0).await.is_none());
     check!(coord.state_for_test("gb", T2, 0).await.is_some());
-    if coord.state_partition_for("ga", &T1, 0) != coord.state_partition_for("gb", &T2, 0) {
+    if coord.state_partition_for("ga", &T1, 0).unwrap()
+        != coord.state_partition_for("gb", &T2, 0).unwrap()
+    {
         check!(records_of(&coord, "gb", T2) == b_before);
     }
 }
@@ -282,7 +289,7 @@ async fn cold_snapshot_then_prune_frees_the_log_prefix() {
     }
 
     coord.prune_state_partitions().await;
-    let state_partition = coord.state_partition_for("gb", &T2, 0);
+    let state_partition = coord.state_partition_for("gb", &T2, 0).unwrap();
     let part = coord
         .partitions
         .get(bootstrap::TOPIC, state_partition)
@@ -343,7 +350,7 @@ async fn run_loop_reacts_to_images_and_timers() {
         images
             .send(with_share_version(image_with_topics(&[(T2, 1)]), level))
             .unwrap();
-        let a_partition = coord.state_partition_for("ga", &T1, 0);
+        let a_partition = coord.state_partition_for("ga", &T1, 0).unwrap();
         check!(
             eventually(|| logged_records(&coord, a_partition)
                 .iter()
@@ -352,7 +359,7 @@ async fn run_loop_reacts_to_images_and_timers() {
             "level {level}"
         );
 
-        let b_partition = coord.state_partition_for("gb", &T2, 0);
+        let b_partition = coord.state_partition_for("gb", &T2, 0).unwrap();
         let part = coord.partitions.get(bootstrap::TOPIC, b_partition).unwrap();
         if jobs_run {
             check!(

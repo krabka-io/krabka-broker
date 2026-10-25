@@ -12,6 +12,8 @@
 //! the model is a value rather than a `cfg` so that tests on a native target
 //! can drive the preopened model too.
 
+#[cfg(target_os = "wasi")]
+use std::future;
 use {
     std::{
         io,
@@ -89,8 +91,8 @@ pub async fn bind_listener(addr: SocketAddr) -> io::Result<TcpListener> {
 /// WASI preview 1 has no `bind`: every listener has to come from the
 /// embedder, so a listener that the broker would bind itself is an error.
 #[cfg(target_os = "wasi")]
-pub(crate) fn bind_listener(addr: SocketAddr) -> std::future::Ready<io::Result<TcpListener>> {
-    std::future::ready(Err(io::Error::new(
+pub fn bind_listener(addr: SocketAddr) -> future::Ready<io::Result<TcpListener>> {
+    future::ready(Err(io::Error::new(
         io::ErrorKind::Unsupported,
         format!(
             "cannot bind a listener on {addr}: this platform has no bind; pass a preopened \

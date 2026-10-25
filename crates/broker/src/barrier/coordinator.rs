@@ -323,10 +323,7 @@ impl BarrierCoordinator {
 
     /// The entry of `group`, or a fresh one.
     fn entry_handle(&self, group: &str) -> Arc<Mutex<GroupEntry>> {
-        Arc::clone(self.groups
-            .entry(group.to_owned())
-            .or_default()
-            .value())
+        Arc::clone(self.groups.entry(group.to_owned()).or_default().value())
     }
 
     /// The entry of a group that this broker holds.

@@ -558,7 +558,8 @@ async fn run_case(case: Case) {
     let leader_id = started_controllers[0]
         .handle
         .wait_until_controller_leader()
-        .await;
+        .await
+        .unwrap();
     let started_brokers = start_all()
         .nodes(brokers)
         .quorum(quorum)

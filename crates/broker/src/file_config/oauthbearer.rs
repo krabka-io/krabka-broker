@@ -10,7 +10,9 @@ use {
     std::path::PathBuf,
 };
 
-/// TOML shape of `[oauthbearer]`. Maps to
+/// TOML shape of `[oauthbearer]`.
+///
+/// Maps to
 /// [`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri`
 /// selects the signed-JWT validator; setting
 /// `introspection_endpoint_uri` selects the RFC 7662 introspection

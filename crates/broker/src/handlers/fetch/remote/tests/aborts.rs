@@ -103,7 +103,8 @@ async fn remote_fetch_reports_an_abort_in_a_later_segment_or_the_local_tail() {
             broker.log_dir_status.clone(),
             Arc::clone(&broker.producer_state),
             false,
-        );
+        )
+        .unwrap();
         part.replica_state.lock().await.hw = end;
         let mut pending = out_of_range_at(&part, 0);
         pending.read_committed = true;

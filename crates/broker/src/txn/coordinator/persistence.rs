@@ -105,7 +105,7 @@ impl TxnCoordinator {
         format_txnv: TxnVersion,
     ) -> Result<TxnEntry, BrokerError> {
         let tid = entry.transactional_id.clone();
-        let p = self.partition_for(&tid);
+        let p = self.require_partition_for(&tid)?;
         let term = self.loaded_term(p).await?;
         self.validate_pid_install(&entry)?;
 
@@ -188,7 +188,7 @@ impl TxnCoordinator {
     )]
     pub(crate) async fn tombstone(&self, entry: &TxnEntry) -> Result<(), BrokerError> {
         let tid = entry.transactional_id.as_str();
-        let p = self.partition_for(tid);
+        let p = self.require_partition_for(tid)?;
         let term = self.loaded_term(p).await?;
 
         let batch = state_batch(Bytes::from(encode_key(tid)?), None, time_util::now_ms());
@@ -233,7 +233,7 @@ pub(super) fn replay_partition(
     part: &Partition,
     partition: PartitionIndex,
     read: (krabka_units::ByteSize, bool),
-    partition_for: impl Fn(&str) -> PartitionIndex,
+    partition_for: impl Fn(&str) -> Option<PartitionIndex>,
 ) -> RecoveredTransactions {
     let mut recovered = RecoveredTransactions::default();
     if let Err(error) = replay_into(&mut recovered, part, partition, read, partition_for) {
@@ -262,7 +262,7 @@ fn replay_into(
     part: &Partition,
     p: PartitionIndex,
     (read_max, last_epoch_tag): (krabka_units::ByteSize, bool),
-    partition_for: impl Fn(&str) -> PartitionIndex,
+    partition_for: impl Fn(&str) -> Option<PartitionIndex>,
 ) -> Result<(), BrokerError> {
     let mut offset = part.log_start_offset();
     loop {
@@ -288,7 +288,7 @@ fn replay_into(
                     continue;
                 }
                 let tid = decode_key(key_bytes)?;
-                let partition_matches = partition_for(&tid) == p;
+                let partition_matches = partition_for(&tid) == Some(p);
                 let Some(value_bytes) = rec.value.as_ref() else {
                     if !partition_matches {
                         return Err(BrokerError::Txn(format!(
@@ -520,7 +520,7 @@ mod tests {
                 &part,
                 PartitionIndex(0),
                 (krabka_units::mebibytes(1), false),
-                |tid| PartitionIndex(i32::from(tid == "misplaced")),
+                |tid| Some(PartitionIndex(i32::from(tid == "misplaced"))),
             );
             (state, pid_to_tid)
         };

@@ -1,5 +1,7 @@
 //! Close a response writer that stops making progress, returning its queue permits.
 
+#[krabka_macros::sendfile_cfg]
+use tokio::net::TcpStream;
 use {
     crate::network::fetch_writer::SendfileSink,
     krabka_raft::{ObservedStream, StreamObserver},
@@ -9,10 +11,7 @@ use {
         task::{Context, Poll},
         time::Duration,
     },
-    tokio::{
-        net::TcpStream,
-        time::{self, Sleep},
-    },
+    tokio::time::{self, Sleep},
 };
 
 /// The listener's idle window applies to pending writes as well as reads.

@@ -112,7 +112,7 @@ fn expected_response(rows: &[ExpectedRow]) -> TxnOffsetCommitResponse {
 /// `NOT_COORDINATOR`.
 async fn lead_group_elsewhere(handle: &BrokerHandle, group_id: &str) {
     let broker = handle.broker_arc_for_test();
-    let partition = partition_for_group(&broker.controller.current_image(), group_id);
+    let partition = partition_for_group(&broker.controller.current_image(), group_id).unwrap();
     let elsewhere = krabka_metadata::NodeId(broker.config.node_id.0 + 1);
     broker
         .controller

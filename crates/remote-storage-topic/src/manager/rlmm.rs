@@ -25,7 +25,8 @@ impl TopicBasedRemoteLogMetadataManager {
         partition: &TopicIdPartition,
         read: impl FnOnce(&InmemoryRemoteLogMetadataManager) -> Result<T, RemoteStorageError>,
     ) -> Result<T, RemoteStorageError> {
-        let mp = metadata_partition_for(partition, self.log.partition_count());
+        let mp = metadata_partition_for(partition, self.log.partition_count())
+            .map_err(MetadataLogError::into_storage)?;
         match self.metadata_partition_gate(mp) {
             // An unassigned partition is a genuine miss, even if the cache
             // retains entries consumed under an earlier assignment.
@@ -155,7 +156,8 @@ impl RemoteLogMetadataManager for TopicBasedRemoteLogMetadataManager {
     // Like every sync method here, this blocks on the manager's runtime, so it
     // is called only from `spawn_blocking` threads.
     fn caught_up(&self, topic_id_partition: &TopicIdPartition) -> Result<bool, RemoteStorageError> {
-        let mp = metadata_partition_for(topic_id_partition, self.log.partition_count());
+        let mp = metadata_partition_for(topic_id_partition, self.log.partition_count())
+            .map_err(MetadataLogError::into_storage)?;
         match self.metadata_partition_gate(mp) {
             // This broker does not consume `mp`, so it cannot vouch for it.
             ReadGate::Unassigned => Ok(false),
@@ -293,7 +295,7 @@ mod tests {
         expected: fn(i32) -> CaughtUp,
     ) {
         let log = HwmFlakyLog::new(4);
-        let mp = metadata_partition_for(&tp(), log.partition_count());
+        let mp = metadata_partition_for(&tp(), log.partition_count()).unwrap();
         // The expectation takes the metadata partition, which a NotReady
         // answer names.
         let expected = expected(mp);

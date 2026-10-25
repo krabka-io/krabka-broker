@@ -663,7 +663,7 @@ mod tests {
                     completing_classic_group, decode_assignment, last_classic_metadata,
                     make_coordinator, make_coordinator_with_config,
                     make_coordinator_with_topic_config, make_coordinator_with_topic_policy,
-                    marked_classic_handle, rpc, seed_and_upgrade,
+                    marked_classic_handle, rpc, seed_and_upgrade, subscription_blob,
                 },
             },
             classic_state::GroupState as ClassicGroupState,
@@ -674,7 +674,15 @@ mod tests {
         },
         assert2::{assert, check},
         bytes::Bytes,
-        krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+        krabka_protocol::{
+            owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+            records::RecordBatch,
+        },
+        std::{
+            collections::HashSet,
+            sync::{Arc, atomic::Ordering},
+        },
+        tokio::{sync::oneshot, time},
     };
 
     /// Kafka's `group.initial.rebalance.delay.ms = 0`: the first member of a
@@ -687,7 +695,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn zero_initial_rebalance_delay_completes_a_new_groups_first_join_at_once() {
         let (coord, _log) = make_coordinator_with_config(NextGenConfig {
-            classic_initial_rebalance_delay: std::time::Duration::ZERO,
+            classic_initial_rebalance_delay: Duration::ZERO,
             ..NextGenConfig::assigning_at_once()
         });
         let handle = marked_classic_handle(&coord, "g");
@@ -696,8 +704,8 @@ mod tests {
         check!(assigned.error_code == codes::MEMBER_ID_REQUIRED);
         let member_id = assigned.member_id;
 
-        let join = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
+        let join = time::timeout(
+            Duration::from_secs(1),
             rpc::classic_join(&handle, &member_id, "t"),
         )
         .await
@@ -865,8 +873,7 @@ mod tests {
         let (coord, log) = make_coordinator();
         let rejoin = stable_static_group_and_rejoin();
         let seeded = super::super::test_support::seed_classic_group(&coord, rejoin.group);
-        log.fail_next
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        log.fail_next.store(true, Ordering::SeqCst);
 
         let response = send_join(&seeded.handle, rejoin.request).await;
 
@@ -930,8 +937,8 @@ mod tests {
         assert!(!p_2.is_empty(), "the new member must receive an assignment");
 
         // Disjoint, and together cover {0, 1}.
-        let set_c: std::collections::HashSet<i32> = p_c.iter().copied().collect();
-        let set_2: std::collections::HashSet<i32> = p_2.iter().copied().collect();
+        let set_c: HashSet<i32> = p_c.iter().copied().collect();
+        let set_2: HashSet<i32> = p_2.iter().copied().collect();
         assert!(
             set_c.is_disjoint(&set_2),
             "the two members must hold disjoint partitions"
@@ -1033,9 +1040,7 @@ mod tests {
             protocol_type: protocol_type.into(),
             protocols: vec![JoinGroupRequestProtocol {
                 name: protocol_name.into(),
-                metadata: crate::coordinator::unified::actor::test_support::subscription_blob(&[
-                    "t",
-                ]),
+                metadata: subscription_blob(&["t"]),
                 ..Default::default()
             }],
             ..Default::default()
@@ -1167,7 +1172,7 @@ mod tests {
     }
 
     /// The shape of each record of `batch`.
-    fn batch_shape(batch: &krabka_protocol::records::RecordBatch) -> Vec<RecordShape> {
+    fn batch_shape(batch: &RecordBatch) -> Vec<RecordShape> {
         use crate::coordinator::unified::persistence::{Key, parse_key};
         batch
             .records
@@ -1500,8 +1505,8 @@ mod tests {
         );
     }
 
-    fn fixed_topic_resolver() -> std::sync::Arc<FixedRegexResolver> {
-        std::sync::Arc::new(FixedRegexResolver::new(&[("t.*", &["t"])]))
+    fn fixed_topic_resolver() -> Arc<FixedRegexResolver> {
+        Arc::new(FixedRegexResolver::new(&[("t.*", &["t"])]))
     }
 
     /// Kafka's `classicGroupJoinToConsumerGroup` runs
@@ -1519,7 +1524,7 @@ mod tests {
         });
         let handle = coord.get_or_create_group("g", GroupKindTag::Consumer);
         let native_resolver = fixed_topic_resolver();
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         handle
             .tx
             .send(GroupActorMessage::Heartbeat {
@@ -1533,7 +1538,7 @@ mod tests {
                 },
                 client_id: "client-a".into(),
                 client_host: String::new(),
-                regex_resolver: native_resolver.clone(),
+                regex_resolver: Arc::<FixedRegexResolver>::clone(&native_resolver),
                 reply: tx,
             })
             .await
@@ -1542,7 +1547,7 @@ mod tests {
         assert!(native_resolver.calls() == 1);
         let classic_resolver = fixed_topic_resolver();
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         handle
             .tx
             .send(GroupActorMessage::ClassicJoin {
@@ -1550,7 +1555,7 @@ mod tests {
                 version: 9,
                 client_id: "client-b".into(),
                 client_host: "127.0.0.1".into(),
-                regex_resolver: classic_resolver.clone(),
+                regex_resolver: Arc::<FixedRegexResolver>::clone(&classic_resolver),
                 reply: tx,
             })
             .await

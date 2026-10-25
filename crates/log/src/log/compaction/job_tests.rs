@@ -214,13 +214,13 @@ fn a_fence_during_the_build_waits_for_it_to_stop_writing() {
 
     let built = thread::scope(|scope| {
         let builder = scope.spawn(|| job.build());
-        control.wait_until_paused();
+        control.wait_until_paused().unwrap();
         let fencer = scope.spawn(|| log.fence());
         // The build is held inside a write, so the fence has to wait for it.
         thread::sleep(Duration::from_millis(100));
         check!(!fencer.is_finished());
 
-        control.resume();
+        control.resume().unwrap();
         fencer.join().unwrap();
         let after_fence = cleaned_files(dir.path());
         let built = builder.join().unwrap();

@@ -16,7 +16,7 @@ use {
         CustomMetadata, LogSegmentData, RemoteLogSegmentMetadata, RemoteStorageError,
     },
     std::{
-        io,
+        io, iter,
         path::Path,
         sync::{
             Condvar, Mutex, PoisonError,
@@ -107,11 +107,15 @@ impl RemoteStorageManager for TestRsm {
                     .partition
                     == BLOCKED_PARTITION
                 {
-                    let open = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
-                    let (_open, wait) = self
+                    let (open, wait) = self
                         .opened
-                        .wait_timeout_while(open, GATE_WAIT, |open| !*open)
+                        .wait_timeout_while(
+                            self.gate.lock().unwrap_or_else(PoisonError::into_inner),
+                            GATE_WAIT,
+                            |open| !*open,
+                        )
                         .expect("gate mutex poisoned");
+                    drop(open);
                     if wait.timed_out() {
                         self.gave_up.store(true, Ordering::Relaxed);
                         return Err(RemoteStorageError::Io(io::Error::other(
@@ -175,7 +179,7 @@ async fn a_parked_copy_does_not_hold_the_next_partitions_copy() {
     );
 
     let gated = Arc::new(TestRsm::new(CopyBehaviour::Gate));
-    let rsm: Arc<dyn RemoteStorageManager> = gated.clone();
+    let rsm = Arc::clone(&gated) as Arc<dyn RemoteStorageManager>;
     let rlmm = fixtures::in_memory_metadata();
     let controller = fixed_source(image_with_orders_partitions(2));
 
@@ -206,7 +210,9 @@ async fn a_parked_copy_does_not_hold_the_next_partitions_copy() {
 /// the config carries is the number the sweep uses and not a hard-coded one.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_copier_bound_caps_the_copies_in_flight() {
-    let dirs: Vec<tempfile::TempDir> = (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
+    let dirs: Vec<tempfile::TempDir> = iter::repeat_with(|| tempfile::tempdir().unwrap())
+        .take(4)
+        .collect();
     let partitions = PartitionRegistry::new();
     for (index, dir) in dirs.iter().enumerate() {
         let index = i32::try_from(index).expect("four partitions fit in i32");
@@ -218,7 +224,7 @@ async fn the_copier_bound_caps_the_copies_in_flight() {
     }
 
     let counting = Arc::new(TestRsm::new(CopyBehaviour::Dwell));
-    let rsm: Arc<dyn RemoteStorageManager> = counting.clone();
+    let rsm = Arc::clone(&counting) as Arc<dyn RemoteStorageManager>;
     let rlmm = fixtures::in_memory_metadata();
     let controller = fixed_source(image_with_orders_partitions(4));
 

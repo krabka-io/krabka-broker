@@ -254,9 +254,9 @@ impl TxnCoordinator {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         self.state
-            .retain(|tid, _| self.partition_for(tid) != partition);
+            .retain(|tid, _| self.partition_for(tid) != Some(partition));
         self.pid_to_tid
-            .retain(|_, tid| self.partition_for(tid) != partition);
+            .retain(|_, tid| self.partition_for(tid) != Some(partition));
     }
 
     /// Replays `partition` for the term of `generation` and publishes the
@@ -268,7 +268,11 @@ impl TxnCoordinator {
     async fn load_partition(self: Arc<Self>, partition: PartitionIndex, generation: u64) {
         // An append holds this lock across its write, so the replay starts
         // after every append that began in an older term.
-        let state_partition_write = self.state_partition_writes.lock_for(partition).lock().await;
+        let state_partition_write = self
+            .state_partition_writes
+            .lock_for(Some(partition))
+            .lock()
+            .await;
         // Kafka's `loadTransactionMetadata` never fails: a replay error ends
         // the replay with what it loaded so far, and a partition without a
         // log loads empty. Only a replay task that dies fails the load here.
@@ -281,7 +285,7 @@ impl TxnCoordinator {
                     &part,
                     partition,
                     (read_max, last_epoch_tag),
-                    |tid| PartitionIndex(partition_for_tid(tid, num_partitions)),
+                    |tid| partition_for_tid(tid, num_partitions).map(PartitionIndex),
                 ))
             })
             .await

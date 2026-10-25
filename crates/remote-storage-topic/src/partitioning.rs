@@ -6,18 +6,27 @@
 //! which match the identity of `TopicIdPartition`. A topic rename therefore
 //! does not move the bucket.
 
-use {krabka_remote_storage::TopicIdPartition, krabka_verified::remote_metadata_partition};
+use {
+    crate::error::MetadataLogError, krabka_remote_storage::TopicIdPartition,
+    krabka_verified::remote_metadata_partition,
+};
 
 /// Pick the metadata-topic partition for `tp`, given the
 /// `partition_count` of `__remote_log_metadata`.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics when `partition_count <= 0`.
-#[must_use]
-pub fn metadata_partition_for(tp: &TopicIdPartition, partition_count: i32) -> i32 {
-    remote_metadata_partition(tp.topic_id.as_u128(), tp.partition, partition_count)
-        .expect("partition_count must be positive")
+/// Returns [`MetadataLogError::NonPositivePartitionCount`] when
+/// `partition_count <= 0`.
+pub fn metadata_partition_for(
+    tp: &TopicIdPartition,
+    partition_count: i32,
+) -> Result<i32, MetadataLogError> {
+    remote_metadata_partition(tp.topic_id.as_u128(), tp.partition, partition_count).ok_or(
+        MetadataLogError::NonPositivePartitionCount {
+            count: partition_count,
+        },
+    )
 }
 
 /// Deduped, sorted set of `__remote_log_metadata` partitions that carry
@@ -27,33 +36,34 @@ pub fn metadata_partition_for(tp: &TopicIdPartition, partition_count: i32) -> i3
 /// This is the set a broker must consume to serve remote
 /// reads for the partitions it leads or follows.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics when `partition_count <= 0`. [`metadata_partition_for`] raises the
-/// panic.
-#[must_use]
-pub fn metadata_partitions_for<'a, I>(tps: I, partition_count: i32) -> Vec<i32>
+/// Returns [`MetadataLogError::NonPositivePartitionCount`] when
+/// `partition_count <= 0`, even for an empty `tps`.
+pub fn metadata_partitions_for<'a, I>(
+    tps: I,
+    partition_count: i32,
+) -> Result<Vec<i32>, MetadataLogError>
 where
     I: IntoIterator<Item = &'a TopicIdPartition>,
 {
-    assert2::assert!(partition_count > 0, "partition_count must be positive");
-    let mut set: Vec<i32> = tps
+    if partition_count <= 0 {
+        return Err(MetadataLogError::NonPositivePartitionCount {
+            count: partition_count,
+        });
+    }
+    let mut set = tps
         .into_iter()
         .map(|tp| metadata_partition_for(tp, partition_count))
-        .collect();
+        .collect::<Result<Vec<i32>, _>>()?;
     set.sort_unstable();
     set.dedup();
-    set
+    Ok(set)
 }
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::*,
-        assert2::assert,
-        std::{collections::HashSet, panic},
-        uuid::Uuid,
-    };
+    use {super::*, assert2::assert, std::collections::HashSet, uuid::Uuid};
 
     fn tp(name: &str, partition: i32) -> TopicIdPartition {
         TopicIdPartition::new(
@@ -66,7 +76,7 @@ mod tests {
     #[test]
     fn is_in_range() {
         for p in 0..10 {
-            let bucket = metadata_partition_for(&tp("orders", p), 50);
+            let bucket = metadata_partition_for(&tp("orders", p), 50).unwrap();
             assert!((0..50).contains(&bucket), "bucket {bucket} out of [0,50)");
         }
     }
@@ -78,21 +88,21 @@ mod tests {
         eighth = { 7, 26 },
     )]
     fn matches_jvm_remote_metadata_partitioner_goldens(partition: i32, expected: i32) {
-        assert2::assert!(metadata_partition_for(&tp("orders", partition), 50) == expected);
+        assert2::assert!(metadata_partition_for(&tp("orders", partition), 50).unwrap() == expected);
     }
 
     #[test]
     fn is_deterministic_across_calls() {
-        let a = metadata_partition_for(&tp("orders", 7), 50);
-        let b = metadata_partition_for(&tp("orders", 7), 50);
+        let a = metadata_partition_for(&tp("orders", 7), 50).unwrap();
+        let b = metadata_partition_for(&tp("orders", 7), 50).unwrap();
         assert!(a == b);
     }
 
     #[test]
     fn ignores_topic_name() {
         // Identity is (topic_id, partition); name is informational.
-        let a = metadata_partition_for(&tp("orders", 3), 50);
-        let b = metadata_partition_for(&tp("renamed", 3), 50);
+        let a = metadata_partition_for(&tp("orders", 3), 50).unwrap();
+        let b = metadata_partition_for(&tp("renamed", 3), 50).unwrap();
         assert!(a == b, "renaming a topic must not re-bucket its metadata");
     }
 
@@ -100,7 +110,7 @@ mod tests {
     fn different_partitions_distribute() {
         let mut seen = HashSet::new();
         for p in 0..200 {
-            seen.insert(metadata_partition_for(&tp("orders", p), 50));
+            seen.insert(metadata_partition_for(&tp("orders", p), 50).unwrap());
         }
         // Sanity: a hash that always returned 0 would land only one bucket.
         assert!(
@@ -113,13 +123,17 @@ mod tests {
     #[test]
     fn single_partition_count_collapses_to_zero() {
         for p in 0..20 {
-            assert!(metadata_partition_for(&tp("t", p), 1) == 0);
+            assert!(metadata_partition_for(&tp("t", p), 1).unwrap() == 0);
         }
     }
 
     #[test]
-    #[should_panic(expected = "partition_count must be positive")]
-    fn rejects_zero_partition_count() { let _ = metadata_partition_for(&tp("t", 0), 0); }
+    fn rejects_zero_partition_count() {
+        assert!(matches!(
+            metadata_partition_for(&tp("t", 0), 0),
+            Err(MetadataLogError::NonPositivePartitionCount { count: 0 })
+        ));
+    }
 
     #[test]
     fn metadata_partitions_for_dedupes_and_sorts() {
@@ -127,9 +141,9 @@ mod tests {
         // collapse to one entry; the result is sorted ascending.
         let a = tp("orders", 0);
         let b = tp("orders", 1);
-        let pa = metadata_partition_for(&a, 50);
-        let pb = metadata_partition_for(&b, 50);
-        let got = metadata_partitions_for([a.clone(), b, a].iter(), 50);
+        let pa = metadata_partition_for(&a, 50).unwrap();
+        let pb = metadata_partition_for(&b, 50).unwrap();
+        let got = metadata_partitions_for([a.clone(), b, a].iter(), 50).unwrap();
         let mut expected: Vec<i32> = vec![pa, pb];
         expected.sort_unstable();
         expected.dedup();
@@ -140,7 +154,7 @@ mod tests {
     #[test]
     fn metadata_partitions_for_empty_is_empty() {
         let none: [TopicIdPartition; 0] = [];
-        assert!(metadata_partitions_for(none.iter(), 50).is_empty());
+        assert!(metadata_partitions_for(none.iter(), 50).unwrap().is_empty());
     }
 
     #[yare::parameterized(
@@ -149,7 +163,12 @@ mod tests {
     )]
     fn metadata_partitions_for_empty_rejects_nonpositive_count(count: i32) {
         let none: [TopicIdPartition; 0] = [];
-        let result = panic::catch_unwind(|| metadata_partitions_for(none.iter(), count));
-        assert2::assert!(result.is_err(), "count {count} must panic before iteration");
+        assert2::assert!(
+            matches!(
+                metadata_partitions_for(none.iter(), count),
+                Err(MetadataLogError::NonPositivePartitionCount { count: c }) if c == count
+            ),
+            "count {count} must be rejected before iteration"
+        );
     }
 }

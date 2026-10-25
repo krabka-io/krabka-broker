@@ -31,6 +31,8 @@
 //! appended bytes in memory to serve those reads, and every byte that is not
 //! on the disk yet.
 
+#[cfg(any(target_os = "linux", test))]
+use std::mem;
 use {
     crate::io::LogIo,
     bytes::Bytes,
@@ -38,7 +40,6 @@ use {
         collections::{BTreeMap, VecDeque},
         fs::File,
         io::{self, Error, ErrorKind},
-        mem,
         panic::{self, AssertUnwindSafe},
         sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
         thread,

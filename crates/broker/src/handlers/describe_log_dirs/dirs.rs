@@ -6,11 +6,12 @@
 //! inside it, and two of them are platform-specific, so they sit apart from the
 //! scan loop.
 
+#[cfg(unix)]
+use rustix::fs;
 use {
     crate::{codes, cordoned_log_dirs::CordonedLogDirs},
     krabka_metadata::metadata_version,
     krabka_protocol::owned::describe_log_dirs_response::DescribeLogDirsResult,
-    rustix::fs,
     std::{
         path,
         path::{Path, PathBuf},
@@ -98,7 +99,7 @@ fn disk_stats(dir: &Path) -> Option<DiskStats> {
 }
 
 #[cfg(not(unix))]
-fn disk_stats(_dir: &std::path::Path) -> Option<DiskStats> { None }
+fn disk_stats(_dir: &Path) -> Option<DiskStats> { None }
 
 // Both tests below are unix-only, so the module itself is gated: on another
 // platform there would be no test left to use the `assert2` imports.

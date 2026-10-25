@@ -59,7 +59,9 @@ pub struct FileTlsConfig {
 fn default_principal_mapping_rules() -> Vec<String> { vec!["DEFAULT".to_owned()] }
 
 /// Whether a TLS listener asks for and requires a client certificate,
-/// Kafka's `ssl.client.auth`. `Disabled` is the default and never asks;
+/// Kafka's `ssl.client.auth`.
+///
+/// `Disabled` is the default and never asks;
 /// `Optional` asks and accepts a connection that presents none; `Required`
 /// rejects a connection that presents none. `Optional` and `Required` both
 /// need a `client_ca_path`.

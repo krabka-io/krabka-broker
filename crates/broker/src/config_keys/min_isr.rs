@@ -136,6 +136,7 @@ mod tests {
             BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
             NodeId, PartitionElrRecord, PartitionRecord, TopicConfigRecord,
         },
+        std::iter,
     };
 
     fn image(topic_override: Option<&str>, cluster_default: Option<&str>) -> MetadataImage {
@@ -143,9 +144,7 @@ mod tests {
         if let Some(value) = topic_override {
             image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: "t".into(),
-                overrides: [(MIN_INSYNC_REPLICAS.to_owned(), value.to_owned())]
-                    .into_iter()
-                    .collect(),
+                overrides: iter::once((MIN_INSYNC_REPLICAS.to_owned(), value.to_owned())).collect(),
             }));
         }
         if let Some(value) = cluster_default {

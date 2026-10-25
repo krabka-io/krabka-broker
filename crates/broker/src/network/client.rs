@@ -6,6 +6,8 @@
 //! The replicator's Fetch path, the raft transport's outbound dial, and the
 //! controller-heartbeat loop all use this client.
 
+#[cfg(target_family = "wasm")]
+use krabka_client_core::transport::{self, SocketOptions};
 #[cfg(not(target_family = "wasm"))]
 use krabka_units::convert::ByteSizeExt as _;
 use {
@@ -208,16 +210,12 @@ impl InterBrokerClient {
     /// [`krabka_client_core::transport::install_connector`]. The socket policy
     /// travels with the request, but a connector socket takes none of it.
     #[cfg(target_family = "wasm")]
-    async fn dial_tuned(&self, host: &str, port: u16) -> Result<TcpStream, std::io::Error> {
-        krabka_client_core::transport::dial(
-            unbracket_host(host),
-            port,
-            krabka_client_core::transport::SocketOptions {
-                send_buffer: Some(self.socket_send_buffer),
-                receive_buffer: Some(self.socket_receive_buffer),
-                nodelay: true,
-            },
-        )
+    async fn dial_tuned(&self, host: &str, port: u16) -> Result<TcpStream, io::Error> {
+        transport::dial(unbracket_host(host), port, SocketOptions {
+            send_buffer: Some(self.socket_send_buffer),
+            receive_buffer: Some(self.socket_receive_buffer),
+            nodelay: true,
+        })
         .await
     }
 

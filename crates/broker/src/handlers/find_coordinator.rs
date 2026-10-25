@@ -185,9 +185,11 @@ pub async fn handle(
             match req.key_type {
                 KEY_TYPE_GROUP => keys
                     .into_iter()
-                    .map(|key| {
-                        let partition = partition_for_group(&image, &key);
-                        resolve_partition_coordinator(&target, state_topic, partition, key)
+                    .map(|key| match partition_for_group(&image, &key) {
+                        Some(partition) => {
+                            resolve_partition_coordinator(&target, state_topic, partition, key)
+                        }
+                        None => unavailable_coordinator(key),
                     })
                     .collect(),
                 KEY_TYPE_TRANSACTION => resolve_transaction_keys(broker, &target, keys),
@@ -199,12 +201,14 @@ pub async fn handle(
                         let Some((group, topic_uuid, partition)) = parse_share_key(&key) else {
                             return unavailable_coordinator(key);
                         };
-                        let p = partition_for_share_key(
+                        let Some(p) = partition_for_share_key(
                             group,
                             &topic_uuid,
                             partition,
                             broker.config.share_coordinator.state_topic_num_partitions,
-                        );
+                        ) else {
+                            return unavailable_coordinator(key);
+                        };
                         resolve_partition_coordinator(&target, state_topic, p, key)
                     })
                     .collect(),

@@ -424,6 +424,7 @@ async fn local_retention_keeps_segments_whose_copy_never_finished() {
             "{name}"
         );
         check!(log.tierable_segments().len() == exports.len(), "{name}");
+        drop(log);
     }
 }
 

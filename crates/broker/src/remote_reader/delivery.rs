@@ -286,6 +286,7 @@ mod tests {
             assert!(fetches.iter().all(|(_, end, bytes)| {
                 end.is_some() && *bytes <= usize::try_from(MAX_ACTIVATION_SCAN_WINDOW).unwrap()
             }));
+            drop(fetches);
         }
     }
 
@@ -318,6 +319,7 @@ mod tests {
         let fetches = counted.log_fetches.lock().unwrap();
         assert!(fetches.len() == 1);
         assert!(fetches[0].2 == usize::try_from(INITIAL_ACTIVATION_SCAN_WINDOW).unwrap());
+        drop(fetches);
     }
 
     #[test]
@@ -471,6 +473,7 @@ mod tests {
             while !*released {
                 released = self.release.wake.wait(released).unwrap();
             }
+            drop(released);
             self.inner.fetch_log_segment(metadata, start, end)
         }
 

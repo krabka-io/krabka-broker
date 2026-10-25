@@ -6,8 +6,7 @@
 //! what they do to its epoch afterwards, so the setup lives here instead of
 //! being repeated beside each of them.
 
-pub use crate::support::boot_single;
-pub use crate::support::topic_id_for;
+pub use crate::support::{boot_single, topic_id_for};
 use {
     crate::support::{
         client::connect_client,

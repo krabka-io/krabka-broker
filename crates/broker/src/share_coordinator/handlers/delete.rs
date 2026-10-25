@@ -211,7 +211,9 @@ mod tests {
                 .expect("seed state");
             let partition = req.topics[0].partitions.first().map_or(0, |p| p.partition);
             let topic_id = uuid::Uuid::from_bytes(req.topics[0].topic_id.0);
-            let state_partition = coordinator.state_partition_for("g", &topic_id, partition);
+            let state_partition = coordinator
+                .state_partition_for("g", &topic_id, partition)
+                .unwrap();
             let before = logged_records(&coordinator, state_partition).len();
             if !led {
                 coordinator

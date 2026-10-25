@@ -984,7 +984,7 @@ mod tests {
         backend: &Arc<LeadershipMovingRsm>,
         rlmm: &Arc<dyn RemoteLogMetadataManager>,
     ) -> FencedPass {
-        let rsm: Arc<dyn RemoteStorageManager> = backend.clone();
+        let rsm = Arc::clone(backend) as Arc<dyn RemoteStorageManager>;
         let metrics = BrokerMetrics::new();
         let tier = fixtures::configured_tier()
             .rsm(&rsm)
@@ -1179,7 +1179,7 @@ mod tests {
     #[tokio::test]
     async fn copy_eligible_chains_consecutive_segments() {
         let archive = Arc::new(FakeWormArchive::new());
-        let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
+        let rsm = Arc::clone(&archive) as Arc<dyn RemoteStorageManager>;
         let rlmm = fixtures::in_memory_metadata();
         let exports = three_exports().call();
 
@@ -1225,7 +1225,8 @@ mod tests {
             prev_head: ChainHead([0xaa; 32]),
         })
         .with_head(ChainHead([0xbb; 32]))
-        .to_custom_metadata();
+        .to_custom_metadata()
+        .unwrap();
         rlmm.update_remote_log_segment_metadata(RemoteLogSegmentMetadataUpdate {
             remote_log_segment_id: segment_id,
             event_timestamp_ms: 101,
@@ -1236,7 +1237,7 @@ mod tests {
         .unwrap();
 
         let archive = Arc::new(FakeWormArchive::new());
-        let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
+        let rsm = Arc::clone(&archive) as Arc<dyn RemoteStorageManager>;
         let copied = copy_exports(
             &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
             three_exports().call(),

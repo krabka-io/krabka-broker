@@ -280,7 +280,8 @@ impl TopicBasedRemoteLogMetadataManager {
         tp: &TopicIdPartition,
         event: Bytes,
     ) -> Result<(), RemoteStorageError> {
-        let partition = metadata_partition_for(tp, self.log.partition_count());
+        let partition = metadata_partition_for(tp, self.log.partition_count())
+            .map_err(MetadataLogError::into_storage)?;
         self.runtime.block_on(async {
             let TrackedPublish { offset, reply } = tokio::select! {
                 biased;

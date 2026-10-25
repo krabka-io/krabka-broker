@@ -343,7 +343,7 @@ pub fn ensure_local_partition(cfg: &Config) -> Result<(), String> {
                 .parent()
                 .ok_or_else(|| "placed partition dir has no parent log.dir".to_owned())?
                 .to_path_buf();
-            Ok(spawn_partition_with_replication_target()
+            spawn_partition_with_replication_target()
                 .topic(cfg.topic.to_string())
                 .replication_target(task_replication_target(cfg))
                 .partition_id(cfg.partition)
@@ -352,7 +352,8 @@ pub fn ensure_local_partition(cfg: &Config) -> Result<(), String> {
                 .log_dir_status(cfg.log_dir_status.clone())
                 .producer_state(Arc::clone(&cfg.producer_state))
                 .diskless(false)
-                .call())
+                .call()
+                .map_err(|e| format!("spawn partition: {e}"))
         })
 }
 

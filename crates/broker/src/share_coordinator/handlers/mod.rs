@@ -99,11 +99,11 @@ pub mod test_support {
             },
             primitives::uuid::Uuid as ProtoUuid,
         },
-        std::{fmt::Debug, path::Path, sync::Arc, time::Duration},
+        std::{fmt::Debug, ops::RangeInclusive, path::Path, sync::Arc, time::Duration},
         tokio::time::{sleep, timeout},
     };
 
-    pub fn batch(bounds: std::ops::RangeInclusive<Offset>) -> StateBatch {
+    pub fn batch(bounds: RangeInclusive<Offset>) -> StateBatch {
         state_batch()
             .bounds(bounds)
             .delivery(FixtureDeliveryState::Acknowledged)

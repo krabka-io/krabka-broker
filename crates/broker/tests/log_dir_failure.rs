@@ -111,7 +111,7 @@ async fn start_cluster() -> Cluster {
         "controller-only start",
     )
     .await;
-    controller.wait_until_controller_leader().await;
+    controller.wait_until_controller_leader().await.unwrap();
 
     let mut brokers = Vec::with_capacity(NODES - 1);
     for index in 1..NODES {

@@ -498,7 +498,8 @@ async fn the_writer_takes_produces_while_a_pass_builds() {
     let waiting = Arc::clone(&control);
     task::spawn_blocking(move || waiting.wait_until_paused())
         .await
-        .expect("join");
+        .expect("join")
+        .expect("a build reaches its first compaction write");
     // The build is held inside a write. The produce must not wait for it.
     time::timeout(
         Duration::from_secs(5),
@@ -506,7 +507,7 @@ async fn the_writer_takes_produces_while_a_pass_builds() {
     )
     .await
     .expect("a produce completes while the pass builds");
-    control.resume();
+    control.resume().expect("the pause is installed");
     compacted.await.expect("compact ack").expect("compact");
 
     let kept: Vec<(i64, Bytes)> = log

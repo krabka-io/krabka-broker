@@ -255,8 +255,8 @@ mod tests {
         // Two ids this broker coordinates, and one it does not.
         let (ongoing_id, dead_id) = ("tx-ongoing", "tx-dead");
         lead_transaction_state_partitions(&broker_handle, &[
-            coordinator.partition_for(ongoing_id),
-            coordinator.partition_for(dead_id),
+            coordinator.partition_for(ongoing_id).unwrap(),
+            coordinator.partition_for(dead_id).unwrap(),
         ])
         .await;
         for (tid, state) in [(ongoing_id, TxnState::Ongoing), (dead_id, TxnState::Dead)] {
@@ -371,7 +371,10 @@ mod tests {
         let peer = peer();
         let tid = "tx";
 
-        lead_transaction_state_partitions(&broker_handle, &[coordinator.partition_for(tid)]).await;
+        lead_transaction_state_partitions(&broker_handle, &[coordinator
+            .partition_for(tid)
+            .unwrap()])
+        .await;
 
         let mut entry = TxnEntry::new_empty(tid.to_owned(), ProducerId(100), 3, 60_000, 0);
         entry.state = TxnState::Ongoing;

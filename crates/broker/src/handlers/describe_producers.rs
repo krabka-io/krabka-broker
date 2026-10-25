@@ -254,7 +254,7 @@ mod tests {
         bytes::Bytes,
         krabka_metadata::NodeId,
         krabka_protocol::owned::describe_producers_request::TopicRequest,
-        std::sync::Arc,
+        std::sync::{Arc, atomic::Ordering},
     };
 
     const VERSION: i16 = 0;
@@ -566,10 +566,7 @@ mod tests {
                     .partitions
                     .get(topic, krabka_ids::PartitionIndex(0))
                     .filter(|partition| {
-                        partition
-                            .current_leader
-                            .load(std::sync::atomic::Ordering::Acquire)
-                            == leader.0
+                        partition.current_leader.load(Ordering::Acquire) == leader.0
                     });
                 let image_holds = broker
                     .controller

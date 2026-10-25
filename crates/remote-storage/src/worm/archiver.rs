@@ -192,9 +192,11 @@ mod tests {
         )
         .unwrap();
         match stamp {
-            Some(stamp) => {
-                md.with_custom_metadata(WormChainRecord::request(stamp).to_custom_metadata())
-            }
+            Some(stamp) => md.with_custom_metadata(
+                WormChainRecord::request(stamp)
+                    .to_custom_metadata()
+                    .unwrap(),
+            ),
             None => md,
         }
     }

@@ -296,7 +296,7 @@ mod tests {
         let controller = MockController::holding(&[long_ago(1)]);
         let shutdown = CancellationToken::new();
         let mut task = tokio::spawn(run(
-            controller.clone(),
+            Arc::<MockController>::clone(&controller),
             millis(50),
             PROPOSAL_RETENTION,
             shutdown.clone(),

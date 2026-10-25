@@ -714,7 +714,7 @@ mod tests {
             unknown_max_timestamp,
         }]);
         let counted = CountingRsm::counting(Arc::clone(&reader.rsm));
-        let rsm: Arc<dyn RemoteStorageManager> = counted.rsm.clone();
+        let rsm = Arc::clone(&counted.rsm) as Arc<dyn RemoteStorageManager>;
         let reader = RemoteReader::new(rsm, Arc::clone(&reader.rlmm));
         (ReaderWithDir { reader, dir }, counted)
     }
@@ -742,6 +742,7 @@ mod tests {
             assert!(ranges.len() == 1);
             assert!(ranges[0].1.is_some(), "the log GET must be bounded");
             transferred.push((tail_batches, ranges[0].2));
+            drop(ranges);
             drop(dir);
         }
         assert!(transferred == vec![(16, 64 * 1024), (64, 64 * 1024)]);
@@ -768,6 +769,7 @@ mod tests {
             let ranges = counted.log_fetches.lock().unwrap();
             assert!(ranges.len() >= 2, "{name}: {ranges:?}");
             assert!(ranges.iter().all(|(_, end, _)| end.is_some()));
+            drop(ranges);
             drop(dir);
         }
     }
@@ -803,6 +805,7 @@ mod tests {
                 .windows(2)
                 .all(|pair| { pair[0].0 + u32::try_from(pair[0].2).unwrap() == pair[1].0 })
         );
+        drop(ranges);
         drop(dir);
     }
 

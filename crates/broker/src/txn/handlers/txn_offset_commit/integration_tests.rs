@@ -101,7 +101,7 @@ struct SeededBroker {
 /// transaction coordinator has loaded `__transaction_state`, which KIP-890
 /// makes every `TxnOffsetCommit` ask.
 pub(super) async fn wait_for_coordinators(handle: &BrokerHandle) {
-    handle.wait_until_controller_leader().await;
+    handle.wait_until_controller_leader().await.unwrap();
     handle.wait_until_brokers_registered(1).await;
     handle.wait_until_transaction_coordinator_ready().await;
     handle.wait_until_group_coordinator_ready().await;
@@ -146,7 +146,7 @@ pub(super) async fn seed_transaction(
     if let Some(group_id) = setup.group_id {
         entry.partitions.insert(TopicPartition {
             topic: OFFSETS_TOPIC.to_owned(),
-            partition: PartitionIndex(partition_for_group(&image, group_id)),
+            partition: PartitionIndex(partition_for_group(&image, group_id).unwrap()),
         });
     }
     broker
@@ -212,7 +212,7 @@ fn with_offsets_log<T>(
     let image = broker.controller.current_image();
     let part = broker.partitions.get(
         OFFSETS_TOPIC,
-        PartitionIndex(partition_for_group(&image, group_id)),
+        PartitionIndex(partition_for_group(&image, group_id).unwrap()),
     )?;
     let log = part.log.lock().expect("lock offsets log");
     let read = log
@@ -1273,7 +1273,7 @@ async fn a_v5_commit_adds_the_offsets_partition_on_a_transaction_version_1_clust
         entry.partitions
             == HashSet::from([TopicPartition {
                 topic: OFFSETS_TOPIC.to_owned(),
-                partition: PartitionIndex(partition_for_group(&image, group_id)),
+                partition: PartitionIndex(partition_for_group(&image, group_id).unwrap()),
             }])
     );
     check!(entry.client_transaction_version == 2);

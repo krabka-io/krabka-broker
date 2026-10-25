@@ -172,7 +172,7 @@ pub async fn bootstrap(
             log_dir_status.clone(),
             Arc::clone(producer_state),
             false,
-        );
+        )?;
         partitions.insert(OFFSETS_TOPIC.into(), partition_id, partition);
     }
     finalize(coordinator, replayed).await;

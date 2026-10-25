@@ -325,15 +325,22 @@ pub async fn await_topic_placement(cluster: &[TestNode]) {
                 })
             })
             .await;
-        node.handle().wait_until_diskless_flusher_ready().await;
+        node.handle()
+            .wait_until_diskless_flusher_ready()
+            .await
+            .unwrap();
     }
 }
 
 /// The controller leader, once all three brokers name the same one.
 pub async fn converged_controller_leader(cluster: &[TestNode]) -> NodeId {
-    let leader = cluster[0].handle().wait_until_controller_leader().await;
+    let leader = cluster[0]
+        .handle()
+        .wait_until_controller_leader()
+        .await
+        .unwrap();
     for node in &cluster[1..] {
-        let observed = node.handle().wait_until_controller_leader().await;
+        let observed = node.handle().wait_until_controller_leader().await.unwrap();
         assert!(
             observed == leader,
             "controller leader did not converge: {leader} vs {observed}"

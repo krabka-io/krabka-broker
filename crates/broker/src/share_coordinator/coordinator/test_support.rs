@@ -198,7 +198,8 @@ pub fn open_state_partition(reg: &PartitionRegistry, log_dir: &Path, p: i32) {
         .log_dir_status(LogDirRegistry::default())
         .producer_state(Arc::new(ProducerState::new()))
         .diskless(false)
-        .call();
+        .call()
+        .unwrap();
     reg.insert(bootstrap::TOPIC.into(), PartitionIndex(p), part);
 }
 

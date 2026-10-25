@@ -258,7 +258,7 @@ async fn a_marker_counts_only_once_committed_under_its_leader() {
                             state.set_policy(LeaderPolicy {
                                 effective_min_isr: 2,
                                 replica_lag_time_max: Duration::from_secs(30),
-                                brokers: std::collections::HashMap::new(),
+                                brokers: HashMap::new(),
                             });
                         }
                         set_hw(&partition, MARKER_END).await;

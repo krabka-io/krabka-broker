@@ -241,7 +241,7 @@ pub fn register(registry: &PartitionRegistry, partition: &Arc<Partition>) {
 }
 
 /// What one [`DeliveryMetrics`] call reported.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MetricEvent {
     Watermark(String, PartitionIndex, PartitionDelivery),
     Late(i64),
@@ -249,7 +249,7 @@ pub enum MetricEvent {
 }
 
 /// A watermark advance the scheduler reported.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReportedWatermark {
     pub(crate) topic: String,
     pub(crate) partition: PartitionIndex,

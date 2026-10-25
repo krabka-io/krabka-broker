@@ -257,7 +257,13 @@ impl SharePersister {
     ) -> Result<RoutedPartition, BrokerError> {
         let state_partition = self
             .share_coordinator
-            .state_partition_for(group, &topic_id, partition);
+            .state_partition_for(group, &topic_id, partition)
+            .ok_or_else(|| {
+                BrokerError::Share(format!(
+                    "share key {group}:{topic_id}:{partition} maps to no {} partition",
+                    bootstrap::TOPIC
+                ))
+            })?;
         self.ensure_topic_and_refresh(state_partition).await?;
         let local = self.share_coordinator.is_leader(state_partition).await;
         Ok(RoutedPartition {
@@ -430,7 +436,7 @@ impl SharePersister {
     /// # Errors
     ///
     /// As [`SharePersister::read_state`].
-    pub(crate) async fn read_summary(
+    pub(crate) async fn read_state_summary(
         &self,
         group: &str,
         topic_id: uuid::Uuid,

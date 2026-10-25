@@ -1,5 +1,7 @@
 //! Kafka-compatible producer-state snapshot encoding and recovery.
 
+#[cfg(not(target_os = "wasi"))]
+use std::mem;
 #[cfg(all(test, not(target_os = "wasi")))]
 use std::{cell::RefCell, sync::mpsc};
 use {
@@ -16,7 +18,6 @@ use {
         collections::HashMap,
         fs,
         io::{self, ErrorKind},
-        mem,
         path::{Path, PathBuf},
     },
 };

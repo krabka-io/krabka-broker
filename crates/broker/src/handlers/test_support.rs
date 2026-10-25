@@ -694,7 +694,7 @@ pub struct CaseOutcomes<T> {
     pub expected: T,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct LabeledCaseOutcome<Response, State> {
     pub label: &'static str,
     pub response: Response,
@@ -702,7 +702,7 @@ pub struct LabeledCaseOutcome<Response, State> {
 }
 
 /// The actual or the expected outcome of one [`TopicResolutionCase`].
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct TopicCaseOutcome<R> {
     pub version: i16,
     pub topic: TopicRef,
@@ -1355,6 +1355,7 @@ pub fn spawn_partition(
         producer_state,
         storage == StorageMode::Diskless,
     )
+    .unwrap()
 }
 
 /// Commits one client quota `config_key = value` for `entity`.

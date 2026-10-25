@@ -459,7 +459,8 @@ mod tests {
             broker.log_dir_status.clone(),
             Arc::new(ProducerState::new()),
             false,
-        );
+        )
+        .unwrap();
         broker.partitions.insert(
             "orders".into(),
             krabka_ids::PartitionIndex(0),

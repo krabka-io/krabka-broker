@@ -74,7 +74,7 @@ async fn boot() -> StartedBroker {
         broker: handle,
         dir,
     } = start_transaction_grant_broker().await;
-    handle.wait_until_controller_leader().await;
+    handle.wait_until_controller_leader().await.unwrap();
     handle.wait_until_brokers_registered(1).await;
     let broker = handle.broker_arc_for_test();
     // A client's first `FindCoordinator(TRANSACTION)` creates

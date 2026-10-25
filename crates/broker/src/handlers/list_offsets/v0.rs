@@ -376,6 +376,7 @@ mod tests {
     use crate::handlers::list_offsets::test_support::DenyNamed;
     use {
         krabka_protocol::owned::create_topics_request::CreatableTopicConfig,
+        std::collections::HashSet,
         tokio::{task, time::timeout},
     };
 
@@ -384,7 +385,7 @@ mod tests {
         krabka_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, admin, socket);
                     boot [start_broker_with_authorizer_no_audit(Arc::new(DenyNamed(
-                                std::collections::HashSet::from(["denied"]),
+                                HashSet::from(["denied"]),
                             )))];
 
         user ["admin"];

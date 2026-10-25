@@ -57,9 +57,9 @@ impl Transition {
     /// transition on `topic`.
     pub(super) fn target(self, topic: &str) -> String {
         match self {
-            Self::UncleanElection
-            | Self::CancelReassignment
-            | Self::TrimRecords => format!("{topic}-0"),
+            Self::UncleanElection | Self::CancelReassignment | Self::TrimRecords => {
+                format!("{topic}-0")
+            }
             Self::Unregister => BROKER_ID.to_string(),
             Self::DeleteTopic => topic.to_owned(),
         }

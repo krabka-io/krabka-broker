@@ -94,7 +94,7 @@ impl ShareCoordinator {
                 let (group, topic_id, partition) = entry.key();
                 filter(topic_id)
                     && self.state_partition_for(group, topic_id, *partition)
-                        == active.term.partition
+                        == Some(active.term.partition)
             })
             .map(|entry| entry.key().clone())
             .collect();
@@ -133,8 +133,8 @@ impl ShareCoordinator {
         for entry in &self.state {
             let (group, topic_id, partition) = entry.key();
             if filter(topic_id)
-                && let Some(bucket) =
-                    partitions.get_mut(&self.state_partition_for(group, topic_id, *partition))
+                && let Some(state_partition) = self.state_partition_for(group, topic_id, *partition)
+                && let Some(bucket) = partitions.get_mut(&state_partition)
             {
                 bucket.keys.push(entry.key().clone());
             }

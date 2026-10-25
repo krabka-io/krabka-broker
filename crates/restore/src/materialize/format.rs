@@ -254,15 +254,20 @@ fn seed_authenticated_chain_tips(
                     tp.topic, tp.partition
                 ),
             })?;
-        *latest = latest.clone().with_custom_metadata(
-            WormChainRecord::request(ChainStamp {
-                epoch_id: verified.epoch_id,
-                seq: verified.last_seq,
-                prev_head: ChainHead::GENESIS,
-            })
-            .with_head(verified.head)
-            .to_custom_metadata(),
-        );
+        let chain_record = WormChainRecord::request(ChainStamp {
+            epoch_id: verified.epoch_id,
+            seq: verified.last_seq,
+            prev_head: ChainHead::GENESIS,
+        })
+        .with_head(verified.head)
+        .to_custom_metadata()
+        .map_err(|error| RestoreError::Authenticity {
+            reason: format!(
+                "RLMM snapshot partition {}-{} WORM chain tip does not encode: {error}",
+                tp.topic, tp.partition
+            ),
+        })?;
+        *latest = latest.clone().with_custom_metadata(chain_record);
     }
     Ok(())
 }

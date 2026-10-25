@@ -138,7 +138,7 @@ async fn controlled_shutdown_drains_leadership_and_returns_ok() {
     // which cannot be drained. Targeting a follower keeps the test
     // focused on the controllable wire path.
     let raft_leader_idx = {
-        let leader = cluster[0].0.wait_until_controller_leader().await;
+        let leader = cluster[0].0.wait_until_controller_leader().await.unwrap();
         cluster
             .iter()
             .position(|(_, cfg, _)| cfg.node_id == leader)
@@ -256,7 +256,7 @@ async fn controlled_shutdown_of_a_controller_only_node_stops_at_once() {
     let controller = krabka_broker::Broker::start(config)
         .await
         .expect("controller-only start");
-    controller.wait_until_controller_leader().await;
+    controller.wait_until_controller_leader().await.unwrap();
 
     let stopped = time::timeout(
         Duration::from_secs(20),

@@ -12,7 +12,8 @@ use {
     },
     krabka_client_core::security::{ClientSecurity, TlsConnectorConfig, TrustStore},
     krabka_remote_storage_topic::{
-        KafkaMetadataEventLog, MetadataPartitionReadiness, TopicBasedRemoteLogMetadataManager,
+        KafkaMetadataEventLog, MetadataLogError, MetadataPartitionReadiness,
+        TopicBasedRemoteLogMetadataManager, metadata_partitions_for,
     },
     krabka_units::convert::TimeExt as _,
     std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration},
@@ -130,11 +131,14 @@ pub(super) fn kafka_swap_kickoff(config: &BrokerConfig) -> Option<KafkaSwapKicko
 /// (`node_id`) must consume. There is one entry for each metadata partition
 /// that covers a user-topic-partition this node leads or follows, for the
 /// metadata topic's `partition_count`.
+///
+/// Returns [`MetadataLogError::NonPositivePartitionCount`] when
+/// `partition_count` is not positive.
 fn needed_metadata_partitions(
     image: &krabka_metadata::MetadataImage,
     node_id: krabka_metadata::NodeId,
     partition_count: i32,
-) -> Vec<i32> {
+) -> Result<Vec<i32>, MetadataLogError> {
     let mut tps: Vec<krabka_remote_storage::TopicIdPartition> = Vec::new();
     for topic in image.topics() {
         for p in image.partitions_of(&topic.name) {
@@ -147,7 +151,7 @@ fn needed_metadata_partitions(
             }
         }
     }
-    krabka_remote_storage_topic::metadata_partitions_for(tps.iter(), partition_count)
+    metadata_partitions_for(tps.iter(), partition_count)
 }
 
 /// Next backoff after a failed RLMM bootstrap attempt: double, capped.
@@ -324,6 +328,13 @@ async fn run_topic_assignment(
     // partitions).
     let initial =
         needed_metadata_partitions(&image_rx.borrow_and_update(), node_id, partition_count);
+    let initial = match initial {
+        Ok(initial) => initial,
+        Err(error) => {
+            tracing::error!(%error, "topic-backed RLMM cannot assign metadata partitions");
+            return;
+        }
+    };
     let (set_tx, set_rx) = watch::channel(initial);
 
     // Keep both loops owned by this bootstrap task so broker shutdown can join
@@ -348,11 +359,16 @@ async fn watch_rlmm_needed_partitions(
                 if changed.is_err() {
                     return;
                 }
+                // `run_topic_assignment` checked `partition_count` already,
+                // so this cannot fail; stop watching if it ever does.
                 let set = needed_metadata_partitions(
                     &image_rx.borrow_and_update(),
                     node_id,
                     partition_count,
                 );
+                let Ok(set) = set else {
+                    return;
+                };
                 set_tx.send_if_modified(|current| {
                     if *current == set {
                         false

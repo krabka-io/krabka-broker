@@ -70,6 +70,12 @@ pub(super) fn spawn_storage_security_maintenance(
     });
     // `BrokerConfig::validate` refuses a JWKS endpoint on wasm32-wasip1, which
     // has no HTTP client stack.
+    #[cfg(target_family = "wasm")]
+    if config.oauthbearer_jwks_endpoint.is_some() {
+        return Err(BrokerError::Startup(
+            "JWKS refresh is unavailable on this platform".to_owned(),
+        ));
+    }
     #[cfg(not(target_family = "wasm"))]
     if let Some(endpoint) = config.oauthbearer_jwks_endpoint.clone()
         && let Some(handle) = config.oauthbearer_validator.jwks_handle()

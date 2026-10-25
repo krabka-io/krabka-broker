@@ -23,6 +23,14 @@ pub enum MetadataLogError {
         count: i32,
     },
 
+    /// The `__remote_log_metadata` partition count is not positive, so no
+    /// user partition maps to a metadata partition.
+    #[error("metadata partition count {count} is not positive")]
+    NonPositivePartitionCount {
+        /// The configured partition count.
+        count: i32,
+    },
+
     /// The transport is closed and no further operations are possible.
     #[error("metadata log closed")]
     Closed,

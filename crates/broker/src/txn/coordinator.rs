@@ -11,7 +11,7 @@ use std::sync::atomic::Ordering;
 use {
     self::verification_client::VerificationClient,
     crate::{
-        codes::{INVALID_PRODUCER_ID_MAPPING, UNKNOWN_SERVER_ERROR},
+        codes::{COORDINATOR_NOT_AVAILABLE, INVALID_PRODUCER_ID_MAPPING, UNKNOWN_SERVER_ERROR},
         coordinator::GroupCoordinator,
         error::BrokerError,
         metadata_source::MetadataSource,
@@ -112,8 +112,9 @@ pub struct TxnCoordinator {
 #[derive(Debug)]
 struct StatePartitionWrites {
     per_partition: Vec<Mutex<()>>,
-    /// The lock of a partition index outside `0..num_partitions`, which
-    /// `partition_for_tid` never yields.
+    /// The lock of a partition index outside `0..num_partitions`, and of an
+    /// id with no partition, which `partition_for_tid` yields only for a
+    /// non-positive partition count.
     out_of_range: Mutex<()>,
 }
 
@@ -127,9 +128,9 @@ impl StatePartitionWrites {
     }
 
     /// The write lock of `partition`.
-    fn lock_for(&self, partition: PartitionIndex) -> &Mutex<()> {
-        usize::try_from(partition.get())
-            .ok()
+    fn lock_for(&self, partition: Option<PartitionIndex>) -> &Mutex<()> {
+        partition
+            .and_then(|partition| usize::try_from(partition.get()).ok())
             .and_then(|index| self.per_partition.get(index))
             .unwrap_or(&self.out_of_range)
     }
@@ -235,9 +236,21 @@ impl TxnCoordinator {
         );
     }
 
-    /// Returns the `__transaction_state` partition index responsible for `tid`.
-    pub(crate) fn partition_for(&self, tid: &str) -> PartitionIndex {
-        PartitionIndex(partition_for_tid(tid, self.num_partitions))
+    /// Returns the `__transaction_state` partition index responsible for `tid`,
+    /// or `None` when the configured partition count is not positive.
+    pub(crate) fn partition_for(&self, tid: &str) -> Option<PartitionIndex> {
+        partition_for_tid(tid, self.num_partitions).map(PartitionIndex)
+    }
+
+    /// [`Self::partition_for`], or an error naming `tid` when the configured
+    /// partition count is not positive.
+    pub(crate) fn require_partition_for(&self, tid: &str) -> Result<PartitionIndex, BrokerError> {
+        self.partition_for(tid).ok_or_else(|| {
+            BrokerError::Txn(format!(
+                "no __transaction_state partition for {tid}: partition count {} is not positive",
+                self.num_partitions
+            ))
+        })
     }
 
     /// Returns `true` if this broker is the transaction coordinator for `tid`
@@ -253,7 +266,10 @@ impl TxnCoordinator {
     /// and `NOT_COORDINATOR` when this broker does not lead the partition or
     /// its load failed.
     pub(crate) async fn coordinator_error(&self, tid: &str) -> Option<i16> {
-        leadership::coordinator_error(self.load_status(self.partition_for(tid)).await)
+        let Some(partition) = self.partition_for(tid) else {
+            return Some(COORDINATOR_NOT_AVAILABLE);
+        };
+        leadership::coordinator_error(self.load_status(partition).await)
     }
 
     /// The error code for a failed append about `tid`.
@@ -356,9 +372,9 @@ mod tests {
         // constant `PartitionIndex(0)` (the Default) is caught: none of these
         // hash to 0.
         let coordinator = test_coordinator();
-        check!(coordinator.partition_for("my-tid") == PartitionIndex(20));
-        check!(coordinator.partition_for("producer-1") == PartitionIndex(30));
-        check!(coordinator.partition_for("tx-orders-prod") == PartitionIndex(16));
+        check!(coordinator.partition_for("my-tid") == Some(PartitionIndex(20)));
+        check!(coordinator.partition_for("producer-1") == Some(PartitionIndex(30)));
+        check!(coordinator.partition_for("tx-orders-prod") == Some(PartitionIndex(16)));
     }
 
     /// Regression: a leadership change can unload the coordinator partition
@@ -371,7 +387,7 @@ mod tests {
         let tid = "tid-missing";
         let unloaded = coordinator.missing_entry_error(tid).await;
         coordinator
-            .lead_state_partition_for_test(coordinator.partition_for(tid))
+            .lead_state_partition_for_test(coordinator.partition_for(tid).unwrap())
             .await;
         let loaded = coordinator.missing_entry_error(tid).await;
         check!((unloaded, loaded) == (codes::NOT_COORDINATOR, INVALID_PRODUCER_ID_MAPPING));
@@ -381,7 +397,8 @@ mod tests {
     fn nondefault_partition_count_changes_coordinator_routing() {
         let coordinator = test_coordinator_with_partitions(PartitionCount(7));
         check!(
-            coordinator.partition_for("my-tid") == PartitionIndex(partition_for_tid("my-tid", 7))
+            coordinator.partition_for("my-tid")
+                == partition_for_tid("my-tid", 7).map(PartitionIndex)
         );
     }
 }

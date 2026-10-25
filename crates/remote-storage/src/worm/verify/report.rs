@@ -276,7 +276,8 @@ mod tests {
                 seq: ManifestSeq(1),
                 prev_head: head,
             })
-            .to_custom_metadata(),
+            .to_custom_metadata()
+            .unwrap(),
         );
         let sealed = WormArchiver::new(Some(Arc::clone(&archive.signer)))
             .seal(&stamped, segment.entries.clone())

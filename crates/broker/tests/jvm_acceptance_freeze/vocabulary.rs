@@ -128,6 +128,4 @@ pub const WRITE_FREEZE_ALTER_REFUSAL: &str = "topic config write.freeze is contr
 
 /// The `write.freeze` value a `DescribeConfigs` reports for a topic frozen by
 /// its own name, in the `frozen:<pattern>:<scope>` form KFC-9 specifies.
-pub fn write_freeze_value(scope: &str) -> String {
-    format!("write.freeze=frozen:literal:{scope}")
-}
+pub fn write_freeze_value(scope: &str) -> String { format!("write.freeze=frozen:literal:{scope}") }

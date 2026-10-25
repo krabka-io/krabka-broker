@@ -10,6 +10,8 @@
 use super::oauthbearer::DEFAULT_INTROSPECTION_HTTP_TIMEOUT;
 #[cfg(not(target_family = "wasm"))]
 use crate::oauth_introspection::ReqwestIntrospectionClient;
+#[cfg(not(target_family = "wasm"))]
+use std::fs;
 use {
     super::{
         FileConfigError,
@@ -21,12 +23,9 @@ use {
     crate::config::{BrokerConfig, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE},
     jsonpath_rust::{parser, parser::model::JpQuery},
     krabka_units::{Time, convert::TimeExt as _},
-    std::{
-        fs,
-        sync::{
-            Arc, PoisonError,
-            atomic::{AtomicI64, AtomicU64},
-        },
+    std::sync::{
+        Arc, PoisonError,
+        atomic::{AtomicI64, AtomicU64},
     },
     tokio::sync::mpsc,
 };
@@ -125,8 +124,8 @@ fn configure_introspection_validator(
 fn configure_introspection_validator(
     _oauth: &FileOAuthBearerConfig,
     _endpoint: &str,
-    _custom_claim_check: Option<jsonpath_rust::parser::model::JpQuery>,
-    _groups_claim: Option<jsonpath_rust::parser::model::JpQuery>,
+    _custom_claim_check: Option<JpQuery>,
+    _groups_claim: Option<JpQuery>,
     _cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     Err(FileConfigError::InvalidConfig(

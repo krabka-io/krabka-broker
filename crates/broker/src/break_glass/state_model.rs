@@ -230,15 +230,12 @@ impl Model for BreakGlassModel {
             Property::sometimes("expired", |_, state: &ProposalState| {
                 state.now_ms >= EXPIRES_AT
             }),
-            Property::sometimes(
-                "fully_approved",
-                |model: &BreakGlassModel, state: &ProposalState| {
-                    distinct(&state.approvals) >= model.config.required_approvals
-                },
-            ),
+            Property::sometimes("fully_approved", |model: &Self, state: &ProposalState| {
+                distinct(&state.approvals) >= model.config.required_approvals
+            }),
             Property::sometimes(
                 "expired_before_it_was_spent",
-                |model: &BreakGlassModel, state: &ProposalState| {
+                |model: &Self, state: &ProposalState| {
                     state.now_ms >= EXPIRES_AT
                         && distinct(&state.approvals) >= model.config.required_approvals
                         && state.consumes == 0

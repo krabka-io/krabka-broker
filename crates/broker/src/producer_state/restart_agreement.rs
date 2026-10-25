@@ -151,7 +151,8 @@ pub(super) fn producer_partition() -> (tempfile::TempDir, Arc<ProducerState>, Ar
         LogDirRegistry::default(),
         Arc::clone(&state),
         false,
-    );
+    )
+    .unwrap();
     (directory, state, partition)
 }
 

@@ -36,13 +36,14 @@ pub use self::{
     open::{FrontierScan, TailScan},
     sealed_input::SealedInput,
 };
+#[krabka_macros::sendfile_cfg]
+use krabka_protocol::records::FileRegion;
 use {
     crate::{
         index::{OFFSET_ENTRY_SIZE, OffsetIndex, TIME_ENTRY_SIZE, TimeIndex},
         io::LogIo,
         name::{leader_epoch_checkpoint_path, stampindex_path, txnindex_path},
     },
-    krabka_protocol::records::FileRegion,
     std::{sync::atomic::AtomicBool, time::SystemTime},
 };
 

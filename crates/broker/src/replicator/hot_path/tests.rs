@@ -175,6 +175,7 @@ fn production_partition(dir: &TempDir) -> Arc<Partition> {
         Arc::new(ProducerState::new()),
         false,
     )
+    .unwrap()
 }
 
 // Explicit epochs retain the original unclamped last-offset delta.

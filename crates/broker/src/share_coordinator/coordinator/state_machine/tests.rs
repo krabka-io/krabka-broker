@@ -159,7 +159,10 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             lead_all(&coord).await;
             let image = image_with_topic(TOPIC, 1);
             let partition = registry
-                .get(SHARE_STATE_TOPIC, coord.state_partition_for("g", &TOPIC, 0))
+                .get(
+                    SHARE_STATE_TOPIC,
+                    coord.state_partition_for("g", &TOPIC, 0).unwrap(),
+                )
                 .expect("state partition is open");
             // The first request reaches its append while the logical key is
             // still absent. Pause that append at the metadata transition seam.
@@ -196,7 +199,7 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             };
             assert!(coord.read_summary("g", TOPIC, 0).await == Ok(Some(expected)));
             let snapshots: Vec<_> =
-                logged_records(&coord, coord.state_partition_for("g", &TOPIC, 0))
+                logged_records(&coord, coord.state_partition_for("g", &TOPIC, 0).unwrap())
                     .into_iter()
                     .filter_map(|record| match record.logged {
                         Logged::Snapshot(snapshot) => {
@@ -376,7 +379,7 @@ async fn initialize_follows_the_rules_of_each_kafka_release() {
                 .initialize(&image, "g", TOPIC, 0, *state_epoch, Offset(*start))
                 .await;
 
-            let state_partition = coord.state_partition_for("g", &TOPIC, 0);
+            let state_partition = coord.state_partition_for("g", &TOPIC, 0).unwrap();
             let logged = logged_records(&coord, state_partition)
                 .into_iter()
                 .filter(|record| matches!(record.logged, Logged::Snapshot(_)))
@@ -716,7 +719,7 @@ async fn write_matches_kafka_checks_and_record_rules() {
             let dir = tempdir().unwrap();
             let Seeded { coord, image } = seeded(dir.path(), trunk).await;
             if drop_log {
-                let state_partition = coord.state_partition_for("g", &TOPIC, partition);
+                let state_partition = coord.state_partition_for("g", &TOPIC, partition).unwrap();
                 coord.partitions.remove(SHARE_STATE_TOPIC, state_partition);
             }
             let result = coord
@@ -903,7 +906,7 @@ async fn read_fences_and_persists_the_leader_epoch() {
 async fn failed_read_append_changes_no_state() {
     let dir = tempdir().unwrap();
     let Seeded { coord, image } = seeded(dir.path(), false).await;
-    let state_partition = coord.state_partition_for("g", &TOPIC, 0);
+    let state_partition = coord.state_partition_for("g", &TOPIC, 0).unwrap();
     coord.partitions.remove(SHARE_STATE_TOPIC, state_partition);
 
     let read = coord.read(&image, "g", TOPIC, 0, 8).await;
@@ -1001,7 +1004,7 @@ async fn writes_append_updates_then_one_snapshot_at_the_threshold() {
             .unwrap();
     }
 
-    let state_partition = coord.state_partition_for("g", &TOPIC, 0);
+    let state_partition = coord.state_partition_for("g", &TOPIC, 0).unwrap();
     let logged: Vec<Logged> = logged_records(&coord, state_partition)
         .into_iter()
         .map(|record| record.logged)
@@ -1105,7 +1108,7 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
                 clock: _clock,
             } = configured_coordinator(dir.path(), config);
             let image = initialize_led_group().coordinator(&coord).call().await;
-            let state_partition = coord.state_partition_for("g", &TOPIC, 0);
+            let state_partition = coord.state_partition_for("g", &TOPIC, 0).unwrap();
             let part = reg
                 .get(SHARE_STATE_TOPIC, state_partition)
                 .expect("the state partition is open");

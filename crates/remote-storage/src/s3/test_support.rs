@@ -173,6 +173,7 @@ pub(super) fn stamped_metadata(
             seq: sequence,
             prev_head: previous_head,
         })
-        .to_custom_metadata(),
+        .to_custom_metadata()
+        .unwrap(),
     )
 }

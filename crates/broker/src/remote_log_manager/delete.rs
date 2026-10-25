@@ -413,15 +413,15 @@ mod tests {
         let rsm: Arc<dyn RemoteStorageManager> =
             Arc::new(LocalTieredStorage::new(remote_dir.path()));
         let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
-        let rlmm: Arc<dyn RemoteLogMetadataManager> = rlmm_impl.clone();
+        let rlmm = Arc::clone(&rlmm_impl) as Arc<dyn RemoteLogMetadataManager>;
         copy_all_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), &exports).await;
 
         cascade_remote_partition_delete(
             tp(),
             1,
             ArchiveMode::Mutable,
-            rsm.clone(),
-            rlmm.clone(),
+            Arc::clone(&rsm),
+            Arc::clone(&rlmm),
             disabled_index_cache(),
         )
         .await;
@@ -449,7 +449,7 @@ mod tests {
             1,
             ArchiveMode::Mutable,
             rsm,
-            rlmm.clone(),
+            Arc::clone(&rlmm),
             disabled_index_cache(),
         )
         .await;
@@ -460,9 +460,9 @@ mod tests {
     #[tokio::test]
     async fn cascade_partition_delete_retains_archive_objects_but_finishes_the_lifecycle() {
         let archive = Arc::new(FakeWormArchive::new());
-        let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
+        let rsm = Arc::clone(&archive) as Arc<dyn RemoteStorageManager>;
         let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
-        let rlmm: Arc<dyn RemoteLogMetadataManager> = rlmm_impl.clone();
+        let rlmm = Arc::clone(&rlmm_impl) as Arc<dyn RemoteLogMetadataManager>;
         let copied = copy_exports(
             &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
             fixtures::two_exports(),
@@ -475,8 +475,8 @@ mod tests {
             tp(),
             1,
             ArchiveMode::WriteOnce,
-            rsm.clone(),
-            rlmm.clone(),
+            Arc::clone(&rsm),
+            Arc::clone(&rlmm),
             disabled_index_cache(),
         )
         .await;

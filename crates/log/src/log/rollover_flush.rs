@@ -6,10 +6,14 @@ use crate::{
     producer_snapshot::PreparedSnapshot,
 };
 #[cfg(not(target_os = "wasi"))]
-use std::{collections::VecDeque, fs::File, mem};
+use std::{
+    collections::VecDeque,
+    fs::File,
+    mem,
+    panic::{self, AssertUnwindSafe},
+};
 use std::{
     io,
-    panic::{self, AssertUnwindSafe},
     sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
 };
 

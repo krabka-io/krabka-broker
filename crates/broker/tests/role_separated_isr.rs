@@ -66,7 +66,7 @@ async fn start_role_separated() -> RoleSeparated {
     )
     .await;
     dirs.push(ctrl_dir);
-    controller.wait_until_controller_leader().await;
+    controller.wait_until_controller_leader().await.unwrap();
 
     let mut brokers = Vec::with_capacity(NODES - 1);
     let mut broker_configs = Vec::with_capacity(NODES - 1);

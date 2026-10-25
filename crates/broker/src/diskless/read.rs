@@ -809,7 +809,8 @@ mod tests {
             broker.log_dir_status.clone(),
             Arc::clone(&broker.producer_state),
             true,
-        );
+        )
+        .unwrap();
         let mut pending = PendingRead {
             topic_name: "orders".into(),
             topic_id: wire_topic_id,

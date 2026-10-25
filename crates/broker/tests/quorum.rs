@@ -42,7 +42,7 @@ use {support::cluster_lock, tempfile::TempDir};
 /// specific node.
 async fn wait_for_leader(cluster: &[(BrokerHandle, BrokerConfig, TempDir)]) {
     for (h, _, _) in cluster {
-        h.wait_until_controller_leader().await;
+        h.wait_until_controller_leader().await.unwrap();
     }
 }
 

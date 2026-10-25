@@ -17,6 +17,8 @@ use super::sendfile::sendfile_region;
 #[krabka_macros::sendfile_cfg]
 use bytes::BytesMut;
 #[krabka_macros::sendfile_cfg]
+use krabka_protocol::records::FileRegion;
+#[krabka_macros::sendfile_cfg]
 use std::mem;
 use {
     super::{WriteOp, sink::SendfileSink},
@@ -24,7 +26,6 @@ use {
         error::BrokerError,
         metrics::{BrokerMetrics, FetchDrainPath},
     },
-    krabka_protocol::records::FileRegion,
     std::{
         io::{Error, ErrorKind, IoSlice},
         iter,

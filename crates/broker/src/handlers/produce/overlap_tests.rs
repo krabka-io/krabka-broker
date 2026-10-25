@@ -17,6 +17,7 @@ use {
     },
     assert2::{assert, check},
     bytes::Bytes,
+    futures_util::future::join_all,
     krabka_log::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord},
     krabka_protocol::{
@@ -347,6 +348,12 @@ async fn a_busy_writer_holds_back_only_its_own_partition() {
     assert!(topic_results == expected_rows(&topics, rows));
 }
 
+/// Keep `guards` for `delay`, then drop them.
+async fn release_after<T>(guards: T, delay: Duration) {
+    sleep(delay).await;
+    drop(guards);
+}
+
 /// Appends that wait at once share the request's handler time between them:
 /// the per-partition CPU charge of four writers busy over the same interval
 /// adds up to that interval, not four times it.
@@ -365,10 +372,15 @@ async fn overlapping_waits_share_the_handler_time_they_spent_together() {
     } = wide_request(&topics).await;
     let mut awaiting: Vec<PendingPartition> = Vec::new();
 
-    let mut busy = Vec::new();
-    for partition in &partitions {
-        busy.push(partition.writer_gate.writer_busy().await);
-    }
+    let release = release_after(
+        join_all(
+            partitions
+                .iter()
+                .map(|partition| partition.writer_gate.writer_busy()),
+        )
+        .await,
+        Duration::from_millis(50),
+    );
     let started = Instant::now();
     let (completed, ()) = tokio::join!(
         complete_admitted(
@@ -378,10 +390,7 @@ async fn overlapping_waits_share_the_handler_time_they_spent_together() {
             &mut topic_results,
             &mut awaiting,
         ),
-        async {
-            sleep(Duration::from_millis(50)).await;
-            drop(busy);
-        },
+        release,
     );
     let wall = started.elapsed();
     drop(awaiting);

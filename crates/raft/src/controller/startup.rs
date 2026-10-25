@@ -3,6 +3,8 @@
 //! controller listener, opens or recovers the engine, and the on-disk state
 //! probe the broker binary shares with that validation.
 
+#[cfg(target_os = "wasi")]
+use std::future;
 use {
     super::{
         ControllerHandle, checkpoint::load_latest_checkpoint,
@@ -333,11 +335,9 @@ async fn bind_controller_listener(addr: SocketAddr) -> io::Result<TcpListener> {
 /// WASI preview 1 has no `bind`: the embedder adopts a preopened socket and
 /// passes it to [`Controller::start_with_listener`].
 #[cfg(target_os = "wasi")]
-fn bind_controller_listener(
-    addr: SocketAddr,
-) -> std::future::Ready<std::io::Result<tokio::net::TcpListener>> {
-    std::future::ready(Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
+fn bind_controller_listener(addr: SocketAddr) -> future::Ready<io::Result<TcpListener>> {
+    future::ready(Err(io::Error::new(
+        io::ErrorKind::Unsupported,
         format!(
             "cannot bind the controller listener on {addr}: this platform has no bind; \
              pass a preopened listener to Controller::start_with_listener"

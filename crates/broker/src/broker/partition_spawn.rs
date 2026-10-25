@@ -120,8 +120,12 @@ fn partition_wal(
 /// access to the `Log` mutex on the hot path, and so
 /// `DescribeLogDirs` can attribute the partition to a dir even when
 /// the path is not stable across canonicalisation.
+///
+/// # Errors
+///
+/// As [`try_spawn_partition_with_replication_target`].
 #[krabka_macros::partition_spawn_parameters]
-pub fn spawn_partition() -> Arc<Partition> {
+pub fn spawn_partition() -> Result<Arc<Partition>, BrokerError> {
     // A test diskless partition needs a topic id for its WAL shard.
     let topic_id = if cfg!(test) {
         diskless.then(uuid::Uuid::new_v4)
@@ -144,9 +148,14 @@ pub fn spawn_partition() -> Arc<Partition> {
         .call()
 }
 
+/// [`spawn_partition`] with an explicit initial replication target.
+///
+/// # Errors
+///
+/// As [`try_spawn_partition_with_replication_target`].
 #[krabka_macros::partition_spawn_parameters(target)]
 #[bon::builder]
-pub fn spawn_partition_with_replication_target() -> Arc<Partition> {
+pub fn spawn_partition_with_replication_target() -> Result<Arc<Partition>, BrokerError> {
     let broker_config = BrokerConfig::default();
     let wal_shards = if cfg!(test) {
         replication_target.topic_id.map(|topic_id| {
@@ -192,7 +201,6 @@ pub fn spawn_partition_with_replication_target() -> Arc<Partition> {
         },
         replication_target,
     )
-    .expect("spawn partition")
 }
 
 pub struct PartitionSpawnConfig {
@@ -217,11 +225,22 @@ pub fn try_spawn_partition_with_sequencer(
     try_spawn_partition_with_replication_target(config, initial_target)
 }
 
+/// Spawn a partition whose replicator starts at `initial_target`.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Startup`] when `config` and `initial_target` name
+/// different topic ids, and any error of opening the partition runtime.
 pub fn try_spawn_partition_with_replication_target(
     config: PartitionSpawnConfig,
     initial_target: ReplicationTarget,
 ) -> Result<Arc<Partition>, BrokerError> {
-    assert2::assert!((config.topic_id) == (initial_target.topic_id));
+    if config.topic_id != initial_target.topic_id {
+        return Err(BrokerError::Startup(format!(
+            "partition {}-{}: topic id {:?} differs from the replication target's {:?}",
+            config.topic, config.partition_id, config.topic_id, initial_target.topic_id
+        )));
+    }
     let PartitionSpawnConfig {
         topic,
         topic_id,

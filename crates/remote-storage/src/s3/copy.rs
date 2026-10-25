@@ -137,7 +137,7 @@ impl S3RemoteStorage {
             sealed
                 .receipt
                 .with_manifest_version(manifest_put.version_id)
-                .to_custom_metadata(),
+                .to_custom_metadata()?,
         ))
     }
 }

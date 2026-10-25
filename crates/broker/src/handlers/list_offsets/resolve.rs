@@ -734,11 +734,13 @@ mod tests {
         krabka_protocol::{
             owned::{
                 create_topics_request::CreatableTopicConfig,
-                list_offsets_request::{ListOffsetsRequest, ListOffsetsTopic},
+                list_offsets_request::{
+                    ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic,
+                },
             },
             records::{Record, RecordBatch},
         },
-        std::io,
+        std::{io, sync::Arc},
     };
 
     /// What the remote tier's answer makes of EARLIEST. A tier that cannot
@@ -944,12 +946,13 @@ mod tests {
             .expect("topic metadata")
             .topic_id;
         let topic_partition = TopicIdPartition::new(topic_id, TOPIC, 0);
-        let rlmm = broker_arc
-            .remote_reader
-            .as_ref()
-            .expect("remote reader")
-            .rlmm
-            .clone();
+        let rlmm = Arc::clone(
+            &broker_arc
+                .remote_reader
+                .as_ref()
+                .expect("remote reader")
+                .rlmm,
+        );
         let finished_id = RemoteLogSegmentId::new(topic_partition.clone(), uuid::Uuid::new_v4());
         let finished = RemoteLogSegmentMetadata::new(
             finished_id.clone(),
@@ -1150,14 +1153,12 @@ mod tests {
                 replica_id: -1,
                 topics: vec![ListOffsetsTopic {
                     name: topic.to_owned(),
-                    partitions: vec![
-                        krabka_protocol::owned::list_offsets_request::ListOffsetsPartition {
-                            partition_index: 0,
-                            current_leader_epoch: -1,
-                            timestamp,
-                            ..Default::default()
-                        },
-                    ],
+                    partitions: vec![ListOffsetsPartition {
+                        partition_index: 0,
+                        current_leader_epoch: -1,
+                        timestamp,
+                        ..Default::default()
+                    }],
                     ..Default::default()
                 }],
                 isolation_level,

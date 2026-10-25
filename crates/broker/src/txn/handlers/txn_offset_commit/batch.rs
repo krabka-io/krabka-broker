@@ -168,7 +168,14 @@ pub(super) async fn append_txn_batch(
                             codes::UNKNOWN_SERVER_ERROR
                         })?,
                 ),
-                value: Some(value.encode_value()),
+                value: Some(value.encode_value().map_err(|error| {
+                    tracing::warn!(
+                        group_id = %req.group_id,
+                        %error,
+                        "transactional offset commit value is not encodable",
+                    );
+                    codes::UNKNOWN_SERVER_ERROR
+                })?),
                 ..Default::default()
             });
             keys.push(key);

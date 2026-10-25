@@ -14,11 +14,13 @@ use {
     crate::{error::LogError, segment::Segment},
     bytes::{Bytes, BytesMut},
     krabka_ids::Offset,
-    krabka_protocol::records::{FileRegion, HEADER_LEN, RecordBatch},
+    krabka_protocol::records::{HEADER_LEN, RecordBatch},
     krabka_units::prelude::{ByteSize, ByteSizeExt, bytes},
-    std::{cell::Cell, sync::PoisonError},
+    std::sync::PoisonError,
     tracing::{field, instrument},
 };
+#[krabka_macros::sendfile_cfg]
+use {krabka_protocol::records::FileRegion, std::cell::Cell};
 
 /// A `usize` byte length as a quantity.
 ///

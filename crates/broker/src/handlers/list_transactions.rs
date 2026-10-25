@@ -324,7 +324,8 @@ mod tests {
         // coordinator can persist the seeded entry.
         let tid = "txn-list-pid-filter";
         let coord = &broker.txn_coordinator;
-        lead_transaction_state_partitions(&broker_handle, &[coord.partition_for(tid)]).await;
+        lead_transaction_state_partitions(&broker_handle, &[coord.partition_for(tid).unwrap()])
+            .await;
 
         let entry = TxnEntry::new_empty(tid.to_owned(), ProducerId(100), 0, 60_000, 0);
         coord
@@ -452,8 +453,8 @@ mod tests {
         // Two transactions in one state partition: one ongoing, one dying.
         let (ongoing_id, dead_id) = ("txn-list-ongoing", "txn-list-dead");
         lead_transaction_state_partitions(&broker_handle, &[
-            coordinator.partition_for(ongoing_id),
-            coordinator.partition_for(dead_id),
+            coordinator.partition_for(ongoing_id).unwrap(),
+            coordinator.partition_for(dead_id).unwrap(),
         ])
         .await;
         for tid in [ongoing_id, dead_id] {

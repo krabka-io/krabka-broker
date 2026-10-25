@@ -11,20 +11,22 @@
 //! and release of `preallocate` and the `O_DIRECT` handle its active segment
 //! writes through.
 
+#[cfg(unix)]
+use std::os::unix::fs::FileExt;
+use std::{
+    fmt::Debug,
+    fs::{self, File},
+    io::{self, ErrorKind, IoSlice, Write},
+    path::Path,
+    sync::Arc,
+};
+#[cfg(target_os = "linux")]
 use {
     rustix::{
         fs::{Advice, FallocateFlags, fadvise, fallocate, open, statx},
         io::{Errno, ReadWriteFlags, preadv2},
     },
-    std::{
-        fmt::Debug,
-        fs::{self, File},
-        io::{self, ErrorKind, IoSlice, Write},
-        num::NonZeroU64,
-        os::unix::fs::FileExt,
-        path::Path,
-        sync::Arc,
-    },
+    std::num::NonZeroU64,
 };
 
 /// Which on-disk file class an [`LogIo`] operation touches.
@@ -305,9 +307,9 @@ fn open_direct(path: &Path) -> io::Result<DirectFile> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn open_direct(path: &Path) -> std::io::Result<DirectFile> {
+fn open_direct(path: &Path) -> io::Result<DirectFile> {
     let _ = path;
-    Err(std::io::ErrorKind::Unsupported.into())
+    Err(ErrorKind::Unsupported.into())
 }
 
 #[cfg(unix)]
@@ -317,9 +319,9 @@ fn write_direct(file: &File, buf: &[u8], offset: u64) -> io::Result<usize> {
 
 /// No target without `O_DIRECT` ever opens a handle to write through.
 #[cfg(not(unix))]
-fn write_direct(file: &File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
+fn write_direct(file: &File, buf: &[u8], offset: u64) -> io::Result<usize> {
     let _ = (file, buf, offset);
-    Err(std::io::ErrorKind::Unsupported.into())
+    Err(ErrorKind::Unsupported.into())
 }
 
 #[cfg(target_os = "linux")]
@@ -328,9 +330,9 @@ fn reserve(file: &File, offset: u64, len: u64) -> io::Result<()> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn reserve(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+fn reserve(file: &File, offset: u64, len: u64) -> io::Result<()> {
     let _ = (file, offset, len);
-    Err(std::io::ErrorKind::Unsupported.into())
+    Err(ErrorKind::Unsupported.into())
 }
 
 #[cfg(target_os = "linux")]

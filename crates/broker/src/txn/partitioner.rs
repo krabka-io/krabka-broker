@@ -6,25 +6,14 @@
 
 use krabka_verified::broker::java_string_hash_partition;
 
-/// Checked form of [`partition_for_tid`].
-///
-/// Returns `None` when `num_partitions` is not positive.
-#[must_use]
-pub fn try_partition_for_tid(transactional_id: &str, num_partitions: i32) -> Option<i32> {
-    let utf16: Vec<u16> = transactional_id.encode_utf16().collect();
-    java_string_hash_partition(&utf16, num_partitions)
-}
-
 /// Map a `transactional_id` to a partition index in `__transaction_state`.
 ///
-/// # Panics
-///
-/// Panics when `num_partitions` is not positive; broker configuration enforces
-/// that invariant.
+/// Returns `None` when `num_partitions` is not positive; broker configuration
+/// rejects such a count.
 #[must_use]
-pub fn partition_for_tid(transactional_id: &str, num_partitions: i32) -> i32 {
-    try_partition_for_tid(transactional_id, num_partitions)
-        .expect("transaction state partition count must be positive")
+pub fn partition_for_tid(transactional_id: &str, num_partitions: i32) -> Option<i32> {
+    let utf16: Vec<u16> = transactional_id.encode_utf16().collect();
+    java_string_hash_partition(&utf16, num_partitions)
 }
 
 #[cfg(test)]
@@ -56,7 +45,7 @@ mod tests {
         ];
         for Vector { tid, expected } in cases {
             assert!(
-                partition_for_tid(tid, 50) == expected,
+                partition_for_tid(tid, 50) == Some(expected),
                 "tid `{tid}` should hash to partition {expected}"
             );
         }
@@ -70,7 +59,7 @@ mod tests {
             "really-long-transactional-id-with-many-bytes-and-symbols-!@#$%",
         ] {
             for n in [1, 50, 256] {
-                let p = partition_for_tid(s, n);
+                let p = partition_for_tid(s, n).unwrap();
                 assert!((0..n).contains(&p));
             }
         }
@@ -78,20 +67,20 @@ mod tests {
 
     #[test]
     fn hashes_non_bmp_text_as_utf16() {
-        assert!(partition_for_tid("😀", 50) == 49);
-        assert!(partition_for_tid("a😀b", 50) == 44);
+        assert!(partition_for_tid("😀", 50) == Some(49));
+        assert!(partition_for_tid("a😀b", 50) == Some(44));
     }
 
     #[test]
     fn signed_minimum_hash_maps_to_zero() {
         // This Java String has hashCode() == Integer.MIN_VALUE.
-        assert!(partition_for_tid("polygenelubricants", 50) == 0);
+        assert!(partition_for_tid("polygenelubricants", 50) == Some(0));
     }
 
     #[test]
     fn rejects_invalid_partition_counts_without_panicking() {
-        assert!(try_partition_for_tid("tid", 0) == None);
-        assert!(try_partition_for_tid("tid", -1) == None);
+        assert!(partition_for_tid("tid", 0) == None);
+        assert!(partition_for_tid("tid", -1) == None);
     }
 
     #[test]

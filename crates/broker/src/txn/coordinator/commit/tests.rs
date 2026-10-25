@@ -117,7 +117,8 @@ async fn coordinator(
         LogDirRegistry::default(),
         Arc::new(ProducerState::new()),
         false,
-    );
+    )
+    .unwrap();
     partition
         .install_isr(&[NodeId(1), NodeId(2)], &[NodeId(1), NodeId(2)], NODE)
         .await;
@@ -177,7 +178,7 @@ async fn catch_up(partition: &Partition) {
 
 /// The leader epoch of every batch in the log of `partition`.
 fn logged_epochs(partition: &Partition) -> Vec<i32> {
-    epochs_in_log(&*partition.log.lock().expect("the log is not poisoned"))
+    epochs_in_log(&partition.log.lock().expect("the log is not poisoned"))
 }
 
 /// The leader epoch of every batch in `log`.

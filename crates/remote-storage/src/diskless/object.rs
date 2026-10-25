@@ -37,6 +37,9 @@ pub enum WalObjectError {
     /// Footer length, entry encoding, or byte ranges are invalid.
     #[error("corrupt wal object manifest")]
     BadManifest,
+    /// A run or the footer is too large for the CKWL `u32` length fields.
+    #[error("wal object exceeds the CKWL 4 GiB length limit")]
+    TooLarge,
 }
 
 /// Builder for combined CKWL objects.
@@ -58,8 +61,9 @@ impl WalObjectBuilder {
 
     /// Append one contiguous partition run.
     ///
-    /// # Panics
-    /// Panics only if an in-memory object exceeds platform or CKWL length limits.
+    /// # Errors
+    /// Returns [`WalObjectError::TooLarge`], and leaves the builder unchanged,
+    /// if the run does not fit the CKWL `u32` length field.
     pub fn append_run(
         &mut self,
         topic_id: Uuid,
@@ -67,10 +71,10 @@ impl WalObjectBuilder {
         first_offset: i64,
         last_offset: i64,
         run: &[u8],
-    ) {
-        // No supported target has a `usize` wider than a `u64`.
-        let byte_start = (HEADER_LEN + self.body.len()) as u64;
-        let byte_len = u32::try_from(run.len()).expect("run size fits u32");
+    ) -> Result<(), WalObjectError> {
+        let byte_start =
+            u64::try_from(HEADER_LEN + self.body.len()).map_err(|_| WalObjectError::TooLarge)?;
+        let byte_len = u32::try_from(run.len()).map_err(|_| WalObjectError::TooLarge)?;
         self.body.extend_from_slice(run);
         self.entries.push(WalObjectEntry {
             topic_id,
@@ -80,19 +84,27 @@ impl WalObjectBuilder {
             byte_start,
             byte_len,
         });
+        Ok(())
     }
 
-    #[must_use]
-    /// # Panics
-    /// Panics only if the in-memory footer exceeds 4 GiB.
-    pub fn finish(self) -> Bytes {
+    /// Frame the appended runs as one CKWL object.
+    ///
+    /// # Errors
+    /// Returns [`WalObjectError::TooLarge`] if the footer does not fit the
+    /// CKWL `u32` length field. No partial object is returned.
+    pub fn finish(self) -> Result<Bytes, WalObjectError> {
+        let footer_len = self
+            .entries
+            .len()
+            .checked_mul(OBJECT_ENTRY_LEN)
+            .and_then(|len| u32::try_from(len).ok())
+            .ok_or(WalObjectError::TooLarge)?;
         let mut out = BytesMut::with_capacity(
             HEADER_LEN + self.body.len() + self.entries.len() * OBJECT_ENTRY_LEN + TRAILER_LEN,
         );
         out.extend_from_slice(&MAGIC);
         out.put_u16_le(OBJECT_VERSION);
         out.extend_from_slice(&self.body);
-        let footer_start = out.len();
         for entry in self.entries {
             out.extend_from_slice(entry.topic_id.as_bytes());
             out.put_i32_le(entry.partition);
@@ -101,13 +113,16 @@ impl WalObjectBuilder {
             out.put_u64_le(entry.byte_start);
             out.put_u32_le(entry.byte_len);
         }
-        out.put_u32_le(u32::try_from(out.len() - footer_start).expect("footer fits u32"));
+        out.put_u32_le(footer_len);
         out.extend_from_slice(&MAGIC);
-        out.freeze()
+        Ok(out.freeze())
     }
 
     /// Append one run and finish the object.
-    #[must_use]
+    ///
+    /// # Errors
+    /// Returns [`WalObjectError::TooLarge`] if the run or footer does not fit
+    /// the CKWL `u32` length fields.
     pub fn finish_with_run(
         mut self,
         topic_id: Uuid,
@@ -115,8 +130,8 @@ impl WalObjectBuilder {
         first_offset: i64,
         last_offset: i64,
         run: &[u8],
-    ) -> Bytes {
-        self.append_run(topic_id, partition, first_offset, last_offset, run);
+    ) -> Result<Bytes, WalObjectError> {
+        self.append_run(topic_id, partition, first_offset, last_offset, run)?;
         self.finish()
     }
 }

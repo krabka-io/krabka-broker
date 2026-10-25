@@ -372,7 +372,7 @@ mod tests {
                         subscribed_topic_names: vec!["t".into()],
                         assignment: Assignment {
                             topic_partitions: vec![TopicPartitions {
-                                topic_id: krabka_protocol::primitives::uuid::Uuid(
+                                topic_id: Uuid(
                                     *visible.as_bytes(),
                                 ),
                                 topic_name: "t".into(),

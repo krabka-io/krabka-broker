@@ -65,7 +65,7 @@ async fn a_gracefully_stopped_controller_is_replaced_within_the_bound() {
             .await;
     wait_for_all_brokers_registered(&cluster, 3).await;
 
-    let old = cluster[0].0.wait_until_controller_leader().await;
+    let old = cluster[0].0.wait_until_controller_leader().await.unwrap();
     let index = cluster
         .iter()
         .position(|(_, config, _)| config.node_id.0 == old.0)

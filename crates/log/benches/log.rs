@@ -12,10 +12,7 @@ use std::io::{self, IoSlice, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
 use {
-    criterion::{
-        BenchmarkGroup, Criterion, black_box, criterion_group, criterion_main,
-        measurement::WallTime,
-    },
+    criterion::{BenchmarkGroup, Criterion, black_box, criterion_main, measurement::WallTime},
     krabka_ids::{LeaderEpoch, Offset, ProducerId},
     krabka_log::{AbortedTxn, Log, LogConfig, SegmentAllocation, TxnIndex, VerbatimBatch},
     krabka_protocol::records::RecordBatch,
@@ -854,20 +851,28 @@ fn report_failures(_c: &mut Criterion) {
 // Harness
 // ---------------------------------------------------------------------------
 
-criterion_group!(
-    benches,
-    bench_append_record_sizes,
-    bench_append_large_message_paths,
-    bench_append_direct_groups,
-    bench_append_handoff,
-    bench_file_write_shapes,
-    bench_read,
-    bench_read_tail,
-    bench_open,
-    bench_truncate,
-    bench_accessors,
-    bench_txn_index_open,
-    bench_txn_index_append_retry,
-    report_failures,
-);
+/// The benchmark group, written out by hand where `criterion_group!` would
+/// generate it.
+fn benches() {
+    let mut criterion = Criterion::default().configure_from_args();
+    let targets: [fn(&mut Criterion); 13] = [
+        bench_append_record_sizes,
+        bench_append_large_message_paths,
+        bench_append_direct_groups,
+        bench_append_handoff,
+        bench_file_write_shapes,
+        bench_read,
+        bench_read_tail,
+        bench_open,
+        bench_truncate,
+        bench_accessors,
+        bench_txn_index_open,
+        bench_txn_index_append_retry,
+        report_failures,
+    ];
+    for target in targets {
+        target(&mut criterion);
+    }
+}
+
 criterion_main!(benches);

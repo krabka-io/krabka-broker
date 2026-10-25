@@ -9,6 +9,11 @@
 use {
     crate::{metrics::BrokerMetrics, schema_validation::ValidationMode},
     krabka_units::Time,
+    std::{
+        convert::Infallible,
+        fmt::{self, Debug, Formatter},
+        future,
+    },
 };
 
 mod reject;
@@ -37,11 +42,11 @@ pub enum SchemaValidatorError {
 
 /// Registry-backed record validation, which this platform cannot construct.
 pub struct SchemaValidator {
-    never: std::convert::Infallible,
+    never: Infallible,
 }
 
-impl std::fmt::Debug for SchemaValidator {
-    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { match self.never {} }
+impl Debug for SchemaValidator {
+    fn fmt(&self, _f: &mut Formatter<'_>) -> fmt::Result { match self.never {} }
 }
 
 impl SchemaValidator {
@@ -90,7 +95,7 @@ impl SchemaValidator {
         _mode: ValidationMode,
         _field: &[u8],
         _metrics: &BrokerMetrics,
-    ) -> std::future::Ready<Result<(), RejectReason>> {
+    ) -> future::Ready<Result<(), RejectReason>> {
         match self.never {}
     }
 
@@ -111,7 +116,7 @@ impl SchemaValidator {
         _mode: ValidationMode,
         _field: &[u8],
         _metrics: &BrokerMetrics,
-    ) -> std::future::Ready<Result<(), RejectReason>> {
+    ) -> future::Ready<Result<(), RejectReason>> {
         match self.never {}
     }
 }

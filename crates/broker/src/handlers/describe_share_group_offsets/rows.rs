@@ -64,7 +64,7 @@ impl ShareSummaries for SharePersister {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<Option<ShareStateSummary>, BrokerError> {
-        Self::read_summary(self, group, topic_id, partition).await
+        self.read_state_summary(group, topic_id, partition).await
     }
 }
 

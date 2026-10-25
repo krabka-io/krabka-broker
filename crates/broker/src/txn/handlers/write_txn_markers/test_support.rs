@@ -73,7 +73,7 @@ pub(super) fn local_offsets_partition_with_index(
     broker: &Broker,
     group_id: &str,
 ) -> IndexedPartition {
-    let partition = partition_for_group(&broker.controller.current_image(), group_id);
+    let partition = partition_for_group(&broker.controller.current_image(), group_id).unwrap();
     let part = broker
         .partitions
         .get(OFFSETS_TOPIC, PartitionIndex(partition))
@@ -108,7 +108,7 @@ pub(super) fn transactional_offset_batch(
 ) -> RecordBatch {
     single_transactional_batch((producer_id, producer_epoch), Record {
         key: Some(OffsetCommitValue::encode_key(group, topic, partition).unwrap()),
-        value: Some(value.encode_value()),
+        value: Some(value.encode_value().unwrap()),
         ..Record::default()
     })
 }

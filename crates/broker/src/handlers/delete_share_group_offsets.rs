@@ -644,13 +644,13 @@ mod tests {
             );
 
             let deleted_state = persister
-                .read_summary("g-delete", deleted_id, 0)
+                .read_state_summary("g-delete", deleted_id, 0)
                 .await
                 .expect("read deleted state");
             assert!(deleted_state.is_none());
         }
         let (kept_state_epoch, _, kept_start_offset, _) = persister
-            .read_summary("g-delete", kept_id, 0)
+            .read_state_summary("g-delete", kept_id, 0)
             .await
             .expect("read kept state")
             .expect("kept state");
@@ -792,7 +792,7 @@ mod tests {
             // topic's must be deleted.
             for (name, topic_id) in [("allow-topic", allow_id), ("deny-topic", deny_id)] {
                 let state = persister
-                    .read_summary("g-authz", topic_id, 0)
+                    .read_state_summary("g-authz", topic_id, 0)
                     .await
                     .expect("read state")
                     .map(|(state_epoch, _, start_offset, _)| (state_epoch, start_offset));

@@ -273,6 +273,7 @@ mod tests {
         crate::{
             codes,
             coordinator::{
+                DeleteGroupError,
                 test_support::offset_entry,
                 unified::{
                     GroupCoordinator,
@@ -291,7 +292,10 @@ mod tests {
         krabka_log::Offset,
         krabka_protocol::records::RecordBatch,
         std::{collections::HashMap, sync::Arc, time::Duration},
-        tokio::sync::oneshot::{Receiver, error::TryRecvError},
+        tokio::{
+            sync::oneshot::{Receiver, error::TryRecvError},
+            task, time,
+        },
     };
 
     /// Kafka's `GroupMetadataManager.onUnloaded` answers every awaiting
@@ -377,9 +381,7 @@ mod tests {
         let rx = rpc::begin(&handle, |tx| GroupActorMessage::FetchOffsets { reply: tx }).await;
         assert!(rx.await.unwrap().committed[&("t".to_owned(), 0)].offset == 7);
         // Non-empty group cannot be deleted.
-        assert!(
-            coord.delete_group("g").await == Err(crate::coordinator::DeleteGroupError::NonEmpty)
-        );
+        assert!(coord.delete_group("g").await == Err(DeleteGroupError::NonEmpty));
     }
 
     /// How long a message may take to answer while a commit replicates. It is
@@ -429,7 +431,7 @@ mod tests {
     }
 
     async fn committed_now(handle: &GroupActorHandle) -> HashMap<(String, i32), OffsetEntry> {
-        tokio::time::timeout(PROMPT, rpc::fetch_committed(handle))
+        time::timeout(PROMPT, rpc::fetch_committed(handle))
             .await
             .expect("OffsetFetch answers while a commit replicates")
     }
@@ -459,7 +461,7 @@ mod tests {
         let mut pending = begin_commit(&handle, 0, 9).await;
 
         assert!(committed_now(&handle).await == offsets(&[(0, 5)]));
-        let heartbeat = tokio::time::timeout(
+        let heartbeat = time::timeout(
             PROMPT,
             rpc::consumer_heartbeat(&handle, &member_id, joined.member_epoch, Some("t")),
         )
@@ -500,9 +502,9 @@ mod tests {
         assert!(committed_now(&timed_out.handle).await == offsets(&[]));
 
         timed_out.log.release_commits();
-        tokio::time::timeout(PROMPT, async {
+        time::timeout(PROMPT, async {
             while committed_now(&timed_out.handle).await != offsets(&[(0, 7)]) {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
@@ -523,7 +525,7 @@ mod tests {
         });
         // The delete's tombstones are in the log once a second batch is.
         while commit.log.batches().await.len() < 2 {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
 
         commit.log.release_commits();

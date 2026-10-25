@@ -7,6 +7,8 @@
 
 #[cfg(all(test, not(target_os = "wasi")))]
 use std::cell::Cell;
+#[cfg(not(target_os = "wasi"))]
+use std::fs::File;
 use {
     super::{Segment, io::seek_to_log_size},
     crate::{error::LogError, io::LogIo},
@@ -14,7 +16,6 @@ use {
     krabka_protocol::records::RecordBatch,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
     std::{
-        fs::File,
         io::{self, ErrorKind},
         mem,
         sync::{Arc, atomic::Ordering},

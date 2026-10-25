@@ -265,12 +265,12 @@ async fn remove_last_member(broker: &Broker) {
 /// Every record the group's `__consumer_offsets` partition holds, with a
 /// `None` value for a tombstone.
 fn offsets_log_records(broker: &Broker) -> Vec<OffsetsRecord> {
-    let partition_id = partition_for_group(&broker.controller.current_image(), GROUP);
+    let partition_id = partition_for_group(&broker.controller.current_image(), GROUP).unwrap();
     let partition = broker
         .partitions
         .get(OFFSETS_TOPIC, PartitionIndex(partition_id))
         .expect("offsets partition is materialized");
-    read_offsets_log(&*partition.log.lock().expect("log lock"))
+    read_offsets_log(&partition.log.lock().expect("log lock"))
 }
 
 /// Every record of the offsets log `log`.

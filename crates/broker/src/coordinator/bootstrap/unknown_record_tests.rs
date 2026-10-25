@@ -55,6 +55,7 @@ fn offset_value(offset: i64) -> Bytes {
         topic_id: None,
     }
     .encode_value()
+    .unwrap()
 }
 
 fn commit(partition: i32, offset: i64) -> Record {

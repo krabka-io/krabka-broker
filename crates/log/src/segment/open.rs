@@ -5,6 +5,8 @@
 //! and active segments recover their tail. Log recovery also uses a private
 //! no-scan loader before it supplies the sealed segment bounds.
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use {
     super::{Segment, io::seek_to_log_size},
     crate::{
@@ -19,7 +21,6 @@ use {
     krabka_units::prelude::{ByteSize, ByteSizeExt},
     std::{
         fs::{File, Metadata, OpenOptions},
-        os::unix::fs::MetadataExt,
         path::Path,
         sync::{Arc, atomic::AtomicBool},
     },
@@ -426,7 +427,7 @@ fn allocated_bytes(metadata: &Metadata) -> u64 { MetadataExt::blocks(metadata).s
 
 /// The targets without block counts cannot reserve blocks either.
 #[cfg(not(unix))]
-fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
+fn allocated_bytes(metadata: &Metadata) -> u64 {
     let _ = metadata;
     0
 }

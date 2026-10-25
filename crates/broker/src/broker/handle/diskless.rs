@@ -3,7 +3,10 @@
 //! readiness check that shipping gates poll before they produce.
 
 use {
-    crate::broker::{BrokerHandle, DISKLESS_FLUSHER_READY_TIMEOUT},
+    crate::{
+        broker::{BrokerHandle, DISKLESS_FLUSHER_READY_TIMEOUT},
+        error::BrokerError,
+    },
     krabka_ids::PartitionIndex,
     std::{
         sync::{Arc, PoisonError, atomic::Ordering},
@@ -73,18 +76,27 @@ impl BrokerHandle {
     /// opened.
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
-    pub async fn wait_until_diskless_flusher_ready(&self) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Startup`] when this broker has no diskless
+    /// flusher, or its bootstrap is not ready within 90s.
+    pub async fn wait_until_diskless_flusher_ready(&self) -> Result<(), BrokerError> {
         let ready = self
             .diskless_flusher_ready
             .as_ref()
-            .expect("diskless flusher is configured");
+            .ok_or_else(|| BrokerError::Startup("diskless flusher is not configured".to_owned()))?;
         time::timeout(DISKLESS_FLUSHER_READY_TIMEOUT, async {
             while !ready.load(Ordering::Acquire) {
                 time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
-        .expect("diskless index/flusher bootstrap did not become ready within 90s");
+        .map_err(|_| {
+            BrokerError::Startup(
+                "diskless index/flusher bootstrap did not become ready within 90s".to_owned(),
+            )
+        })
     }
 
     /// Test-only snapshot of the local inputs used by the diskless flusher:

@@ -1,22 +1,23 @@
 //! Construction of an `object_store::ObjectStore` handle from a config.
 
-#[cfg(not(target_family = "wasm"))]
-use crate::config::{GcsConfig, S3Config};
 #[cfg(target_family = "wasm")]
 use crate::unavailable::unavailable;
-#[cfg(not(target_family = "wasm"))]
-use object_store::{ClientOptions, RetryConfig};
 use {
     super::{error::ObjectStoreError, object_store_api as object_store},
     crate::config::ObjectStoreConfig,
+    object_store::{ObjectStore, memory::InMemory},
+    std::sync::Arc,
+};
+#[cfg(not(target_family = "wasm"))]
+use {
+    crate::config::{GcsConfig, S3Config},
     object_store::{
-        ObjectStore,
+        ClientOptions, RetryConfig,
         aws::{AmazonS3, AmazonS3Builder, Checksum, S3ConditionalPut},
         gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder},
         local::LocalFileSystem,
-        memory::InMemory,
     },
-    std::{sync::Arc, time::Duration},
+    std::time::Duration,
 };
 
 /// The retry budget `cfg` asks for.

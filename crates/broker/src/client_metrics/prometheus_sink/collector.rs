@@ -283,6 +283,7 @@ mod tests {
             assert2::assert!(
                 matches!(point.value, PointValue::Counter(value) if (value - expected).abs() < f64::EPSILON)
             );
+            drop(guard);
         }
 
         let guard = sink.points.lock().unwrap();
@@ -295,6 +296,7 @@ mod tests {
                 if (*sum - 10.0).abs() < f64::EPSILON
                     && buckets.as_slice() == [(1.0, 3), (f64::MAX, 2)]
         )));
+        drop(guard);
 
         let mut total = PointValue::Histogram {
             count: 2,

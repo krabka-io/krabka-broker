@@ -33,7 +33,9 @@ use {
     bytes::Bytes,
     krabka_protocol::{
         owned::{
-            fetch_request::{FetchPartition, FetchRequest, FetchTopic},
+            fetch_request::{
+                FetchPartition, FetchRequest, FetchTopic, MAX_VERSION as FETCH_MAX_VERSION,
+            },
             fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
         },
         primitives::uuid::Uuid as WireUuid,
@@ -46,7 +48,7 @@ use {
 const UNKNOWN_NAME: &str = "no-such-topic";
 
 /// The highest `Fetch` version that the broker serves.
-const MAX_VERSION: i16 = krabka_protocol::owned::fetch_request::MAX_VERSION;
+const MAX_VERSION: i16 = FETCH_MAX_VERSION;
 
 use {
     crate::handlers::test_support::{

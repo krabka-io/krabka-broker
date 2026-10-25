@@ -120,8 +120,8 @@ async fn two_brokers_split_metadata_partitions() {
     let topic_id = Uuid::from_u128(0xFEED);
     let tp_a = TopicIdPartition::new(topic_id, "orders", 0);
     let tp_b = TopicIdPartition::new(topic_id, "orders", 1);
-    let mp_a = metadata_partition_for(&tp_a, n);
-    let mp_b = metadata_partition_for(&tp_b, n);
+    let mp_a = metadata_partition_for(&tp_a, n).unwrap();
+    let mp_b = metadata_partition_for(&tp_b, n).unwrap();
     assert!(
         mp_a != mp_b,
         "test needs the two partitions in distinct buckets"

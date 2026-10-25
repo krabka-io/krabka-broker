@@ -7,7 +7,9 @@
 
 use {schemars::JsonSchema, serde::Deserialize};
 
-/// TOML shape of `[authorization]`. `type` (renamed to `authz_type` on
+/// TOML shape of `[authorization]`.
+///
+/// `type` (renamed to `authz_type` on
 /// the Rust side to avoid shadowing the keyword) defaults to
 /// `AllowAll`; `super_users` is the principal bypass list consulted by
 /// every concrete authorizer impl.
@@ -77,7 +79,9 @@ pub enum AuthzType {
     Opa,
 }
 
-/// TOML shape of `[authorization.opa]`. Mirrors the constructor
+/// TOML shape of `[authorization.opa]`.
+///
+/// Mirrors the constructor
 /// arguments of [`crate::authorizer::opa::OpaAuthorizer::new`]. Defaults
 /// are picked to match Strimzi's `KafkaAuthorizationOpa` (`50_000` LRU
 /// entries, 1 h TTL, fail-closed on OPA error).

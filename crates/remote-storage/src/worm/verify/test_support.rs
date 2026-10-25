@@ -125,7 +125,8 @@ impl Archive {
                         seq: ManifestSeq(u64::try_from(seq).unwrap()),
                         prev_head,
                     })
-                    .to_custom_metadata(),
+                    .to_custom_metadata()
+                    .unwrap(),
                 );
                 let sealed = archiver.seal(&stamped, entries.clone()).unwrap();
                 let manifest_key = format!("{dir}/{}", segment_file_name(&md, MANIFEST_SUFFIX));
@@ -193,10 +194,11 @@ impl Archive {
         if let Some(head) = prev_head {
             stamp.prev_head = head;
         }
-        let stamped = segment
-            .metadata
-            .clone()
-            .with_custom_metadata(WormChainRecord::request(stamp).to_custom_metadata());
+        let stamped = segment.metadata.clone().with_custom_metadata(
+            WormChainRecord::request(stamp)
+                .to_custom_metadata()
+                .unwrap(),
+        );
         let sealed = WormArchiver::new(signer)
             .seal(&stamped, entries.unwrap_or_else(|| segment.entries.clone()))
             .unwrap();

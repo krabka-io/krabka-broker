@@ -47,7 +47,7 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
         cfg.transaction_state_replication_factor = 1;
     })
     .await;
-    handle_.wait_until_controller_leader().await;
+    handle_.wait_until_controller_leader().await.unwrap();
     handle_.wait_until_brokers_registered(1).await;
     let broker = handle_.broker_arc_for_test();
     handle_.wait_until_transaction_coordinator_ready().await;

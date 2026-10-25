@@ -265,7 +265,7 @@ async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_serv
         handle: first,
         dir: first_dir,
     } = start(first, vec![NodeRole::Controller], &log_dir, &bootstrap).await;
-    first.wait_until_controller_leader().await;
+    first.wait_until_controller_leader().await.unwrap();
     let first_directory = first
         .voter_directory_id_for_test(NodeId(3001))
         .expect("the standalone voter");
@@ -381,7 +381,7 @@ async fn a_wildcard_controller_advertises_the_host_name_in_the_voter_set() {
         handle: controller,
         dir: _dir,
     } = start(node, vec![NodeRole::Controller], &log_dir, &[reachable]).await;
-    controller.wait_until_controller_leader().await;
+    controller.wait_until_controller_leader().await.unwrap();
 
     let host_name = hostname::get()
         .expect("this machine's host name")

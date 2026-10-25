@@ -20,16 +20,16 @@ use {
     tokio::sync::{Mutex, Semaphore},
     tokio_util::sync::CancellationToken,
 };
+#[cfg(not(target_family = "wasm"))]
+use {krabka_telemetry::profiling, std::fs, tokio::net::TcpListener};
 use {
-    krabka_telemetry::{
-        profiling,
-        profiling::{ProfilingConfig, ProfilingError},
-    },
-    std::{
-        fs,
-        io::{Error, ErrorKind},
-    },
-    tokio::net::TcpListener,
+    krabka_telemetry::profiling::{ProfilingConfig, ProfilingError},
+    std::io::{Error, ErrorKind},
+};
+#[cfg(target_family = "wasm")]
+use {
+    std::{future, net::SocketAddr, path::Path},
+    tokio_util::sync::CancellationToken,
 };
 
 #[cfg(not(target_family = "wasm"))]
@@ -130,14 +130,14 @@ pub async fn run(
 /// `BrokerConfig::validate` refuses `profiling_listen_addr` on this platform,
 /// so this is unreachable from a validated config.
 #[cfg(target_family = "wasm")]
-pub(crate) fn run(
-    addr: std::net::SocketAddr,
-    _token_file: &std::path::Path,
-    _profiling: krabka_telemetry::profiling::ProfilingConfig,
-    _shutdown: tokio_util::sync::CancellationToken,
-) -> std::future::Ready<Result<std::net::SocketAddr, krabka_telemetry::profiling::ProfilingError>> {
-    std::future::ready(Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
+pub fn run(
+    addr: SocketAddr,
+    _token_file: &Path,
+    _profiling: ProfilingConfig,
+    _shutdown: CancellationToken,
+) -> future::Ready<Result<SocketAddr, ProfilingError>> {
+    future::ready(Err(Error::new(
+        ErrorKind::Unsupported,
         format!(
             "cannot serve profiling on {addr}: the profiling server is unavailable on this \
              platform"

@@ -53,7 +53,7 @@ async fn stopped_observer() -> StoppedObserver {
         broker: controller,
         dir: controller_dir,
     } = start_broker_no_audit().await;
-    controller.wait_until_controller_leader().await;
+    controller.wait_until_controller_leader().await.unwrap();
     let authority = controller.broker_arc_for_test();
     let addr = controller.controller_addr();
     let cluster_id = authority.controller.current_image().cluster_id();

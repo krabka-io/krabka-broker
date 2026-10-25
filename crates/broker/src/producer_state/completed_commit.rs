@@ -138,7 +138,8 @@ async fn completions_after_real_markers_preserve_closed_state_and_restart_decisi
                 LogDirRegistry::default(),
                 Arc::clone(&state),
                 false,
-            );
+            )
+            .unwrap();
             for sequence in [0, 2] {
                 partition
                     .produce_batch(RecordBatch {

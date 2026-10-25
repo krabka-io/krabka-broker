@@ -3956,7 +3956,6 @@ dependencies = [
  "bon",
  "clap",
  "hex",
- "num-traits",
  "regex",
  "serde",
  "serde_json",

@@ -779,6 +779,7 @@ async fn scheduled_local_retention_keeps_the_pending_prefix_until_its_clock_boun
         let mut log = partition.log.lock().unwrap();
         check!(log.advance_delivery_watermark(2_099).watermark == Offset(2));
         check!(log.read(Offset(2), bytes(4096)).unwrap().batches[0].max_timestamp == 2_000);
+        drop(log);
     }
     let due = pass_over(&partition, &rlmm, 2_100).await;
     check!(due.removed == 1);

@@ -91,9 +91,12 @@ fn serve(
         // as the group's __consumer_offsets partition in the txn partition set
         // (Kafka's TransactionLogValue has no group-name field). EndTxn fans a
         // marker to every partition in the set, including this one.
+        let Some(offsets_partition) = partition_for_group(&image, &req.group_id) else {
+            return AddOffsetsToTxnResponse::error(codes::COORDINATOR_NOT_AVAILABLE);
+        };
         let offsets_partition = TopicPartition {
             topic: OFFSETS_TOPIC.to_owned(),
-            partition: PartitionIndex(partition_for_group(&image, &req.group_id)),
+            partition: PartitionIndex(offsets_partition),
         };
         let code = add_offsets_partition(
             &coord,

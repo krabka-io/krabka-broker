@@ -7,6 +7,8 @@
 //! because each is a whole-broker singleton that `apply_to` writes exactly
 //! once, after the values they may depend on are already resolved.
 
+#[cfg(not(target_family = "wasm"))]
+use krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW;
 use {
     super::{
         AuthzType, FileAuditConfig, FileAuthorizationConfig, FileConfigError, FileGssapiConfig,
@@ -17,7 +19,6 @@ use {
         config::{BrokerConfig, InterBrokerCredentials, NodeRole, validate_oauthbearer_token_file},
         network::auth::GssapiConfig,
     },
-    krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
     krabka_units::{
         ByteSize, Time,
         convert::{ByteSizeExt as _, TimeExt as _},

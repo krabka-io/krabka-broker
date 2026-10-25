@@ -715,12 +715,12 @@ fn a_broker_reports_its_per_node_override_above_the_cluster_default() {
                     .source(CONFIG_SOURCE_DYNAMIC_BROKER)
                     .synonyms(vec![
                         synonym(
-                            crate::throttle::LEADER_THROTTLED_RATE_KEY,
+                            LEADER_THROTTLED_RATE_KEY,
                             "1024",
                             CONFIG_SOURCE_DYNAMIC_BROKER
                         ),
                         synonym(
-                            crate::throttle::LEADER_THROTTLED_RATE_KEY,
+                            LEADER_THROTTLED_RATE_KEY,
                             "512",
                             CONFIG_SOURCE_DYNAMIC_DEFAULT_BROKER
                         ),

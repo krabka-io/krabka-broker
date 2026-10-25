@@ -151,7 +151,8 @@ impl Fixture {
                     seq: ManifestSeq(u64::try_from(index).unwrap()),
                     prev_head,
                 })
-                .to_custom_metadata(),
+                .to_custom_metadata()
+                .unwrap(),
             );
             // The rotation lands part-way through: the chain is unbroken, so
             // only the trusted-key set separates a clean run from an
@@ -202,7 +203,8 @@ impl Fixture {
                 seq: ManifestSeq(0),
                 prev_head: ChainHead::GENESIS,
             })
-            .to_custom_metadata(),
+            .to_custom_metadata()
+            .unwrap(),
         );
         let sealed = WormArchiver::new(Some(Arc::new(signer)))
             .seal(&stamped, self.entries[index].clone())

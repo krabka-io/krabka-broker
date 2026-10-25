@@ -136,7 +136,7 @@ async fn cpu_profile(
 async fn heap_profile(
     State(config): State<ProfilingConfig>,
     Query(q): Query<HeapQuery>,
-) -> axum::response::Response {
+) -> Response {
     let Some(ctl) = jemalloc_pprof::PROF_CTL.as_ref() else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -159,12 +159,13 @@ async fn heap_profile(
             config.profiling_heap_default_duration,
             config.profiling_heap_max_duration,
         );
-        tokio::time::sleep(duration.to_std()).await;
+        time::sleep(duration.to_std()).await;
     }
     let dump = ctl.dump_pprof();
     if activated_here && let Err(e) = ctl.deactivate() {
         tracing::warn!(error = %e, "could not deactivate jemalloc profiling after heap dump");
     }
+    drop(ctl);
     match dump {
         Ok(pprof) => (
             StatusCode::OK,

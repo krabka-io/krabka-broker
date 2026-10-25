@@ -1037,14 +1037,8 @@ mod tests {
                     partition_index: 0,
                     leader_epoch: 5,
                     new_isr_with_epochs: vec![
-                        bs(
-                            crate::test_support::WireBrokerId(1),
-                            crate::test_support::BrokerEpoch(10),
-                        ),
-                        bs(
-                            crate::test_support::WireBrokerId(2),
-                            crate::test_support::BrokerEpoch(-1),
-                        ),
+                        bs(WireBrokerId(1), BrokerEpoch(10)),
+                        bs(WireBrokerId(2), BrokerEpoch(-1)),
                     ],
                     ..Default::default()
                 }),

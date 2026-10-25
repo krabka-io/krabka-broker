@@ -701,7 +701,7 @@ pub async fn start_jvm_bound(
         krabka_broker::Broker::start_with_listeners(config, Some(controller), [data_plane])
             .await
             .expect("broker start");
-    handle.wait_until_controller_leader().await;
+    handle.wait_until_controller_leader().await.unwrap();
     (handle, bootstrap)
 }
 

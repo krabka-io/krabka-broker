@@ -118,7 +118,7 @@ impl BacklogPoller {
                 for partition in partitions {
                     let spso = self
                         .persister
-                        .read_summary(&group_id, topic_id, partition)
+                        .read_state_summary(&group_id, topic_id, partition)
                         .await
                         .map_err(|error| error.to_string())?
                         .map_or(-1, |(_, _, start_offset, _)| start_offset.0);
@@ -259,9 +259,8 @@ fn latest_fetch_offset(
 }
 
 fn owns_group(image: &krabka_metadata::MetadataImage, node_id: NodeId, group_id: &str) -> bool {
-    let partition = partitioner::partition_for_group(image, group_id);
-    image
-        .partition(OFFSETS_TOPIC, partition)
+    partitioner::partition_for_group(image, group_id)
+        .and_then(|partition| image.partition(OFFSETS_TOPIC, partition))
         .is_some_and(|record| record.leader == node_id)
 }
 
@@ -409,7 +408,7 @@ mod tests {
     fn group_for_partition(partition: i32) -> String {
         (0..100)
             .map(|i| format!("group-{i}"))
-            .find(|group| partitioner::partition_for_group_with_count(group, 2) == partition)
+            .find(|group| partitioner::partition_for_group_with_count(group, 2) == Some(partition))
             .expect("both offsets partitions receive a group")
     }
 

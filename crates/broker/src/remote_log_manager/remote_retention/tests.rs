@@ -1063,7 +1063,7 @@ fn refusing_backends() -> RefusingBackends {
     let rlmm = fixtures::in_memory_metadata();
     seed_finished_segments(&rlmm, 3);
     let rsm_impl = Arc::new(RefusesDeleteRsm::default());
-    let rsm: Arc<dyn RemoteStorageManager> = rsm_impl.clone();
+    let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
     RefusingBackends {
         rlmm,
         rsm_impl,

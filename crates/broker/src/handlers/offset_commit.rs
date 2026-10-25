@@ -496,7 +496,7 @@ fn commit_records(
                     &topic.name,
                     part.partition_index,
                 )?),
-                value: Some(OffsetCommitValue::from(&entry).encode_value()),
+                value: Some(OffsetCommitValue::from(&entry).encode_value()?),
                 ..Default::default()
             });
             entries.push(((topic.name.clone(), part.partition_index), entry));

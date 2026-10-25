@@ -254,8 +254,8 @@ pub async fn start_mixed_cluster(container: &str, jvm_is_controller: bool) -> Mi
 
     // Wait for the Krabka voters to elect a shared leader (event-driven: each
     // awaiter resolves once that voter observes a non-zero controller leader).
-    c1.wait_until_controller_leader().await;
-    c2.wait_until_controller_leader().await;
+    c1.wait_until_controller_leader().await.unwrap();
+    c2.wait_until_controller_leader().await.unwrap();
 
     let bootstrap_all = format!(
         "{}:{},{}:{},{}:{}",

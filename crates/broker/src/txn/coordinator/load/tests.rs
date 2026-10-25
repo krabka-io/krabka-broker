@@ -141,7 +141,7 @@ async fn a_leadership_change_loads_the_new_leader_and_unloads_the_old_one() {
     // the state-partition lock, and it answers COORDINATOR_LOAD_IN_PROGRESS.
     let held_append = second
         .state_partition_writes
-        .lock_for(PartitionIndex(0))
+        .lock_for(Some(PartitionIndex(0)))
         .lock()
         .await;
     let loads = second
@@ -350,7 +350,7 @@ async fn a_bad_record_loads_the_transactions_before_it_and_serves_them() {
     let tid_in = |partition: i32, skip: usize| {
         (0..1_000)
             .map(|n| format!("tid-{n}"))
-            .filter(|tid| partition_for_tid(tid, 2) == partition)
+            .filter(|tid| partition_for_tid(tid, 2) == Some(partition))
             .nth(skip)
             .expect("a transactional id in that partition")
     };

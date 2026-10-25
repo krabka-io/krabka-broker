@@ -136,7 +136,7 @@ async fn boot_diskless_broker(log_dir: TempDir, controller: TcpListener) -> Disk
         .await
         .expect("the diskless broker starts");
     handle.wait_until_brokers_registered(1).await;
-    handle.wait_until_diskless_flusher_ready().await;
+    handle.wait_until_diskless_flusher_ready().await.unwrap();
     DisklessBroker {
         handle,
         bootstrap: data_addr.to_string(),

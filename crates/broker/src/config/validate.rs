@@ -478,6 +478,7 @@ mod tests {
         krabka_security::ListenerProtocol,
         krabka_telemetry::profiling::ProfilingConfig,
         krabka_units::{Time, bytes, millis},
+        std::iter,
     };
 
     /// Kafka's `KafkaConfig` requires `broker.id == node.id` in `KRaft` mode. A
@@ -644,9 +645,7 @@ mod tests {
                 controller_listener_protocol: protocol,
                 enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
                 plain_credentials: if credentials {
-                    [("admin".to_owned(), "admin-secret".to_owned())]
-                        .into_iter()
-                        .collect()
+                    iter::once(("admin".to_owned(), "admin-secret".to_owned())).collect()
                 } else {
                     PlainCredentials::default()
                 },

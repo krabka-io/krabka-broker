@@ -2,6 +2,8 @@
 //! mutex, the blocking seek-and-read that serves it, and the response
 //! fields the served bytes fill in.
 
+#[krabka_macros::sendfile_cfg]
+use krabka_protocol::records::FileRegion;
 use {
     super::{FetchWatermarks, VisibilityWindow, compute_visibility_window, plan::refused_read},
     crate::{
@@ -11,7 +13,7 @@ use {
     krabka_log::{Log, LogError, Offset},
     krabka_protocol::{
         owned::fetch_response::{AbortedTransaction, PartitionData},
-        records::{FileRegion, RecordsPayload},
+        records::RecordsPayload,
     },
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
     std::{

@@ -216,8 +216,12 @@ impl OffsetCommitValue {
     ///
     /// Version 1 has no `leader_epoch` or `topic_id`, so a per-commit expiry
     /// drops both the same way Kafka's does; a reader sees `-1` and no id.
-    #[must_use]
-    pub fn encode_value(&self) -> Bytes {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerError::Protocol`] if the value does not encode at its
+    /// version, which versions 1 and 4 always do.
+    pub fn encode_value(&self) -> Result<Bytes, BrokerError> {
         use krabka_protocol::Encode as _;
         let version = self.value_version();
         let wire = offset_commit_value::OffsetCommitValue {
@@ -231,9 +235,8 @@ impl OffsetCommitValue {
         };
         let mut buf = BytesMut::new();
         buf.put_i16(version);
-        wire.encode(&mut buf, version)
-            .expect("an OffsetCommitValue encodes at versions 1 and 4");
-        buf.freeze()
+        wire.encode(&mut buf, version)?;
+        Ok(buf.freeze())
     }
 
     /// Decodes an `OffsetCommit` value of any version Kafka defines, 0 to 4,
@@ -589,7 +592,7 @@ mod tests {
             ),
         ];
         for (written, bytes, read) in cases {
-            let encoded = written.encode_value();
+            let encoded = written.encode_value().unwrap();
             assert!(encoded[..] == bytes[..], "{written:?}");
             assert!(OffsetCommitValue::decode_value(&encoded).unwrap() == read);
         }

@@ -198,7 +198,7 @@ async fn a_cleanly_stopped_broker_still_counts_toward_the_replication_factor() {
     // Stop a broker that does not lead the raft quorum. The topic gives every
     // broker one partition to lead, so the stop goes through controlled
     // shutdown rather than straight to a fence.
-    let raft_leader = cluster[0].0.wait_until_controller_leader().await;
+    let raft_leader = cluster[0].0.wait_until_controller_leader().await.unwrap();
     let position = cluster
         .iter()
         .position(|(_, config, _)| config.node_id != raft_leader)

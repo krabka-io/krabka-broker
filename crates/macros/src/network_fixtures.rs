@@ -170,8 +170,8 @@ pub fn export_segment_data(input: TokenStream) -> Result<TokenStream, ParseError
     named_items(input, |name| {
         moxy::template! {
         #[derive(Clone, Copy)]
-        pub(crate) enum ProducerSnapshotExport { Include, Omit }
-        pub(crate) fn {{ name }}(
+        pub enum ProducerSnapshotExport { Include, Omit }
+        pub fn {{ name }}(
             export: &::krabka_log::SegmentExport,
             snapshot: ProducerSnapshotExport,
             epoch_bytes: impl FnOnce() -> ::bytes::Bytes,

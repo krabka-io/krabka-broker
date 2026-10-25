@@ -97,7 +97,7 @@ async fn preferred_election_via_wire_returns_success() {
     // `&[(BrokerHandle, BrokerConfig, TempDir)]` function signature that
     // triggers the Rust 1.95 annotate-snippets ICE in clippy::type_complexity.
     let elect_addr = {
-        let leader = cluster[0].0.wait_until_controller_leader().await;
+        let leader = cluster[0].0.wait_until_controller_leader().await.unwrap();
         let pos = cluster
             .iter()
             .position(|(_, cfg, _)| cfg.node_id == leader)

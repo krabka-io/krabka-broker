@@ -77,7 +77,7 @@ async fn rejected_mutations_return_the_cache_error_and_valid_retries_succeed() {
 async fn replay_without_local_waiters_keeps_no_outcome_history() {
     let log = InProcessMetadataEventLog::new(2);
     let manager = start_manager_all(Arc::<InProcessMetadataEventLog>::clone(&log)).await;
-    let partition = metadata_partition_for(&tp(), log.partition_count());
+    let partition = metadata_partition_for(&tp(), log.partition_count()).unwrap();
     let mut last = -1;
     for _ in 0..64 {
         last = log
@@ -195,7 +195,7 @@ struct HeldManager {
 async fn held_manager() -> HeldManager {
     let log = HeldPublishLog::new(2);
     let manager = start_manager_all(Arc::<HeldPublishLog>::clone(&log)).await;
-    let partition = metadata_partition_for(&tp(), log.partition_count());
+    let partition = metadata_partition_for(&tp(), log.partition_count()).unwrap();
     HeldManager {
         log,
         manager,

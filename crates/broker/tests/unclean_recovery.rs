@@ -343,7 +343,7 @@ async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_
     // Event-driven: await a non-zero elected controller leader (same watch channel
     // `controller_leader_id` reads), then resolve its listen address.
     let elect_addr = {
-        let leader = h1.wait_until_controller_leader().await;
+        let leader = h1.wait_until_controller_leader().await.unwrap();
         let pos = cluster
             .iter()
             .position(|(_, cfg, _)| cfg.node_id == leader)

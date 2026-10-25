@@ -169,9 +169,14 @@ async fn copy_one_inner(
     // object, which would leave orphans in a bucket that takes nothing back.
     let metadata = match chain {
         ChainPosition::Unchained => metadata,
-        ChainPosition::At(stamp) => {
-            metadata.with_custom_metadata(WormChainRecord::request(stamp).to_custom_metadata())
-        }
+        ChainPosition::At(stamp) => match WormChainRecord::request(stamp).to_custom_metadata() {
+            Ok(custom) => metadata.with_custom_metadata(custom),
+            Err(e) => {
+                warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                      error = %e, "remote-log-manager: cannot encode WORM chain stamp");
+                return CopyOutcome::Failed;
+            }
+        },
         ChainPosition::Exhausted => return CopyOutcome::Failed,
     };
 
@@ -613,7 +618,7 @@ mod tests {
         rlmm: &Arc<dyn RemoteLogMetadataManager>,
         floor: Option<Offset>,
     ) -> CopyResidue {
-        let rsm: Arc<dyn RemoteStorageManager> = rsm_impl.clone();
+        let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
         let outcome = copy_one(
             &tier(ArchiveMode::Mutable, &rsm, rlmm),
             &tp(),
@@ -683,7 +688,7 @@ mod tests {
     async fn a_copy_marked_for_deletion_mid_copy_rolls_back() {
         let rlmm = fixtures::in_memory_metadata();
         let rsm_impl = Arc::new(DeletingRsm {
-            marking: Some(rlmm.clone()),
+            marking: Some(Arc::clone(&rlmm)),
             ..DeletingRsm::default()
         });
 
@@ -778,12 +783,16 @@ mod tests {
             (
                 "write-once stamps the request form",
                 ChainPosition::At(stamp),
-                Some(WormChainRecord::request(stamp).to_custom_metadata()),
+                Some(
+                    WormChainRecord::request(stamp)
+                        .to_custom_metadata()
+                        .unwrap(),
+                ),
             ),
         ];
         for (name, chain, expected) in cases {
             let rsm_impl = Arc::new(CapturingRsm::default());
-            let rsm: Arc<dyn RemoteStorageManager> = rsm_impl.clone();
+            let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
             let rlmm = fixtures::in_memory_metadata();
             let export = synth_export().call();
 
@@ -805,6 +814,7 @@ mod tests {
                 seen[0].custom_metadata() == expected.as_ref(),
                 "case {name}"
             );
+            drop(seen);
         }
     }
 
@@ -825,7 +835,7 @@ mod tests {
         ];
         for receipt in cases {
             let rsm: Arc<dyn RemoteStorageManager> =
-                Arc::new(ReturningRsm(Some(receipt.to_custom_metadata())));
+                Arc::new(ReturningRsm(Some(receipt.to_custom_metadata().unwrap())));
             let rlmm = fixtures::in_memory_metadata();
 
             let outcome = copy_one(

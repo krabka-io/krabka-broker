@@ -62,6 +62,7 @@ async fn an_unbounded_pool_never_refuses() {
     check!(permits.len() == 64);
     check!(pool.rejected() == 0);
     check!(pool.queue_size() == 0);
+    drop(permits);
 }
 
 #[tokio::test]

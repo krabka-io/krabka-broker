@@ -228,7 +228,9 @@ pub async fn handle(
                 Err(error_code) => return Ok(refusal(version, error_code)),
             };
             drop(coord.refresh_leader_partitions(&image).await);
-            let txn_partition = coord.partition_for(tid);
+            let Some(txn_partition) = coord.partition_for(tid) else {
+                return Ok(refusal(version, codes::COORDINATOR_NOT_AVAILABLE));
+            };
             if coord.load_status(txn_partition).await == Some(LoadStatus::Pending) {
                 // This broker leads the `__transaction_state` partition, but
                 // its log is not open yet. The replicator supervisor opens it

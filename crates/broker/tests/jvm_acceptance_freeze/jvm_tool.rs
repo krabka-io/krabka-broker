@@ -61,11 +61,7 @@ impl ToolRun {
 ///
 /// The container is named rather than anonymous so that a run killed
 /// mid-flight leaves something an operator can find and remove.
-pub fn run_tool(
-    props: Option<&ClientPropsFile>,
-    stdin: Option<&str>,
-    args: &[&str],
-) -> ToolRun {
+pub fn run_tool(props: Option<&ClientPropsFile>, stdin: Option<&str>, args: &[&str]) -> ToolRun {
     let name = support::unique_container_name("kfc9-jvm");
     let mount = props.map(ClientPropsFile::mount_str);
     let mut options = vec!["--name", name.as_str()];

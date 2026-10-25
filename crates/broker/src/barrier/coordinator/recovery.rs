@@ -559,14 +559,16 @@ mod tests {
             .finalize_open_injections(&fixture.source.current_image())
             .await;
         assert!(matches!(result, Err(BarrierError::StateNotLocal { .. })));
-        let handle = recovering
-            .groups
-            .get(GROUP)
-            .expect("the replayed group remains")
-            .value()
-            .clone();
+        let handle = Arc::clone(
+            recovering
+                .groups
+                .get(GROUP)
+                .expect("the replayed group remains")
+                .value(),
+        );
         let entry = handle.lock().await;
         assert!(entry.pending.as_ref().map(|pending| pending.epoch) == Some(1));
         assert!(entry.cuts.is_empty());
+        drop(entry);
     }
 }

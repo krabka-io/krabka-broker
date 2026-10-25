@@ -681,7 +681,7 @@ pub async fn crash_follower(
     cluster: &mut Vec<(krabka_broker::BrokerHandle, BrokerConfig, tempfile::TempDir)>,
     coordinator: u64,
 ) -> tempfile::TempDir {
-    let raft_leader = cluster[0].0.wait_until_controller_leader().await.0;
+    let raft_leader = cluster[0].0.wait_until_controller_leader().await.unwrap().0;
     let follower = cluster
         .iter()
         .position(|(h, _, _)| h.node_id() != coordinator && h.node_id() != raft_leader)
