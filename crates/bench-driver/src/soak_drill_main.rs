@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .with_target(false)
         .init();
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let cli = Cli::parse();
     let mut terminate = signal(SignalKind::terminate()).context("listen for SIGTERM")?;
     let lost = async move {

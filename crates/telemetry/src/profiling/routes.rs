@@ -42,50 +42,63 @@ async fn cpu_profile(
     State(config): State<ProfilingConfig>,
     Query(q): Query<CpuQuery>,
 ) -> axum::response::Response {
-    // pprof::protos::Message re-exports the prost 0.12 Message trait bundled
-    // inside the pprof crate, which is the version Profile was generated with.
-    use pprof::protos::Message as _;
-
     let duration = requested_duration(
         q.seconds,
         config.profiling_cpu_default_duration,
         config.profiling_cpu_max_duration,
     );
+    let guard = match profile_work(move || start_cpu_profile(&config)).await {
+        Ok(guard) => guard,
+        Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    };
+    tokio::time::sleep(duration.to_std()).await;
+    match profile_work(move || finish_cpu_profile(guard)).await {
+        Ok(body) => (
+            StatusCode::OK,
+            [("content-type", "application/octet-stream")],
+            body,
+        )
+            .into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    }
+}
+
+/// Profiler setup, symbolization, and encoding can take hundreds of milliseconds. Offload that synchronous work so other requests and timers can progress, including on a current-thread runtime.
+#[cfg(unix)]
+async fn profile_work<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| format!("profiling worker: {error}"))?
+}
+
+#[cfg(unix)]
+fn start_cpu_profile(config: &ProfilingConfig) -> Result<pprof::ProfilerGuard<'static>, String> {
     let blocklist = config
         .profiling_native_frame_blocklist
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>();
-    let guard = match pprof::ProfilerGuardBuilder::default()
+    pprof::ProfilerGuardBuilder::default()
         .frequency(config.profiling_cpu_sample_frequency.hertz())
         .blocklist(&blocklist)
         .build()
-    {
-        Ok(g) => g,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("profiler: {e}")).into_response();
-        }
-    };
-    tokio::time::sleep(duration.to_std()).await;
-    let report = match guard.report().build() {
-        Ok(r) => r,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("report: {e}")).into_response();
-        }
-    };
-    let profile = match report.pprof() {
-        Ok(p) => p,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("pprof: {e}")).into_response();
-        }
-    };
-    let body = gzip(&profile.encode_to_vec());
-    (
-        StatusCode::OK,
-        [("content-type", "application/octet-stream")],
-        body,
-    )
-        .into_response()
+        .map_err(|error| format!("profiler: {error}"))
+}
+
+#[cfg(unix)]
+fn finish_cpu_profile(guard: pprof::ProfilerGuard<'static>) -> Result<Vec<u8>, String> {
+    // This is the prost Message trait used by pprof's generated Profile.
+    use pprof::protos::Message as _;
+
+    let report = guard
+        .report()
+        .build()
+        .map_err(|error| format!("report: {error}"))?;
+    drop(guard);
+    let profile = report.pprof().map_err(|error| format!("pprof: {error}"))?;
+    Ok(gzip(&profile.encode_to_vec()))
 }
 
 /// Gzip a buffer.
@@ -207,6 +220,31 @@ mod tests {
         assert2::assert,
         krabka_units::{millis, minutes},
     };
+
+    /// A blocked profiler worker must leave this single runtime thread free to run the task that releases it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn profiling_work_does_not_block_runtime_progress() {
+        let (started, waiting) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let work = profile_work(move || {
+            started.send(()).unwrap();
+            released
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|error| error.to_string())?;
+            Ok(42)
+        });
+        let other_task = async move {
+            waiting.await.unwrap();
+            release.send(()).unwrap();
+        };
+        let (result, ()) = tokio::join!(work, other_task);
+        assert!(result == Ok(42));
+        assert!(
+            profile_work(|| Err::<(), _>("report failed".into())).await
+                == Err("report failed".into())
+        );
+    }
 
     #[test]
     fn requested_profile_duration_uses_configured_default_floor_and_cap() {

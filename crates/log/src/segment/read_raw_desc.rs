@@ -256,7 +256,7 @@ enum Probe {
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
+        super::{super::header_walk::initial_header_walk_window, *},
         crate::{
             config::{DEFAULT_INDEX_INTERVAL, DEFAULT_TIMESTAMP_SCAN_WINDOW},
             io::LogIo,
@@ -354,7 +354,7 @@ mod tests {
     /// The sendfile path resolves a run's start position through the sparse
     /// index once, and both the page-cache probe and the description use it.
     /// An indexed successor needs only the preceding header; other sparse
-    /// lookups scan one window. The description then reads its own headers.
+    /// lookups with no later index entry scan one index interval. The description then reads its own headers.
     /// The region always equals the bytes `read_raw` returns for the same fetch.
     #[test]
     fn the_sendfile_read_looks_up_its_start_position_once() {
@@ -366,7 +366,7 @@ mod tests {
             /// The lookup's expected first read, absent on an exact index hit.
             lookup_bytes: Option<usize>,
         }
-        let lookup_window = DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize();
+        let lookup_window = initial_header_walk_window();
         let sparse = DEFAULT_INDEX_INTERVAL;
         let cases = [
             // The `descriptor_large_batch` benchmark: one unindexed 1 MiB
@@ -536,7 +536,7 @@ mod tests {
 
         let (desc, reads) = counted_read(&seg, Offset(0), Offset(1));
         assert2::check!(desc.is_none());
-        assert2::check!(reads == vec![(0, DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize())]);
+        assert2::check!(reads == vec![(0, initial_header_walk_window())]);
 
         seg.wrote_direct = true;
         let (desc, reads) = counted_read(&seg, Offset(0), Offset(1));
@@ -570,10 +570,12 @@ mod tests {
                 segment: mut seg,
             } = test_segment();
             let mut batch_len = 0;
+            let mut first_batch_len = None;
             for (off, size) in payload_sizes.iter().enumerate() {
                 let mut batch = test_batch_at(Offset(i64::try_from(off).unwrap()));
                 batch.records[0].value = Some(Bytes::from(vec![0; *size]));
                 batch_len = batch.encoded_len();
+                first_batch_len.get_or_insert(batch_len);
                 seg.append(&batch, DENSE_INDEX).unwrap();
             }
             // The small batches cross one scan window; the final read is
@@ -584,8 +586,13 @@ mod tests {
                 expected_reads.push(usize::try_from(seg.log_size).unwrap() - next_read);
             }
             // The first batch has no index entry, so the start-position
-            // lookup reads one header-scan window before the walk begins.
-            expected_reads.insert(0, DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize());
+            // lookup reads up to the second batch's entry, capped at one
+            // header-scan window, before the walk begins.
+            expected_reads.insert(
+                0,
+                (first_batch_len.unwrap() + HEADER_LEN)
+                    .min(DEFAULT_TIMESTAMP_SCAN_WINDOW.bytes_usize()),
+            );
             let limit = Offset(i64::try_from(payload_sizes.len()).unwrap());
             let mut reads = Vec::new();
             let desc = seg

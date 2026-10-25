@@ -22,8 +22,8 @@ pub struct FileOAuthBearerConfig {
     /// Optional `JsonPath` expression (RFC 9535, via
     /// jsonpath-rust) evaluated against the token claim set. Token is
     /// rejected when the expression yields empty/null/false. Compiled
-    /// once at broker startup; malformed expressions panic with a
-    /// descriptive error.
+    /// once at config-load; malformed expressions return a
+    /// [`FileConfigError::InvalidConfig`][super::FileConfigError::InvalidConfig].
     pub custom_claim_check: Option<String>,
     /// Optional JWT `typ` header check. When set, JWT-mode
     /// validators (unsecured + signed JWS) require the JWT header's
@@ -95,8 +95,8 @@ pub struct FileOAuthBearerConfig {
     /// Prepended on fallback only.
     pub fallback_user_name_prefix: Option<String>,
     /// `JsonPath` expression (RFC 9535) extracting groups.
-    /// Compiled once at broker startup; malformed expression panics
-    /// with descriptive error.
+    /// Compiled once at config-load; a malformed expression returns a
+    /// [`FileConfigError::InvalidConfig`][super::FileConfigError::InvalidConfig].
     pub groups_claim: Option<String>,
     /// When `groups_claim` resolves to a string, split on
     /// this delimiter.

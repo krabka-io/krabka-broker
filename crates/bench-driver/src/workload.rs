@@ -30,7 +30,8 @@ use {
         security::{ClientSecurity, KeyStore, TlsConnectorConfig, TrustStore},
     },
     krabka_client_producer::{
-        DEFAULT_PRODUCER_MAX_IN_FLIGHT, Producer, ProducerError, ProducerRecord, RecordMetadata,
+        DEFAULT_PRODUCER_MAX_BLOCK, DEFAULT_PRODUCER_MAX_IN_FLIGHT, Producer, ProducerError,
+        ProducerRecord, RecordMetadata,
     },
     krabka_macros::RefinedNewtype,
     krabka_security::ListenerProtocol,
@@ -898,7 +899,7 @@ async fn capture_resources(
             Resource::default()
         }
     };
-    let broker_samples = client
+    let broker_samples = match client
         .capture_resource_series(
             cfg.stack,
             &cfg.namespace,
@@ -907,7 +908,14 @@ async fn capture_resources(
             15,
         )
         .await
-        .unwrap_or_default();
+    {
+        Ok(samples) => samples,
+        Err(error) => {
+            warn!(%error, "prometheus resource time-series capture failed");
+            notes.push(format!("prometheus-resource-series-failed: {error}"));
+            Vec::new()
+        }
+    };
     ResourceCapture {
         resource,
         broker_samples,
@@ -1079,6 +1087,23 @@ impl<'a> ProducerObservations<'a> {
         }
     }
 
+    /// Record a send that `enqueue` held past the producer's own blocking
+    /// limit. The record counts as dropped, and the first error stays.
+    fn record_enqueue_timeout(&mut self) {
+        self.output.dropped += 1;
+        if self.output.error.is_empty() {
+            self.output.error = format!("producer-{}-enqueue-timeout", self.idx);
+        }
+    }
+
+    /// Record a shutdown step (`flush` or `close`) that outlived its limit.
+    /// The first error a producer hit stays the one it reports.
+    fn record_teardown_timeout(&mut self, step: &str) {
+        if self.output.error.is_empty() {
+            self.output.error = format!("producer-{}-{step}-timeout", self.idx);
+        }
+    }
+
     /// Account for every send still outstanding at the final drain deadline.
     fn record_drain_timeout(&mut self, unresolved: usize) {
         self.output.dropped += unresolved as u64;
@@ -1226,6 +1251,7 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
     // track the cluster while keeping memory in hand.
     let max_inflight: usize = 512;
     let mut inflight: FuturesUnordered<AckFuture> = FuturesUnordered::new();
+    let enqueue_limit = enqueue_limit(request_timeout);
 
     loop {
         let state = stop.load(Ordering::Relaxed);
@@ -1270,14 +1296,21 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
             ..Default::default()
         };
         let t0 = Instant::now();
-        match producer.enqueue(rec).await {
-            Ok(delivery) => inflight.push(Box::pin(async move {
+        match within(enqueue_limit, producer.enqueue(rec)).await {
+            Some(Ok(delivery)) => inflight.push(Box::pin(async move {
                 SettledAck {
                     result: delivery.await,
                     sent_at: t0,
                 }
             })),
-            Err(error) => observations.record_ack(Err(error), t0),
+            Some(Err(error)) => observations.record_ack(Err(error), t0),
+            // `enqueue` outlived the producer's own `max_block`: the producer
+            // is stuck, and another send would only wait again. Stop sending;
+            // the bounded drain and teardown below still let the run report.
+            None => {
+                observations.record_enqueue_timeout();
+                break;
+            }
         }
     }
 
@@ -1305,8 +1338,15 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
         }
     }
 
-    let _ = producer.flush().await;
-    let _ = producer.close().await;
+    // `flush` and `close` wait on the same sends the drain gave up on, so
+    // they get the same bound: a producer that stops issuing requests must
+    // not hold the run open past its report.
+    if !finished_within(final_drain_timeout, producer.flush()).await {
+        observations.record_teardown_timeout("flush");
+    }
+    if !finished_within(final_drain_timeout, Box::pin(producer.close())).await {
+        observations.record_teardown_timeout("close");
+    }
 
     observations.output
 }
@@ -1421,7 +1461,10 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
             }
         }
     }
-    let _ = consumer.close().await;
+    // A close that outlives one request timeout would only hold the run open.
+    if !finished_within(request_timeout, Box::pin(consumer.close())).await && error.is_empty() {
+        error = format!("consumer-{idx}-close-timeout");
+    }
     ConsumerOut {
         latency: measurements.latency,
         msgs: measurements.msgs,
@@ -1492,6 +1535,23 @@ async fn build_consumer_with_retry(
         }
     }
     unreachable!("exponential_backoff::Backoff yields a terminal attempt");
+}
+
+/// Await `step` for at most `limit`. `None` when the limit ran out first.
+async fn within<T>(limit: Time, step: impl Future<Output = T>) -> Option<T> {
+    tokio::time::timeout(limit.to_std(), step).await.ok()
+}
+
+/// Await `step` for at most `limit`. `false` when the limit ran out first.
+async fn finished_within(limit: Time, step: impl Future) -> bool {
+    within(limit, step).await.is_some()
+}
+
+/// How long the driver lets one `enqueue` take. The producer itself fails a
+/// send that waits past `max_block`, which the driver leaves at its default,
+/// so a send still pending one request timeout after that is stuck.
+fn enqueue_limit(request_timeout: Time) -> Time {
+    Time::from_std(DEFAULT_PRODUCER_MAX_BLOCK) + request_timeout
 }
 
 /// The producer's `max_in_flight_per_connection` for a scenario.
@@ -1576,18 +1636,88 @@ mod tests {
         }
     }
 
+    #[test]
+    fn an_enqueue_may_block_for_max_block_and_one_request_timeout() {
+        assert!(enqueue_limit(secs(2)) == secs(62));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_shutdown_step_is_bounded_by_its_limit() {
+        let outcomes = (
+            finished_within(secs(1), std::future::ready(())).await,
+            finished_within(secs(1), std::future::pending::<()>()).await,
+        );
+        assert!(outcomes == (true, false));
+    }
+
+    /// The phase signal and failover markers a producer's observations
+    /// read, for a one-producer scenario sampled every 10 ms.
+    struct ObservationHandles {
+        grid: Grid,
+        stop: Arc<AtomicU8>,
+        first_ack: Arc<AtomicU64>,
+        kill_at: Arc<AtomicU64>,
+    }
+
+    impl ObservationHandles {
+        fn new(phase: u8) -> Self {
+            Self {
+                grid: Grid::new(Instant::now(), 0, &scenario(1), millis(10)),
+                stop: Arc::new(AtomicU8::new(phase)),
+                first_ack: Arc::new(AtomicU64::new(0)),
+                kill_at: Arc::new(AtomicU64::new(0)),
+            }
+        }
+
+        fn shared(&self) -> SharedHandles<'_> {
+            SharedHandles {
+                stop: &self.stop,
+                first_ack: &self.first_ack,
+                kill_at: &self.kill_at,
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_teardown_timeout_names_its_step_and_keeps_an_earlier_error() {
+        let handles = ObservationHandles::new(STATE_STOP);
+        let (grid, shared) = (handles.grid, handles.shared());
+
+        let mut stalled = ProducerObservations::new(4, 100, grid, shared);
+        stalled.record_teardown_timeout("flush");
+        stalled.record_teardown_timeout("close");
+
+        let mut drained = ProducerObservations::new(4, 100, grid, shared);
+        drained.record_drain_timeout(3);
+        drained.record_teardown_timeout("flush");
+
+        let mut blocked = ProducerObservations::new(4, 100, grid, shared);
+        blocked.record_enqueue_timeout();
+        blocked.record_teardown_timeout("flush");
+
+        assert!(
+            [
+                (stalled.output.error.as_str(), stalled.output.dropped),
+                (drained.output.error.as_str(), drained.output.dropped),
+                (blocked.output.error.as_str(), blocked.output.dropped),
+            ] == [
+                ("producer-4-flush-timeout", 0),
+                ("producer-4-final-drain-timeout:3", 3),
+                ("producer-4-enqueue-timeout", 1),
+            ]
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn settled_acknowledgements_observe_phase_and_shared_failover_markers() {
-        let scenario = scenario(1);
-        let grid = Grid::new(Instant::now(), 0, &scenario, millis(10));
-        let stop = Arc::new(AtomicU8::new(STATE_RUN));
-        let first_ack = Arc::new(AtomicU64::new(0));
-        let kill_at = Arc::new(AtomicU64::new(0));
-        let shared = SharedHandles {
-            stop: &stop,
-            first_ack: &first_ack,
-            kill_at: &kill_at,
-        };
+        let handles = ObservationHandles::new(STATE_RUN);
+        let ObservationHandles {
+            grid,
+            stop,
+            first_ack,
+            kill_at,
+        } = &handles;
+        let (grid, shared) = (*grid, handles.shared());
         let metadata = RecordMetadata {
             topic: "t".into(),
             partition: 0,

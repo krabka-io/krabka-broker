@@ -5,7 +5,7 @@ use {
         GroupCoordinator,
         assignor::{Assignor, RangeAssignor, UniformAssignor},
     },
-    crate::{config_keys::node_or_cluster_default, time_util::system_timer},
+    crate::{BrokerError, config_keys::node_or_cluster_default, time_util::system_timer},
     krabka_metadata::{MetadataImage, NodeId},
     qubit_clock::Timer,
     std::{borrow::Cow, collections::BTreeMap, str::FromStr, sync::Arc, time::Duration},
@@ -330,6 +330,19 @@ impl Default for NextGenConfig {
 }
 
 impl NextGenConfig {
+    /// Validate the consumer-group extension registry before actors can use it.
+    ///
+    /// # Errors
+    /// Returns an error when no server-side assignor is registered.
+    pub(crate) fn validate_assignors(&self) -> Result<(), BrokerError> {
+        if self.assignors.is_empty() {
+            return Err(BrokerError::InvalidRuntimeConfig(
+                "consumer group must have at least one registered assignor".into(),
+            ));
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn next_gen_enabled(&self) -> bool {
         self.rebalance_protocols
@@ -398,7 +411,10 @@ mod tests {
                     actor::resolve_broker_and_group_config,
                     config::{STREAMS_GROUP_ASSIGNMENT_INTERVAL_MS, StreamsGroupConfig},
                 },
-                test_support::{BrokerValue, group_config_image, make_coord, with_broker_values},
+                test_support::{
+                    BrokerValue, ImageMetadatalessProvider, InMemoryOffsetsLog, group_config_image,
+                    make_coord, with_broker_values,
+                },
             },
             test_support::FakeMetadataSource,
         },
@@ -692,6 +708,27 @@ mod tests {
         cfg.register_assignor(Arc::new(TestAssignor("custom")))
             .unwrap();
         assert!(cfg.find_assignor("custom").is_some());
+        assert!(cfg.validate_assignors().is_ok());
+    }
+
+    #[test]
+    fn direct_group_coordinator_construction_rejects_an_empty_assignor_registry() {
+        let mut config = NextGenConfig::default();
+        config.assignors.clear();
+
+        let result = GroupCoordinator::new(
+            config,
+            ShareGroupConfig::default(),
+            Arc::new(ImageMetadatalessProvider),
+            Arc::new(InMemoryOffsetsLog::default()),
+            StreamsGroupConfig::default(),
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::BrokerError::InvalidRuntimeConfig(message))
+                if message == "consumer group must have at least one registered assignor"
+        ));
     }
 
     #[test]

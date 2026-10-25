@@ -623,7 +623,7 @@
           ]
         },
         "custom_claim_check": {
-          "description": "Optional `JsonPath` expression (RFC 9535, via\njsonpath-rust) evaluated against the token claim set. Token is\nrejected when the expression yields empty/null/false. Compiled\nonce at broker startup; malformed expressions panic with a\ndescriptive error.",
+          "description": "Optional `JsonPath` expression (RFC 9535, via\njsonpath-rust) evaluated against the token claim set. Token is\nrejected when the expression yields empty/null/false. Compiled\nonce at config-load; malformed expressions return a\n[`FileConfigError::InvalidConfig`][super::FileConfigError::InvalidConfig].",
           "type": [
             "string",
             "null"
@@ -651,7 +651,7 @@
           ]
         },
         "groups_claim": {
-          "description": "`JsonPath` expression (RFC 9535) extracting groups.\nCompiled once at broker startup; malformed expression panics\nwith descriptive error.",
+          "description": "`JsonPath` expression (RFC 9535) extracting groups.\nCompiled once at config-load; a malformed expression returns a\n[`FileConfigError::InvalidConfig`][super::FileConfigError::InvalidConfig].",
           "type": [
             "string",
             "null"

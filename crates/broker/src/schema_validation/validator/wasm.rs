@@ -93,6 +93,27 @@ impl SchemaValidator {
     ) -> std::future::Ready<Result<(), RejectReason>> {
         match self.never {}
     }
+
+    /// The subject a `role` field of `topic` names. No value of this type
+    /// exists, so no call reaches this method.
+    #[must_use]
+    pub fn subject(&self, _topic: &str, _role: Role) -> String { match self.never {} }
+
+    /// Check one record field against `subject`. No value of this type
+    /// exists, so no call reaches this method.
+    ///
+    /// # Errors
+    ///
+    /// Never returns.
+    pub fn check_subject(
+        &self,
+        _subject: &str,
+        _mode: ValidationMode,
+        _field: &[u8],
+        _metrics: &BrokerMetrics,
+    ) -> std::future::Ready<Result<(), RejectReason>> {
+        match self.never {}
+    }
 }
 
 fn unavailable() -> SchemaValidatorError {

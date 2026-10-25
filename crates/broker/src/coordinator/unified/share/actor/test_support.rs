@@ -135,13 +135,16 @@ pub(super) fn make_coordinator_with_config(
     share: ShareGroupConfig,
 ) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
     let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = Arc::new(GroupCoordinator::new(
-        next_gen,
-        share,
-        metadata,
-        log.clone(),
-        StreamsGroupConfig::default(),
-    ));
+    let coord = Arc::new(
+        GroupCoordinator::new(
+            next_gen,
+            share,
+            metadata,
+            log.clone(),
+            StreamsGroupConfig::default(),
+        )
+        .expect("valid test assignor configuration"),
+    );
     (coord, log)
 }
 

@@ -278,16 +278,19 @@ async fn a_loaded_group_refreshes_its_metadata_at_the_first_heartbeat() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_hosted_classic_member_gets_a_created_topic_when_it_joins_again() {
     let metadata = SwitchableMetadata::new(snapshot_of(&[]));
-    let coordinator = Arc::new(GroupCoordinator::new(
-        NextGenConfig {
-            migration_policy: ConsumerGroupMigrationPolicy::Upgrade,
-            ..NextGenConfig::assigning_at_once()
-        },
-        ShareGroupConfig::assigning_at_once(),
-        metadata.clone(),
-        Arc::new(InMemoryOffsetsLog::default()),
-        StreamsGroupConfig::default(),
-    ));
+    let coordinator = Arc::new(
+        GroupCoordinator::new(
+            NextGenConfig {
+                migration_policy: ConsumerGroupMigrationPolicy::Upgrade,
+                ..NextGenConfig::assigning_at_once()
+            },
+            ShareGroupConfig::assigning_at_once(),
+            metadata.clone(),
+            Arc::new(InMemoryOffsetsLog::default()),
+            StreamsGroupConfig::default(),
+        )
+        .expect("valid test assignor configuration"),
+    );
     let handle = seed_and_upgrade(&coordinator, "orders").await;
 
     metadata.set(snapshot_of(&[("orders", 1, 2)]));
@@ -349,16 +352,19 @@ async fn the_replayed_assignment_timestamp_holds_the_interval() {
     let (rows, mut cases) = assignment_interval_fixture();
 
     for (case, ago, wanted) in rows {
-        let coordinator = Arc::new(GroupCoordinator::new(
-            NextGenConfig {
-                assignment_interval: std::time::Duration::from_mins(1),
-                ..NextGenConfig::assigning_at_once()
-            },
-            ShareGroupConfig::assigning_at_once(),
-            SwitchableMetadata::new(snapshot_of(&[("orders", 1, 2)])),
-            Arc::new(InMemoryOffsetsLog::default()),
-            StreamsGroupConfig::default(),
-        ));
+        let coordinator = Arc::new(
+            GroupCoordinator::new(
+                NextGenConfig {
+                    assignment_interval: std::time::Duration::from_mins(1),
+                    ..NextGenConfig::assigning_at_once()
+                },
+                ShareGroupConfig::assigning_at_once(),
+                SwitchableMetadata::new(snapshot_of(&[("orders", 1, 2)])),
+                Arc::new(InMemoryOffsetsLog::default()),
+                StreamsGroupConfig::default(),
+            )
+            .expect("valid test assignor configuration"),
+        );
         let handle = coordinator.get_or_create_consumer("g");
         let stored = ago.map_or(0, |ago| wall_clock_ms() - ago);
         handle

@@ -17,7 +17,7 @@ use {
         streams::{actor::StreamsGroupActorHandle, config::StreamsGroupConfig},
     },
     crate::{
-        coordinator::leadership::ShardTerms, metadata_source::MetadataSource,
+        BrokerError, coordinator::leadership::ShardTerms, metadata_source::MetadataSource,
         metrics::BrokerMetrics, share_coordinator::persister_client::SharePersister,
     },
     dashmap::DashMap,
@@ -135,14 +135,19 @@ pub struct GroupCoordinator {
 pub(crate) struct MetadataSourceHandle(#[debug(skip)] pub(crate) Arc<dyn MetadataSource>);
 
 impl GroupCoordinator {
+    /// Construct a coordinator with the supplied consumer-group registry.
+    ///
+    /// # Errors
+    /// Returns a configuration error when no consumer assignor is registered.
     pub fn new(
         config: NextGenConfig,
         share_config: ShareGroupConfig,
         metadata: Arc<dyn MetadataProvider>,
         offsets_log: Arc<dyn OffsetsLog>,
         streams_config: StreamsGroupConfig,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, BrokerError> {
+        config.validate_assignors()?;
+        Ok(Self {
             config: Arc::new(config),
             share_config: Arc::new(share_config),
             metadata,
@@ -165,7 +170,7 @@ impl GroupCoordinator {
             shard_terms: std::sync::Mutex::default(),
             regex_refresh_version: std::sync::atomic::AtomicI64::new(-1),
             node_id: std::sync::OnceLock::new(),
-        }
+        })
     }
 
     /// Install the KIP-932 share-state persister bridge.

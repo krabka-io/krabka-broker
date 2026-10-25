@@ -210,7 +210,7 @@ impl MetadataEventLog for InProcessMetadataEventLog {
         let inject_stream = unfold(inject_rx, |mut rx| async move {
             rx.recv().await.map(|r| (r, rx))
         });
-        let live = filtered_broadcast(rx, state);
+        let live = filtered_broadcast(rx, Arc::clone(&state), Arc::clone(&self.inner));
         // Snapshot first (subscribe-time backlog), then a merge of injected
         // backlog (from `add`) and assignment-filtered live records.
         let merged = stream::select(inject_stream, live);
@@ -421,6 +421,95 @@ mod tests {
             assert!(r.payload.as_ref() == &[i]);
             assert!(r.offset == i64::from(i));
         }
+    }
+
+    #[tokio::test]
+    async fn lag_replays_exact_and_larger_bursts_once_in_order() {
+        use std::time::Duration;
+
+        for count in [1025_i64, 4097] {
+            let log = InProcessMetadataEventLog::new(1);
+            let (mut stream, _handle) = log.subscribe(vec![PartitionStart::new(0, 0)]);
+            for offset in 0..count {
+                let payload = Bytes::copy_from_slice(&offset.to_be_bytes());
+                assert!(log.publish(0, payload).await.unwrap() == offset);
+            }
+
+            tokio::time::timeout(Duration::from_secs(3), async {
+                for expected in 0..count {
+                    let record = stream.next().await.expect("retained record is replayed");
+                    assert!(record.offset == expected);
+                    assert!(record.payload.as_ref() == expected.to_be_bytes());
+                }
+            })
+            .await
+            .expect("burst replay completes");
+
+            // A new subscriber remains an independent retained-log control.
+            let (mut fresh, _fresh_handle) = log.subscribe(vec![PartitionStart::new(0, 0)]);
+            assert!(fresh.next().await.unwrap().offset == 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_then_live_delivery_has_no_overlap_or_gap() {
+        let log = InProcessMetadataEventLog::new(1);
+        for offset in 0..4_i64 {
+            log.publish(0, Bytes::copy_from_slice(&offset.to_be_bytes()))
+                .await
+                .unwrap();
+        }
+        let (mut stream, _handle) = log.subscribe(vec![PartitionStart::new(0, 2)]);
+        for offset in 4..8_i64 {
+            log.publish(0, Bytes::copy_from_slice(&offset.to_be_bytes()))
+                .await
+                .unwrap();
+        }
+
+        for expected in 2..8_i64 {
+            let record = stream.next().await.unwrap();
+            assert!(record.offset == expected);
+            assert!(record.payload.as_ref() == expected.to_be_bytes());
+        }
+    }
+
+    #[tokio::test]
+    async fn assignment_added_before_overflow_replays_its_backlog_and_live_events() {
+        let log = InProcessMetadataEventLog::new(2);
+        let (mut stream, handle) = log.subscribe(vec![PartitionStart::new(0, 0)]);
+        for offset in 0..4_i64 {
+            log.publish(1, Bytes::copy_from_slice(&offset.to_be_bytes()))
+                .await
+                .unwrap();
+        }
+        handle.add(PartitionStart::new(1, 1));
+        log.publish(1, Bytes::from_static(b"live")).await.unwrap();
+        for _ in 0..1025 {
+            log.publish(0, Bytes::from_static(b"overflow"))
+                .await
+                .unwrap();
+        }
+
+        let mut partition_zero = Vec::new();
+        let mut partition_one = Vec::new();
+        for _ in 0..1029 {
+            let record = stream.next().await.unwrap();
+            match record.partition {
+                0 => partition_zero.push(record.offset),
+                1 => partition_one.push((record.offset, record.payload)),
+                _ => panic!("unexpected partition"),
+            }
+        }
+        assert!(partition_zero == (0..1025).collect::<Vec<_>>());
+        assert!(
+            partition_one
+                == vec![
+                    (1, Bytes::copy_from_slice(&1_i64.to_be_bytes())),
+                    (2, Bytes::copy_from_slice(&2_i64.to_be_bytes())),
+                    (3, Bytes::copy_from_slice(&3_i64.to_be_bytes())),
+                    (4, Bytes::from_static(b"live")),
+                ]
+        );
     }
 
     #[tokio::test]

@@ -43,13 +43,16 @@ pub(super) fn coordinator_with_log(
     config: StreamsGroupConfig,
     log: Arc<InMemoryOffsetsLog>,
 ) -> Arc<GroupCoordinator> {
-    Arc::new(GroupCoordinator::new(
-        NextGenConfig::default(),
-        ShareGroupConfig::default(),
-        Arc::new(EmptyMetadata),
-        log,
-        config,
-    ))
+    Arc::new(
+        GroupCoordinator::new(
+            NextGenConfig::default(),
+            ShareGroupConfig::default(),
+            Arc::new(EmptyMetadata),
+            log,
+            config,
+        )
+        .expect("valid test assignor configuration"),
+    )
 }
 
 pub(super) fn make_coordinator() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {

@@ -6,16 +6,13 @@
 //! signature that reaches a broker. The private key never leaves the machine
 //! that runs the command.
 //!
-//! # Why the layout is repeated rather than called
+//! # Why the byte layout is repeated rather than called
 //!
-//! The broker defines the same two layouts in `freeze::signing` and
-//! `break_glass::signing`, and both builders are `pub(crate)` inside
-//! `pub(crate)` modules. Nothing outside `krabka-broker` can call either one,
-//! so this module reproduces both layouts. Two copies of a byte layout drift
-//! silently, so the tests below rebuild every expected vector by hand, field by
-//! field, from the layout the broker's module documents. A change on either
-//! side that the other does not follow fails a test here rather than an
-//! operator's thaw during an incident.
+//! The audit crate owns the shared freeze field contract, and the broker
+//! re-exports it for compatibility. This module independently encodes those
+//! fields and the break-glass proposal fields; it does not call the broker's
+//! private encoders. The golden vectors below pin these bytes field by field,
+//! so an encoder drift fails here rather than during an operator's thaw.
 //!
 //! # The freeze layout
 //!
@@ -49,7 +46,7 @@
 //! outside the signed bytes on purpose: every approver signs the same payload,
 //! and a payload that grew with each approval could never verify twice.
 
-pub use krabka_broker::FreezeSigningInput;
+pub use krabka_audit::{FreezeSigningInput, freeze_signing_input};
 use {krabka_audit::FileEd25519Signer, std::path::Path};
 
 /// Domain separator for a freeze record signature (KFC-9).

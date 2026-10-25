@@ -10,18 +10,43 @@
 use {
     super::{SchemaValidator, reject::RejectReason},
     crate::{metrics::BrokerMetrics, schema_validation::ValidationMode},
-    apache_avro::reader::datum::{GenericDatumReader, GenericDatumReaderBuilder},
     krabka_schema_serde::{
-        error::SchemaSerdeError,
-        format::validate::{validate_body, validate_protobuf_with_references},
         subject::{Role, SchemaKind, SubjectStrategy as _, TopicNameStrategy},
         wire,
     },
-    std::collections::HashMap,
 };
 
 impl SchemaValidator {
-    /// Check one record field.
+    /// The registry subject a `role` field of `topic` must be registered
+    /// under.
+    ///
+    /// It depends only on the topic and the role, so a caller checking a
+    /// whole batch derives it once per role and passes it to
+    /// [`SchemaValidator::check_subject`] for every record.
+    #[must_use]
+    pub fn subject(&self, topic: &str, role: Role) -> String {
+        TopicNameStrategy.subject(topic, role)
+    }
+
+    /// Check one record field of `topic`, deriving its subject from `role`.
+    ///
+    /// # Errors
+    ///
+    /// As [`SchemaValidator::check_subject`].
+    pub async fn check(
+        &self,
+        topic: &str,
+        role: Role,
+        mode: ValidationMode,
+        field: &[u8],
+        metrics: &BrokerMetrics,
+    ) -> Result<(), RejectReason> {
+        self.check_subject(&self.subject(topic, role), mode, field, metrics)
+            .await
+    }
+
+    /// Check one record field against `subject`, as
+    /// [`SchemaValidator::subject`] derived it.
     ///
     /// `field` is the record's key or value as it arrived. A null field is not
     /// passed here — the caller drops those, because a null value is a
@@ -33,10 +58,9 @@ impl SchemaValidator {
     /// # Errors
     ///
     /// Returns the [`RejectReason`] that decided against the record.
-    pub async fn check(
+    pub async fn check_subject(
         &self,
-        topic: &str,
-        role: Role,
+        subject: &str,
         mode: ValidationMode,
         field: &[u8],
         metrics: &BrokerMetrics,
@@ -59,17 +83,18 @@ impl SchemaValidator {
                 "unsupported Confluent magic byte {magic}"
             )));
         };
-        let subject = TopicNameStrategy.subject(topic, role);
-
-        let entry = match self.entry(id, &subject, mode, metrics).await {
+        let entry = match self.entry(id, subject, mode, metrics).await {
             Ok(entry) => entry,
             // A registry that could not answer is what `fail_open` governs. An
             // answer of "not registered" is an answer, and it rejects either
             // way.
             Err(reason) => return self.on_unavailable(reason),
         };
-        if !entry.subjects.contains(&subject) {
-            return Err(RejectReason::WrongSubject { id, subject });
+        if !entry.subjects.contains(subject) {
+            return Err(RejectReason::WrongSubject {
+                id,
+                subject: subject.to_owned(),
+            });
         }
 
         if mode == ValidationMode::Id {
@@ -101,18 +126,12 @@ impl SchemaValidator {
             (Vec::new(), &field[5..])
         };
 
-        validate_body_with_references(
-            schema_body.kind,
-            &schema_body.schema,
-            &schema_body.references,
-            &schema_body.reference_order,
-            &message_index,
-            body,
-        )
-        .map_err(|e| RejectReason::BodyMismatch {
-            id,
-            detail: e.to_string(),
-        })
+        schema_body
+            .validate(&message_index, body)
+            .map_err(|e| RejectReason::BodyMismatch {
+                id,
+                detail: e.to_string(),
+            })
     }
 
     /// What an unreachable registry means, per `fail_open`.
@@ -134,97 +153,17 @@ impl SchemaValidator {
     }
 }
 
-fn validate_body_with_references(
-    kind: SchemaKind,
-    schema: &str,
-    references: &HashMap<String, String>,
-    reference_order: &[String],
-    message_index: &[i32],
-    body: &[u8],
-) -> Result<(), SchemaSerdeError> {
-    match kind {
-        SchemaKind::Avro if !references.is_empty() => {
-            let sources: Vec<_> = reference_order
-                .iter()
-                .filter_map(|name| references.get(name).map(String::as_str))
-                .collect();
-            let (writer, schemas) = apache_avro::Schema::parse_str_with_list(schema, sources)
-                .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
-            let mut cursor = body;
-            GenericDatumReader::builder(&writer)
-                .writer_schemata(schemas.iter().collect())
-                .and_then(GenericDatumReaderBuilder::build)
-                .and_then(|reader| reader.read_value(&mut cursor))
-                .map_err(|error| SchemaSerdeError::Deserialize(format!("avro body: {error}")))?;
-            if cursor.is_empty() {
-                Ok(())
-            } else {
-                Err(SchemaSerdeError::Deserialize(format!(
-                    "avro body: {} trailing byte(s) after the datum",
-                    cursor.len()
-                )))
-            }
-        }
-        SchemaKind::Protobuf if !references.is_empty() => {
-            validate_protobuf_with_references(schema, references, message_index, body)
-        }
-        SchemaKind::Json => {
-            let writer: serde_json::Value = serde_json::from_str(schema)
-                .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
-            let instance: serde_json::Value = serde_json::from_slice(body)
-                .map_err(|error| SchemaSerdeError::Deserialize(error.to_string()))?;
-            let base_uri = jsonschema::uri::from_str(
-                writer
-                    .get("$id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(""),
-            )
-            .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
-            let references = references
-                .iter()
-                .map(|(name, source)| {
-                    let schema = serde_json::from_str(source)
-                        .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
-                    let uri = jsonschema::uri::resolve_against(&base_uri.borrow(), name)
-                        .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
-                    Ok((uri.to_string(), schema))
-                })
-                .collect::<Result<HashMap<_, _>, _>>()?;
-            let validator = jsonschema::options()
-                .with_retriever(CachedJsonSchemas(references))
-                .build(&writer)
-                .map_err(|error| SchemaSerdeError::Schema(error.to_string()))?;
-            validator.validate(&instance).map_err(|error| {
-                SchemaSerdeError::Deserialize(format!("json schema validation: {error}"))
-            })
-        }
-        _ => validate_body(kind, schema, message_index, body),
-    }
-}
-
-#[derive(Debug)]
-struct CachedJsonSchemas(HashMap<String, serde_json::Value>);
-
-impl jsonschema::Retrieve for CachedJsonSchemas {
-    fn retrieve(
-        &self,
-        uri: &jsonschema::Uri<String>,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-        self.0.get(uri.as_str()).cloned().ok_or_else(|| {
-            format!("JSON Schema reference {uri} is not present in the registry cache").into()
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use {
         super::*,
         crate::schema_validation::validator::test_support::{
-            KNOWN_ID, configured_validator, framed, no_metrics, registry, response_endpoint,
-            status_registry, validator, value_check,
+            ClockedValidator, KNOWN_ID, clocked_validator, configured_validator, framed,
+            no_metrics, registry, response_endpoint, status_registry, validator, value_check,
         },
         assert2::{assert, check},
+        krabka_units::millis,
+        std::{sync::Arc, time::Duration},
         wiremock::{Mock, MockServer, ResponseTemplate, matchers::method},
     };
 
@@ -493,6 +432,131 @@ mod tests {
         let result = value_check(&v, ValidationMode::Full, &invalid).await;
         assert!(let Err(reason) = result);
         check!(reason.label() == "body_mismatch", "{reason}");
+
+        // The second rejection comes from the compiled validator the first
+        // one built, and reads the same.
+        let again = value_check(&v, ValidationMode::Full, &invalid).await;
+        check!(again == Err(reason));
+        check!(compilations(&v).await == 1);
+    }
+
+    /// How many times the cached schema closure for `KNOWN_ID` was compiled.
+    async fn compilations(v: &SchemaValidator) -> usize {
+        v.entry(
+            KNOWN_ID,
+            "orders-value",
+            ValidationMode::Full,
+            &no_metrics(),
+        )
+        .await
+        .expect("cached lookup")
+        .body
+        .as_ref()
+        .expect("full lookup has a body")
+        .compilations()
+    }
+
+    /// Check a matching and a mismatched record three times each: every
+    /// answer must repeat the first, and the schema must compile only once.
+    async fn checks_compile_once(v: &SchemaValidator, matching: &[u8], mismatched: &[u8]) {
+        let mut rejections = Vec::new();
+        for _ in 0..3 {
+            let accepted = value_check(v, ValidationMode::Full, matching).await;
+            check!(accepted.is_ok(), "{accepted:?}");
+            assert!(let Err(reason) = value_check(v, ValidationMode::Full, mismatched).await);
+            check!(reason.label() == "body_mismatch", "{reason}");
+            rejections.push(reason);
+        }
+
+        check!(rejections.windows(2).all(|pair| pair[0] == pair[1]));
+        check!(compilations(v).await == 1);
+    }
+
+    #[tokio::test]
+    async fn a_schema_is_compiled_once_for_every_record_that_names_it() {
+        let server = registry(1).await;
+        let v = validator(server.uri());
+        // Avro string "a", and bytes that are no datum of the schema.
+        let matching = framed(KNOWN_ID, &[0x02, b'a']);
+        let mismatched = framed(KNOWN_ID, &[0xFF; 6]);
+
+        checks_compile_once(&v, &matching, &mismatched).await;
+    }
+
+    #[tokio::test]
+    async fn a_protobuf_schema_with_references_is_compiled_once() {
+        let server = MockServer::start().await;
+        json_id_endpoint(
+            &server,
+            serde_json::json!({
+                "schemaType": "PROTOBUF",
+                "schema": "syntax = \"proto3\"; import \"money.proto\"; message Order { money.Money total = 1; }",
+                "references": [{"name":"money.proto","subject":"money","version":1}]
+            }),
+        )
+        .await;
+        response_endpoint(
+            &server,
+            "/subjects/money/versions/1",
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "subject": "money",
+                "version": 1,
+                "id": 7,
+                "schemaType": "PROTOBUF",
+                "schema": "syntax = \"proto3\"; package money; message Money { int64 cents = 1; }"
+            })),
+            Some(1),
+        )
+        .await;
+        let v = validator(server.uri());
+        // Message-index `[0]`, written as Confluent's single zero byte, then
+        // `Order { total: Money { cents: 19 } }`.
+        let matching = framed(KNOWN_ID, &[0x00, 0x0A, 0x02, 0x08, 0x13]);
+        // Field number 0 is illegal in every protobuf message.
+        let mismatched = framed(KNOWN_ID, &[0x00, 0x00, 0x01]);
+
+        checks_compile_once(&v, &matching, &mismatched).await;
+    }
+
+    #[tokio::test]
+    async fn an_expired_entry_compiles_its_schema_afresh() {
+        // Two registry answers, one per TTL, and one compile for each: the
+        // compiled form lives and dies with the cache entry that holds it.
+        let server = registry(2).await;
+        let ClockedValidator {
+            timeline,
+            validator: v,
+        } = clocked_validator(server.uri(), millis(10));
+        let field = framed(KNOWN_ID, &[0x02, b'a']);
+
+        check!(value_check(&v, ValidationMode::Full, &field).await.is_ok());
+        let before = v
+            .entry(
+                KNOWN_ID,
+                "orders-value",
+                ValidationMode::Full,
+                &no_metrics(),
+            )
+            .await
+            .expect("cached lookup");
+        timeline
+            .advance(Duration::from_millis(50))
+            .expect("manual time moves forward");
+        check!(value_check(&v, ValidationMode::Full, &field).await.is_ok());
+        let after = v
+            .entry(
+                KNOWN_ID,
+                "orders-value",
+                ValidationMode::Full,
+                &no_metrics(),
+            )
+            .await
+            .expect("refreshed lookup");
+
+        assert!(let (Some(before), Some(after)) = (&before.body, &after.body));
+        check!(!Arc::ptr_eq(before, after));
+        check!(before.compilations() == 1);
+        check!(after.compilations() == 1);
     }
 
     #[tokio::test]

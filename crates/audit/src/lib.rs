@@ -8,6 +8,7 @@ pub mod event;
 pub mod ids;
 pub mod log;
 pub mod ocsf;
+pub mod operator_keys;
 pub mod signing;
 pub mod sink;
 pub mod spool;
@@ -30,7 +31,10 @@ pub use {
     krabka_ids::NodeId,
     log::{AuditLog, AuditMode, AuditReceiver, AuditWriter, AuditWriterParams},
     ocsf::{ProductInfo, to_ocsf},
-    signing::{FileEd25519Signer, checkpoint_signing_bytes, verify_signature},
+    signing::{
+        FileEd25519Signer, FreezeSigningInput, checkpoint_signing_bytes, freeze_signing_input,
+        verify_signature,
+    },
     sink::{AuditError, AuditRecord, AuditSink, HEADER_PREV_HASH, HEADER_SEQ, MemorySink},
     spool::Spool,
     stats::AuditStats,

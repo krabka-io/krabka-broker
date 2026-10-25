@@ -22,6 +22,7 @@ use {
         io::{read_full_at, seek_to_log_size},
     },
     crate::{error::LogError, io::DirectFile, name},
+    krabka_ids::Offset,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
 };
 
@@ -53,6 +54,36 @@ impl Drop for DirectMode {
 
 impl Segment {
     pub(crate) fn writes_direct(&self) -> bool { self.direct.is_some() }
+
+    /// The reservation and direct handle already exist, and one append fits the write queue. A configuration change that grows the reservation still takes the blocking path.
+    pub(crate) fn can_queue_append(&self, bytes: usize, segment_size: ByteSize) -> bool {
+        segment_size.bytes_u64()
+            <= self
+                .log_size
+                .max(self.reserved_end)
+                .max(self.reserve_requested)
+            && self
+                .direct
+                .as_ref()
+                .is_some_and(|mode| mode.writer.can_queue(bytes))
+    }
+
+    /// A read of this active segment can stay on its caller when its index lookup and payload are in memory. A segment that stopped writing directly still has cold bytes, even after its configuration changed.
+    pub(crate) fn read_may_block(&self, offset: Offset, opened_end: Offset) -> bool {
+        if offset > self.last_offset {
+            return false;
+        }
+        if !self.wrote_direct {
+            return offset < opened_end;
+        }
+        let Some(mode) = &self.direct else {
+            return true;
+        };
+        mode.cache.end() != self.log_size
+            || !self
+                .position_for(offset)
+                .is_ok_and(|position| position >= mode.cache.start())
+    }
 
     /// Write this segment's appends through `O_DIRECT` from here on, keeping
     /// up to `tail_cache` of the newest bytes in memory for reads.

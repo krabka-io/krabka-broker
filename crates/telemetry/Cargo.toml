@@ -64,6 +64,6 @@ jemalloc_pprof = { version = "0.9", optional = true }
 [dev-dependencies]
 mutants = { workspace = true }
 tower = { workspace = true, features = ["util"] }
-tokio = { workspace = true, features = ["io-util", "net", "rt", "time", "macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt", "time", "macros", "rt-multi-thread", "sync"] }
 axum = { workspace = true, features = ["query", "tokio", "http1"] }
 yare = { workspace = true }

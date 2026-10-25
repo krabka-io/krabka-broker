@@ -489,7 +489,7 @@ use crate::support::tls::{
 /// then it is served on the same connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_principal() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let pem_dir = tempfile::TempDir::new().expect("tempdir");
     let write = |name: &str, contents: &str| {
         let path = pem_dir.path().join(name);

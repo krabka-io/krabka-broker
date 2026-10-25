@@ -5,7 +5,6 @@
 
 use {
     super::OperatorKeyEntry,
-    crate::test_support::fresh_ed25519_key,
     ring::signature::{Ed25519KeyPair, KeyPair as _},
     std::path::PathBuf,
     tempfile::TempDir,
@@ -17,7 +16,9 @@ mod verify;
 
 // A fresh Ed25519 key pair plus its raw public key bytes.
 fn fresh_key() -> (Ed25519KeyPair, Vec<u8>) {
-    let pair = fresh_ed25519_key();
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+        .expect("generate Ed25519 key");
+    let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse generated key");
     let public = pair.public_key().as_ref().to_vec();
     (pair, public)
 }
