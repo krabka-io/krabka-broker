@@ -805,8 +805,8 @@ mod tests {
             },
             Case {
                 what: "override past the range",
-                features: krabka(2),
-                want: Err("No feature:krabka.version with feature level 2".to_owned()),
+                features: krabka(3),
+                want: Err("No feature:krabka.version with feature level 3".to_owned()),
             },
         ];
         let Case {
