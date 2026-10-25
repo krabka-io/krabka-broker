@@ -13,7 +13,7 @@ use {
         records::features_epoch_after_snapshot,
         recovery::{
             CommittedReplay, control_state_at, replay_committed_with_timestamp,
-            replay_control_records,
+            replay_control_records, with_uncommitted_feature_levels,
         },
         timing::initial_election_at,
     },
@@ -284,7 +284,8 @@ impl KraftController {
     ///
     /// # Errors
     /// Returns [`RaftError`] if the log/checkpoint cannot be opened or read, or
-    /// `validate_image` refuses the recovered metadata before checkpoint repair
+    /// `validate_image` refuses the recovered metadata, with every feature
+    /// level the log holds above its high watermark, before checkpoint repair
     /// or an engine task can start.
     #[tracing::instrument(
         level = "info",
@@ -437,7 +438,14 @@ impl KraftController {
             voters: initial_state.voters.clone(),
         }));
 
-        validate_image(&image)?;
+        // The guard reads every feature level the log holds, not only the
+        // committed ones: the high watermark recovered from its cache file can
+        // sit below a level that the engine would commit and then refuse.
+        validate_image(&with_uncommitted_feature_levels(
+            &log,
+            &image,
+            metadata_raft_fetch_max,
+        )?)?;
 
         Self::spawn_with_image(
             KraftConfig {

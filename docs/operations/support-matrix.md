@@ -137,7 +137,7 @@ each image covers. The rows below say when each client last ran.
 | :--- | :--- | :--- | :--- | :--- |
 | `v1.0.5` to `main`, single-broker smoke | `historical` | [Dispatch 39519220181, `upgrade · previous release`](https://github.com/krabka-io/krabka-broker/actions/runs/39519220181/job/118958685699) | `3831a25d`, from `v1.0.7` | The job now upgrades from the previous release, not from `v1.0.5`. HEAD started on the volume that the previous release wrote, read the record back and found the log start that `DeleteRecords` raised. It also passed at `eb7e0c6a` from `v1.0.6`, and in every nightly from 10-21 to 10-24 from `v1.0.8`, the last at `782f5b50` ([job 120834946248](https://github.com/krabka-io/krabka-broker/actions/runs/40081197462/job/120834946248)). |
 | Rolling upgrade under load, RF3 | `historical` | [Qualification 39446231280, `loaded lifecycle`](https://github.com/krabka-io/krabka-broker/actions/runs/39446231280/job/118708771194); [#1396](https://github.com/krabka-io/krabka-broker/issues/1396) | `f5c683d9`, from `v1.0.5` | Four nodes, min ISR 2, idempotent, transactional and compacted classic paths under load. Each node upgraded in turn, then TLS rotation to a new CA and a reassignment. Leader failover took 5.3 to 8.4 s and ISR rejoin 7.1 to 18.7 s. 0 of 141,412 acknowledged sends were lost or duplicated, and all 168 committed-offset checks passed. `f5c683d9` is a release-branch commit three commits before `v1.0.6`. It does not cover network partitions, tiered or diskless paths, or the operator. The run on release images, `v1.0.6` to `v1.0.8`, is scheduled with the [1.1 release](https://github.com/krabka-io/krabka-broker/milestone/31) qualification. |
-| Rollback before feature finalization | `historical` | [Qualification 39446231280, `loaded lifecycle`](https://github.com/krabka-io/krabka-broker/actions/runs/39446231280/job/118708771194); [#1396](https://github.com/krabka-io/krabka-broker/issues/1396) | `f5c683d9`, to `v1.0.5` | Every node rolled back to `v1.0.5` under the same load. After the candidate finalized `metadata.version` 33 on a node, `v1.0.5` refused it and changed nothing. The same check in the `soak_contract` self-check is intermittent: it failed in [`netem` at `f5c683d9`](https://github.com/krabka-io/krabka-broker/actions/runs/39438207211/job/118680789544) and on the first attempt of the [10-22 nightly](https://github.com/krabka-io/krabka-broker/actions/runs/39758128742/job/119760217842). In both failures, `v1.0.5` changed the metadata log, the high watermark, `leader-epoch-checkpoint` and `quorum-state` while it refused the level. It passed at `3831a25d` and in the nightlies of 10-23 and 10-24. Release blocker F5 records it. |
+| Rollback before feature finalization | `historical` | [Qualification 39446231280, `loaded lifecycle`](https://github.com/krabka-io/krabka-broker/actions/runs/39446231280/job/118708771194); [#1396](https://github.com/krabka-io/krabka-broker/issues/1396) | `f5c683d9`, to `v1.0.5` | Every node rolled back to `v1.0.5` under the same load. After the candidate finalized `metadata.version` 33 on a node, `v1.0.5` refused it and changed nothing. The same check in the `soak_contract` self-check is intermittent: it failed in [`netem` at `f5c683d9`](https://github.com/krabka-io/krabka-broker/actions/runs/39438207211/job/118680789544) and on the first attempt of the [10-22 nightly](https://github.com/krabka-io/krabka-broker/actions/runs/39758128742/job/119760217842). The rollback target, `v1.0.5` in the first and `v1.0.6` in the second, changed the metadata log, the high watermark, `leader-epoch-checkpoint` and `quorum-state` while it refused the level. It passed at `3831a25d` and in the nightlies of 10-23 and 10-24. Release blocker F5 records it. |
 | 0.x data directory read by 1.x | `unsupported` | [Persisted formats](../persisted_formats.md#the-contract) | none | Reformat and restore. |
 
 ### Upgrade paths
@@ -187,11 +187,12 @@ its source. An item stays here until a linked change removes it.
   benchmark-host rerun, which is scheduled with the 1.1 release
   qualification. [#1352](https://github.com/krabka-io/krabka-broker/issues/1352) is open.
 - **A refused rollback can change bytes, intermittently.** In two
-  `soak_contract` runs, `v1.0.5` changed the metadata log, the high
-  watermark, `leader-epoch-checkpoint` and `quorum-state` while it refused a
-  finalized `metadata.version` 33. See
-  [Rollback before feature finalization](#upgrades-and-rollback). No issue is
-  filed yet. Release blocker F5 records it.
+  `soak_contract` runs, the rollback target, `v1.0.5` and then `v1.0.6`,
+  changed the metadata log, the high watermark, `leader-epoch-checkpoint` and
+  `quorum-state` while it refused a finalized `metadata.version` 33. Its
+  startup check missed a level above a lagging high-watermark file. The fix
+  is on `main`, and a rollback to `v1.0.8` or an earlier release still has the
+  window. Release blocker F5 records it.
 
 Fixed since the 2026-10-18 version of this page, and passed at `v1.0.8`
 (`3831a25d`) but not on a candidate: [#1448](https://github.com/krabka-io/krabka-broker/issues/1448),

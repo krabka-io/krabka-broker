@@ -259,6 +259,14 @@ pub(crate) async fn refuse_unsupported_rollback(
     docker_try(&["rm", &broker.name])?;
     let after = file_contents(&broker.host_log_dir());
     let (changed, derived_changed) = changed_files(&before, &after);
+    if !changed.is_empty() {
+        // The source's own log says what it wrote before it refused, and the
+        // refusal message alone does not.
+        eprintln!(
+            "soak-contract: the refused rollback changed {changed:?}; {} logged:\n{log}",
+            lifecycle.source.version
+        );
+    }
 
     // The candidate, with the switch on again, opens what the source left.
     std::fs::write(&config, unstable).map_err(|error| error.to_string())?;

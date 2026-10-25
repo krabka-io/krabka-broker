@@ -160,6 +160,69 @@ async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
     controller.shutdown().await;
 }
 
+/// What the high-watermark file says when the node restarts.
+#[derive(Clone, Copy, Debug)]
+enum HighWatermarkFile {
+    /// The file records the log start, below the finalized level.
+    AtLogStart,
+    /// The file is gone, so the restart starts from the log start.
+    Missing,
+}
+
+/// The high-watermark file is a cache, and a restart can recover a high
+/// watermark below the finalized level. The refusal must still come before
+/// the engine writes anything: an engine that started would elect itself,
+/// append to the log, commit the level, and only then stop.
+#[yare::parameterized(
+    at_log_start = { HighWatermarkFile::AtLogStart },
+    missing = { HighWatermarkFile::Missing },
+)]
+#[test_macro(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
+    high_watermark: HighWatermarkFile,
+) {
+    let dir = TempDir::new().unwrap();
+    let cluster_id = Uuid::new_v4();
+    let controller = Controller::start(
+        config()
+            .dir(&dir)
+            .cluster_id(cluster_id)
+            .unstable(UnstableFeatureVersions::Enabled)
+            .call(),
+    )
+    .await
+    .expect("first boot");
+    wait_for_leader(&controller).await;
+    controller
+        .submit_change(finalize_unstable_metadata_version())
+        .await
+        .expect("finalize the unstable level");
+    controller.shutdown().await;
+
+    let metadata_dir = metadata_partition_dir(dir.path());
+    let high_watermark_path = metadata_dir.join("high-watermark");
+    match high_watermark {
+        // Version 0 of the file: the version, then the offset.
+        HighWatermarkFile::AtLogStart => std::fs::write(&high_watermark_path, "0\n0\n").unwrap(),
+        HighWatermarkFile::Missing => std::fs::remove_file(&high_watermark_path).unwrap(),
+    }
+    let before = protected_metadata_files(&metadata_dir);
+
+    let Err(refused) = Controller::start(
+        config()
+            .dir(&dir)
+            .cluster_id(cluster_id)
+            .mode(BootstrapMode::Rejoin)
+            .call(),
+    )
+    .await
+    else {
+        panic!("a controller without the flag started over an unstable log");
+    };
+    check!(matches!(&refused, RaftError::FatalFault(message) if message == REFUSAL));
+    check!(protected_metadata_files(&metadata_dir) == before);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_controller_stops_when_it_replays_a_level_it_does_not_support() {
     let dir = TempDir::new().unwrap();

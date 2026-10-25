@@ -282,6 +282,18 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- A controller that starts over a feature level it does not support now
+  refuses before it writes anything, also when its recovered high watermark is
+  below the record that finalized the level. Startup rebuilt the image from
+  the committed prefix only, and the high watermark comes from a cache file
+  that can lag or be missing. The engine then started, elected itself,
+  appended to the metadata log and wrote `quorum-state`, the leader-epoch
+  checkpoint and the high watermark, and refused the level only when it
+  committed it. The startup guard now also reads every feature level that the
+  log holds above the high watermark. This is release blocker F5: a rollback
+  to a release that refuses the level must change no byte. The fix protects a
+  rollback to a release that carries it. `v1.0.8` and earlier releases
+  still have the window.
 - Diskless upload and maintenance stop when the index projection fails, including during an object-store request (#1703).
 
 - Require `ClusterAction` for `PushTelemetry`, refuse both client-telemetry

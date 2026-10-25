@@ -145,6 +145,66 @@ pub fn replay_committed_with_timestamp(
     Ok(replay)
 }
 
+/// `committed` with every feature level that the log holds above its high
+/// watermark applied, in log order: the levels the image reaches if the
+/// whole durable log commits.
+///
+/// The startup feature guard reads this image, and not the committed one.
+/// The high-watermark file is a cache (see `KraftLog::open`). A restart
+/// recovers from it a high watermark at or below the true one, and from the
+/// log start when the file is gone or does not parse. With a high watermark
+/// below a `FeatureLevelRecord`, the committed image misses that level. The
+/// engine would then start, elect itself, append to the log and commit the
+/// level, and refuse it only after those writes. Kafka's controller also
+/// replays only committed records, but krabka's guard refuses before the
+/// engine writes anything, so it reads every level the log holds.
+///
+/// A record in the tail that does not decode is skipped: startup does not
+/// replay the tail, and live apply judges the record if it commits.
+///
+/// # Errors
+/// The error of a log read.
+pub fn with_uncommitted_feature_levels(
+    log: &KraftLog,
+    committed: &MetadataImage,
+    max: MetadataRaftFetchMax,
+) -> Result<MetadataImage, RaftError> {
+    let mut image = committed.clone();
+    visit_decoded_batches(
+        log,
+        log.hwm(),
+        log.log_end_offset(),
+        max,
+        |batches, from, target| {
+            for batch in batches {
+                for rec in &batch.records {
+                    let ReplayRecordDecision::Apply(record_offset) = replay_record_decision(
+                        batch.base_offset,
+                        rec.offset_delta,
+                        from.0,
+                        target.0,
+                        batch.attributes.is_control_batch(),
+                        false,
+                    ) else {
+                        continue;
+                    };
+                    let Some(value) = rec.value.as_ref() else {
+                        continue;
+                    };
+                    if let Ok(Some(meta @ MetadataRecord::V1FeatureLevel(_))) =
+                        decode_committed_value(value, &image, record_offset)
+                        && image.validate(&meta).is_ok()
+                    {
+                        image.apply(&meta);
+                    }
+                }
+            }
+            Ok(())
+        },
+    )?;
+    Ok(image)
+}
+
 /// Replays the KIP-853 control records of the committed log into `state`.
 ///
 /// # Errors
