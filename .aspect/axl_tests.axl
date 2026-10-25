@@ -34,6 +34,7 @@ load("./generate_kip_matrix_test.axl", "generate_kip_matrix_tests")
 load("./kafka_system_tests_test.axl", "kafka_system_tests_tests")
 load("./kind_smoke_test.axl", "kind_smoke_tests")
 load("./mutants_shard_test.axl", "mutants_shard_tests")
+load("./pgo_test.axl", "pgo_tests")
 load("./testing.axl", "run_suites")
 load("./verify_release_test.axl", "verify_release_tests")
 
@@ -64,6 +65,7 @@ SUITES = [
     kafka_system_tests_tests,
     kind_smoke_tests,
     mutants_shard_tests,
+    pgo_tests,
     verify_release_tests,
 ]
 

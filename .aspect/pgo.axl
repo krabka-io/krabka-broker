@@ -1,0 +1,766 @@
+"""Measure what profile-guided optimization does for the broker.
+
+The task builds the broker three times with the repository's release profile.
+The first build is the baseline, the second records a profile, and the third
+uses that profile. It then runs the baseline and the optimized broker against
+the same benchmark scenarios and writes the comparison to `report.md`.
+
+    aspect pgo
+    aspect pgo --dry-run
+    aspect pgo --phase compare --trials 7
+    aspect pgo --work-dir /var/tmp/pgo
+
+The phases run in this order: `build`, `train`, `merge`, `optimize`,
+`compare`. `--phase` names the first phase to run, and every later phase
+runs after it, so a run that failed can continue from the phase that failed.
+`--dry-run` prints every command with its environment, and runs nothing.
+
+1. `build` makes the baseline `krabka-broker`, `krabka-format` and
+   `krabka-bench-driver`, and a broker built with `-Cprofile-generate`.
+2. `train` runs the instrumented broker under shortened copies of the
+   scenarios in `bench/scenarios/`. Each broker stops on SIGTERM, which makes
+   it write its `.profraw` file.
+3. `merge` merges the `.profraw` files with `llvm-profdata`.
+4. `optimize` builds the broker with `-Cprofile-use`.
+5. `compare` runs both brokers in alternating order for `--trials` rounds.
+   It records the driver's producer throughput and p99 ack latency and the
+   broker's CPU seconds from `/proc/<pid>/stat`.
+
+`docs/operations/pgo.md` explains how to read the report.
+"""
+
+load("@std//time.axl", "sleep")
+
+PHASES = ["build", "train", "merge", "optimize", "compare"]
+
+CLIENT_PORT = 19092
+CONTROLLER_PORT = 19093
+NODE_ID = 1
+
+# The compare phase keeps the broker and the driver off each other's cores.
+BROKER_CPUS = "2,3"
+DRIVER_CPUS = "0,1"
+
+TRAIN_WARMUP = "2s"
+TRAIN_DURATION = "20s"
+
+# The release binaries that every phase uses: the baseline build makes all
+# three, and the other builds make the broker only.
+BASELINE_PACKAGES = [
+    ("krabka-broker", "krabka-broker"),
+    ("krabka-format", "krabka-format"),
+    ("krabka-bench-driver", "krabka-bench-driver"),
+]
+BROKER_PACKAGE = [("krabka-broker", "krabka-broker")]
+
+# The training set. Each entry is a shortened copy of a file in
+# `bench/scenarios/`; `compression` makes a compressed variant of it.
+# Together they cover small records, large records, consumers, a fixed rate,
+# `acks=all`, and the lz4 and zstd codecs.
+TRAINING = [
+    struct(name = "small-msg-saturate", source = "small-msg-saturate", compression = None),
+    struct(name = "small-msg-saturate-zstd", source = "small-msg-saturate", compression = "zstd"),
+    struct(name = "large-msg", source = "large-msg", compression = None),
+    struct(name = "fan-out", source = "fan-out", compression = None),
+    struct(name = "fixed-rate-latency", source = "fixed-rate-latency", compression = None),
+    struct(name = "mixed-acks", source = "mixed-acks", compression = None),
+]
+
+# The evaluation set. `duration` replaces the scenario's own when it is set.
+EVALUATION = [
+    struct(name = "small-msg-saturate", source = "small-msg-saturate", duration = None),
+    struct(name = "large-msg", source = "large-msg", duration = "30s"),
+]
+
+BINARIES = ["baseline", "pgo"]
+
+# The report's metrics, in the order the report lists them.
+METRICS = [
+    struct(key = "msgs_per_s", label = "Producer throughput, msgs/s", better = "higher", digits = 0),
+    struct(key = "mb_per_s", label = "Producer throughput, MB/s", better = "higher", digits = 2),
+    struct(key = "p99_ms", label = "Producer p99 ack latency, ms", better = "lower", digits = 3),
+    struct(key = "cpu_s", label = "Broker CPU, s", better = "lower", digits = 2),
+]
+
+# A broker gets this long to log that it started, and this long to exit after
+# SIGTERM. Both are polls of `_POLL_MS` milliseconds.
+_POLL_MS = 250
+_START_POLLS = 240
+_STOP_POLLS = 480
+
+# The line `krabka-broker` logs once its listeners are open.
+STARTED_LINE = "krabka-broker started"
+
+_SHELL_SAFE = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-+=/.,:@%"
+
+# ── Paths ────────────────────────────────────────────────────────────────────
+
+def default_work_dir(root):
+    """`pgo-work` beside the repository root."""
+    parent = root.rstrip("/").rsplit("/", 1)[0]
+    return (parent or "") + "/pgo-work"
+
+def resolve_path(path, cwd):
+    """`path` made absolute against `cwd`, without a trailing slash."""
+    if not path.startswith("/"):
+        path = cwd.rstrip("/") + "/" + path
+    return path.rstrip("/") or "/"
+
+def binaries(work):
+    """Where each build leaves the binaries that the later phases run."""
+    baseline = work + "/target-baseline/release/"
+    return struct(
+        baseline = baseline + "krabka-broker",
+        format = baseline + "krabka-format",
+        driver = baseline + "krabka-bench-driver",
+        instrumented = work + "/target-instrumented/release/krabka-broker",
+        pgo = work + "/target-pgo/release/krabka-broker",
+    )
+
+def phases_from(phase):
+    """The phases to run for `--phase`: that phase and every one after it.
+
+    Returns `None` for a name that is not a phase.
+    """
+    if phase == "all":
+        return list(PHASES)
+    if phase not in PHASES:
+        return None
+    return PHASES[PHASES.index(phase):]
+
+# ── Scenarios ────────────────────────────────────────────────────────────────
+
+def set_scenario_key(text, key, value):
+    """`text` with its top-level `key:` line set to `value`.
+
+    Every other line stays as it is. A scenario without the key gets it as
+    its last line.
+    """
+    lines = text.splitlines()
+    out = []
+    found = False
+    for line in lines:
+        if line.startswith(key + ":"):
+            out.append("%s: %s" % (key, value))
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        out.append("%s: %s" % (key, value))
+    return "\n".join(out) + "\n"
+
+def scenario_value(text, key):
+    """The value of the top-level `key:` line, or `None` when there is none."""
+    for line in text.splitlines():
+        if line.startswith(key + ":"):
+            value = line[len(key) + 1:]
+            comment = value.find(" #")
+            if comment >= 0:
+                value = value[:comment]
+            return value.strip()
+    return None
+
+def shorten_scenario(text):
+    """A training copy of a scenario: a 2s warmup and a 20s measured window."""
+    return set_scenario_key(set_scenario_key(text, "warmup", TRAIN_WARMUP), "duration", TRAIN_DURATION)
+
+def training_scenario(entry, source):
+    """The training copy of `entry`, made from its source scenario's text."""
+    text = shorten_scenario(source)
+    if entry.compression:
+        text = set_scenario_key(text, "name", entry.name)
+        text = set_scenario_key(text, "compression", entry.compression)
+    return text
+
+def evaluation_scenario(entry, source):
+    """The evaluation copy of `entry`: the source, with its duration set."""
+    if entry.duration:
+        return set_scenario_key(source, "duration", entry.duration)
+    return source
+
+def parse_seconds(value):
+    """A scenario extent such as `20s`, `2m` or `500ms`, in seconds."""
+    units = [("ms", 0.001), ("s", 1), ("m", 60), ("h", 3600)]
+    for suffix, scale in units:
+        if value.endswith(suffix):
+            number = value[:-len(suffix)]
+            if number and number.isdigit():
+                return int(number) * scale
+    fail("cannot read %r as an extent such as 20s" % value)
+
+def scenario_seconds(text):
+    """The measured window of a scenario, in seconds. The driver's default is 60s."""
+    value = scenario_value(text, "duration")
+    return parse_seconds(value) if value != None else 60
+
+def scenario_partitions(text):
+    """The topic's partition count. The driver's topic auto-creates with it."""
+    value = scenario_value(text, "partitions")
+    if value == None or not value.isdigit():
+        fail("the scenario names no partition count")
+    return int(value)
+
+# ── Commands ─────────────────────────────────────────────────────────────────
+
+def command(argv, env = {}, cwd = ""):
+    """One process to run: its argv, the environment it adds, and its directory."""
+    return struct(argv = argv, env = env, cwd = cwd)
+
+def shell_quote(word):
+    """`word` as a POSIX shell reads it back, quoted only where it needs it."""
+    if word and not [c for c in word.elems() if c not in _SHELL_SAFE]:
+        return word
+    return "'" + word.replace("'", "'\\''") + "'"
+
+def render_command(cmd):
+    """The command as one shell line: directory, environment, then argv."""
+    words = ["%s=%s" % (key, shell_quote(value)) for key, value in cmd.env.items()]
+    words.extend([shell_quote(word) for word in cmd.argv])
+    line = " ".join(words)
+    if cmd.cwd:
+        line = "cd %s && %s" % (shell_quote(cmd.cwd), line)
+    return line
+
+def cargo_build(root, target_dir, packages, rustflags = None):
+    """`cargo build --release --locked` of `packages` into `target_dir`."""
+    argv = ["cargo", "build", "--release", "--locked"]
+    for package, binary in packages:
+        argv.extend(["-p", package, "--bin", binary])
+    env = {"CARGO_TARGET_DIR": target_dir}
+    if rustflags != None:
+        env["RUSTFLAGS"] = rustflags
+    return command(argv, env = env, cwd = root)
+
+def build_commands(root, work):
+    """The two builds of the `build` phase: the baseline, then the instrumented broker."""
+    return [
+        cargo_build(root, work + "/target-baseline", BASELINE_PACKAGES),
+        cargo_build(root, work + "/target-instrumented", BROKER_PACKAGE, "-Cprofile-generate=" + work + "/profraw"),
+    ]
+
+def optimize_command(root, work):
+    """The `optimize` phase's build of the broker with the merged profile."""
+    return cargo_build(root, work + "/target-pgo", BROKER_PACKAGE, "-Cprofile-use=" + work + "/merged.profdata")
+
+def pinned(argv, cpus):
+    """`argv` under `taskset -c cpus`, or as it is when `cpus` is empty."""
+    return ["taskset", "-c", cpus] + argv if cpus else argv
+
+def format_command(format_binary, log_dir):
+    """Format `log_dir` as a standalone node that is its own controller."""
+    return command([
+        format_binary,
+        "--log-dir",
+        log_dir,
+        "--standalone",
+        "--node-id",
+        str(NODE_ID),
+        "--controller-listener",
+        "127.0.0.1:%d" % CONTROLLER_PORT,
+    ])
+
+def broker_command(broker_binary, log_dir, partitions, cpus = "", env = {}):
+    """Start a single-node broker on `log_dir`.
+
+    One broker holds every replica, so the internal topics take one replica
+    and a minimum ISR of one. The driver's topic does not exist beforehand:
+    the producer's metadata request creates it with `--num-partitions`.
+    The metrics and health endpoints are off, so that no fixed port of theirs
+    can collide with another process.
+    """
+    return command(pinned([
+        broker_binary,
+        "--log-dir",
+        log_dir,
+        "--broker-id",
+        str(NODE_ID),
+        "--listen-addr",
+        "127.0.0.1:%d" % CLIENT_PORT,
+        "--controller-listen-addr",
+        "127.0.0.1:%d" % CONTROLLER_PORT,
+        "--metrics-listen-addr",
+        "none",
+        "--health-listen-addr",
+        "none",
+        "--offsets-topic-replication-factor",
+        "1",
+        "--transaction-state-replication-factor",
+        "1",
+        "--transaction-state-min-isr",
+        "1",
+        "--num-partitions",
+        str(partitions),
+        "--default-replication-factor",
+        "1",
+    ], cpus), env = env)
+
+def driver_command(driver_binary, scenario_path, out, cpus = ""):
+    """Run one scenario against the broker and write its `RunOutput` JSON to `out`."""
+    return command(pinned([
+        driver_binary,
+        "--scenario",
+        scenario_path,
+        "--bootstrap",
+        "127.0.0.1:%d" % CLIENT_PORT,
+        "--stack",
+        "krabka",
+        "--out",
+        out,
+    ], cpus))
+
+def training_env(work, name):
+    """Where an instrumented broker writes its profile, named after the scenario.
+
+    `LLVM_PROFILE_FILE` wins over the directory that `-Cprofile-generate`
+    compiled in. `%p` is the process id and `%m` the binary's signature.
+    """
+    return {"LLVM_PROFILE_FILE": "%s/profraw/%s-%%p-%%m.profraw" % (work, name)}
+
+def host_triple(rustc_version):
+    """The `host:` line of `rustc -vV`."""
+    for line in rustc_version.splitlines():
+        if line.startswith("host:"):
+            return line[len("host:"):].strip()
+    fail("rustc -vV printed no host line")
+
+def llvm_profdata_path(sysroot, triple):
+    """Where `rustup component add llvm-tools` puts `llvm-profdata`."""
+    return "%s/lib/rustlib/%s/bin/llvm-profdata" % (sysroot.strip(), triple)
+
+def profraw_files(directory, names):
+    """The `.profraw` files among `names`, as sorted paths under `directory`."""
+    return [directory + "/" + name for name in sorted(names) if name.endswith(".profraw")]
+
+def merge_command(llvm_profdata, work, profraws):
+    """Merge every training profile into `merged.profdata`."""
+    return command([llvm_profdata, "merge", "-o", work + "/merged.profdata"] + profraws)
+
+# ── Trials ───────────────────────────────────────────────────────────────────
+
+def round_order(round):
+    """The binaries in the order round `round` runs them, counted from 1.
+
+    The baseline goes first in odd rounds and the optimized broker in even
+    ones. A drift over the run, such as a warming disk or a hotter CPU,
+    then falls on both binaries alike.
+    """
+    return list(BINARIES) if round % 2 == 1 else list(reversed(BINARIES))
+
+def trial_plan(trials, scenarios):
+    """Every trial of the compare phase, in the order it runs.
+
+    A round runs each scenario once on each binary, in `round_order`.
+    """
+    plan = []
+    for round in range(1, trials + 1):
+        for scenario in scenarios:
+            for binary in round_order(round):
+                plan.append(struct(round = round, scenario = scenario, binary = binary))
+    return plan
+
+def trial_label(trial):
+    """The name a trial's files share: `r1-baseline-large-msg`."""
+    return "r%d-%s-%s" % (trial.round, trial.binary, trial.scenario)
+
+# ── Measurements ─────────────────────────────────────────────────────────────
+
+def parse_proc_stat(text):
+    """`utime` and `stime` of a `/proc/<pid>/stat` line, in clock ticks.
+
+    The second field is the command name in parentheses, and the name can
+    hold spaces and parentheses itself. The fields after it start after the
+    last `)`. There, field 3 (`state`) is the first word, so `utime` and
+    `stime`, fields 14 and 15, are the 12th and 13th.
+    """
+    close = text.rfind(")")
+    if close < 0:
+        fail("not a /proc/<pid>/stat line: %r" % text)
+    fields = text[close + 1:].split()
+    if len(fields) < 13:
+        fail("a /proc/<pid>/stat line with %d fields after the command name" % len(fields))
+    return struct(utime = int(fields[11]), stime = int(fields[12]))
+
+def cpu_seconds(stat, clock_ticks):
+    """User plus system CPU time of a process, in seconds."""
+    if clock_ticks <= 0:
+        fail("CLK_TCK must be positive, got %d" % clock_ticks)
+    return (stat.utime + stat.stime) / clock_ticks
+
+def driver_metrics(run, seconds):
+    """The producer's throughput and p99 ack latency from one `RunOutput`.
+
+    `msgs_produced` and `bytes_in` count the measured window only, so the
+    rates divide them by the scenario's `duration`. `producer_latency.p99`
+    is in whole nanoseconds. A MB is 10^6 bytes.
+    """
+    throughput = run["throughput"]
+    return {
+        "msgs_per_s": throughput["msgs_produced"] / seconds,
+        "mb_per_s": throughput["bytes_in"] / seconds / 1000000,
+        "p99_ms": run["producer_latency"]["p99"] / 1000000,
+    }
+
+def median(values):
+    """The middle value, or the mean of the two middle values."""
+    if not values:
+        fail("median of no values")
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+def percent_change(baseline, optimized):
+    """How far `optimized` is from `baseline`, in percent of `baseline`.
+
+    Returns `None` when the baseline is zero.
+    """
+    if baseline == 0:
+        return None
+    return (optimized - baseline) * 100.0 / baseline
+
+def fixed(value, digits):
+    """`value` with exactly `digits` decimals, rounded half away from zero.
+
+    AXL's `%` operator has no precision, so `%.2f` is not available.
+    """
+    scale = 1
+    for _ in range(digits):
+        scale *= 10
+    scaled = int(abs(value) * scale + 0.5)
+    text = str(scaled // scale)
+    if digits:
+        text += "." + ("0" * digits + str(scaled % scale))[-digits:]
+    return "-" + text if value < 0 and scaled else text
+
+def signed_percent(change):
+    """`+1.25%`, `-0.50%`, or `n/a` for a change with no baseline."""
+    if change == None:
+        return "n/a"
+    text = fixed(change, 2)
+    return text + "%" if text.startswith("-") else "+" + text + "%"
+
+# ── Report ───────────────────────────────────────────────────────────────────
+
+def trial_values(results, scenario, binary, key):
+    """`key` of every result for `scenario` and `binary`, in round order."""
+    picked = [r for r in results if r["scenario"] == scenario and r["binary"] == binary]
+    return [r["metrics"][key] for r in sorted(picked, key = lambda r: r["round"])]
+
+def render_report(setup, scenarios, results):
+    """The Markdown comparison: one table per scenario, one row per metric.
+
+    `setup` is a struct of `work`, `trials` and `clock_ticks`. `results`
+    holds one dict per trial: `round`, `scenario`, `binary` and `metrics`.
+    """
+    lines = [
+        "# PGO comparison",
+        "",
+        "Baseline `%s` against PGO `%s`, %d rounds." % (
+            binaries(setup.work).baseline,
+            binaries(setup.work).pgo,
+            setup.trials,
+        ),
+        "Each round runs both brokers, in alternating order, on a fresh log directory.",
+        "The broker runs on CPUs %s and the driver on CPUs %s." % (BROKER_CPUS, DRIVER_CPUS),
+        "Broker CPU is utime plus stime from `/proc/<pid>/stat` before SIGTERM, at %d ticks a second." % setup.clock_ticks,
+        "A change is the PGO median against the baseline median.",
+    ]
+    for scenario in scenarios:
+        lines.extend([
+            "",
+            "## " + scenario,
+            "",
+            "| Metric | Better | Baseline median | PGO median | Change | Baseline trials | PGO trials |",
+            "| :--- | :--- | ---: | ---: | ---: | :--- | :--- |",
+        ])
+        for metric in METRICS:
+            baseline = trial_values(results, scenario, "baseline", metric.key)
+            optimized = trial_values(results, scenario, "pgo", metric.key)
+            if not baseline or not optimized:
+                lines.append("| %s | %s | | | | %s | %s |" % (
+                    metric.label,
+                    metric.better,
+                    ", ".join([fixed(v, metric.digits) for v in baseline]),
+                    ", ".join([fixed(v, metric.digits) for v in optimized]),
+                ))
+                continue
+            base_median = median(baseline)
+            pgo_median = median(optimized)
+            lines.append("| %s | %s | %s | %s | %s | %s | %s |" % (
+                metric.label,
+                metric.better,
+                fixed(base_median, metric.digits),
+                fixed(pgo_median, metric.digits),
+                signed_percent(percent_change(base_median, pgo_median)),
+                ", ".join([fixed(v, metric.digits) for v in baseline]),
+                ", ".join([fixed(v, metric.digits) for v in optimized]),
+            ))
+    return "\n".join(lines) + "\n"
+
+# ── IO ───────────────────────────────────────────────────────────────────────
+
+def _say(r, text):
+    r.ctx.std.io.stdout.write("# %s\n" % text)
+
+def _spawn(r, cmd, stdout = None, stderr = None):
+    process = r.ctx.std.process.command(cmd.argv[0]).args(cmd.argv[1:])
+    for key, value in cmd.env.items():
+        process = process.env(key, value)
+    if cmd.cwd:
+        process = process.current_dir(cmd.cwd)
+    if stdout:
+        process = process.stdout(r.ctx.std.fs.create(stdout))
+    if stderr:
+        process = process.stderr(r.ctx.std.fs.create(stderr))
+    return process.spawn()
+
+def _run(r, cmd):
+    """Print `cmd`, then run it to completion and return its exit code. `--dry-run` only prints it."""
+    r.ctx.std.io.stdout.write("$ %s\n" % render_command(cmd))
+    if r.dry:
+        return 0
+    return _spawn(r, cmd).wait().code
+
+def _must(r, cmd):
+    code = _run(r, cmd)
+    if code != 0:
+        fail("%s exited with %r" % (render_command(cmd), code))
+
+def _capture(ctx, argv, cwd):
+    """The stdout of a read-only query. It runs under `--dry-run` too."""
+    result = ctx.std.process.command(argv[0]).args(argv[1:]).current_dir(cwd).stdout("piped").stderr("piped").spawn().wait_with_output()
+    if result.status.code != 0:
+        fail("%s failed:\n%s" % (" ".join(argv), result.stderr))
+    return result.stdout
+
+def _fresh_dir(r, path):
+    _say(r, "rm -rf %s && mkdir -p %s" % (path, path))
+    if r.dry:
+        return
+    if r.ctx.std.fs.exists(path):
+        r.ctx.std.fs.remove_dir_all(path)
+    r.ctx.std.fs.create_dir_all(path)
+
+def _remove_dir(r, path):
+    _say(r, "rm -rf " + path)
+    if not r.dry and r.ctx.std.fs.exists(path):
+        r.ctx.std.fs.remove_dir_all(path)
+
+def _write(r, path, contents):
+    _say(r, "write " + path)
+    if not r.dry:
+        r.ctx.std.fs.create_dir_all(path.rsplit("/", 1)[0])
+        r.ctx.std.fs.write(path, contents)
+
+def _require(r, paths, phase):
+    if r.dry:
+        return
+    for path in paths:
+        if not r.ctx.std.fs.exists(path):
+            fail("%s is missing: run `aspect pgo --phase %s` first" % (path, phase))
+
+def _started(r, logs):
+    for path in logs:
+        if r.ctx.std.fs.exists(path) and STARTED_LINE in r.ctx.std.fs.read_to_string(path):
+            return True
+    return False
+
+def _kill_quietly(child):
+    if child.try_wait() == None:
+        child.kill()
+        child.wait()
+
+def _session(r, broker, driver, log_dir, logs):
+    """Format `log_dir`, start `broker`, run `driver`, then stop the broker.
+
+    Returns the broker's CPU seconds, read just before the SIGTERM, or 0
+    under `--dry-run`.
+    """
+    _remove_dir(r, log_dir)
+    _must(r, format_command(r.bin.format, log_dir))
+
+    r.ctx.std.io.stdout.write("$ %s > %s 2> %s &\n" % (render_command(broker), logs[0], logs[1]))
+    _say(r, "wait for %r in the broker's output" % STARTED_LINE)
+    child = None
+    if not r.dry:
+        child = _spawn(r, broker, stdout = logs[0], stderr = logs[1])
+        r.ctx.defer(_kill_quietly, child)
+        ready = False
+        for _ in range(_START_POLLS):
+            if child.try_wait() != None:
+                fail("the broker exited before it started; see %s and %s" % (logs[0], logs[1]))
+            if _started(r, logs):
+                ready = True
+                break
+            sleep(_POLL_MS)
+        if not ready:
+            fail("the broker did not start in %d ms; see %s" % (_START_POLLS * _POLL_MS, logs[0]))
+
+    code = _run(r, driver)
+
+    _say(r, "read /proc/<broker pid>/stat, then kill -TERM <broker pid> and wait for it to exit")
+    seconds = 0
+    if not r.dry:
+        seconds = cpu_seconds(parse_proc_stat(r.ctx.std.fs.read_to_string("/proc/%d/stat" % child.id)), r.clock_ticks)
+        r.ctx.std.process.command("kill").args(["-TERM", str(child.id)]).spawn().wait()
+        status = None
+        for _ in range(_STOP_POLLS):
+            status = child.try_wait()
+            if status != None:
+                break
+            sleep(_POLL_MS)
+        if status == None:
+            child.kill()
+            child.wait()
+            fail("the broker did not exit in %d ms after SIGTERM" % (_STOP_POLLS * _POLL_MS))
+        if status.code != 0:
+            r.ctx.std.io.stderr.write("warning: the broker exited with %r after SIGTERM; see %s\n" % (status.code, logs[1]))
+
+    # A saturating run writes gigabytes, and nothing reads them afterwards.
+    _remove_dir(r, log_dir)
+    if code != 0:
+        fail("%s exited with %r" % (render_command(driver), code))
+    return seconds
+
+def _read_scenarios(r, entries):
+    sources = {}
+    for entry in entries:
+        if entry.source not in sources:
+            sources[entry.source] = r.ctx.std.fs.read_to_string("%s/bench/scenarios/%s.yaml" % (r.root, entry.source))
+    return sources
+
+def _phase_build(r):
+    for cmd in build_commands(r.root, r.work):
+        _must(r, cmd)
+
+def _phase_train(r):
+    _require(r, [r.bin.instrumented, r.bin.format, r.bin.driver], "build")
+
+    # The instrumented build runs instrumented build scripts, and they leave
+    # profiles here too. Only the broker's profiles go into the merge.
+    _fresh_dir(r, r.work + "/profraw")
+    sources = _read_scenarios(r, TRAINING)
+    for entry in TRAINING:
+        text = training_scenario(entry, sources[entry.source])
+        path = "%s/scenarios/train/%s.yaml" % (r.work, entry.name)
+        _write(r, path, text)
+        label = "train-" + entry.name
+        _session(
+            r,
+            broker_command(r.bin.instrumented, r.work + "/data/" + label, scenario_partitions(text), env = training_env(r.work, entry.name)),
+            driver_command(r.bin.driver, path, "%s/train/%s.json" % (r.work, entry.name)),
+            r.work + "/data/" + label,
+            [r.work + "/logs/" + label + ".out", r.work + "/logs/" + label + ".err"],
+        )
+
+def _phase_merge(r):
+    sysroot = _capture(r.ctx, ["rustc", "--print", "sysroot"], r.root)
+    triple = host_triple(_capture(r.ctx, ["rustc", "-vV"], r.root))
+    tool = llvm_profdata_path(sysroot, triple)
+    directory = r.work + "/profraw"
+    if r.dry:
+        profraws = [directory + "/*.profraw"]
+    else:
+        if not r.ctx.std.fs.exists(tool):
+            fail("%s is missing: run `rustup component add llvm-tools`" % tool)
+        names = [entry.path for entry in r.ctx.std.fs.read_dir(directory) if entry.is_file] if r.ctx.std.fs.exists(directory) else []
+        profraws = profraw_files(directory, names)
+        if not profraws:
+            fail("%s holds no .profraw files: run `aspect pgo --phase train`. An instrumented broker writes one only when it exits cleanly." % directory)
+    _must(r, merge_command(tool, r.work, profraws))
+
+def _phase_optimize(r):
+    _require(r, [r.work + "/merged.profdata"], "merge")
+    _must(r, optimize_command(r.root, r.work))
+
+def _phase_compare(r):
+    _require(r, [r.bin.baseline, r.bin.pgo, r.bin.format, r.bin.driver], "optimize")
+    sources = _read_scenarios(r, EVALUATION)
+    texts = {}
+    for entry in EVALUATION:
+        texts[entry.name] = evaluation_scenario(entry, sources[entry.source])
+        _write(r, "%s/scenarios/eval/%s.yaml" % (r.work, entry.name), texts[entry.name])
+
+    brokers = {"baseline": r.bin.baseline, "pgo": r.bin.pgo}
+    results = []
+    results_path = r.work + "/compare/results.json"
+    for trial in trial_plan(r.trials, [entry.name for entry in EVALUATION]):
+        label = trial_label(trial)
+        text = texts[trial.scenario]
+        out = "%s/compare/%s.json" % (r.work, label)
+        _say(r, "round %d of %d: %s on %s" % (trial.round, r.trials, trial.scenario, trial.binary))
+        seconds = _session(
+            r,
+            broker_command(brokers[trial.binary], r.work + "/data/" + label, scenario_partitions(text), cpus = BROKER_CPUS),
+            driver_command(r.bin.driver, "%s/scenarios/eval/%s.yaml" % (r.work, trial.scenario), out, cpus = DRIVER_CPUS),
+            r.work + "/data/" + label,
+            [r.work + "/logs/" + label + ".out", r.work + "/logs/" + label + ".err"],
+        )
+        if r.dry:
+            continue
+        run = json.decode(r.ctx.std.fs.read_to_string(out))
+        if run.get("errors"):
+            r.ctx.std.io.stderr.write("warning: %s reports errors: %s\n" % (out, run["errors"]))
+        metrics = driver_metrics(run, scenario_seconds(text))
+        metrics["cpu_s"] = seconds
+        results.append({"round": trial.round, "scenario": trial.scenario, "binary": trial.binary, "metrics": metrics})
+
+        # Kept after every trial, so a run that stops part way still has its numbers.
+        r.ctx.std.fs.write(results_path, json.encode(results))
+
+    report = r.work + "/report.md"
+    setup = struct(work = r.work, trials = r.trials, clock_ticks = r.clock_ticks)
+    _write(r, report, render_report(setup, [entry.name for entry in EVALUATION], results))
+    r.ctx.std.io.stdout.write("report: %s\n" % report)
+
+_PHASE_IMPLS = {
+    "build": _phase_build,
+    "train": _phase_train,
+    "merge": _phase_merge,
+    "optimize": _phase_optimize,
+    "compare": _phase_compare,
+}
+
+def _impl(ctx: TaskContext) -> int:
+    root = ctx.std.env.bazel_root_dir()
+    phases = phases_from(ctx.args.phase)
+    if phases == None:
+        ctx.std.io.stderr.write("--phase must be all or one of %s, got %r\n" % (", ".join(PHASES), ctx.args.phase))
+        return 2
+    if ctx.args.trials < 1:
+        ctx.std.io.stderr.write("--trials must be at least 1, got %d\n" % ctx.args.trials)
+        return 2
+    work = resolve_path(ctx.args.work_dir, ctx.std.env.current_dir()) if ctx.args.work_dir else default_work_dir(root)
+
+    clock_ticks = 100
+    if "train" in phases or "compare" in phases:
+        clock_ticks = int(_capture(ctx, ["getconf", "CLK_TCK"], root).strip())
+
+    r = struct(
+        ctx = ctx,
+        dry = ctx.args.dry_run,
+        root = root,
+        work = work,
+        bin = binaries(work),
+        trials = ctx.args.trials,
+        clock_ticks = clock_ticks,
+    )
+    _say(r, "work directory %s, phases %s%s" % (work, " ".join(phases), ", dry run" if r.dry else ""))
+    if not r.dry:
+        ctx.std.fs.create_dir_all(work + "/logs")
+    for phase in phases:
+        _say(r, "phase " + phase)
+        _PHASE_IMPLS[phase](r)
+    return 0
+
+pgo = task(
+    summary = "Build a profile-guided broker and compare it with the baseline",
+    implementation = _impl,
+    args = {
+        "work_dir": args.string(default = "", description = "Where builds, profiles and results go. Default: pgo-work beside the repository root."),
+        "phase": args.string(default = "all", description = "The first phase to run: all, build, train, merge, optimize or compare. Every later phase runs after it."),
+        "trials": args.int(default = 5, description = "Compare rounds. Each round runs both brokers on every evaluation scenario."),
+        "dry_run": args.boolean(default = False, description = "Print every command with its environment, and run nothing."),
+    },
+)
