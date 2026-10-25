@@ -28,7 +28,7 @@ use {
 ///
 /// The handler keeps it so that it can read again after a long-poll wake.
 pub(crate) struct PendingRead {
-    pub(crate) topic_name: String,
+    pub(crate) topic_name: Arc<str>,
     pub(crate) topic_id: WireUuid,
     pub(crate) partition_index: i32,
     /// Epoch the follower supplied with the original Fetch request.
@@ -73,7 +73,7 @@ pub(crate) struct PendingRead {
 
 impl PendingRead {
     pub(super) fn planned(
-        topic_name: &str,
+        topic_name: &Arc<str>,
         topic_id: WireUuid,
         partition: &EffectivePartition,
         mode: FetchMode,
@@ -81,7 +81,7 @@ impl PendingRead {
         out: PartitionData,
     ) -> Self {
         Self {
-            topic_name: topic_name.to_owned(),
+            topic_name: Arc::clone(topic_name),
             topic_id,
             partition_index: partition.partition,
             current_leader_epoch: partition.current_leader_epoch,
@@ -551,7 +551,7 @@ pub(super) struct PlannedRead {
 
 pub(super) async fn plan_partition_read(
     context: &PendingPlanContext<'_>,
-    topic_name: &str,
+    topic_name: &Arc<str>,
     topic_id: WireUuid,
     topic_error: Option<i16>,
     request: &EffectivePartition,
@@ -859,22 +859,25 @@ pub(super) async fn build_pending_reads(
         // name.
         let (name, id, error) = match resolve(context.image, &topic.topic, topic.topic_id) {
             Ok(record) => (
-                record.name.clone(),
+                record.name.as_str(),
                 WireUuid(record.topic_id.into_bytes()),
                 None,
             ),
             Err(codes::UNKNOWN_TOPIC_OR_PARTITION)
                 if context.version < super::FIRST_TOPIC_ID_VERSION =>
             {
-                (topic.topic.clone(), topic.topic_id, None)
+                (topic.topic.as_str(), topic.topic_id, None)
             }
             Err(codes::UNKNOWN_TOPIC_OR_PARTITION) => (
-                topic.topic.clone(),
+                topic.topic.as_str(),
                 topic.topic_id,
                 Some(codes::UNKNOWN_TOPIC_ID),
             ),
-            Err(error_code) => (topic.topic.clone(), topic.topic_id, Some(error_code)),
+            Err(error_code) => (topic.topic.as_str(), topic.topic_id, Some(error_code)),
         };
+        // The registry already owns the name of a locally hosted topic.
+        // Every partition, including refused rows, shares this one handle.
+        let name = context.broker.partitions.shared_topic_name(name);
         for partition in &topic.partitions {
             pending.push(plan_partition_read(context, &name, id, error, partition).await);
         }
@@ -1033,9 +1036,14 @@ mod tests {
                 follower_id,
                 follower_broker_epoch: -1,
             };
-            let super::PlannedRead { read, .. } =
-                super::plan_partition_read(&context, TOPIC, super::WireUuid::ZERO, None, &request)
-                    .await;
+            let super::PlannedRead { read, .. } = super::plan_partition_read(
+                &context,
+                &TOPIC.into(),
+                super::WireUuid::ZERO,
+                None,
+                &request,
+            )
+            .await;
             assert!(read.out == want, "{name}: got {:?}", read.out);
         }
         broker_handle.shutdown().await;
@@ -1159,9 +1167,14 @@ mod tests {
             partition_max_bytes: 1024,
         };
 
-        let super::PlannedRead { read, .. } =
-            super::plan_partition_read(&context, "orders", super::WireUuid::ZERO, None, &request)
-                .await;
+        let super::PlannedRead { read, .. } = super::plan_partition_read(
+            &context,
+            &"orders".into(),
+            super::WireUuid::ZERO,
+            None,
+            &request,
+        )
+        .await;
 
         assert!(read.out.preferred_read_replica == 2);
         assert!(read.out.error_code == crate::codes::NONE);

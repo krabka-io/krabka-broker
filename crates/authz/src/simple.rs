@@ -102,16 +102,14 @@ impl Authorizer for SimpleAclAuthorizer {
         let mut saw_deny = false;
         let mut has_resource_acls = false;
         if !super_user {
-            let user_pattern = format!("User:{}", req.principal.name);
-            let host_str = jdk_host_address(req.host.ip());
             let cidr_hosts_supported = source.cidr_hosts_supported();
             for entry in source.matching_acls(req.resource_type, req.resource_name) {
                 if !matches_resource(entry, req.resource_type, req.resource_name) {
                     continue;
                 }
                 has_resource_acls = true;
-                if !matches_principal(entry, &user_pattern)
-                    || !matches_host(entry, &host_str, req.host.ip(), cidr_hosts_supported)
+                if !matches_principal(entry, &req.principal.name)
+                    || !matches_host(entry, req.host.ip(), cidr_hosts_supported)
                     || !matches_operation(entry.operation, req.operation, entry.permission_type)
                 {
                     continue;
@@ -199,14 +197,12 @@ impl Authorizer for SimpleAclAuthorizer {
             span.record("decision", "allow-hardcode");
             return AuthorizationResult::Allow;
         }
-        let user_pattern = format!("User:{}", principal.name);
-        let host_str = jdk_host_address(host.ip());
         let cidr_hosts_supported = source.cidr_hosts_supported();
         let applicable: Vec<_> = source
             .acls_of_type(resource_type)
             .filter(|entry| {
-                matches_principal(entry, &user_pattern)
-                    && matches_host(entry, &host_str, host.ip(), cidr_hosts_supported)
+                matches_principal(entry, &principal.name)
+                    && matches_host(entry, host.ip(), cidr_hosts_supported)
                     && matches_operation(entry.operation, operation, entry.permission_type)
             })
             .collect();

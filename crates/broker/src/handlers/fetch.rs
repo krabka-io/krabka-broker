@@ -40,6 +40,7 @@ mod session;
 #[cfg(test)]
 mod test_support;
 mod throttle;
+mod wait;
 
 #[cfg(test)]
 mod broker_limit_tests;

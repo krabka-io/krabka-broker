@@ -252,16 +252,6 @@ impl WalIndexCache {
             .collect()
     }
 
-    /// Object keys referenced by at least one projected range.
-    #[must_use]
-    pub(crate) fn referenced_objects(&self) -> HashSet<String> {
-        self.by_topic_partition
-            .values()
-            .flat_map(BTreeMap::values)
-            .map(|range| range.object_key.clone())
-            .collect()
-    }
-
     /// Object UUIDs whose publication is in flight.
     #[must_use]
     pub(crate) fn reserved_objects(&self) -> HashSet<Uuid> { self.object_reservations.clone() }
@@ -396,7 +386,9 @@ impl WalIndexCache {
     }
 }
 
-fn object_id_from_key(object_key: &str) -> Option<Uuid> {
+/// The UUID an object key `.../<uuid>.ckwl` names, which a reservation is
+/// keyed by.
+pub(crate) fn object_id_from_key(object_key: &str) -> Option<Uuid> {
     let filename = object_key.rsplit('/').next()?;
     Uuid::parse_str(filename.strip_suffix(".ckwl")?).ok()
 }
@@ -804,14 +796,14 @@ mod tests {
             format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![shared],
         });
-        assert!(cache.referenced_objects() == ["new".into(), "old".into()].into());
+        assert!(["new", "old"].map(|key| cache.references_object(key)) == [true, true]);
 
         cache.remove(WalIndexKey {
             topic_id: Uuid::from_u128(1),
             partition: 1,
             first_offset: 0,
         });
-        assert!(cache.referenced_objects() == ["new".into()].into());
+        assert!(["new", "old"].map(|key| cache.references_object(key)) == [true, false]);
     }
 
     /// One keyed index event for the range `entry(0, 0, 4)`.

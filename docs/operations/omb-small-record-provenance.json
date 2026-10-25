@@ -1,0 +1,68 @@
+{
+  "recorded_ns": 1792863755043110202,
+  "broker_baseline_commit": "782f5b50268679e428f2da5118735ba3f87c4dda",
+  "omb_commit": "5b1fa70951a323da26bd587174b58bb2c65b0b5c",
+  "site_commit": "329bbeb5d3f03ef7ae2f55e86ffdee4a8585f225",
+  "kernel": {
+    "system": "Linux",
+    "node": "577aed780695",
+    "release": "6.18.55",
+    "version": "#1 SMP Wed Oct 14 19:45:18 UTC 2026",
+    "machine": "x86_64",
+    "processor": ""
+  },
+  "java": "openjdk version \"21.0.12.1\" 2026-08-18\nOpenJDK Runtime Environment (build 21.0.12.1+1-1-deb13u1-Debian)\nOpenJDK 64-Bit Server VM (build 21.0.12.1+1-1-deb13u1-Debian, mixed mode, sharing)",
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "cpu_max": "400000 100000",
+  "memory_max": "17179869184",
+  "record_validation": "Native diagnostic client checks consumed counts, offsets and per-producer sequence; Kafka client validates record CRCs. OMB uses the upstream Kafka 3.6.1 client with the common commit-coalescing patch.",
+  "omb_patch_sha256": "2745718b278c5e655dd656faca7465fa7d1629834fd2a50dafa6ebdb054688ec",
+  "binaries": {
+    "krabka-candidate": "309d0d6c4bb067741cc74fc837b1de31f87ae8d8f4c478ad682fb98e661f95b7",
+    "krabka-baseline": "497373feb4d179514f83506997ac210eb1753f2e9a73aea84054ff9069f80ef4",
+    "krabka-candidate-v2": "5e8d14d10ecb437d616a7eb11729808ee18c79c742f8010f501ffd8bb3e9e1fd",
+    "krabka-candidate-v3": "02e474c9526739bce03699ac6dd7b38fdbebbc2b5b6ed4fe275f2c9b291c68e4",
+    "krabka-candidate-v4": "bf78ffafbb93b8d74451b6b98c66f4b13a76f17cb7e008e6ae85ab850fa24c59"
+  },
+  "redpanda_image": [
+    "docker.redpanda.com/redpandadata/redpanda@sha256:468bd13a9f2bd24794cb7fddc867c767fb1008b9a07b297b89fde48c564d7d96"
+  ],
+  "limits": "Diagnostic host: shared 4 CPU quota and 16 GiB RAM; 32 GiB filesystem. Krabka has 2 Tokio workers per broker; Redpanda has 2 shards and 1 GiB application memory per broker. Java client ActiveProcessorCount=2 and Xmx2g. Durations and segment sizes are reduced from the upstream suite; this is not a reproduction of the original host or a broker ranking.",
+  "patches": {
+    "candidate-v3.patch": "8102dc6866ae3b9752712ed024602de6f08a0810b7e21007aba45b94c9b4e083",
+    "candidate-v4-code.patch": "c8dc9a6ae0da4b75d2723f505285e03ec6b72c8832cacf4595bad10784d54587"
+  },
+  "final_build_command": "cargo build --locked --release -p krabka-broker --example profile_server --example loadgen --bin krabka-broker",
+  "validation": {
+    "storage_tests": 909,
+    "fetch_writer_tests": 20,
+    "broker_integration_tests": 21,
+    "telemetry_unit_tests": 77,
+    "telemetry_http_tests": 4,
+    "clippy": "cargo clippy --locked --workspace --all-targets -- -D warnings: passed",
+    "duplication": "passed",
+    "imported_paths": "passed"
+  },
+  "redpanda_final_storage_min_free_bytes": 1073741824,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+  "release_optimization": "Repository release profile; no additional RUSTFLAGS or release-profile overrides.",
+  "final_matrix": "profile-load/matrix-final-v4.json",
+  "native_client_go": "1.27.3",
+  "native_gomaxprocs": 2,
+  "invalid_trials": [
+    "base-rf3-3prod-cold: filesystem guard before complete adaptive run",
+    "rp-rf3-3prod-fixed-350k: Redpanda default 5 GiB storage reserve caused storage errors",
+    "redpanda-rf3-latency-1p-1kb-40k-disk-invalid: filesystem guard before full measurement; unchanged workload retried after freeing build cache"
+  ],
+  "supplemental_control_matrix": "profile-load/matrix-fixedheap-control.json",
+  "primary_completed_trials": 55,
+  "supplemental_completed_trials": 2,
+  "native_validated_records": 792216006,
+  "final_code_patch_verified_sha256": "c8dc9a6ae0da4b75d2723f505285e03ec6b72c8832cacf4595bad10784d54587"
+}

@@ -322,12 +322,10 @@ async fn run_blocking_read(
 ) -> Result<ServedRecords, BrokerError> {
     let read = BlockingRead { ..*read };
     let fetch_offset = read.fetch_offset;
-    // A read of what this process wrote into the active segment finds it in
-    // the page cache. An older one may go to the disk, so it does not run on
-    // a runtime worker.
+    // The active segment can serve recent bytes from the page cache or its direct-write tail cache. Older reads still run away from the runtime worker.
     let served = run_page_cache_io(
         log,
-        |log| fetch_offset >= log.written_since_open_from(),
+        |log| !log.read_may_block(fetch_offset),
         move |log| read_records(log, &read),
     )
     .await

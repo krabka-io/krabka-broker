@@ -129,19 +129,17 @@ pub trait MetadataEventLog: Send + Sync {
 
     /// Append a keyed value or tombstone to a compacted metadata topic.
     ///
-    /// The default keeps existing append-only implementations small. A
-    /// transport used for compaction must override this method.
+    /// The default rejects keyed publication. A transport used for compaction
+    /// must override this method.
     async fn publish_keyed(
         &self,
-        partition: i32,
-        key: Bytes,
-        event: Option<Bytes>,
+        _partition: i32,
+        _key: Bytes,
+        _event: Option<Bytes>,
     ) -> Result<i64, MetadataLogError> {
-        let event = event.ok_or_else(|| {
-            MetadataLogError::Other("metadata log does not support tombstones".into())
-        })?;
-        let _ = key;
-        self.publish(partition, event).await
+        Err(MetadataLogError::Other(
+            "metadata log does not support keyed publication".into(),
+        ))
     }
 
     /// Append a group of keyed records and wait until every one of them is
@@ -242,15 +240,19 @@ pub trait MetadataEventLog: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {
+        super::*,
+        std::sync::atomic::{AtomicUsize, Ordering},
+    };
 
-    struct AppendOnlyLog;
+    struct AppendOnlyLog(AtomicUsize);
 
     #[async_trait]
     impl MetadataEventLog for AppendOnlyLog {
         fn partition_count(&self) -> i32 { 1 }
 
         async fn publish(&self, _partition: i32, _event: Bytes) -> Result<i64, MetadataLogError> {
+            self.0.fetch_add(1, Ordering::Relaxed);
             Ok(7)
         }
 
@@ -265,31 +267,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_keyed_publish_delegates_values_and_rejects_tombstones() {
-        let log = AppendOnlyLog;
+    async fn default_keyed_publish_rejects_values_and_tombstones_without_appending() {
+        let log = AppendOnlyLog(AtomicUsize::new(0));
         assert2::assert!(log.partition_count() == 1);
         assert2::assert!(log.high_water_marks().await.unwrap() == vec![0]);
-        let offset = log
+        assert2::assert!(
+            log.publish(0, Bytes::from_static(b"append-only"))
+                .await
+                .unwrap()
+                == 7
+        );
+        let value_error = log
             .publish_keyed(
                 0,
                 Bytes::from_static(b"key"),
                 Some(Bytes::from_static(b"value")),
             )
             .await
-            .unwrap();
-        assert2::assert!(offset == 7);
+            .unwrap_err();
+        assert2::assert!(
+            value_error
+                .to_string()
+                .contains("does not support keyed publication")
+        );
 
         let error = log
             .publish_keyed(0, Bytes::from_static(b"key"), None)
             .await
             .unwrap_err();
-        assert2::assert!(error.to_string().contains("does not support tombstones"));
+        assert2::assert!(
+            error
+                .to_string()
+                .contains("does not support keyed publication")
+        );
+        assert2::assert!(log.0.load(Ordering::Relaxed) == 1);
     }
 
     #[tokio::test]
     async fn default_range_read_refuses_without_visiting() {
         let mut visits = 0;
-        let error = AppendOnlyLog
+        let error = AppendOnlyLog(AtomicUsize::new(0))
             .visit_range(0, 0, 1, &mut |_record| {
                 visits += 1;
                 Ok(())

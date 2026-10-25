@@ -105,6 +105,9 @@ pub struct Segment {
     /// the batch headers one small read at a time and sending the run from
     /// the file. See `read_raw_desc`.
     wrote_direct: bool,
+    /// Unsupported page-cache probes are remembered per open segment: other
+    /// segments can live on filesystems with different NOWAIT capabilities.
+    cache_probe_unsupported: std::sync::atomic::AtomicBool,
 }
 
 /// Verbatim, decode-free output of [`Segment::read_raw`].

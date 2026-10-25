@@ -3,11 +3,11 @@
 use {
     super::wal_index::{
         WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexCache, WalIndexEntry,
-        WalIndexKey, WalObjectReservationKey,
+        WalIndexKey, WalObjectReservationKey, object_id_from_key,
     },
     crate::{error::BrokerError, metrics::BrokerMetrics},
     bytes::Bytes,
-    futures_util::StreamExt,
+    futures_util::{StreamExt, future::try_join_all},
     krabka_remote_storage::diskless::index::{
         REPLAY_FENCE_KEY, WAL_OBJECT_RESERVATION_PARTITION, wal_index_key_version,
     },
@@ -327,56 +327,57 @@ impl DisklessIndexLog {
     #[must_use]
     pub(crate) fn cache(&self) -> Arc<Mutex<WalIndexCache>> { self.cache.clone() }
 
-    /// Reconcile the live projection through a fence committed to every index
-    /// partition. A failed or stalled partition makes destructive callers
-    /// decline the sweep.
+    /// Bring the projection up to a fence committed to every index partition
+    /// now, so it holds every index record committed before this call.
+    ///
+    /// `timeout` bounds the whole wait, fence publication included: a stalled
+    /// index partition makes the caller skip its destructive work and return
+    /// to the flusher loop, never hold it up. Returns `false` when the view
+    /// cannot be established in time or the projection is invalid.
     pub(crate) async fn wait_for_fresh_view(&self, timeout: Duration) -> bool {
+        tokio::time::timeout(timeout, self.fresh_view())
+            .await
+            .unwrap_or(false)
+    }
+
+    async fn fresh_view(&self) -> bool {
         if !self.is_valid() {
             return false;
         }
-        let mut targets = vec![-1; usize::try_from(self.log.partition_count()).unwrap_or(0)];
-        for partition in 0..self.log.partition_count() {
-            let offset = match self
-                .log
-                .publish_keyed(
-                    partition,
-                    Bytes::from_static(REPLAY_FENCE_KEY),
-                    Some(Bytes::new()),
-                )
-                .await
-            {
-                Ok(offset) => offset,
-                Err(error) => {
-                    tracing::warn!(%error, partition, "diskless index freshness fence failed");
-                    return false;
-                }
-            };
-            targets[usize::try_from(partition).expect("partition non-negative")] = offset;
-        }
-        let mut consumed = self.consumed_offsets.clone();
-        tokio::time::timeout(timeout, async {
-            loop {
-                if !self.is_valid() {
-                    return false;
-                }
-                let reached = {
-                    let offsets = consumed.borrow_and_update();
-                    offsets.len() == targets.len()
-                        && offsets
-                            .iter()
-                            .zip(&targets)
-                            .all(|(seen, target)| seen >= target)
-                };
-                if reached {
-                    return true;
-                }
-                if consumed.changed().await.is_err() {
-                    return false;
-                }
+        let fences = (0..self.log.partition_count()).map(|partition| {
+            self.log.publish_keyed(
+                partition,
+                Bytes::from_static(REPLAY_FENCE_KEY),
+                Some(Bytes::new()),
+            )
+        });
+        let targets = match try_join_all(fences).await {
+            Ok(targets) => targets,
+            Err(error) => {
+                tracing::warn!(%error, "diskless index freshness fence failed");
+                return false;
             }
-        })
-        .await
-        .unwrap_or(false)
+        };
+        let mut consumed = self.consumed_offsets.clone();
+        loop {
+            if !self.is_valid() {
+                return false;
+            }
+            let reached = {
+                let offsets = consumed.borrow_and_update();
+                offsets.len() == targets.len()
+                    && offsets
+                        .iter()
+                        .zip(&targets)
+                        .all(|(seen, target)| seen >= target)
+            };
+            if reached {
+                return true;
+            }
+            if consumed.changed().await.is_err() {
+                return false;
+            }
+        }
     }
 
     /// Commit an object reservation before its bytes are put. The existing
@@ -734,11 +735,6 @@ fn index_partition(key: &[u8], partitions: i32) -> i32 {
     });
     i32::try_from(hash % u32::try_from(partitions).expect("positive partition count"))
         .expect("index partition fits i32")
-}
-
-fn object_id_from_key(object_key: &str) -> Option<uuid::Uuid> {
-    let filename = object_key.rsplit('/').next()?;
-    uuid::Uuid::parse_str(filename.strip_suffix(".ckwl")?).ok()
 }
 
 fn object_reservation_key(object_key: &str) -> Result<(uuid::Uuid, bytes::Bytes), BrokerError> {

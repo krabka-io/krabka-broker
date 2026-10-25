@@ -14,6 +14,7 @@ use {
         request::EffectivePartition,
         response::{GroupedResponses, group_into_topic_responses},
         throttle::leader_withholds,
+        wait::{Wait, WaitFut},
     },
     crate::{
         broker::Broker,
@@ -26,8 +27,7 @@ use {
     krabka_log::Offset,
     krabka_protocol::owned::fetch_response::PartitionData,
     krabka_units::convert::ByteSizeExt as _,
-    std::{sync::Arc, time::Duration},
-    tokio::sync::Notify,
+    std::time::Duration,
 };
 
 /// The initial pass and a long-poll re-read use the same planned read inputs.
@@ -47,16 +47,6 @@ fn planned_read_request(
         sendfile_capable,
         sendfile_min_bytes: broker.config.sendfile_min.bytes_usize(),
     }
-}
-
-type WaitFut = std::pin::Pin<Box<dyn std::future::Future<Output = Woken> + Send>>;
-
-/// The waiter that fired: which pending read it belongs to, and the notifier
-/// it parked on, so the poll loop can arm a replacement on the same notifier
-/// before it reads.
-struct Woken {
-    pending: usize,
-    notify: Arc<Notify>,
 }
 
 /// What a fetch that has already read once needs in order to decide whether to
@@ -188,38 +178,22 @@ impl LongPollState {
     }
 }
 
-/// Arms one waiter on `notify` and tags it with the pending entry it belongs
-/// to.
-///
-/// The waiter registers here rather than on its first poll. Every producer
-/// path signals with `notify_waiters`, which wakes only the waiters already
-/// registered and leaves no permit behind, so a waiter armed after the read
-/// pass would miss an append that landed during it and would then sleep out
-/// the whole `max_wait_ms`.
-fn arm_wait(pending: usize, notify: Arc<Notify>) -> WaitFut {
-    let mut notified = Box::pin(Arc::clone(&notify).notified_owned());
-    notified.as_mut().enable();
-    Box::pin(async move {
-        notified.await;
-        Woken { pending, notify }
-    })
-}
-
-/// Arms every planned partition's waiters, before any of them is read.
-///
-/// A fetch that then finds enough bytes on the first pass drops the whole set
-/// unused, so a wake set costs one waiter-list insertion and one removal per
-/// notifier whether or not the fetch parks. That is the price of the guarantee
-/// -- registering after the read is what loses an append -- and it is small
-/// beside the per-partition log read the same pass makes. Only a fetch that
-/// asked to wait pays it at all: `max_wait_ms == 0` arms nothing.
-fn arm_waits(pending: &[PendingRead]) -> Vec<WaitFut> {
-    let mut waits = Vec::new();
+/// Capture every planned partition's broadcast generation before any read.
+/// A fetch answered by the first pass needs neither per-notifier allocations
+/// nor waiter-list insertion/removal. Only a fetch that parks boxes and polls
+/// the captured futures. `max_wait_ms == 0` captures nothing.
+fn arm_waits(pending: &[PendingRead]) -> Vec<Wait> {
+    let capacity = pending
+        .iter()
+        .filter(|read| read.partition.is_some())
+        .map(|read| if read.is_follower_fetch { 1 } else { 3 })
+        .sum();
+    let mut waits = Vec::with_capacity(capacity);
     for (index, read) in pending.iter().enumerate() {
         let Some(part) = read.partition.as_ref() else {
             continue;
         };
-        waits.push(arm_wait(index, part.append_notify.clone()));
+        waits.push(Wait::new(index, part.append_notify.clone()));
         // KIP-392: a consumer reading from a follower becomes unblocked
         // when the follower's HW advances (via set_follower_hw), not only
         // on raw append. Follower (inter-broker) fetches don't need this.
@@ -231,8 +205,8 @@ fn arm_waits(pending: &[PendingRead]) -> Vec<WaitFut> {
         // consumer sleeps out its whole long poll in the one case the
         // feature exists for.
         if !read.is_follower_fetch {
-            waits.push(arm_wait(index, part.hw_advance_notify.clone()));
-            waits.push(arm_wait(index, part.delivery.advance_notify.clone()));
+            waits.push(Wait::new(index, part.hw_advance_notify.clone()));
+            waits.push(Wait::new(index, part.delivery.advance_notify.clone()));
         }
     }
     waits
@@ -252,14 +226,14 @@ fn arm_waits(pending: &[PendingRead]) -> Vec<WaitFut> {
 /// partition, and each wake revalidates every partition of the fetch. The
 /// revalidation at the start of the long poll catches a leadership change
 /// that lands before this arm.
-fn arm_leadership_waits(pending: &[PendingRead]) -> Vec<WaitFut> {
+fn arm_leadership_waits(pending: &[PendingRead]) -> Vec<Wait> {
     pending
         .iter()
         .enumerate()
         .filter(|(_, read)| read.is_follower_fetch && read.fetch_only_leader)
         .filter_map(|(index, read)| {
             let part = read.partition.as_ref()?;
-            Some(arm_wait(index, part.hw_advance_notify.clone()))
+            Some(Wait::new(index, part.hw_advance_notify.clone()))
         })
         .collect()
 }
@@ -468,12 +442,13 @@ pub(super) async fn execute_pending_reads(
 async fn long_poll_then_reread(
     broker: &Broker,
     pending: &mut [PendingRead],
-    mut waits: Vec<WaitFut>,
+    waits: Vec<Wait>,
     state: &mut LongPollState,
     phases: &RequestPhases,
 ) {
     let max_wait = Duration::from_millis(u64::from(u32::try_from(state.max_wait_ms).unwrap_or(0)));
     let deadline = tokio::time::Instant::now() + max_wait;
+    let mut waits: Vec<WaitFut> = waits.into_iter().map(Wait::boxed).collect();
     loop {
         if revalidate_epochs(broker, pending).await
             || has_read_error(pending)
@@ -501,10 +476,9 @@ async fn long_poll_then_reread(
             continue;
         };
         waits = rest;
-        // Arm the replacement before the read and not after it, for the reason
-        // `arm_wait` gives: an append landing while this read runs would
-        // otherwise leave nothing registered to catch it.
-        waits.push(arm_wait(woken.pending, woken.notify));
+        // Capture the next broadcast generation before reading again, so an
+        // append during that read is observed on the next poll.
+        waits.push(Wait::new(woken.pending, woken.notify).boxed());
         reread_woken(broker, pending, woken.pending, state, phases).await;
     }
 }
@@ -1586,7 +1560,7 @@ mod tests {
         });
 
         let request_for = |topic_id: WireUuid| super::PendingRead {
-            topic_name: String::new(),
+            topic_name: "".into(),
             topic_id,
             partition_index: 0,
             current_leader_epoch: 0,
@@ -1989,7 +1963,7 @@ mod tests {
     async fn check_blocked_poll_completes(
         broker: &Broker,
         pending: &mut [super::PendingRead],
-        waits: Vec<super::WaitFut>,
+        waits: Vec<super::Wait>,
         #[builder(into, default = FetchMinimumBytes (4096))] minimum: FetchMinimumBytes,
         #[builder(into, default = FetchWaitMillis (30_000))] wait: FetchWaitMillis,
         #[builder(default = "the long poll completes promptly")] failure: &'_ str,
@@ -2194,7 +2168,7 @@ mod tests {
         error_code: i16,
     ) -> super::PendingRead {
         super::PendingRead::planned(
-            topic,
+            &topic.into(),
             WireUuid::ZERO,
             request,
             FetchMode {

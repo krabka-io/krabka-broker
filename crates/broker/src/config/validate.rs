@@ -220,6 +220,7 @@ impl BrokerConfig {
         };
 
         let consumer = &self.next_gen_consumer_group;
+        consumer.validate_assignors()?;
         validate_group(
             "consumer group",
             consumer.session_timeout,
@@ -865,6 +866,17 @@ mod tests {
         let mut config = BrokerConfig::default();
         config.streams_group.max_size = 0;
         assert_invalid_runtime(&config, "streams group maximum size must be positive");
+    }
+
+    #[test]
+    fn rejects_an_empty_consumer_group_assignor_registry() {
+        let mut config = BrokerConfig::default();
+        config.next_gen_consumer_group.assignors.clear();
+
+        assert_invalid_runtime(
+            &config,
+            "consumer group must have at least one registered assignor",
+        );
     }
 
     #[test]

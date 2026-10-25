@@ -250,20 +250,18 @@ async fn referenced_wal_restores_at_original_offsets_and_orphans_are_ignored() {
 }
 
 #[tokio::test]
-async fn versioned_namespace_object_restores_at_original_offsets() {
-    let RestoreFixture {
+async fn a_prefixed_persisted_key_restores_without_reapplying_the_prefix() {
+    let UnwrittenFixture {
         archive,
         target,
         capture_path,
-    } = restore_fixture(true, false);
-    let key = "krabka-diskless-wal-v2/1/a.ckwl";
+        mut capture,
+    } = unwritten_fixture(true, false);
     let old_path = archive.path().join("diskless-wal/1/a.ckwl");
-    let new_path = archive.path().join(key);
+    let new_path = archive.path().join("clusters/one/diskless-wal/1/a.ckwl");
     std::fs::create_dir_all(new_path.parent().unwrap()).unwrap();
-    std::fs::rename(old_path, new_path).unwrap();
-    let mut capture: DisklessWalCapture =
-        serde_json::from_slice(&std::fs::read(&capture_path).unwrap()).unwrap();
-    capture.partitions[0].ranges[0].object_key = key.into();
+    std::fs::rename(old_path, &new_path).unwrap();
+    capture.partitions[0].ranges[0].object_key = "clusters/one/diskless-wal/1/a.ckwl".to_owned();
     write_capture(&capture_path, &capture);
 
     restore_and_check_full_diskless(archive.path(), target.path(), &capture_path).await;

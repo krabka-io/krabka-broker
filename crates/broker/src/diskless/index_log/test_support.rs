@@ -16,13 +16,17 @@ use {
     bytes::Bytes,
     futures_util::{FutureExt as _, StreamExt as _},
     krabka_ids::PartitionIndex,
+    krabka_remote_storage::diskless::index::REPLAY_FENCE_KEY,
     krabka_remote_storage_topic::{
         AssignmentHandle, KeyedEvent, MetadataEventLog, MetadataEventStream, MetadataLogError,
         PartitionStart,
     },
     std::{
         collections::HashSet,
-        sync::{Arc, Mutex as StdMutex},
+        sync::{
+            Arc, Mutex as StdMutex,
+            atomic::{AtomicBool, Ordering},
+        },
         time::Duration,
     },
 };
@@ -69,6 +73,66 @@ impl MetadataEventLog for PacedReplayLog {
             event
         });
         (Box::pin(paced), handle)
+    }
+}
+
+/// Wraps a [`MetadataEventLog`] and stalls one of two things on demand, after
+/// the projection has started: what its subscription delivers, as a broker
+/// whose index fetch loop wedges does, or the replay fences published on it,
+/// as a broker whose Produce to an index partition hangs does.
+pub(crate) struct StallableLog {
+    inner: Arc<dyn MetadataEventLog>,
+    delivery_stalled: Arc<AtomicBool>,
+    fences_stalled: AtomicBool,
+}
+
+impl StallableLog {
+    pub(crate) fn new(inner: Arc<dyn MetadataEventLog>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            delivery_stalled: Arc::new(AtomicBool::new(false)),
+            fences_stalled: AtomicBool::new(false),
+        })
+    }
+
+    /// Deliver nothing more, without closing the stream.
+    pub(crate) fn stall_delivery(&self) { self.delivery_stalled.store(true, Ordering::SeqCst); }
+
+    /// Never acknowledge a replay fence published from here on.
+    pub(crate) fn stall_fences(&self) { self.fences_stalled.store(true, Ordering::SeqCst); }
+}
+
+#[krabka_macros::metadata_log_delegate(krabka_remote_storage_topic, keyed)]
+#[async_trait]
+impl MetadataEventLog for StallableLog {
+    fn subscribe(
+        &self,
+        assignment: Vec<PartitionStart>,
+    ) -> (MetadataEventStream, Arc<dyn AssignmentHandle>) {
+        let (stream, handle) = self.inner.subscribe(assignment);
+        let stalled = Arc::clone(&self.delivery_stalled);
+        let gated = stream.then(move |event| {
+            let stalled = Arc::clone(&stalled);
+            async move {
+                if stalled.load(Ordering::SeqCst) {
+                    std::future::pending::<()>().await;
+                }
+                event
+            }
+        });
+        (Box::pin(gated), handle)
+    }
+
+    async fn publish_keyed(
+        &self,
+        partition: i32,
+        key: Bytes,
+        value: Option<Bytes>,
+    ) -> Result<i64, MetadataLogError> {
+        if self.fences_stalled.load(Ordering::SeqCst) && key.as_ref() == REPLAY_FENCE_KEY {
+            std::future::pending::<()>().await;
+        }
+        self.inner.publish_keyed(partition, key, value).await
     }
 }
 

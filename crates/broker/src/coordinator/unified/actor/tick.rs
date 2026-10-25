@@ -456,23 +456,26 @@ mod tests {
 
         let topic = krabka_protocol::primitives::uuid::Uuid([42; 16]);
         let clock = ManualMonotonicClock::new_shared();
-        let coord = Arc::new(GroupCoordinator::new(
-            NextGenConfig {
-                timer: clock.new_timer(),
-                session_expiry_tick: Duration::from_hours(1),
-                ..NextGenConfig::assigning_at_once()
-            },
-            ShareGroupConfig::assigning_at_once(),
-            Arc::new(StaticMetadata {
-                input: ReconcileInput {
-                    topic_id_by_name: [("t".to_string(), topic)].into(),
-                    partitions_per_topic: [(topic, 2)].into(),
-                    ..Default::default()
+        let coord = Arc::new(
+            GroupCoordinator::new(
+                NextGenConfig {
+                    timer: clock.new_timer(),
+                    session_expiry_tick: Duration::from_hours(1),
+                    ..NextGenConfig::assigning_at_once()
                 },
-            }),
-            Arc::new(InMemoryOffsetsLog::default()),
-            StreamsGroupConfig::default(),
-        ));
+                ShareGroupConfig::assigning_at_once(),
+                Arc::new(StaticMetadata {
+                    input: ReconcileInput {
+                        topic_id_by_name: [("t".to_string(), topic)].into(),
+                        partitions_per_topic: [(topic, 2)].into(),
+                        ..Default::default()
+                    },
+                }),
+                Arc::new(InMemoryOffsetsLog::default()),
+                StreamsGroupConfig::default(),
+            )
+            .expect("valid test assignor configuration"),
+        );
         let handle = coord.get_or_create_consumer("g");
         let heartbeat = |member_id: &'static str,
                          member_epoch: i32,
@@ -551,17 +554,20 @@ mod tests {
         let clock = ManualMonotonicClock::new_shared();
         let log = Arc::new(InMemoryOffsetsLog::default());
         let tick_interval = Duration::from_millis(37);
-        let coord = Arc::new(GroupCoordinator::new(
-            NextGenConfig {
-                timer: clock.new_timer(),
-                session_expiry_tick: tick_interval,
-                ..NextGenConfig::assigning_at_once()
-            },
-            ShareGroupConfig::assigning_at_once(),
-            empty_metadata(),
-            log.clone(),
-            StreamsGroupConfig::default(),
-        ));
+        let coord = Arc::new(
+            GroupCoordinator::new(
+                NextGenConfig {
+                    timer: clock.new_timer(),
+                    session_expiry_tick: tick_interval,
+                    ..NextGenConfig::assigning_at_once()
+                },
+                ShareGroupConfig::assigning_at_once(),
+                empty_metadata(),
+                log.clone(),
+                StreamsGroupConfig::default(),
+            )
+            .expect("valid test assignor configuration"),
+        );
 
         let handle = coord.get_or_create_group("g", GroupKindTag::Classic);
 

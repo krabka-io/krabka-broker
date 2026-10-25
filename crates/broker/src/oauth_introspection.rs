@@ -17,13 +17,23 @@ use {
 /// It uses HTTP Basic Auth with the operator-configured `client_id` and
 /// `client_secret`. It can also call a userinfo endpoint after a successful
 /// introspection.
-#[derive(Debug)]
 pub struct ReqwestIntrospectionClient {
     client: reqwest::Client,
     introspection_endpoint: String,
     userinfo_endpoint: Option<String>,
     client_id: String,
     client_secret: String,
+}
+
+impl std::fmt::Debug for ReqwestIntrospectionClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReqwestIntrospectionClient")
+            .field("introspection_endpoint", &self.introspection_endpoint)
+            .field("userinfo_endpoint", &self.userinfo_endpoint)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<redacted>")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Errors that can occur while the broker builds the introspection client at
@@ -68,7 +78,7 @@ impl ReqwestIntrospectionClient {
         // works from any entry point — the `let _ =` swallows
         // `AlreadySet` when a sibling caller (notably `Broker::start`)
         // won the race.
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
         let mut builder = reqwest::Client::builder().timeout(timeout.to_std());
         if let Some(path) = tls_trust {
@@ -137,6 +147,28 @@ mod tests {
         tokio::io::{AsyncReadExt as _, AsyncWriteExt as _},
         tokio_util::sync::CancellationToken,
     };
+
+    #[test]
+    fn debug_redacts_client_secret_for_concrete_and_trait_object() {
+        let sentinel = "oauth-client-secret-sentinel";
+        let client = ReqwestIntrospectionClient {
+            client: reqwest::Client::new(),
+            introspection_endpoint: "https://idp.example/introspect".into(),
+            userinfo_endpoint: Some("https://idp.example/userinfo".into()),
+            client_id: "broker-client".into(),
+            client_secret: sentinel.into(),
+        };
+        let concrete = format!("{client:?}");
+        assert!(!concrete.contains(sentinel));
+        assert!(concrete.contains("<redacted>"));
+        assert!(concrete.contains("broker-client"));
+        assert!(concrete.contains("idp.example/introspect"));
+
+        let erased: Arc<dyn IntrospectionClient> = Arc::new(client);
+        let trait_object = format!("{erased:?}");
+        assert!(!trait_object.contains(sentinel));
+        assert!(trait_object.contains("<redacted>"));
+    }
 
     /// Records observed requests so tests can assert on the bytes.
     #[derive(Debug, Default)]
@@ -520,7 +552,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let EcdsaPair { cert, .. } = ecdsa_pair_for_host("127.0.0.1");
         let ca_path = dir.path().join("ca.pem");
         std::fs::write(&ca_path, cert.pem()).unwrap();

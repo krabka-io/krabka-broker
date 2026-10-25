@@ -458,7 +458,7 @@ pub(super) async fn try_remote_read(
     let topic_id = uuid::Uuid::from_bytes(p.topic_id.0);
     let tp = krabka_remote_storage::TopicIdPartition::new(
         topic_id,
-        p.topic_name.clone(),
+        p.topic_name.to_string(),
         p.partition_index,
     );
     // Atomic stores the raw epoch; wrap into `LeaderEpoch` for the

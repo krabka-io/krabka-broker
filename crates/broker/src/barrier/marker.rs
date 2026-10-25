@@ -1,4 +1,4 @@
-//! The barrier marker control record.
+//! The broker-side builder for a barrier marker control record.
 //!
 //! A marker is a Kafka control batch with one record. Every Kafka consumer
 //! skips a control batch, so a marker is invisible to a client and only the
@@ -27,16 +27,15 @@
 //! values are what keep the marker out of the log's producer and transaction
 //! bookkeeping, and what make compaction keep it.
 
+pub use krabka_log::BarrierMarker;
+#[cfg(test)]
+pub(crate) use krabka_log::parse_barrier_marker;
 use {
     crate::{coordinator::unified::persistence::put_string, error::BrokerError},
     bytes::Bytes,
     krabka_log::{BARRIER_CONTROL_TYPE, Offset},
     krabka_protocol::{
-        ProtocolError,
-        primitives::{
-            fixed::{get_i16, get_i64, put_i16, put_i64},
-            string_bytes::get_string_owned,
-        },
+        primitives::fixed::{put_i16, put_i64},
         records::{Attributes, Record, RecordBatch},
     },
 };
@@ -46,18 +45,6 @@ const CONTROL_KEY_VERSION: i16 = 0;
 
 /// The marker value version.
 const VALUE_VERSION: i16 = 0;
-
-/// The contents of one barrier marker.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BarrierMarker {
-    /// The barrier group this marker belongs to.
-    pub group: String,
-    /// The epoch this marker stamps.
-    pub epoch: i64,
-    /// When the coordinator started the injection, in milliseconds since the
-    /// Unix epoch.
-    pub triggered_at: i64,
-}
 
 /// Build the control batch for one barrier marker.
 ///
@@ -103,58 +90,6 @@ pub(crate) fn build_barrier_batch(
             ..Record::default()
         }],
         ..RecordBatch::default()
-    })
-}
-
-/// Read the contents of a barrier marker back out of its record.
-///
-/// The `krabka barrier verify` path uses this function to prove that the
-/// marker at a cut's offset is the one the cut names.
-///
-/// # Errors
-/// Returns a [`ProtocolError`] when the record carries no key or no value,
-/// when the key is not a barrier control-record key, when either the key
-/// version or the value version is unsupported, or when the value is
-/// truncated, holds a non-UTF-8 group name, or has trailing bytes.
-pub fn parse_barrier_marker(record: &Record) -> Result<BarrierMarker, ProtocolError> {
-    let key = record
-        .key
-        .as_deref()
-        .ok_or(ProtocolError::InvalidValue("barrier marker has no key"))?;
-    let mut cur = key;
-    if get_i16(&mut cur)? != CONTROL_KEY_VERSION {
-        return Err(ProtocolError::InvalidValue(
-            "unsupported control record key version",
-        ));
-    }
-    if get_i16(&mut cur)? != BARRIER_CONTROL_TYPE {
-        return Err(ProtocolError::InvalidValue(
-            "control record is not a barrier marker",
-        ));
-    }
-
-    let value = record
-        .value
-        .as_deref()
-        .ok_or(ProtocolError::InvalidValue("barrier marker has no value"))?;
-    let mut cur = value;
-    if get_i16(&mut cur)? != VALUE_VERSION {
-        return Err(ProtocolError::InvalidValue(
-            "unsupported barrier marker version",
-        ));
-    }
-    let group = get_string_owned(&mut cur)?;
-    let epoch = get_i64(&mut cur)?;
-    let triggered_at = get_i64(&mut cur)?;
-    if !cur.is_empty() {
-        return Err(ProtocolError::InvalidValue(
-            "trailing bytes after barrier marker",
-        ));
-    }
-    Ok(BarrierMarker {
-        group,
-        epoch,
-        triggered_at,
     })
 }
 

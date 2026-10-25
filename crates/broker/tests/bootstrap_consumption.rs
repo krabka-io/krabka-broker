@@ -68,7 +68,7 @@ async fn bootstrap_records_provisions_scram_user() {
     // but the SCRAM client side of this test also performs PBKDF2 / SHA
     // through the same provider. Install it defensively so the test is
     // order-independent. `.ok()` swallows `AlreadySet`.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let dir = tempfile::tempdir().unwrap();
     // Format the log_dir into the *child* `boot` subdir — the CLI refuses

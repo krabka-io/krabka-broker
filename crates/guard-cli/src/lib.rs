@@ -39,10 +39,13 @@
 
 use {self::command::dispatch, clap::Parser};
 
+mod broker_codes;
 mod cli;
 mod command;
 mod failure;
 mod report;
+#[cfg(test)]
+mod signed_approval_interop;
 pub mod signing;
 pub mod verify;
 

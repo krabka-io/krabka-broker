@@ -47,13 +47,16 @@ fn coordinator(
             ..Default::default()
         },
     });
-    let coordinator = Arc::new(GroupCoordinator::new(
-        config,
-        ShareGroupConfig::assigning_at_once(),
-        metadata,
-        Arc::new(InMemoryOffsetsLog::default()),
-        StreamsGroupConfig::default(),
-    ));
+    let coordinator = Arc::new(
+        GroupCoordinator::new(
+            config,
+            ShareGroupConfig::assigning_at_once(),
+            metadata,
+            Arc::new(InMemoryOffsetsLog::default()),
+            StreamsGroupConfig::default(),
+        )
+        .expect("valid test assignor configuration"),
+    );
     let image = group_config_image(overrides);
     coordinator.set_metadata_source(fixed_source(image));
     coordinator

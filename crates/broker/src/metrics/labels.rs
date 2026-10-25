@@ -170,7 +170,7 @@ pub struct ClientSoftwareLabel {
 /// unknown api keys land under the `"Unknown"` sentinel label.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ApiKeyLabel {
-    pub api_key: String,
+    pub api_key: &'static str,
 }
 
 /// Per-barrier-group label set, paired with the `barrier_*` families.

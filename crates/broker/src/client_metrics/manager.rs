@@ -15,7 +15,7 @@ use {
     krabka_metadata::MetadataImage,
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
     std::{
-        collections::{BTreeMap, HashMap, hash_map::Entry},
+        collections::{HashMap, hash_map::Entry},
         sync::Mutex,
         time::{Duration, Instant},
     },
@@ -26,7 +26,9 @@ mod subscription;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::subscription::{compute_subscription, subscription_id};
+#[cfg(test)]
+pub(crate) use self::subscription::compute_subscription;
+pub(crate) use self::subscription::{Subscriptions, subscription_id};
 
 /// Connection-derived attributes: the ones subscription matching reads, and
 /// the id of the connection that carried the request, which
@@ -77,13 +79,13 @@ struct ClientInstance {
 
 impl ClientInstance {
     fn new(
-        image: &MetadataImage,
+        subscriptions: &Subscriptions,
         attrs: ClientAttributes,
         default_interval_ms: i32,
         subscription_version: u64,
         now: Instant,
     ) -> Self {
-        let subscription = compute_subscription(image, &attrs, default_interval_ms);
+        let subscription = subscriptions.compute(&attrs, default_interval_ms);
         let subscription_id = subscription_id(&subscription, attrs.client_instance_id);
         // `interval.ms` is validated in [100, 3_600_000], and the default is
         // positive, so the interval is always positive.
@@ -183,9 +185,10 @@ struct State {
     /// Kafka's `clientConnectionIdMap`: the instance that a connection created
     /// or rebuilt. Closing the connection drops that instance.
     connections: HashMap<String, Uuid>,
-    /// The subscriptions last seen in the metadata image, and a version that
-    /// moves on every change to them: Kafka's `subscriptionUpdateVersion`.
-    subscriptions: HashMap<String, BTreeMap<String, String>>,
+    /// The subscriptions last seen in the metadata image, compiled, and a
+    /// version that moves on every change to them: Kafka's
+    /// `subscriptionUpdateVersion`.
+    subscriptions: Subscriptions,
     subscription_version: u64,
     /// The push interval of an instance that no subscription lowers, which is
     /// what `interval.ms` reads as when no subscription sets it.
@@ -194,15 +197,7 @@ struct State {
 
 impl State {
     fn observe_subscriptions(&mut self, image: &MetadataImage) {
-        let unchanged = image.client_metrics_subscriptions().count() == self.subscriptions.len()
-            && image
-                .client_metrics_subscriptions()
-                .all(|(name, configs)| self.subscriptions.get(name) == Some(configs));
-        if !unchanged {
-            self.subscriptions = image
-                .client_metrics_subscriptions()
-                .map(|(name, configs)| (name.clone(), configs.clone()))
-                .collect();
+        if self.subscriptions.observe(image) {
             self.subscription_version += 1;
         }
     }
@@ -224,7 +219,7 @@ impl State {
             Entry::Vacant(slot) => {
                 self.connections.insert(attrs.connection_id.clone(), id);
                 slot.insert(ClientInstance::new(
-                    image,
+                    &self.subscriptions,
                     attrs.clone(),
                     default_interval_ms,
                     version,
@@ -241,8 +236,13 @@ impl State {
                         ..inst.attrs.clone()
                     };
                     self.connections.insert(attrs.connection_id.clone(), id);
-                    *inst =
-                        ClientInstance::new(image, first_attrs, default_interval_ms, version, now);
+                    *inst = ClientInstance::new(
+                        &self.subscriptions,
+                        first_attrs,
+                        default_interval_ms,
+                        version,
+                        now,
+                    );
                 }
                 inst
             }
@@ -272,7 +272,7 @@ impl ClientMetricsManager {
             state: Mutex::new(State {
                 instances: HashMap::new(),
                 connections: HashMap::new(),
-                subscriptions: HashMap::new(),
+                subscriptions: Subscriptions::default(),
                 subscription_version: 0,
                 default_interval_ms,
             }),

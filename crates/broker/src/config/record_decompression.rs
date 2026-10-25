@@ -15,6 +15,15 @@ impl BrokerConfig {
     /// Returns an invalid-runtime error when the configured values violate the
     /// fixed decompression security bounds.
     pub fn record_decompression_policy(&self) -> Result<RecordDecompressionPolicy, BrokerError> {
+        let defaults = RecordDecompressionPolicy::default();
+        if self.record_decompression_max_ratio == defaults.max_ratio()
+            && self.record_decompression_output_floor == defaults.output_floor()
+            && self.record_decompression_output_ceiling == defaults.output_ceiling()
+        {
+            // The shared defaults are already valid. Reconstructing them on
+            // every Produce request allocates the refined bounds validators.
+            return Ok(defaults);
+        }
         RecordDecompressionPolicy::new(
             self.record_decompression_max_ratio,
             self.record_decompression_output_floor,

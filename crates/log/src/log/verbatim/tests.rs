@@ -493,26 +493,18 @@ fn an_append_may_block_only_when_it_rolls_or_the_log_flushes() {
 }
 
 #[test]
-fn only_bytes_this_process_wrote_count_as_written_since_open() {
+fn buffered_reads_stay_inline_only_for_this_processes_active_appends() {
     let TempLog { dir, mut log } = test_log();
     log.append(&mut test_batch_at(0)).unwrap();
     log.append(&mut test_batch_at(1)).unwrap();
-    check!(log.written_since_open_from() == Offset(0));
+    check!(!log.read_may_block(Offset(0)));
     drop(log);
 
     let mut reopened = Log::open(dir.path(), LogConfig::default()).unwrap();
-    check!(reopened.written_since_open_from() == Offset(2));
+    check!(reopened.read_may_block(Offset(0)));
+    check!(!reopened.read_may_block(Offset(2)));
     assert!(reopened.roll().unwrap());
     reopened.append(&mut test_batch_at(2)).unwrap();
-    check!(reopened.written_since_open_from() == Offset(2));
-}
-
-#[test]
-fn a_preallocated_log_counts_nothing_as_written_since_open() {
-    let TempLog { dir: _dir, mut log } = configured_test_log(LogConfig {
-        segment_allocation: SegmentAllocation::Preallocate,
-        ..LogConfig::default()
-    });
-    log.append(&mut test_batch_at(0)).unwrap();
-    check!(log.written_since_open_from() == Offset(i64::MAX));
+    check!(reopened.read_may_block(Offset(0)));
+    check!(!reopened.read_may_block(Offset(2)));
 }

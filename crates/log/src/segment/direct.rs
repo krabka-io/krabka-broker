@@ -409,6 +409,21 @@ impl DirectWriter {
     /// Every byte below this is on the disk.
     pub(crate) fn written(&self) -> u64 { self.shared.queue.lock().unwrap().written }
 
+    /// Whether one append fits without waiting for the disk. The owner keeps the segment lock from this check through the append; completion can only make more room in the queue.
+    pub(crate) fn can_queue(&self, bytes: usize) -> bool {
+        let Some(logical) = self.tail.len().checked_add(bytes) else {
+            return false;
+        };
+        let whole = logical - logical % self.align.block;
+        self.shared.queue.try_lock().is_ok_and(|queue| {
+            queue.failure.is_none()
+                && queue
+                    .unwritten()
+                    .checked_add(whole)
+                    .is_some_and(|needed| needed <= self.queue_limit)
+        })
+    }
+
     /// Queue the concatenation of `parts` to be written at [`Self::end`].
     ///
     /// The whole blocks from the start of the partial last block to the last
@@ -1225,11 +1240,15 @@ mod tests {
         let (mut writer, io) = writer(block);
         writer.queue_limit = block;
         io.hold(true);
+        check!(writer.can_queue(block));
+        check!(!writer.can_queue(2 * block));
 
         let first = pattern(1, 600);
         writer.append(&[&first]).unwrap();
         check!(writer.end() == 600);
         check!(writer.written() == 0);
+        check!(!writer.can_queue(424));
+        check!(!writer.can_queue(usize::MAX));
 
         let second = pattern(2, 600);
         let appended = std::sync::atomic::AtomicBool::new(false);
@@ -1246,8 +1265,31 @@ mod tests {
             waiting.join().unwrap()
         });
         writer.drain().unwrap();
+        check!(writer.can_queue(block));
         check!(writer.written() == 1200);
         check!(file_contents(writer.file()) == padded(&[first, second].concat(), block));
+    }
+
+    #[test]
+    fn inline_queue_admission_refuses_contention_and_write_failure() {
+        let (writer, _io) = writer(512);
+        let mut queue = writer.shared.queue.lock().unwrap();
+        check!(!writer.can_queue(1));
+        queue.failure = Some((ErrorKind::StorageFull, "disk full".into()));
+        drop(queue);
+        check!(!writer.can_queue(1));
+    }
+
+    #[test]
+    fn an_oversized_queued_write_blocks_even_a_partial_block_append() {
+        let (mut writer, io) = writer(512);
+        writer.queue_limit = 512;
+        io.hold(true);
+        writer.append(&[&[7; 1024]]).unwrap();
+        check!(!writer.can_queue(1));
+        io.hold(false);
+        writer.drain().unwrap();
+        check!(writer.can_queue(1));
     }
 
     /// Writes finish out of order, and the written mark moves only over

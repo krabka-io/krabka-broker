@@ -195,7 +195,7 @@ pub(super) async fn recover_storage_and_groups(
         Arc::new(ImageMetadataProvider::new(Arc::clone(controller))),
         offsets_log,
         streams_group,
-    ));
+    )?);
     group_coordinator.set_node_id(config.node_id);
     let producer_ids = Arc::new(ProducerIdManager::clustered(
         config.node_id,

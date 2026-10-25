@@ -82,6 +82,57 @@ struct CompiledPattern<'a> {
     regex: regex::Regex,
 }
 
+/// The fewest patterns for which one [`regex::RegexSet`] pass beats testing
+/// each pattern on its own. Below it, a single pattern's literal-prefix
+/// optimizations make the per-pattern test faster even at 10 000 topics.
+const MIN_SET_PATTERNS: usize = 5;
+
+/// The fewest topic-pattern pairs for which building the set pays for itself:
+/// the build costs about as much as testing 50 000 pairs one by one.
+const MIN_SET_PAIRS: usize = 50_000;
+
+/// How the topics are tested against the compiled patterns. Both report, for
+/// a topic, exactly the patterns whose own regex matches it: a
+/// [`regex::RegexSet`] of the same anchored sources is defined to.
+enum PatternMatcher {
+    /// One `is_match` per pattern and topic.
+    EachPattern,
+    /// One pass of a set built from the patterns' sources, in `compiled` order.
+    Set(regex::RegexSet),
+}
+
+impl PatternMatcher {
+    fn new(compiled: &[CompiledPattern<'_>], topic_count: usize) -> Self {
+        if compiled.len() < MIN_SET_PATTERNS
+            || topic_count.saturating_mul(compiled.len()) < MIN_SET_PAIRS
+        {
+            return Self::EachPattern;
+        }
+        // A set can exceed the compiled-size limit that each pattern alone
+        // stays within; the per-pattern test then still applies.
+        regex::RegexSet::new(compiled.iter().map(|compiled| compiled.regex.as_str()))
+            .map_or(Self::EachPattern, Self::Set)
+    }
+
+    /// Calls `on_match` with the position in `compiled` of every pattern that
+    /// matches the whole of `topic`.
+    fn for_each_match(
+        &self,
+        compiled: &[CompiledPattern<'_>],
+        topic: &str,
+        mut on_match: impl FnMut(usize),
+    ) {
+        match self {
+            Self::EachPattern => compiled
+                .iter()
+                .enumerate()
+                .filter(|(_, compiled)| compiled.regex.is_match(topic))
+                .for_each(|(position, _)| on_match(position)),
+            Self::Set(set) => set.matches(topic).into_iter().for_each(on_match),
+        }
+    }
+}
+
 impl TopicRegexResolver for ImageTopicRegexResolver {
     fn resolve(&self, regexes: &BTreeSet<String>) -> HashMap<String, ResolvedRegularExpression> {
         let timestamp_ms = now_ms();
@@ -105,15 +156,16 @@ impl TopicRegexResolver for ImageTopicRegexResolver {
             .iter()
             .map(|pattern| (pattern, BTreeSet::new()))
             .collect();
+        let pattern_matcher = PatternMatcher::new(&compiled, self.image.topics().count());
         for topic in self.image.topics() {
-            for compiled in &compiled {
-                if compiled.regex.is_match(&topic.name) {
+            pattern_matcher.for_each_match(&compiled, &topic.name, |position| {
+                if let Some(compiled) = compiled.get(position) {
                     matched
                         .entry(compiled.pattern)
                         .or_default()
                         .insert(topic.name.clone());
                 }
-            }
+            });
         }
 
         // Kafka's `filterTopicDescribeAuthorizedTopics`: every distinct match
@@ -265,6 +317,92 @@ mod tests {
     }
 
     fn alice() -> Principal { sasl_principal("alice") }
+
+    /// The positions of the patterns `matcher` reports for `topic`.
+    fn matches_of(
+        matcher: &PatternMatcher,
+        compiled: &[CompiledPattern<'_>],
+        topic: &str,
+    ) -> Vec<usize> {
+        let mut positions = Vec::new();
+        matcher.for_each_match(compiled, topic, |position| positions.push(position));
+        positions
+    }
+
+    /// A set of the anchored sources reports, for every topic, exactly the
+    /// patterns that each match it alone: full-name matching, a flag scoped to
+    /// its own pattern, alternation that must not leak past the anchors, and
+    /// overlapping patterns.
+    #[test]
+    fn a_set_matches_exactly_the_patterns_that_match_alone() {
+        let patterns: Vec<String> = [
+            "orders-.*",
+            "(?i)PAYMENTS\\..*",
+            "a|ab",
+            "prod\\.(orders|payments)\\..*",
+            ".*-dlq",
+            "orders-[0-9]+",
+            "",
+        ]
+        .map(str::to_owned)
+        .into();
+        let compiled: Vec<CompiledPattern<'_>> = patterns
+            .iter()
+            .map(|pattern| CompiledPattern {
+                pattern,
+                regex: compile_full_match(pattern).unwrap(),
+            })
+            .collect();
+        let set = PatternMatcher::Set(
+            regex::RegexSet::new(compiled.iter().map(|c| c.regex.as_str())).unwrap(),
+        );
+        let topics = [
+            "orders-1",
+            "orders-x-dlq",
+            "payments.events",
+            "PAYMENTS.events",
+            "xpayments.events",
+            "ab",
+            "abc",
+            "a",
+            "prod.orders.v1",
+            "prod.ads.v1",
+            "",
+            "Orders-1",
+        ];
+        for topic in topics {
+            assert!(
+                matches_of(&set, &compiled, topic)
+                    == matches_of(&PatternMatcher::EachPattern, &compiled, topic),
+                "topic {topic:?}"
+            );
+        }
+    }
+
+    /// Few patterns, or few topic-pattern pairs, are tested one by one; many
+    /// of both build a set.
+    #[yare::parameterized(
+        one_pattern_many_topics = { 1, 100_000, false },
+        below_pattern_floor = { MIN_SET_PATTERNS - 1, 100_000, false },
+        below_pair_floor = { MIN_SET_PATTERNS, MIN_SET_PAIRS / MIN_SET_PATTERNS - 1, false },
+        at_both_floors = { MIN_SET_PATTERNS, MIN_SET_PAIRS / MIN_SET_PATTERNS, true },
+    )]
+    fn a_set_is_built_only_where_it_pays(patterns: usize, topics: usize, expect_set: bool) {
+        let sources: Vec<String> = (0..patterns).map(|i| format!("t{i}-.*")).collect();
+        let compiled: Vec<CompiledPattern<'_>> = sources
+            .iter()
+            .map(|pattern| CompiledPattern {
+                pattern,
+                regex: compile_full_match(pattern).unwrap(),
+            })
+            .collect();
+        assert2::assert!(
+            matches!(
+                PatternMatcher::new(&compiled, topics),
+                PatternMatcher::Set(_)
+            ) == expect_set
+        );
+    }
 
     fn describe_acl(topic: &str) -> MetadataRecord {
         MetadataRecord::V1AccessControlEntry(

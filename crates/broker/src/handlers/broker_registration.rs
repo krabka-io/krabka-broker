@@ -500,7 +500,7 @@ mod tests {
             ("metadata.version", 25),
             (
                 krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE,
-                krabka_raft::DISKLESS_RESERVATION_FEATURE_LEVEL,
+                krabka_metadata::krabka_version::DISKLESS_OBJECT_RESERVATION_LEVEL,
             ),
         ] {
             image.apply(&MetadataRecord::V1FeatureLevel(

@@ -337,11 +337,7 @@ mod tests {
                     feature(STREAMS_VERSION, 0, 1),
                     feature(ELR_VERSION, 0, 1),
                     feature("kraft.version", 0, 1),
-                    feature(
-                        "krabka.version",
-                        0,
-                        krabka_raft::DISKLESS_RESERVATION_FEATURE_LEVEL
-                    ),
+                    feature("krabka.version", 0, 2),
                 ]
         );
     }

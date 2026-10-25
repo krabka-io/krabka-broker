@@ -12,13 +12,13 @@ use {
             BrokerProducePolicy, current_leader_hint, diskless_role_ready,
             replica_state_matches_image, replication_target_matches_image, validate_partition_gate,
         },
-        prepare::{DecodeEnv, PreparedBatch, prepare_batch},
+        prepare::{DecodeEnv, PreparedBatch, prepare_batch_within},
         producer_checks::{
             DedupOutcome, PartitionName, ProducerIdAndEpoch, RowError, TransactionRequest,
             Verification, handle_duplicate, produce_verification_code,
             verify_transactional_produce, verify_with_coordinator,
         },
-        record_limit::exceeds_decompressed_limit,
+        record_limit::decompressed_record_limit,
         schema::{SCHEMA_REJECTION_MESSAGE, validate_batch_schemas},
         topic_settings::TimestampPolicy,
     },
@@ -267,6 +267,23 @@ pub(super) async fn verify_admitted(
     answers
 }
 
+/// Verify a single admitted partition without building the request-wide
+/// producer groups. Non-transactional batches need no coordinator allocation.
+pub(super) async fn verify_single_admitted(
+    batch: &AdmittedBatch,
+    txn_coordinator: &Arc<TxnCoordinator>,
+    image: &krabka_metadata::MetadataImage,
+    transaction: TransactionRequest<'_>,
+) -> Option<i16> {
+    let check = batch.coordinator_check()?;
+    verify_with_coordinator(txn_coordinator, image, transaction, check.producer, vec![
+        check.partition,
+    ])
+    .await
+    .into_iter()
+    .next()
+}
+
 async fn local_replica_is_ready(
     part: &Arc<Partition>,
     image: &krabka_metadata::MetadataImage,
@@ -486,7 +503,15 @@ pub(super) async fn admit_partition(
     // the records, exactly as before. A null /
     // undecodable field returns INVALID_REQUEST / INVALID_RECORD, preserving
     // the prior error-code ordering (before the leadership gate).
-    let mut prepared = match prepare_batch(
+    //
+    // The same walk applies Kafka trunk's max.decompressed.message.bytes: a
+    // compressed batch with a record whose decompressed body is larger than
+    // the topic's limit is `INVALID_RECORD`, with no per-record errors, as
+    // `LogValidator` answers it when `DefaultRecord.readFrom` throws while the
+    // batch is iterated. It answers after every other prepare check. Kafka
+    // 4.3.1 has no such limit, so only a broker serving trunk's keys reads it,
+    // and only a compressed batch pays for the lookup.
+    let mut prepared = match prepare_batch_within(
         part_data.payload,
         topic_compression,
         timestamps,
@@ -497,6 +522,14 @@ pub(super) async fn admit_partition(
             policy: record_decompression_policy,
         },
         transaction.version,
+        || {
+            decompressed_record_limit(
+                image,
+                broker_policy.node_id,
+                topic_name,
+                unstable_api_versions,
+            )
+        },
     ) {
         Ok(p) => p,
         Err(code) => {
@@ -504,25 +537,6 @@ pub(super) async fn admit_partition(
             return Ok(Admission::Done(out));
         }
     };
-
-    // ── max.decompressed.message.bytes (Kafka trunk) ─────────────────
-    // A compressed batch with a record whose decompressed body is larger than
-    // the topic's limit is `INVALID_RECORD`, with no per-record errors, as
-    // `LogValidator` answers it when `DefaultRecord.readFrom` throws while the
-    // batch is iterated. Kafka 4.3.1 has no such limit, so only a broker
-    // serving trunk's keys reads it, and only a compressed batch pays for the
-    // lookup.
-    if exceeds_decompressed_limit(
-        &prepared,
-        image,
-        broker_policy.node_id,
-        topic_name,
-        unstable_api_versions,
-        record_decompression_policy,
-    ) {
-        out.error_code = codes::INVALID_RECORD;
-        return Ok(Admission::Done(out));
-    }
 
     // ── max.message.bytes, again, on the re-encoded batch ────────────
     // The check above measured the bytes the producer sent. Those are the

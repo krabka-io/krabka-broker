@@ -12,6 +12,40 @@ use {
     std::path::Path,
 };
 
+/// The freeze fields shared by the broker and operator CLI. Both sides encode
+/// these fields independently into the signed wire payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FreezeSigningInput<'a> {
+    pub cluster_id: &'a str,
+    pub pattern_type: i8,
+    pub scope: &'a str,
+    pub frozen: bool,
+    pub reason: &'a str,
+    pub set_by: &'a str,
+    pub set_at_ms: i64,
+    pub proposal_id: [u8; 16],
+}
+
+/// Project the signed values from a described freeze returned by the broker.
+#[must_use]
+#[bon::builder]
+pub fn freeze_signing_input<'a>(
+    cluster_id: &'a str,
+    entry: &'a krabka_protocol::krabka::freeze::DescribedTopicFreeze,
+    frozen: bool,
+) -> FreezeSigningInput<'a> {
+    FreezeSigningInput {
+        cluster_id,
+        pattern_type: entry.pattern_type,
+        scope: &entry.scope,
+        frozen,
+        reason: &entry.reason,
+        set_by: &entry.set_by,
+        set_at_ms: entry.set_at_ms,
+        proposal_id: entry.proposal_id.0,
+    }
+}
+
 /// Versioned domain-separation prefix for checkpoint signatures.
 pub const CHECKPOINT_DOMAIN: &[u8] = b"krabka-audit-ckpt-v1\0";
 
@@ -165,5 +199,40 @@ mod tests {
     fn bad_pkcs8_is_a_key_error() {
         let err = FileEd25519Signer::from_pkcs8_bytes(b"not-a-key", "k".into());
         check!(matches!(err, Err(crate::sink::AuditError::Key(_))));
+    }
+
+    #[test]
+    fn freeze_input_preserves_every_signed_field() {
+        use krabka_protocol::{krabka::freeze::DescribedTopicFreeze, primitives::uuid::Uuid};
+
+        let entry = DescribedTopicFreeze {
+            pattern_type: 4,
+            scope: "tenant-a.".to_owned(),
+            reason: "maintenance".to_owned(),
+            set_by: "User:alice".to_owned(),
+            set_at_ms: 0x0102_0304_0506_0708,
+            proposal_id: Uuid([7; 16]),
+            ..DescribedTopicFreeze::default()
+        };
+
+        for frozen in [true, false] {
+            check!(
+                freeze_signing_input()
+                    .cluster_id("cluster-a")
+                    .entry(&entry)
+                    .frozen(frozen)
+                    .call()
+                    == FreezeSigningInput {
+                        cluster_id: "cluster-a",
+                        pattern_type: 4,
+                        scope: "tenant-a.",
+                        frozen,
+                        reason: "maintenance",
+                        set_by: "User:alice",
+                        set_at_ms: 0x0102_0304_0506_0708,
+                        proposal_id: [7; 16],
+                    }
+            );
+        }
     }
 }

@@ -8,7 +8,6 @@
 use {
     super::{
         WriterPartition,
-        append::append_may_block,
         storage::{
             StorageStatus, flag_storage_failure, lock_log, run_log_append, run_log_mutation,
         },
@@ -139,10 +138,10 @@ pub(super) async fn handle_replicate_verbatim(
     // parked on `append_notify` are woken for those batches all the same.
     let mut appended_any = false;
     for ReplicatedBatch { batch, base_offset } in batches {
-        let footprint = (batch.bytes.len(), batch.max_timestamp);
+        let incoming = batch.clone();
         result = run_log_append(
             log,
-            move |log| !append_may_block(log, footprint),
+            move |log| !log.verbatim_append_may_block(&incoming),
             move |log| {
                 // A follower takes its offsets from the leader; see
                 // `Log::clear_reconciled_next_offset`.

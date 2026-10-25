@@ -5,11 +5,12 @@ use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::acl_wire::CLUSTER_RESOURCE_NAME,
     crate::{
+        authorizer::Authorizer,
         broker::Broker,
         codes::{CLUSTER_AUTHORIZATION_FAILED, INVALID_REQUEST, NONE, UNSUPPORTED_VERSION},
         handlers::{RequestContext, acl_denied},
     },
-    krabka_metadata::{EntityKey, ResourceType},
+    krabka_metadata::{EntityKey, MetadataImage, ResourceType},
     krabka_protocol::owned::{
         describe_client_quotas_request::{ComponentData, DescribeClientQuotasRequest},
         describe_client_quotas_response::{
@@ -102,17 +103,29 @@ fn validate_filter(components: &[ComponentData]) -> Result<(), FilterError> {
 pub(crate) fn handle(
     broker: &Broker,
     req: &DescribeClientQuotasRequest,
-    _version: i16,
+    version: i16,
     ctx: &RequestContext<'_>,
 ) -> DescribeClientQuotasResponse {
     let image = broker.controller.current_image();
+    respond(&image, broker.config.authorizer.as_ref(), req, version, ctx)
+}
+
+/// Build the response from the metadata and authorization capabilities this
+/// read actually needs. The registry adapter above owns broker access.
+pub(crate) fn respond(
+    image: &MetadataImage,
+    authorizer: &dyn Authorizer,
+    req: &DescribeClientQuotasRequest,
+    _version: i16,
+    ctx: &RequestContext<'_>,
+) -> DescribeClientQuotasResponse {
     // Kafka's `KafkaApis.handleDescribeClientQuotasRequest` authorizes
     // `DescribeConfigs` on the cluster. A denial goes through
     // `ApiError.fromThrowable`, which drops the default message, so the
     // response carries a null `error_message`.
     if acl_denied(
-        broker.config.authorizer.as_ref(),
-        &image,
+        authorizer,
+        image,
         ctx,
         ResourceType::Cluster,
         CLUSTER_RESOURCE_NAME,
@@ -537,35 +550,33 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    #[tokio::test]
-    async fn handle_returns_matching_quota_entry_fields() {
-        let HandlerStartedBroker {
-            broker: broker_handle,
-            dir: _dir,
-        } = start_broker(Arc::new(AllowAllAuthorizer)).await;
-        seed_quota(&broker_handle, QuotaRecordSetup {
-            entity: vec![
-                QuotaEntityInput::client_id(Some("app-1")),
-                QuotaEntityInput::user(Some("alice")),
-            ],
-            value: QuotaValue(2048.0),
-            ..Default::default()
-        })
-        .await;
-        seed_quota(&broker_handle, QuotaRecordSetup {
-            entity: vec![QuotaEntityInput::user(Some("bob"))],
-            key: "consumer_byte_rate",
-            value: QuotaValue(512.0),
-        })
-        .await;
-        let broker = broker_handle.broker_arc_for_test();
+    #[test]
+    fn respond_returns_matching_quota_entry_fields_from_explicit_inputs() {
+        use crate::quota::test_support::{image_with_quotas, quota_record};
+
+        let image = image_with_quotas(vec![
+            quota_record()
+                .entity(vec![
+                    QuotaEntityInput::client_id(Some("app-1")),
+                    QuotaEntityInput::user(Some("alice")),
+                ])
+                .value(QuotaValue(2048.0))
+                .call(),
+            quota_record()
+                .entity(vec![QuotaEntityInput::user(Some("bob"))])
+                .key("consumer_byte_rate")
+                .value(QuotaValue(512.0))
+                .call(),
+        ]);
+        let authorizer = AllowAllAuthorizer;
         krabka_macros::request_test_identity! {
             bind(ctx);
             user ["admin"];
         };
 
-        let resp = handle(
-            &broker,
+        let resp = respond(
+            &image,
+            &authorizer,
             &request().components(exact_user_filter("alice")).call(),
             VERSION,
             &ctx,
@@ -597,7 +608,6 @@ mod tests {
             (entry.values[0].value - 2048.0).abs() < f64::EPSILON,
             "{entry:?}"
         );
-        broker_handle.shutdown().await;
     }
 
     /// Kafka's `ClientQuotasImage.describe` rejects a bad filter before any

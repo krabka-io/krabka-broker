@@ -32,7 +32,7 @@ krabka-ids = { version = "0.7.0" }
 krabka-macros = { version = "1.0.8", path = "../macros" }
 assert2 = { workspace = true }
 tempfile = { workspace = true }
-criterion = { version = "5.0.2", package = "codspeed-criterion-compat" }
+criterion = { version = "6.0.0", package = "codspeed-criterion-compat" }
 rustix = { workspace = true }
 
 [[bench]]

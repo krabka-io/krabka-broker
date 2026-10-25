@@ -99,11 +99,6 @@ impl From<bool> for UnstableFeatureVersions {
 pub const LATEST_PRODUCTION_METADATA_VERSION: i16 =
     krabka_metadata::metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL;
 
-/// The finalized `krabka.version` level that fences diskless-object
-/// reservations. Once finalized, it cannot be lowered: older brokers do not
-/// honor reservations when reclaiming objects.
-pub const DISKLESS_RESERVATION_FEATURE_LEVEL: i16 = 2;
-
 /// The latest production level of each feature that has levels past it, as
 /// Kafka's `Feature.latestProduction` gives it: what a node supports unless
 /// [`UnstableFeatureVersions`] is [`Enabled`][UnstableFeatureVersions::Enabled].
@@ -140,12 +135,6 @@ pub fn supported_feature_range(
     unstable: UnstableFeatureVersions,
 ) -> (i16, i16) {
     let (min, max) = feature.supported_range();
-    if feature.name() == krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE {
-        // This level gates a storage protocol implemented by the broker, not
-        // a private RPC schema. Private RPC negotiation remains capped by the
-        // generated krabka.version table.
-        return (min, max.max(DISKLESS_RESERVATION_FEATURE_LEVEL));
-    }
     match LATEST_PRODUCTION_LEVELS
         .iter()
         .find(|production| production.feature == feature.name())
@@ -318,12 +307,6 @@ mod tests {
             (METADATA_VERSION_FEATURE, (7, 33), Enabled, (7, 33)),
             ("group.version", (0, 1), Disabled, (0, 1)),
             ("group.version", (0, 1), Enabled, (0, 1)),
-            (
-                krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE,
-                (0, 1),
-                Disabled,
-                (0, DISKLESS_RESERVATION_FEATURE_LEVEL),
-            ),
         ];
         let actual: Vec<_> = rows
             .iter()
@@ -367,7 +350,7 @@ mod tests {
                     ("eligible.leader.replicas.version", (0, 1)),
                     ("group.version", (0, 1)),
                     ("krabka.metadata.downgrade", (1, 1)),
-                    ("krabka.version", (0, DISKLESS_RESERVATION_FEATURE_LEVEL)),
+                    ("krabka.version", (0, 2)),
                     ("kraft.version", (0, 1)),
                     ("metadata.version", (METADATA_VERSION_MIN, metadata_max)),
                     ("share.version", (0, share_max)),

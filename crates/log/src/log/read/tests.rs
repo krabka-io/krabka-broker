@@ -586,9 +586,9 @@ struct ColdFile {
 
 #[krabka_macros::sendfile_cfg]
 impl LogIo for ColdFile {
-    fn is_cached(&self, file: &std::fs::File, _offset: u64) -> bool {
+    fn is_cached(&self, file: &std::fs::File, _offset: u64) -> Option<bool> {
         use std::os::unix::fs::MetadataExt;
-        file.metadata().unwrap().ino() != self.cold
+        Some(file.metadata().unwrap().ino() != self.cold)
     }
 }
 

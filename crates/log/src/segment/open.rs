@@ -243,6 +243,7 @@ impl Segment {
             direct: None,
             direct_asked: false,
             wrote_direct: false,
+            cache_probe_unsupported: std::sync::atomic::AtomicBool::new(false),
         })
     }
 

@@ -94,7 +94,9 @@ mod tests {
         },
     };
 
-    fn install_provider() { let _ = rustls::crypto::ring::default_provider().install_default(); }
+    fn install_provider() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    }
 
     /// A certificate and a key, both PEM encoded.
     struct PemPair {

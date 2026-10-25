@@ -88,7 +88,7 @@ fn client_config_with_pinned_server_and_client_cert(
 async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     // Provider registration is shared with auth_handlers.rs; tolerate
     // an earlier installer.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // The cert's Subject DN is the principal name. Set it as a
     // super-user so the authorizer permits CreateTopics; with no
@@ -146,7 +146,7 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
 /// cert, same DN in `super_users` -- so the only difference is the rule list.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unmappable_certificate_dn_closes_the_connection() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let MtlsFixture {
         log_dir: _log_dir,
@@ -198,7 +198,7 @@ async fn an_unmappable_certificate_dn_closes_the_connection() {
 /// direction, so between them the branch cannot be flattened either way.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let MtlsBroker {
         log_dir: _log_dir,

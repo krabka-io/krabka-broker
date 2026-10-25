@@ -317,10 +317,7 @@ mod tests {
         crate::{
             broker::spawn_partition,
             config::{RemoteStorageBackend, RlmmKind},
-            diskless::{
-                DISKLESS_WAL_V2_PREFIX,
-                wal_index::{WalFlushRecord, WalIndexEntry},
-            },
+            diskless::wal_index::{WalFlushRecord, WalIndexEntry},
             testing::single_value_batch,
         },
         assert2::assert,
@@ -334,7 +331,7 @@ mod tests {
             primitives::uuid::Uuid as WireUuid,
             records::{Record, RecordBatch},
         },
-        object_store::{ObjectStoreExt, PutPayload, path::Path, prefix::PrefixStore},
+        object_store::{ObjectStoreExt, PutPayload, path::Path},
     };
 
     #[bon::builder]
@@ -701,14 +698,10 @@ mod tests {
         let byte_start = u64::try_from(object.len()).unwrap();
         object.extend_from_slice(&second);
 
-        let store: Arc<dyn ObjectStore> = Arc::new(PrefixStore::new(
-            object_store::memory::InMemory::new(),
-            Path::from("tenant/cluster"),
-        ));
-        let object_key = format!("{DISKLESS_WAL_V2_PREFIX}/o");
+        let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
         store
             .put(
-                &Path::from(object_key.clone()),
+                &Path::from("diskless-wal/o"),
                 PutPayload::from(object.freeze()),
             )
             .await
@@ -716,7 +709,7 @@ mod tests {
 
         let mut cache = WalIndexCache::default();
         cache.apply(&super::super::wal_index::WalFlushRecord {
-            object_key,
+            object_key: "diskless-wal/o".into(),
             format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![super::super::wal_index::WalIndexEntry {
                 topic_id,
@@ -737,6 +730,47 @@ mod tests {
             .unwrap();
 
         assert!(got == second);
+    }
+
+    #[tokio::test]
+    async fn cold_reads_use_persisted_prefixed_and_legacy_object_keys_verbatim() {
+        for object_key in [
+            "diskless-wal/7/legacy.ckwl",
+            "clusters/one/diskless-wal/7/current.ckwl",
+        ] {
+            let topic_id = Uuid::from_u128(941);
+            let encoded = encode_batches(&[batch(0, b"persisted")]);
+            let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+            store
+                .put(&Path::from(object_key), PutPayload::from(encoded.clone()))
+                .await
+                .unwrap();
+            let mut cache = WalIndexCache::default();
+            cache.apply(&WalFlushRecord {
+                object_key: object_key.to_owned(),
+                format_version: WalFlushRecord::FORMAT_VERSION,
+                entries: vec![WalIndexEntry {
+                    topic_id,
+                    partition: 0,
+                    first_offset: 0,
+                    last_offset: 0,
+                    byte_start: 0,
+                    byte_len: u32::try_from(encoded.len()).unwrap(),
+                    max_timestamp_ms: 0,
+                }],
+            });
+            let handle = DisklessReadHandle::new(Arc::new(AsyncMutex::new(cache)), store);
+
+            assert!(
+                handle
+                    .read_records(topic_id, 0, 0, usize::MAX)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    == encoded,
+                "object key {object_key}"
+            );
+        }
     }
 
     #[tokio::test]

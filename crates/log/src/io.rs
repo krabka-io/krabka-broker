@@ -153,9 +153,9 @@ pub trait LogIo: Debug + Send + Sync {
     /// run's batch headers one small read at a time: on bytes that are not in
     /// the page cache, each of those reads waits for the disk under the log
     /// lock, and one large read is faster. A host that cannot ask answers
-    /// true, which keeps the walk.
+    /// `None`, which keeps the walk and lets the segment stop probing.
     #[krabka_macros::sendfile_cfg]
-    fn is_cached(&self, file: &File, offset: u64) -> bool { is_cached(file, offset) }
+    fn is_cached(&self, file: &File, offset: u64) -> Option<bool> { is_cached(file, offset) }
 
     /// Reserve disk blocks for the `len` bytes of a `.log` file from `offset`
     /// without changing its length, so the appends that later fill the range
@@ -343,24 +343,25 @@ fn advise_will_need(file: &File, offset: u64, len: u64) { let _ = (file, offset,
 /// callers only ask about bytes below the end of the file, so zero bytes also
 /// means not cached.
 #[cfg(target_os = "linux")]
-fn is_cached(file: &File, offset: u64) -> bool {
+fn is_cached(file: &File, offset: u64) -> Option<bool> {
     let mut byte = [0u8; 1];
-    !matches!(
-        rustix::io::preadv2(
-            file,
-            &mut [std::io::IoSliceMut::new(&mut byte)],
-            offset,
-            rustix::io::ReadWriteFlags::NOWAIT,
-        ),
-        Err(rustix::io::Errno::AGAIN) | Ok(0)
-    )
+    match rustix::io::preadv2(
+        file,
+        &mut [std::io::IoSliceMut::new(&mut byte)],
+        offset,
+        rustix::io::ReadWriteFlags::NOWAIT,
+    ) {
+        Err(rustix::io::Errno::OPNOTSUPP | rustix::io::Errno::NOSYS) => None,
+        Err(rustix::io::Errno::AGAIN) | Ok(0) => Some(false),
+        _ => Some(true),
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
 #[krabka_macros::sendfile_cfg]
-fn is_cached(file: &File, offset: u64) -> bool {
+fn is_cached(file: &File, offset: u64) -> Option<bool> {
     let _ = (file, offset);
-    true
+    None
 }
 
 /// Write the whole of `buf` to `file` through `io`, looping over short writes.

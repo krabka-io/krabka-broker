@@ -244,6 +244,8 @@ impl Segment {
             mode.writer.set_io(io.clone());
         }
         self.io = io;
+        self.cache_probe_unsupported
+            .store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Truncate the `.log` file and the indexes so that no batch at

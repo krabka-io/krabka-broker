@@ -28,7 +28,7 @@ use {
         leadership::{BrokerProducePolicy, current_effective_min_isr},
         pipeline::{
             Admission, AdmittedBatch, PartitionInput, PartitionOutcome, PartitionServices,
-            admit_partition, complete_partition, verify_admitted,
+            admit_partition, complete_partition, verify_admitted, verify_single_admitted,
         },
         producer_checks::TransactionRequest,
         response::build_topic_error_response,
@@ -73,6 +73,7 @@ mod pipeline;
 mod prepare;
 mod producer_checks;
 mod record_limit;
+mod record_scan;
 mod response;
 mod schema;
 mod throttle;
@@ -613,12 +614,26 @@ const MAX_CONCURRENT_PARTITION_APPENDS: usize = 16;
 /// through would abandon an append its writer still makes; the error of the
 /// earliest lane in request order is then the request's.
 async fn complete_admitted(
-    admitted: Vec<AdmittedPartition>,
+    mut admitted: Vec<AdmittedPartition>,
     services: PartitionServices<'_>,
     transaction: TransactionRequest<'_>,
     topic_results: &mut [TopicProduceResponse],
     awaiting: &mut Vec<PendingPartition>,
 ) -> Result<(), BrokerError> {
+    // Most producers send one partition. It needs the same coordinator and
+    // append checks, but no lane map, boxed future or concurrent scheduler.
+    if admitted.len() == 1 {
+        let partition = admitted.pop().expect("one admitted partition");
+        let answer = verify_single_admitted(
+            &partition.batch,
+            services.txn_coordinator,
+            services.image,
+            transaction,
+        )
+        .await;
+        return complete_single_admitted(partition, answer, services, topic_results, awaiting)
+            .await;
+    }
     let answers = verify_admitted(
         &admitted
             .iter()
@@ -671,32 +686,101 @@ async fn complete_admitted(
     }
     for (_, lane) in finished {
         for completed in lane.completed {
-            let CompletedPartition {
-                topic_row,
-                partition_row,
-                topic_name,
-                outcome,
-                ..
-            } = completed;
-            match outcome {
-                PartitionOutcome::Done(out) => {
-                    record_partition_failure(services.metrics, &topic_name, out.error_code);
-                    topic_results[topic_row].partition_responses[partition_row] = out;
-                }
-                PartitionOutcome::AwaitingHighWatermark(ack) => {
-                    // The row is decided by the one high-watermark wait.
-                    awaiting.push(PendingPartition {
-                        topic_row,
-                        partition_row,
-                        topic_name,
-                        ack,
-                    });
-                }
-            }
+            finish_completed_partition(completed, services.metrics, topic_results, awaiting);
         }
         lane.error.map_or(Ok(()), Err)?;
     }
     Ok(())
+}
+
+/// Complete the only admitted partition directly, retaining phase and error
+/// accounting even when the append waits or fails.
+async fn complete_single_admitted(
+    partition: AdmittedPartition,
+    answer: Option<i16>,
+    services: PartitionServices<'_>,
+    topic_results: &mut [TopicProduceResponse],
+    awaiting: &mut Vec<PendingPartition>,
+) -> Result<(), BrokerError> {
+    let completed = complete_timed_partition(partition, answer, services).await?;
+    record_partition_cpu(
+        services.metrics,
+        &completed.topic_name,
+        completed.idx,
+        completed
+            .admit_micros
+            .saturating_add(completed.stage_micros),
+    );
+    finish_completed_partition(completed, services.metrics, topic_results, awaiting);
+    Ok(())
+}
+
+/// Time one append and charge failed work immediately. Successful work is
+/// charged by the caller, after accounting for any overlap with other lanes.
+async fn complete_timed_partition(
+    partition: AdmittedPartition,
+    answer: Option<i16>,
+    services: PartitionServices<'_>,
+) -> Result<CompletedPartition, BrokerError> {
+    let AdmittedPartition {
+        topic_row,
+        partition_row,
+        topic_name,
+        idx,
+        micros,
+        batch,
+    } = partition;
+    let started = std::time::Instant::now();
+    let outcome = complete_partition(*batch, answer, services).await;
+    let stage_micros = elapsed_micros(started);
+    let outcome = outcome.inspect_err(|_| {
+        record_partition_cpu(
+            services.metrics,
+            &topic_name,
+            idx,
+            micros.saturating_add(stage_micros),
+        );
+    })?;
+    Ok(CompletedPartition {
+        topic_row,
+        partition_row,
+        topic_name,
+        idx,
+        admit_micros: micros,
+        stage_micros,
+        outcome,
+    })
+}
+
+/// Settle one appended row, or retain its wait for the request's common
+/// high-watermark deadline, independent of how many append lanes ran.
+fn finish_completed_partition(
+    completed: CompletedPartition,
+    metrics: &BrokerMetrics,
+    topic_results: &mut [TopicProduceResponse],
+    awaiting: &mut Vec<PendingPartition>,
+) {
+    let CompletedPartition {
+        topic_row,
+        partition_row,
+        topic_name,
+        outcome,
+        ..
+    } = completed;
+    match outcome {
+        PartitionOutcome::Done(out) => {
+            record_partition_failure(metrics, &topic_name, out.error_code);
+            topic_results[topic_row].partition_responses[partition_row] = out;
+        }
+        PartitionOutcome::AwaitingHighWatermark(ack) => {
+            awaiting.push(PendingPartition {
+                topic_row,
+                partition_row,
+                topic_name,
+                ack,
+            });
+        }
+    }
 }
 
 /// Microseconds since `started`, saturating.
@@ -760,41 +844,15 @@ struct LaneOutcome {
 async fn complete_lane(lane: Vec<LaneEntry>, services: PartitionServices<'_>) -> LaneOutcome {
     let mut completed = Vec::with_capacity(lane.len());
     for (partition, answer) in lane {
-        let AdmittedPartition {
-            topic_row,
-            partition_row,
-            topic_name,
-            idx,
-            micros,
-            batch,
-        } = partition;
-        let started = std::time::Instant::now();
-        let outcome = complete_partition(*batch, answer, services).await;
-        let stage_micros = elapsed_micros(started);
-        let outcome = match outcome {
-            Ok(outcome) => outcome,
+        match complete_timed_partition(partition, answer, services).await {
+            Ok(partition) => completed.push(partition),
             Err(error) => {
-                record_partition_cpu(
-                    services.metrics,
-                    &topic_name,
-                    idx,
-                    micros.saturating_add(stage_micros),
-                );
                 return LaneOutcome {
                     completed,
                     error: Some(error),
                 };
             }
-        };
-        completed.push(CompletedPartition {
-            topic_row,
-            partition_row,
-            topic_name,
-            idx,
-            admit_micros: micros,
-            stage_micros,
-            outcome,
-        });
+        }
     }
     LaneOutcome {
         completed,
@@ -840,7 +898,7 @@ struct PendingPartition {
 /// charged once because it happened once.
 async fn await_durability(
     broker: &Broker,
-    awaiting: Vec<PendingPartition>,
+    mut awaiting: Vec<PendingPartition>,
     topic_results: &mut [TopicProduceResponse],
     timeout: Duration,
     phases: &RequestPhases,
@@ -862,6 +920,22 @@ async fn await_durability(
             min_isr_layers,
         )
     };
+    if awaiting.len() == 1 {
+        let PendingPartition {
+            topic_row,
+            partition_row,
+            topic_name,
+            ack,
+        } = awaiting.pop().expect("one pending partition");
+        let leadership_changed = ack.leadership_changed(broker.controller.watch_image());
+        let row = ack
+            .finish(deadline, current_min_isr, leadership_changed)
+            .await;
+        phases.add_remote(started.elapsed());
+        record_partition_failure(&broker.metrics, &topic_name, row.error_code);
+        topic_results[topic_row].partition_responses[partition_row] = row;
+        return;
+    }
     let finished = futures_util::future::join_all(awaiting.into_iter().map(|pending| {
         let PendingPartition {
             topic_row,
