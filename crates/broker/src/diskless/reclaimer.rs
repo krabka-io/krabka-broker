@@ -3,7 +3,7 @@
 use {
     super::index_log::DisklessIndexLog,
     futures_util::TryStreamExt as _,
-    object_store::{ObjectStore, ObjectStoreExt as _, path::Path},
+    object_store::{ObjectStore, ObjectStoreExt as _},
     std::{
         collections::{HashMap, HashSet},
         sync::Arc,
@@ -19,6 +19,7 @@ pub(super) const RECLAIM_GRACE: Duration = Duration::from_mins(5);
 pub(super) struct Reclaimer {
     index_log: DisklessIndexLog,
     object_store: Arc<dyn ObjectStore>,
+    object_prefix: Option<String>,
     first_seen: HashMap<String, Instant>,
     grace: Duration,
 }
@@ -27,11 +28,13 @@ impl Reclaimer {
     pub(super) fn new(
         index_log: DisklessIndexLog,
         object_store: Arc<dyn ObjectStore>,
+        object_prefix: Option<String>,
         grace: Duration,
     ) -> Self {
         Self {
             index_log,
             object_store,
+            object_prefix,
             first_seen: HashMap::new(),
             grace,
         }
@@ -41,7 +44,8 @@ impl Reclaimer {
 
     pub(super) async fn sweep_at(&mut self, now: Instant) {
         let referenced = self.index_log.cache().lock().await.referenced_objects();
-        let prefix = Path::from("diskless-wal");
+        let prefix =
+            krabka_object_store::prefixed_key(self.object_prefix.as_deref(), "diskless-wal");
         let objects = match self
             .object_store
             .list(Some(&prefix))

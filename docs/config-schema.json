@@ -1034,7 +1034,7 @@
           ]
         },
         "prefix": {
-          "description": "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket).",
+          "description": "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket). Tiered segments and new diskless WAL objects are\nwritten under it, and the diskless reclaimer lists and deletes only\nbelow `<prefix>/diskless-wal/`. WAL objects written at the bucket root\nbefore a prefix was set stay readable at their recorded keys, and the\nreclaimer of a prefixed cluster never deletes them.",
           "type": [
             "string",
             "null"
@@ -1158,7 +1158,7 @@
           ]
         },
         "prefix": {
-          "description": "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket).",
+          "description": "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket). Tiered segments and new diskless WAL objects are\nwritten under it, and the diskless reclaimer lists and deletes only\nbelow `<prefix>/diskless-wal/`. WAL objects written at the bucket root\nbefore a prefix was set stay readable at their recorded keys, and the\nreclaimer of a prefixed cluster never deletes them.",
           "type": [
             "string",
             "null"

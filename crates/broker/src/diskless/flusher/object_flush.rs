@@ -86,7 +86,10 @@ pub(crate) async fn flush_once(
         return Ok(None);
     }
     metrics.diskless_wal_flush_attempts_total.inc();
-    let object_key = format!("diskless-wal/{broker_id}/{}.ckwl", Uuid::new_v4());
+    let relative_key = format!("diskless-wal/{broker_id}/{}.ckwl", Uuid::new_v4());
+    let object_key =
+        krabka_object_store::prefixed_key(config.object_prefix.as_deref(), &relative_key)
+            .to_string();
     let object = builder.finish();
     if let Err(error) = object_store
         .put(
@@ -570,5 +573,44 @@ mod tests {
 
         assert!(record.entries.len() == 1);
         assert!(record.entries[0].partition == 0);
+    }
+
+    #[tokio::test]
+    async fn flush_persists_prefixed_absolute_key_for_reads_and_restore() {
+        let dir = tempdir().unwrap();
+        let handle = orders_partition(dir.path());
+        let store = Arc::new(object_store::memory::InMemory::new());
+        let store_dyn: Arc<dyn ObjectStore> = store.clone();
+        let index = test_index_log().await;
+        let config = FlushConfig {
+            object_prefix: Some("clusters/one".to_owned()),
+            trim_safety_lag: None,
+            ..FlushConfig::default()
+        };
+
+        let record = flush_once(
+            store_dyn,
+            7,
+            &BrokerMetrics::new(),
+            &index,
+            index.cache(),
+            &[FlushPartition {
+                topic_id: Uuid::from_u128(11),
+                handle,
+                high_watermark: Offset(3),
+            }],
+            &config,
+            |_| true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert!(
+            record
+                .object_key
+                .starts_with("clusters/one/diskless-wal/7/")
+        );
+        assert!(store.head(&Path::from(record.object_key)).await.is_ok());
     }
 }

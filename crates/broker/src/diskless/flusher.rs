@@ -98,6 +98,7 @@ pub(crate) async fn run(
     let mut reclaimer = Reclaimer::new(
         context.index_log.clone(),
         Arc::clone(&context.object_store),
+        config.object_prefix.clone(),
         RECLAIM_GRACE,
     );
     tokio::select! {
@@ -250,6 +251,7 @@ mod tests {
         Reclaimer::new(
             context.index_log.clone(),
             Arc::clone(&context.object_store),
+            None,
             grace,
         )
     }
@@ -580,7 +582,7 @@ mod tests {
                 .unwrap();
             wait_for_object(&cache, topic_id, key).await;
         }
-        let mut reclaimer = Reclaimer::new(index, Arc::clone(&store), Duration::from_mins(1));
+        let mut reclaimer = Reclaimer::new(index, Arc::clone(&store), None, Duration::from_mins(1));
         let observed = Instant::now();
         reclaimer.sweep_at(observed).await;
         assert!(
@@ -606,6 +608,56 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn clusters_sharing_a_store_under_disjoint_prefixes_keep_each_others_live_objects() {
+        const LEGACY_ROOT: &str = "diskless-wal/7/legacy.ckwl";
+        let topic_id = Uuid::from_u128(11);
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut reclaimers = Vec::new();
+        for cluster in ["clusters/one", "clusters/two"] {
+            let live = format!("{cluster}/diskless-wal/7/live.ckwl");
+            let orphan = format!("{cluster}/diskless-wal/7/orphan.ckwl");
+            for key in [&live, &orphan] {
+                store
+                    .put(
+                        &Path::from(key.as_str()),
+                        PutPayload::from_static(b"object"),
+                    )
+                    .await
+                    .unwrap();
+            }
+            let index = test_index_log().await;
+            index
+                .publish_flush(&three_record_flush(topic_id, &live))
+                .await
+                .unwrap();
+            wait_for_object(&index.cache(), topic_id, &live).await;
+            reclaimers.push(Reclaimer::new(
+                index,
+                Arc::clone(&store),
+                Some(cluster.to_owned()),
+                Duration::ZERO,
+            ));
+        }
+        store
+            .put(&Path::from(LEGACY_ROOT), PutPayload::from_static(b"object"))
+            .await
+            .unwrap();
+
+        for reclaimer in &mut reclaimers {
+            reclaimer.sweep().await;
+        }
+
+        assert!(
+            object_keys(&store).await
+                == [
+                    "clusters/one/diskless-wal/7/live.ckwl",
+                    "clusters/two/diskless-wal/7/live.ckwl",
+                    LEGACY_ROOT,
+                ]
+        );
+    }
+
     struct StoredReclaimer {
         index: DisklessIndexLog,
         cache: Arc<tokio::sync::Mutex<WalIndexCache>>,
@@ -625,7 +677,7 @@ mod tests {
         index: &DisklessIndexLog,
         store: &Arc<dyn ObjectStore>,
     ) -> tokio::task::JoinHandle<()> {
-        let mut reclaimer = Reclaimer::new(index.clone(), Arc::clone(store), Duration::ZERO);
+        let mut reclaimer = Reclaimer::new(index.clone(), Arc::clone(store), None, Duration::ZERO);
         tokio::spawn(async move { reclaimer.sweep().await })
     }
 
@@ -723,7 +775,7 @@ mod tests {
         .tombstone_deleted_topics(&image)
         .await
         .unwrap();
-        Reclaimer::new(index, Arc::clone(&store), Duration::ZERO)
+        Reclaimer::new(index, Arc::clone(&store), None, Duration::ZERO)
             .sweep()
             .await;
 

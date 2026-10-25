@@ -19,7 +19,11 @@ pub struct FileRemoteStorageS3Config {
     /// AWS region. Required even for non-AWS endpoints (use any value).
     pub region: String,
     /// Optional key prefix inside the bucket (lets multiple clusters
-    /// share a bucket).
+    /// share a bucket). Tiered segments and new diskless WAL objects are
+    /// written under it, and the diskless reclaimer lists and deletes only
+    /// below `<prefix>/diskless-wal/`. WAL objects written at the bucket root
+    /// before a prefix was set stay readable at their recorded keys, and the
+    /// reclaimer of a prefixed cluster never deletes them.
     pub prefix: Option<String>,
     /// Optional custom endpoint URL (e.g. `MinIO` or Cloudflare R2).
     pub endpoint: Option<String>,
