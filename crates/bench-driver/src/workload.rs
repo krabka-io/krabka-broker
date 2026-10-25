@@ -1086,6 +1086,14 @@ impl<'a> ProducerObservations<'a> {
         }
     }
 
+    /// Record a shutdown step (`flush` or `close`) that outlived its limit.
+    /// The first error a producer hit stays the one it reports.
+    fn record_teardown_timeout(&mut self, step: &str) {
+        if self.output.error.is_empty() {
+            self.output.error = format!("producer-{}-{step}-timeout", self.idx);
+        }
+    }
+
     /// Account for every send still outstanding at the final drain deadline.
     fn record_drain_timeout(&mut self, unresolved: usize) {
         self.output.dropped += unresolved as u64;
@@ -1312,8 +1320,15 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
         }
     }
 
-    let _ = producer.flush().await;
-    let _ = producer.close().await;
+    // `flush` and `close` wait on the same sends the drain gave up on, so
+    // they get the same bound: a producer that stops issuing requests must
+    // not hold the run open past its report.
+    if !finished_within(final_drain_timeout, producer.flush()).await {
+        observations.record_teardown_timeout("flush");
+    }
+    if !finished_within(final_drain_timeout, producer.close()).await {
+        observations.record_teardown_timeout("close");
+    }
 
     observations.output
 }
@@ -1428,7 +1443,10 @@ async fn run_consumer(task: ConsumerTask) -> ConsumerOut {
             }
         }
     }
-    let _ = consumer.close().await;
+    // A close that outlives one request timeout would only hold the run open.
+    if !finished_within(request_timeout, Box::pin(consumer.close())).await && error.is_empty() {
+        error = format!("consumer-{idx}-close-timeout");
+    }
     ConsumerOut {
         latency: measurements.latency,
         msgs: measurements.msgs,
@@ -1499,6 +1517,11 @@ async fn build_consumer_with_retry(
         }
     }
     unreachable!("exponential_backoff::Backoff yields a terminal attempt");
+}
+
+/// Await `step` for at most `limit`. `false` when the limit ran out first.
+async fn finished_within(limit: Time, step: impl Future) -> bool {
+    tokio::time::timeout(limit.to_std(), step).await.is_ok()
 }
 
 /// The producer's `max_in_flight_per_connection` for a scenario.
@@ -1581,6 +1604,45 @@ mod tests {
             bytes: output.bytes,
             dropped: output.dropped,
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_shutdown_step_is_bounded_by_its_limit() {
+        let outcomes = (
+            finished_within(secs(1), std::future::ready(())).await,
+            finished_within(secs(1), std::future::pending::<()>()).await,
+        );
+        assert!(outcomes == (true, false));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_teardown_timeout_names_its_step_and_keeps_an_earlier_error() {
+        let scenario = scenario(1);
+        let grid = Grid::new(Instant::now(), 0, &scenario, millis(10));
+        let stop = Arc::new(AtomicU8::new(STATE_STOP));
+        let first_ack = Arc::new(AtomicU64::new(0));
+        let kill_at = Arc::new(AtomicU64::new(0));
+        let shared = SharedHandles {
+            stop: &stop,
+            first_ack: &first_ack,
+            kill_at: &kill_at,
+        };
+
+        let mut stalled = ProducerObservations::new(4, 100, grid, shared);
+        stalled.record_teardown_timeout("flush");
+        stalled.record_teardown_timeout("close");
+
+        let mut drained = ProducerObservations::new(4, 100, grid, shared);
+        drained.record_drain_timeout(3);
+        drained.record_teardown_timeout("flush");
+
+        assert!(
+            (stalled.output.error.as_str(), drained.output.error.as_str())
+                == (
+                    "producer-4-flush-timeout",
+                    "producer-4-final-drain-timeout:3"
+                )
+        );
     }
 
     #[tokio::test(start_paused = true)]
