@@ -55,6 +55,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   that fit an initialized direct-write queue can run without a blocking-worker
   handoff. Segment setup, flushes, epoch checkpoint changes, cold reads and
   queue backpressure still use blocking placement.
+- The fetch path gives its `POSIX_FADV_WILLNEED` readahead hint as one call
+  for each 128 KiB of the range. Linux reads only about
+  `max(max_sectors_kb, read_ahead_kb)` of one call, so one hint over the
+  window and the 4 MiB after it read only the start of that range. The
+  range is unchanged (#1333).
 - Large in-memory fetch payloads share vectored writes with their headers,
   reducing socket calls without copying records. Small responses retain
   coalescing. [Small-record profiling](docs/operations/omb-small-record-profiling.md)
