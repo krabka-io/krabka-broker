@@ -63,17 +63,11 @@ BROKER_PACKAGE = [("krabka-broker", "krabka-broker")]
 # The training set. Each entry is a shortened copy of a file in
 # `bench/scenarios/`; `compression` makes a compressed variant of it.
 # Together they cover small records, large records, consumers, a fixed rate,
-# `acks=all`, and the zstd codec.
-#
-# The large-record runs are uncompressed. With lz4 and records of 16 KiB and
-# up, the driver hangs at the end of the run against any release broker
-# (before and after the SIMD review): the broker goes idle, and the producer
-# waits for acknowledgements that never come. A debug broker is too slow to
-# hit it. Until that is fixed, an lz4 large-record run cannot finish.
+# `acks=all`, and the lz4 and zstd codecs.
 TRAINING = [
     struct(name = "small-msg-saturate", source = "small-msg-saturate", compression = None),
     struct(name = "small-msg-saturate-zstd", source = "small-msg-saturate", compression = "zstd"),
-    struct(name = "large-msg-uncompressed", source = "large-msg", compression = "none"),
+    struct(name = "large-msg", source = "large-msg", compression = None),
     struct(name = "fan-out", source = "fan-out", compression = None),
     struct(name = "fixed-rate-latency", source = "fixed-rate-latency", compression = None),
     struct(name = "mixed-acks", source = "mixed-acks", compression = None),
@@ -82,7 +76,7 @@ TRAINING = [
 # The evaluation set. `duration` replaces the scenario's own when it is set.
 EVALUATION = [
     struct(name = "small-msg-saturate", source = "small-msg-saturate", duration = None, compression = None),
-    struct(name = "large-msg-uncompressed", source = "large-msg", duration = "30s", compression = "none"),
+    struct(name = "large-msg", source = "large-msg", duration = "30s", compression = None),
 ]
 
 # The broker builds that `compare` can run, in the order a round rotates

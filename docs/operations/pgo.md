@@ -81,17 +81,11 @@ The phases run in this order:
    the instrumented broker, and makes `v3` only when `--variants` selects it.
 2. `train` runs the instrumented broker under six short scenarios. They are
    copies of the files in `bench/scenarios/` with a 2s warmup and a 20s
-   measured window. They cover small records, uncompressed large records,
-   small records with zstd, four producers and four consumers, a fixed rate,
-   and `acks=all`. The task stops each broker with SIGTERM. An instrumented
-   binary writes its `.profraw` file only when it exits cleanly.
-
-   The large-record runs are uncompressed because, with lz4 and records of
-   16 KiB or more, the driver hangs at the end of the run against a release
-   broker: the broker goes idle and the producer waits for acknowledgements
-   that never come. This predates the task, and a debug broker is too slow to
-   hit it. The task gives each driver run 600 seconds and retries a hung
-   session once.
+   measured window. They cover small records, large records with lz4, small
+   records with zstd, four producers and four consumers, a fixed rate, and
+   `acks=all`. The task stops each broker with SIGTERM. An instrumented
+   binary writes its `.profraw` file only when it exits cleanly. The task
+   gives each driver run 600 seconds and retries a hung session once.
 3. `merge` merges the `.profraw` files into `merged.profdata`.
 4. `optimize` builds the `pgo` broker with `RUSTFLAGS=-Cprofile-use`, and
    the `v3-pgo` broker with
@@ -132,7 +126,7 @@ stop on.
 ## What the compare phase measures
 
 The evaluation set is `small-msg-saturate` as it is in `bench/scenarios/`,
-and `large-msg` without compression and with a 30s measured window. Each round runs every scenario
+and `large-msg` with a 30s measured window. Each round runs every scenario
 once on each selected broker. The order rotates from round to round: round 1
 runs the brokers in the order `baseline`, `pgo`, `v3`, `v3-pgo`, and each
 later round starts one broker further along that list. With four variants,

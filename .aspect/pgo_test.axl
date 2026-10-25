@@ -167,7 +167,7 @@ def _test_training_set_covers_compression_and_consumers(_ctx):
     check_eq("training", [(e.name, e.source, e.compression) for e in TRAINING], [
         ("small-msg-saturate", "small-msg-saturate", None),
         ("small-msg-saturate-zstd", "small-msg-saturate", "zstd"),
-        ("large-msg-uncompressed", "large-msg", "none"),
+        ("large-msg", "large-msg", None),
         ("fan-out", "fan-out", None),
         ("fixed-rate-latency", "fixed-rate-latency", None),
         ("mixed-acks", "mixed-acks", None),
@@ -176,7 +176,7 @@ def _test_training_set_covers_compression_and_consumers(_ctx):
 def _test_evaluation_keeps_small_and_cuts_large_to_30s(_ctx):
     small, large = EVALUATION
     check_eq("small unchanged", evaluation_scenario(small, _SMALL), _SMALL)
-    check_eq("large", evaluation_scenario(large, "name: large-msg\ncompression: lz4\nwarmup: 10s\nduration: 60s\n"), "name: large-msg-uncompressed\ncompression: none\nwarmup: 10s\nduration: 30s\n")
+    check_eq("large", evaluation_scenario(large, "name: large-msg\ncompression: lz4\nwarmup: 10s\nduration: 60s\n"), "name: large-msg\ncompression: lz4\nwarmup: 10s\nduration: 30s\n")
 
 def _test_scenario_values(_ctx):
     check_eq("seconds", [parse_seconds(v) for v in ["20s", "2m", "500ms", "1h"]], [20, 120, 0.5, 3600])
