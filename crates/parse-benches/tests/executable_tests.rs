@@ -96,22 +96,49 @@ fn a_build_without_bench_executables_has_no_manifest(lines: &[&str]) {
     ));
 }
 
-#[test]
-fn running_lines_resolve_relative_and_absolute_paths() {
-    let log = "\
-   Compiling krabka-log v1.0.0 (/work/crates/log)
-    Finished `bench` profile [optimized] target(s) in 0.56s
-     Running benches/log.rs (target/release/deps/log-0123)
-Benchmarking log/append: Warming up for 3.0000 s
-     Running benches/produce.rs (/elsewhere/release/deps/produce-4567)
-";
+/// Cargo's `Running` label as `CARGO_TERM_COLOR=always` prints it: bold
+/// bright green, then a reset.
+const COLOURED_RUNNING: &str = "\x1b[1m\x1b[92m     Running\x1b[0m";
 
-    assert!(
+#[yare::parameterized(
+    plain_relative = {
+        "     Running benches/log.rs (target/release/deps/log-0123)",
+        &["/work/target/release/deps/log-0123"],
+    },
+    plain_absolute = {
+        "     Running benches/produce.rs (/elsewhere/release/deps/produce-4567)",
+        &["/elsewhere/release/deps/produce-4567"],
+    },
+    coloured_relative = {
+        &format!("{COLOURED_RUNNING} benches/log.rs (target/release/deps/log-0123)"),
+        &["/work/target/release/deps/log-0123"],
+    },
+    coloured_absolute = {
+        &format!(
+            "{COLOURED_RUNNING} benches/fetch_drain.rs \
+             (/home/runner/work/_temp/krabka-benchmark-reference-target/release/deps/fetch_drain-7a4b8c61b81a714a)"
+        ),
+        &["/home/runner/work/_temp/krabka-benchmark-reference-target/release/deps/fetch_drain-7a4b8c61b81a714a"],
+    },
+    coloured_build_lines_are_not_runs = {
+        "\x1b[1m\x1b[92m   Compiling\x1b[0m krabka-log v1.0.0 (/work/crates/log)\n\
+         \x1b[1m\x1b[92m    Finished\x1b[0m `bench` profile [optimized] target(s) in 0.56s",
+        &[],
+    },
+    mixed_log = {
+        &format!(
+            "   Compiling krabka-log v1.0.0 (/work/crates/log)\n\
+             {COLOURED_RUNNING} benches/log.rs (target/release/deps/log-0123)\n\
+             Benchmarking log/append: Warming up for 3.0000 s\n\
+             \x20    Running benches/produce.rs (/elsewhere/release/deps/produce-4567)\n"
+        ),
+        &["/work/target/release/deps/log-0123", "/elsewhere/release/deps/produce-4567"],
+    },
+)]
+fn running_lines_name_the_executables_cargo_ran(log: &str, expected: &[&str]) {
+    assert2::assert!(
         ran_executables(log, Path::new("/work"))
-            == vec![
-                PathBuf::from("/work/target/release/deps/log-0123"),
-                PathBuf::from("/elsewhere/release/deps/produce-4567"),
-            ]
+            == expected.iter().map(PathBuf::from).collect::<Vec<_>>()
     );
 }
 
@@ -146,6 +173,18 @@ fn a_pass_that_ran_its_prebuilt_executable_is_verified() {
         manifest,
         cargo_log,
     } = pass();
+
+    let ran = verify_pass(&manifest, &cargo_log, source.path(), "abc123").unwrap();
+
+    assert!(ran == manifest.executables);
+}
+
+#[test]
+fn a_pass_logged_in_colour_is_verified() {
+    let Pass {
+        source, manifest, ..
+    } = pass();
+    let cargo_log = format!("{COLOURED_RUNNING} benches/log.rs (target/release/deps/log-0123)\n");
 
     let ran = verify_pass(&manifest, &cargo_log, source.path(), "abc123").unwrap();
 
