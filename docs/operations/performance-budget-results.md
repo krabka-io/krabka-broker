@@ -10,7 +10,10 @@ and not a supported limit.
 The current contract is `rf3-regression-v3`. No run of it has completed yet.
 Until a run on a frozen release candidate passes in both modes, release
 blocker B8 stays open
-([release-candidate qualification](../release-candidate-qualification.md)).
+([release-candidate qualification](../release-candidate-qualification.md)). The
+next runs are scheduled with the
+[1.1 release](https://github.com/krabka-io/krabka-broker/milestone/31)
+qualification.
 
 One run of the previous contract, `rf3-regression-v2`, completed in the
 `pinned_kafka` mode and passed. Its verdict is valid under `rf3-regression-v2`
