@@ -163,6 +163,9 @@ krabka_broker_incremental_fetch_session_evictions_total 0
 # HELP krabka_broker_incremental_fetch_partitions_cached KIP-227: total (topic, partition) tuples held across every live incremental-fetch session (gauge)..
 # TYPE krabka_broker_incremental_fetch_partitions_cached gauge
 krabka_broker_incremental_fetch_partitions_cached 0
+# HELP krabka_broker_fetch_forgotten_partition_wakes Parked consumer fetches answered early because a partition their fetch session forgot lately received new records..
+# TYPE krabka_broker_fetch_forgotten_partition_wakes counter
+krabka_broker_fetch_forgotten_partition_wakes_total 0
 # HELP krabka_broker_client_software_versions KIP-511: cumulative count of accepted ApiVersions handshakes, labelled by client software name and version. One increment per successful v3+ ApiVersions call..
 # TYPE krabka_broker_client_software_versions counter
 krabka_broker_client_software_versions_total{software_name="apache-kafka-java",software_version="4.0.0"} 0

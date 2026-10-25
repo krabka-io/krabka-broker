@@ -512,6 +512,15 @@ pub struct BrokerMetrics {
         incremental-fetch session (gauge)."
     )]
     pub incremental_fetch_partitions_cached: Gauge,
+    /// Consumer fetches parked below `min_bytes` that the read loop answered
+    /// early, with no records, because a partition their session had
+    /// forgotten lately received records. See
+    /// `handlers::fetch::read_loop::arm_forgotten_waits`.
+    #[metric(
+        help = "Parked consumer fetches answered early because a partition their fetch \
+        session forgot lately received new records."
+    )]
+    pub fetch_forgotten_partition_wakes_total: Counter,
     /// KIP-511: per-(name, version) counter of accepted v3+ `ApiVersions`
     /// handshakes. Operators graph this to see which client libraries
     /// and versions are connecting.

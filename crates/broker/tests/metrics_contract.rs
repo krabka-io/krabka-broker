@@ -220,6 +220,7 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         incremental_fetch_sessions: _,
         incremental_fetch_session_evictions_total: _,
         incremental_fetch_partitions_cached: _,
+        fetch_forgotten_partition_wakes_total: _,
         client_software_versions: _,
         successful_authentication: _,
         failed_authentication: _,
