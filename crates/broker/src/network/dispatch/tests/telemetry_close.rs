@@ -9,7 +9,7 @@ use {
     super::request_frame,
     crate::{
         broker::Broker,
-        client_metrics::test_support::{gauge_metric, metrics_data},
+        client_metrics::test_support::{gauge_metric, metrics_data, subscribe_to_cpu},
         codes,
         handlers::test_support::StartedBroker,
         metrics::{ClientMetricsEviction, ClientMetricsEvictionLabel},
@@ -19,7 +19,6 @@ use {
     assert2::assert,
     bytes::BytesMut,
     futures_util::{SinkExt as _, StreamExt as _},
-    krabka_metadata::{ClientMetricsConfigRecord, MetadataRecord},
     krabka_protocol::{
         Decode,
         owned::{
@@ -113,15 +112,7 @@ async fn closing_a_connection_releases_only_its_own_series() {
         broker: handle,
         dir: _dir,
     } = start_broker_with(|cfg| cfg.client_metrics_enable = true).await;
-    handle
-        .submit_metadata_record_for_test(MetadataRecord::V1ClientMetricsConfig(
-            ClientMetricsConfigRecord {
-                name: "cpu".into(),
-                configs: [("metrics".to_string(), "cpu.utilization".to_string())].into(),
-            },
-        ))
-        .await
-        .expect("submit client-metrics subscription");
+    subscribe_to_cpu(&handle).await;
     let broker = handle.broker_arc_for_test();
     let collector = &broker.client_metrics.prometheus;
     let disconnects = || {

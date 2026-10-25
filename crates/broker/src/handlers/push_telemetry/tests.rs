@@ -17,7 +17,7 @@ use {
                 ClientAttributes, SubscriptionDecision, compute_subscription,
                 subscription_id as compute_subscription_id,
             },
-            test_support::{gauge_metric, metrics_data},
+            test_support::{gauge_metric, metrics_data, subscribe_to_cpu},
         },
         test_support::{
             self as broker_fixture_support, DenyAll, KafkaErrorCode, peer, start_broker_with,
@@ -336,15 +336,7 @@ async fn push_without_a_get_builds_the_instance() {
     };
     // The broker accepts only subscribed metrics, so subscribe every client
     // to the one metric `otlp` pushes.
-    broker_handle
-        .submit_metadata_record_for_test(MetadataRecord::V1ClientMetricsConfig(
-            ClientMetricsConfigRecord {
-                name: "cpu".into(),
-                configs: [("metrics".to_string(), "cpu.utilization".to_string())].into(),
-            },
-        ))
-        .await
-        .expect("submit client-metrics subscription");
+    subscribe_to_cpu(&broker_handle).await;
     let peer_addr = peer();
     let principal = broker_fixture_support::principal("telemetry-client");
     let client_ctx = TelemetryContext {
@@ -469,15 +461,7 @@ async fn connection_churn_stays_under_the_ceiling_and_drains_to_zero() {
         cfg.client_metrics_prom_max_series_per_instance = 1;
     })
     .await;
-    broker_handle
-        .submit_metadata_record_for_test(MetadataRecord::V1ClientMetricsConfig(
-            ClientMetricsConfigRecord {
-                name: "cpu".into(),
-                configs: [("metrics".to_string(), "cpu.utilization".to_string())].into(),
-            },
-        ))
-        .await
-        .expect("submit client-metrics subscription");
+    subscribe_to_cpu(&broker_handle).await;
     let broker = broker_handle.broker_arc_for_test();
     let collector = &broker.client_metrics.prometheus;
     let peer = peer();
