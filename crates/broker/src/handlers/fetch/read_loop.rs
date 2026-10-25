@@ -27,7 +27,7 @@ use {
     krabka_log::Offset,
     krabka_protocol::owned::fetch_response::PartitionData,
     krabka_units::convert::ByteSizeExt as _,
-    std::time::Duration,
+    std::{sync::Arc, time::Duration},
 };
 
 /// The initial pass and a long-poll re-read use the same planned read inputs.
@@ -212,6 +212,35 @@ fn arm_waits(pending: &[PendingRead]) -> Vec<Wait> {
     waits
 }
 
+/// The `Wait::pending` of a waiter on a partition the fetch did not ask for:
+/// one its session forgot lately. There is no row to read again on its wake;
+/// the wake answers the fetch as it stands.
+const FORGOTTEN_PARTITION: usize = usize::MAX;
+
+/// Arm a waiter on the append and the high-watermark advance of every
+/// partition the fetch's session forgot lately.
+///
+/// The Java consumer leaves a partition out of a fetch while it still holds
+/// that partition's records, and names it again once it has drained them. Its
+/// one fetch in flight to this broker then parks on the partitions it did ask
+/// for, and when they are idle it holds the consumer for `max_wait_ms` while
+/// the partition it left out, the busy one, piles up records. A producer that
+/// sticks to one partition for a whole `batch.size` of records, which is the
+/// Java producer's default, makes every other partition idle for that long.
+/// Waking on the forgotten partition answers the fetch at once, with the rows
+/// as they stand, and the consumer's next fetch names the busy partition and
+/// gets its records. The answer carries no records and is within the request's
+/// `max_wait_ms`, both of which the protocol allows.
+fn arm_forgotten_waits(forgotten: &[Arc<Partition>], waits: &mut Vec<Wait>) {
+    for part in forgotten {
+        waits.push(Wait::new(FORGOTTEN_PARTITION, part.append_notify.clone()));
+        waits.push(Wait::new(
+            FORGOTTEN_PARTITION,
+            part.hw_advance_notify.clone(),
+        ));
+    }
+}
+
 /// Arms the leadership waiter of every follower read, after the first pass
 /// records the follower positions.
 ///
@@ -260,6 +289,21 @@ async fn refresh_follower_bounds(pending: &mut [PendingRead], state: &LongPollSt
     }
 }
 
+/// What one fetch request allows its read loop: the floor it waits for, the
+/// bytes it may answer with, how long it may wait, and whether the connection
+/// can drain records with `sendfile`.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ReadBudget {
+    /// The request's `min_bytes`.
+    pub(super) min_bytes: i32,
+    /// `min(request.max_bytes, fetch.max.bytes, quota window)`; see
+    /// [`super::fetch_response_byte_budget`].
+    pub(super) response_max_bytes: usize,
+    /// The request's `max_wait_ms`.
+    pub(super) max_wait_ms: i32,
+    pub(super) sendfile_capable: bool,
+}
+
 /// Read every planned partition once, then long-poll until the fetch reaches
 /// `min_bytes` or runs out of wait.
 ///
@@ -277,12 +321,16 @@ async fn refresh_follower_bounds(pending: &mut [PendingRead], state: &LongPollSt
 pub(super) async fn execute_pending_reads(
     broker: &Broker,
     mut pending: Vec<PendingRead>,
-    min_bytes: i32,
-    response_max_bytes: usize,
-    max_wait_ms: i32,
-    sendfile_capable: bool,
+    forgotten: &[Arc<Partition>],
+    read_budget: ReadBudget,
     phases: &RequestPhases,
 ) -> GroupedResponses {
+    let ReadBudget {
+        min_bytes,
+        response_max_bytes,
+        max_wait_ms,
+        sendfile_capable,
+    } = read_budget;
     let mut state = LongPollState {
         // Kafka's `fetchMinBytes = min(minBytes, fetchMaxBytes)`: a floor the
         // response's own cap could never clear is not a floor at all.
@@ -301,11 +349,14 @@ pub(super) async fn execute_pending_reads(
     // append landing between a partition's read and the park cannot be lost.
     // Kafka closes the same window by re-running `tryComplete` right after it
     // registers the watch (`tryCompleteElseWatch`).
-    let waits = if max_wait_ms > 0 {
+    let mut waits = if max_wait_ms > 0 {
         arm_waits(&pending)
     } else {
         Vec::new()
     };
+    if max_wait_ms > 0 {
+        arm_forgotten_waits(forgotten, &mut waits);
+    }
     for (index, read) in pending.iter_mut().enumerate() {
         let Some(partition) = read.partition.clone() else {
             continue;
@@ -476,6 +527,14 @@ async fn long_poll_then_reread(
             continue;
         };
         waits = rest;
+        if woken.pending == FORGOTTEN_PARTITION {
+            // A partition the consumer left out while it held its records has
+            // more. Answer with the rows as they stand, so the consumer's next
+            // fetch, which names that partition again, is not held behind
+            // this one's `max_wait_ms`. See `arm_forgotten_waits`.
+            broker.metrics.record_fetch_forgotten_partition_wake();
+            return;
+        }
         // Capture the next broadcast generation before reading again, so an
         // append during that read is observed on the next poll.
         waits.push(Wait::new(woken.pending, woken.notify).boxed());
@@ -1100,7 +1159,7 @@ mod tests {
             responses: topics,
             long_poll_active,
             ..
-        } = super::execute_pending_reads(&broker, pending(), 0, 150, 0, false, &phases).await;
+        } = super::execute_pending_reads(&broker, pending(), &[], budget(0, 150, 0), &phases).await;
         // A fetch that does not wait is all handler work, none of it a long
         // poll.
         assert!(long_poll_active == std::time::Duration::ZERO);
@@ -1211,9 +1270,14 @@ mod tests {
                 .collect()
         };
         let phases = RequestPhases::default();
-        let GroupedResponses { responses, .. } =
-            super::execute_pending_reads(&broker, pending(1), 0, usize::MAX, 0, false, &phases)
-                .await;
+        let GroupedResponses { responses, .. } = super::execute_pending_reads(
+            &broker,
+            pending(1),
+            &[],
+            budget(0, usize::MAX, 0),
+            &phases,
+        )
+        .await;
         let batch_bytes = responses[0].partitions[0]
             .records
             .as_ref()
@@ -1223,10 +1287,8 @@ mod tests {
         let GroupedResponses { responses, .. } = super::execute_pending_reads(
             &broker,
             pending(ENTRIES),
-            0,
-            FITTING * batch_bytes,
-            0,
-            false,
+            &[],
+            budget(0, FITTING * batch_bytes, 0),
             &phases,
         )
         .await;
@@ -1599,11 +1661,17 @@ mod tests {
         // Both an oversized first batch and a fitting first batch spend the
         // response's first-nonempty exception. B cannot use it for the whole
         // batch its WAL source returns beyond the remaining byte budget.
-        for budget in [1, batch_a.len() + 1] {
+        for budget_bytes in [1, batch_a.len() + 1] {
             let GroupedResponses {
                 responses: topics, ..
-            } = super::execute_pending_reads(&broker, pending(), 0, budget, 0, false, &phases)
-                .await;
+            } = super::execute_pending_reads(
+                &broker,
+                pending(),
+                &[],
+                budget(0, budget_bytes, 0),
+                &phases,
+            )
+            .await;
             let served_a = &topics[0].partitions[0];
             let served_b = &topics[1].partitions[0];
             assert!(served_a.error_code == NONE);
@@ -1611,7 +1679,7 @@ mod tests {
                 served_a.records.as_ref().map(RecordsPayload::payload_len) == Some(batch_a.len())
             );
             assert!(served_b.error_code == NONE);
-            assert!(served_b.records.is_none(), "response budget {budget}");
+            assert!(served_b.records.is_none(), "response budget {budget_bytes}");
         }
         broker_handle.shutdown().await;
     }
@@ -1802,6 +1870,62 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
+    /// A consumer that still holds a partition's records leaves it out of its
+    /// next fetch, and that fetch parks on the partitions it did ask for. An
+    /// append to the partition it left out answers the parked fetch at once,
+    /// with the rows as they stand, so the consumer's next fetch, which names
+    /// the partition again, is not held behind this one's `max_wait_ms`.
+    #[tokio::test]
+    async fn an_append_to_a_forgotten_partition_completes_a_parked_consumer_fetch() {
+        const ASKED: &str = "forgotten-wake-asked";
+        const FORGOTTEN: &str = "forgotten-wake-forgotten";
+
+        let ReadSetup {
+            broker_handle,
+            dir,
+            broker,
+            part: asked,
+        } = leader_read_setup(ASKED).await;
+        let forgotten = handler_fixture_support::local_partition(&broker, dir.path(), FORGOTTEN);
+        forgotten
+            .install_replication_target(None, broker.config.node_id.0, 0)
+            .await;
+        let mut pending = [consumer_read(ASKED, &asked, false)];
+
+        // The partition the fetch asked for never appends. Only the one it
+        // left out does, 50 ms in.
+        let mut waits = super::arm_waits(&pending);
+        super::arm_forgotten_waits(&[Arc::clone(&forgotten)], &mut waits);
+        let appender = Arc::clone(&forgotten);
+        let append = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            appender
+                .produce_batch(RecordBatch {
+                    records: vec![Record {
+                        value: Some(Bytes::from_static(b"moved")),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })
+                .await
+                .expect("append to the forgotten partition");
+        });
+        check_blocked_poll_completes()
+            .broker(&broker)
+            .pending(&mut pending)
+            .waits(waits)
+            .failure("the forgotten partition's append completes the long poll")
+            .call()
+            .await;
+        append.await.expect("append task");
+
+        // The fetch answers with what it has, which is nothing for the
+        // partition it asked for.
+        assert!(pending[0].out.records.is_none());
+        assert!(pending[0].out.error_code == NONE);
+        broker_handle.shutdown().await;
+    }
+
     /// Kafka's `DelayedFetch.tryComplete` completes a parked follower fetch
     /// when the partition's leader changes. A follower fetch parked below its
     /// `min_bytes` floor on a partition that then moves to another leader
@@ -1987,6 +2111,16 @@ mod tests {
         .expect(setup.failure);
     }
 
+    /// A read budget with `sendfile` off.
+    fn budget(min_bytes: i32, response_max_bytes: usize, max_wait_ms: i32) -> super::ReadBudget {
+        super::ReadBudget {
+            min_bytes,
+            response_max_bytes,
+            max_wait_ms,
+            sendfile_capable: false,
+        }
+    }
+
     /// The accumulator a fetch carries into the long poll, for a pending set
     /// that has just been read and produced `bytes` bytes in total.
     #[bon::builder]
@@ -2088,10 +2222,8 @@ mod tests {
         } = super::execute_pending_reads(
             &broker,
             pending,
-            min_bytes,
-            usize::MAX,
-            30_000,
-            false,
+            &[],
+            budget(min_bytes, usize::MAX, 30_000),
             &phases,
         )
         .await;
@@ -2157,7 +2289,7 @@ mod tests {
     ) -> Vec<krabka_protocol::owned::fetch_response::FetchableTopicResponse> {
         let phases = RequestPhases::default();
         let GroupedResponses { responses, .. } =
-            super::execute_pending_reads(broker, pending, 0, 8, 0, false, &phases).await;
+            super::execute_pending_reads(broker, pending, &[], budget(0, 8, 0), &phases).await;
         responses
     }
 

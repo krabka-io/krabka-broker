@@ -179,6 +179,7 @@ bucket of a phase says nothing about the same bucket of the total.
 | `krabka_broker_incremental_fetch_sessions` | gauge | - | `FetchSessionCache,name=NumIncrementalFetchSessions` | KIP-227 live fetch sessions. |
 | `krabka_broker_incremental_fetch_session_evictions_total` | counter | - | `FetchSessionCache,name=IncrementalFetchSessionEvictionsPerSec` | Sessions evicted to make room. |
 | `krabka_broker_incremental_fetch_partitions_cached` | gauge | - | `FetchSessionCache,name=NumIncrementalFetchPartitionsCached` | Partitions held across every live session. |
+| `krabka_broker_fetch_forgotten_partition_wakes_total` | counter | - | - | Consumer fetches parked below `fetch.min.bytes` that the broker answered early, with no records, because a partition the fetch session had forgotten in the last 100 ms received records. The Java consumer forgets a partition while it still holds that partition's records and names it again once it has drained them; the early answer lets it do that at once instead of after `fetch.max.wait.ms`. A rate well above `topic_fetch_requests_total`'s share of records is a consumer that lags behind one busy partition. |
 | `krabka_broker_client_metrics_otlp_dropped_total` | counter | - | - | KIP-714 client-metric batches dropped because the OTLP queue was full or closed. |
 | `krabka_broker_client_metrics_otlp_failed_total` | counter | - | - | KIP-714 export attempts the collector rejected or the transport failed. |
 

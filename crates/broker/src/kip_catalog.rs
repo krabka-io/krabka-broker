@@ -277,7 +277,7 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
         status: KipStatus::Implemented,
         module: "crates/broker/src/fetch_session.rs",
         tests: &["crates/broker/tests/fetch_session.rs"],
-        note: "",
+        note: "A consumer fetch parked below `fetch.min.bytes` is answered early, with no records, when a partition its session forgot in the last 100 ms receives records. The Java consumer leaves a partition out of its next fetch while it still holds that partition's records from the previous response, and names it again once it has drained them. Without the early answer that fetch waits out `fetch.max.wait.ms` on the idle partitions it did name while the busy partition it left out gathers records; Kafka's `DelayedFetch` has no such wake. `fetch_forgotten_partition_wakes_total` counts the early answers.",
     },
     KipAnnotation {
         key: "KIP-255",
