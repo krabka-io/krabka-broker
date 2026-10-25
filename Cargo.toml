@@ -174,7 +174,7 @@ schemars = "1.2"
 serde = { version = "1", features = ["derive"] }
 serde-wincode = "=0.1.2"
 serde_json = "1"
-jsonschema = { version = "0.59", default-features = false }
+jsonschema = { version = "0.60", default-features = false }
 # KFC-7 Protobuf body validation: the descriptor pool a cached schema closure
 # keeps. The same versions krabka-schema-serde resolves.
 prost-reflect = "0.16"
