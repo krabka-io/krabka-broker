@@ -133,10 +133,12 @@ impl Segment {
     /// per batch header, each up to a window ahead of the last, and only then
     /// sends the run. On a cold segment each of those `pread`s is a disk read
     /// of its own, made one after another, and the scattered pages they leave
-    /// behind keep the kernel's sequential readahead from growing. One
-    /// `WILLNEED` over the whole window turns them into a few large reads in
-    /// flight at once, and the part past the window makes the next fetch of a
-    /// consumer that is behind a page-cache hit. Kafka's fetch needs no hint:
+    /// behind keep the kernel's sequential readahead from growing. A
+    /// `WILLNEED` hint over the whole window turns them into a few large reads
+    /// in flight at once, and the part past the window makes the next fetch of
+    /// a consumer that is behind a page-cache hit. This asks [`LogIo`] once for
+    /// the whole range. The real file I/O splits it into 128 KiB `WILLNEED`
+    /// calls, because Linux reads only the start of one large range. Kafka's fetch needs no hint:
     /// it reads no batch header past the one it starts at, and sends a slice
     /// that may end in a partial batch.
     pub(super) fn advise_read(&self, start_pos: u64, window: u64, read_ahead_max: ByteSize) {

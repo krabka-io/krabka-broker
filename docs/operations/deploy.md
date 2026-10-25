@@ -102,6 +102,17 @@ The parts that carry the design:
 - The pod uses the `RuntimeDefault` seccomp profile. See
   [Seccomp and io_uring](#seccomp-and-io_uring).
 
+#### Log volume mount options
+
+On ext4, a buffered append changes the inode timestamps on each `write()`.
+Under load, that change waits for the commit of the jbd2 journal
+(`ext4_dirty_inode` calls `jbd2_journal_get_write_access`). The `lazytime`
+mount option stops ext4 from journaling a change that touches only the
+timestamps, so you can mount the log volume with `lazytime` to remove this
+wait. krabka has not measured the effect of `lazytime` yet.
+[#1333](https://github.com/krabka-io/krabka-broker/issues/1333) tracks the
+direct I/O work for log segments.
+
 #### Seccomp and io_uring
 
 A segment of a `preallocate=true` log writes its data with `O_DIRECT`. The
