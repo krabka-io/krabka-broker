@@ -18,7 +18,7 @@ use {
     },
     krabka_ids::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord},
-    krabka_protocol::records::{RecordBatch, metadata::control::ControlRecord},
+    krabka_protocol::records::{Record, RecordBatch, metadata::control::ControlRecord},
     krabka_verified::recovery::{
         ReplayCursorDecision, ReplayRecordDecision, replay_cursor_decision, replay_record_decision,
         should_capture_first_downgrade,
@@ -46,6 +46,27 @@ fn visit_decoded_batches(
         }
     }
     Ok(())
+}
+
+/// The offset and value of `rec`, a record of `batch`, when a replay over
+/// `[from, target)` applies it: a metadata record in that range with a value.
+fn metadata_record_in<'a>(
+    batch: &RecordBatch,
+    rec: &'a Record,
+    from: Offset,
+    target: Offset,
+) -> Option<(Offset, &'a [u8])> {
+    let ReplayRecordDecision::Apply(offset) = replay_record_decision(
+        batch.base_offset,
+        rec.offset_delta,
+        from.0,
+        target.0,
+        batch.attributes.is_control_batch(),
+        false,
+    ) else {
+        return None;
+    };
+    rec.value.as_deref().map(|value| (Offset(offset), value))
 }
 
 /// Replay committed log batches starting at `from` into `image` (idempotent:
@@ -94,18 +115,8 @@ pub fn replay_committed_with_timestamp(
                 replay.last_applied_timestamp_ms = Some(batch.max_timestamp);
             }
             for rec in &batch.records {
-                let ReplayRecordDecision::Apply(record_offset) = replay_record_decision(
-                    batch.base_offset,
-                    rec.offset_delta,
-                    from.0,
-                    target.0,
-                    batch.attributes.is_control_batch(),
-                    false,
-                ) else {
-                    continue;
-                };
-                let record_offset = Offset(record_offset);
-                let Some(value) = rec.value.as_ref() else {
+                let Some((record_offset, value)) = metadata_record_in(batch, rec, from, target)
+                else {
                     continue;
                 };
                 // A record that does not decode stops recovery; one that
@@ -178,21 +189,12 @@ pub fn with_uncommitted_feature_levels(
         |batches, from, target| {
             for batch in batches {
                 for rec in &batch.records {
-                    let ReplayRecordDecision::Apply(record_offset) = replay_record_decision(
-                        batch.base_offset,
-                        rec.offset_delta,
-                        from.0,
-                        target.0,
-                        batch.attributes.is_control_batch(),
-                        false,
-                    ) else {
-                        continue;
-                    };
-                    let Some(value) = rec.value.as_ref() else {
+                    let Some((record_offset, value)) = metadata_record_in(batch, rec, from, target)
+                    else {
                         continue;
                     };
                     if let Ok(Some(meta @ MetadataRecord::V1FeatureLevel(_))) =
-                        decode_committed_value(value, &image, record_offset)
+                        decode_committed_value(value, &image, record_offset.0)
                         && image.validate(&meta).is_ok()
                     {
                         image.apply(&meta);
@@ -264,7 +266,7 @@ fn replay_control_records_until(
 /// describes.
 fn apply_control_record(
     state: &mut QuorumState,
-    record: &krabka_protocol::records::Record,
+    record: &Record,
     offset: i64,
 ) -> Result<(), MetadataReplayError> {
     let invalid = |reason: String| MetadataReplayError::InvalidControlRecord { offset, reason };

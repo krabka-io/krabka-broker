@@ -102,15 +102,11 @@ fn protected_metadata_files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         .collect()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
-    let dir = TempDir::new().unwrap();
-    let cluster_id = Uuid::new_v4();
-
-    // The first boot has the flag on and finalizes the unstable level.
+/// Boot a node with the flag on, finalize the unstable level, and stop it.
+async fn finalize_unstable_level(dir: &TempDir, cluster_id: Uuid) {
     let controller = Controller::start(
         config()
-            .dir(&dir)
+            .dir(dir)
             .cluster_id(cluster_id)
             .unstable(UnstableFeatureVersions::Enabled)
             .call(),
@@ -123,15 +119,13 @@ async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
         .await
         .expect("finalize the unstable level");
     controller.shutdown().await;
+}
 
-    let metadata_dir = metadata_partition_dir(dir.path());
-    let before = protected_metadata_files(&metadata_dir);
-    assert!(!before.is_empty());
-
-    // With the flag off the node refuses the log, with Kafka's message.
+/// Start the node of `dir` with the flag off, and return its refusal.
+async fn refused_start(dir: &TempDir, cluster_id: Uuid) -> RaftError {
     let Err(refused) = Controller::start(
         config()
-            .dir(&dir)
+            .dir(dir)
             .cluster_id(cluster_id)
             .mode(BootstrapMode::Rejoin)
             .call(),
@@ -140,6 +134,23 @@ async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
     else {
         panic!("a controller without the flag started over an unstable log");
     };
+    refused
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_log_finalized_at_an_unstable_level_starts_only_with_the_flag_on() {
+    let dir = TempDir::new().unwrap();
+    let cluster_id = Uuid::new_v4();
+
+    // The first boot has the flag on and finalizes the unstable level.
+    finalize_unstable_level(&dir, cluster_id).await;
+
+    let metadata_dir = metadata_partition_dir(dir.path());
+    let before = protected_metadata_files(&metadata_dir);
+    assert!(!before.is_empty());
+
+    // With the flag off the node refuses the log, with Kafka's message.
+    let refused = refused_start(&dir, cluster_id).await;
     check!(matches!(&refused, RaftError::FatalFault(message) if message == REFUSAL));
     check!(refused.to_string() == format!("Encountered fatal fault: {REFUSAL}"));
     check!(protected_metadata_files(&metadata_dir) == before);
@@ -183,21 +194,7 @@ async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
 ) {
     let dir = TempDir::new().unwrap();
     let cluster_id = Uuid::new_v4();
-    let controller = Controller::start(
-        config()
-            .dir(&dir)
-            .cluster_id(cluster_id)
-            .unstable(UnstableFeatureVersions::Enabled)
-            .call(),
-    )
-    .await
-    .expect("first boot");
-    wait_for_leader(&controller).await;
-    controller
-        .submit_change(finalize_unstable_metadata_version())
-        .await
-        .expect("finalize the unstable level");
-    controller.shutdown().await;
+    finalize_unstable_level(&dir, cluster_id).await;
 
     let metadata_dir = metadata_partition_dir(dir.path());
     let high_watermark_path = metadata_dir.join("high-watermark");
@@ -208,17 +205,7 @@ async fn a_level_above_the_recovered_high_watermark_is_refused_before_any_write(
     }
     let before = protected_metadata_files(&metadata_dir);
 
-    let Err(refused) = Controller::start(
-        config()
-            .dir(&dir)
-            .cluster_id(cluster_id)
-            .mode(BootstrapMode::Rejoin)
-            .call(),
-    )
-    .await
-    else {
-        panic!("a controller without the flag started over an unstable log");
-    };
+    let refused = refused_start(&dir, cluster_id).await;
     check!(matches!(&refused, RaftError::FatalFault(message) if message == REFUSAL));
     check!(protected_metadata_files(&metadata_dir) == before);
 }
