@@ -6,7 +6,8 @@
 use {
     crate::{
         client_metrics::{
-            ClientMetrics, ClientMetricsManager, prometheus_sink::SharedClientMetricsCollector,
+            ClientMetrics, ClientMetricsManager,
+            prometheus_sink::{SeriesCeilings, SeriesStats, SharedClientMetricsCollector},
         },
         config::BrokerConfig,
         error::BrokerError,
@@ -66,18 +67,29 @@ pub(super) async fn start_observability(
             }
         })?;
     }
-    let client_metrics = Arc::new(ClientMetrics::new(
-        ClientMetricsManager::new(
-            config.client_metrics_telemetry_max,
-            config.client_metrics_default_interval.millis_i32(),
-        ),
-        config.client_metrics_otlp_endpoint.clone(),
-        config.client_metrics_otlp_protocol,
-        config.client_metrics_otlp_queue_capacity,
-        config.client_metrics_prom_snapshot_ttl,
-        metrics.client_metrics_otlp_dropped_total.clone(),
-        metrics.client_metrics_otlp_failed_total.clone(),
-    ));
+    let client_metrics = Arc::new(
+        ClientMetrics::builder()
+            .manager(ClientMetricsManager::new(
+                config.client_metrics_telemetry_max,
+                config.client_metrics_default_interval.millis_i32(),
+            ))
+            .maybe_otlp_endpoint(config.client_metrics_otlp_endpoint.clone())
+            .otlp_protocol(config.client_metrics_otlp_protocol)
+            .otlp_queue_capacity(config.client_metrics_otlp_queue_capacity)
+            .prometheus_snapshot_ttl(config.client_metrics_prom_snapshot_ttl)
+            .prometheus_ceilings(
+                SeriesCeilings::builder()
+                    .total(config.client_metrics_prom_max_series)
+                    .per_principal(config.client_metrics_prom_max_series_per_principal)
+                    .per_client(config.client_metrics_prom_max_series_per_client)
+                    .per_instance(config.client_metrics_prom_max_series_per_instance)
+                    .build(),
+            )
+            .prometheus_stats(SeriesStats::of(metrics))
+            .otlp_dropped(metrics.client_metrics_otlp_dropped_total.clone())
+            .otlp_failed(metrics.client_metrics_otlp_failed_total.clone())
+            .build(),
+    );
     metrics
         .registry
         .lock()
@@ -95,7 +107,7 @@ pub(super) async fn start_observability(
         loop {
             tokio::select! {
                 () = eviction_shutdown.cancelled() => return,
-                _ = tick.tick() => eviction_metrics.manager.evict_stale(
+                _ = tick.tick() => eviction_metrics.evict_stale(
                     stale_push_intervals,
                     stale_floor.to_std(),
                 ),

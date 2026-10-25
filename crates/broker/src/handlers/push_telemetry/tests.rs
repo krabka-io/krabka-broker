@@ -449,3 +449,90 @@ async fn push_checks_metrics_against_the_instances_first_attributes() {
     );
     broker_handle.shutdown().await;
 }
+
+/// Connection churn: every connection takes a fresh instance id and a fresh
+/// `client_id`, pushes one series and goes. Neither id is the client's to be
+/// trusted with, so the per-principal ceiling holds the retained count
+/// whether the connections close at once or linger, and closing them all
+/// drains the collector to zero.
+#[tokio::test]
+async fn connection_churn_stays_under_the_ceiling_and_drains_to_zero() {
+    const CEILING: usize = 20;
+    const CONNECTIONS: u128 = 200;
+    let HandlerStartedBroker {
+        broker: broker_handle,
+        dir: _dir,
+    } = start_broker_with(|cfg| {
+        cfg.client_metrics_enable = true;
+        cfg.client_metrics_prom_max_series_per_principal = CEILING;
+        cfg.client_metrics_prom_max_series_per_client = 1;
+        cfg.client_metrics_prom_max_series_per_instance = 1;
+    })
+    .await;
+    broker_handle
+        .submit_metadata_record_for_test(MetadataRecord::V1ClientMetricsConfig(
+            ClientMetricsConfigRecord {
+                name: "cpu".into(),
+                configs: [("metrics".to_string(), "cpu.utilization".to_string())].into(),
+            },
+        ))
+        .await
+        .expect("submit client-metrics subscription");
+    let broker = broker_handle.broker_arc_for_test();
+    let collector = &broker.client_metrics.prometheus;
+    let peer = peer();
+    let principal = broker_fixture_support::principal("churning-client");
+    for (row, (name, close_each, expected_peak)) in (0u128..).zip([
+        ("connect, push and disconnect", true, 1),
+        ("connect and push, disconnect later", false, CEILING),
+    ]) {
+        let mut peak = 0;
+        let connections = (0..CONNECTIONS)
+            .map(|index| {
+                (
+                    Uuid::from_u128((row + 1) << 64 | index),
+                    format!("{row}-{index}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (instance, connection_id) in &connections {
+            let client = Client {
+                broker: &broker,
+                ctx: TelemetryContext {
+                    principal: &principal,
+                    connection_id,
+                    client_id: connection_id,
+                    peer: &peer,
+                    software_name: "test-client",
+                    software_version: "1.0.0",
+                },
+            };
+            let subscription = client.get(*instance);
+            assert!(
+                client.push(PushSetup {
+                    instance: *instance,
+                    subscription,
+                    compression: TelemetryCompression::Gzip,
+                    metrics: gzip(&otlp()),
+                }) == response(KafkaErrorCode(codes::NONE)),
+                "row {name}"
+            );
+            peak = peak.max(collector.retained_series());
+            if close_each {
+                broker.client_metrics.connection_closed(connection_id);
+            }
+        }
+        for (_, connection_id) in &connections {
+            broker.client_metrics.connection_closed(connection_id);
+        }
+        assert!(
+            (
+                peak,
+                collector.retained_series(),
+                collector.stats().retained.get()
+            ) == (expected_peak, 0, 0),
+            "row {name}"
+        );
+    }
+    broker_handle.shutdown().await;
+}

@@ -254,6 +254,10 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         audit_records_dropped_total: _,
         client_metrics_otlp_dropped_total: _,
         client_metrics_otlp_failed_total: _,
+        client_metrics_series_accepted_total: _,
+        client_metrics_series_rejected: _,
+        client_metrics_series_evicted: _,
+        client_metrics_retained_series: _,
         log_cleaner_runs_total: _,
         log_cleaner_failures: _,
         log_retention_runs_total: _,
@@ -426,8 +430,9 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
 /// Gives one label set to every family whose label type no other family
 /// shares. [`seed_grouped_families`] marks each of these with `_`.
 ///
-/// `fetch_response_drain` is also marked `_`, but needs no seed: registration
-/// creates all three of its `path` series at zero.
+/// `fetch_response_drain`, `client_metrics_series_rejected` and
+/// `client_metrics_series_evicted` are also marked `_`, but need no seed:
+/// registration creates every one of their closed-enum series at zero.
 fn seed_single_families(metrics: &BrokerMetrics) {
     drop(metrics.replica_lag.get_or_create(&ReplicaLagLabel {
         topic: "orders".into(),

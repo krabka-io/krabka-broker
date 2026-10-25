@@ -329,6 +329,23 @@ krabka_broker_client_metrics_otlp_dropped_total 0
 # HELP krabka_broker_client_metrics_otlp_failed Cumulative failed KIP-714 client-metric OTLP export attempts.
 # TYPE krabka_broker_client_metrics_otlp_failed counter
 krabka_broker_client_metrics_otlp_failed_total 0
+# HELP krabka_broker_client_metrics_series_accepted Cumulative KIP-714 client-metric series stored by the Prometheus sink, counted as the series a scrape renders.
+# TYPE krabka_broker_client_metrics_series_accepted counter
+krabka_broker_client_metrics_series_accepted_total 0
+# HELP krabka_broker_client_metrics_series_rejected Cumulative KIP-714 client-metric series refused by the Prometheus sink, labelled by reason: instance_ceiling, client_ceiling, principal_ceiling, global_ceiling, validation.
+# TYPE krabka_broker_client_metrics_series_rejected counter
+krabka_broker_client_metrics_series_rejected_total{reason="client_ceiling"} 0
+krabka_broker_client_metrics_series_rejected_total{reason="global_ceiling"} 0
+krabka_broker_client_metrics_series_rejected_total{reason="instance_ceiling"} 0
+krabka_broker_client_metrics_series_rejected_total{reason="principal_ceiling"} 0
+krabka_broker_client_metrics_series_rejected_total{reason="validation"} 0
+# HELP krabka_broker_client_metrics_series_evicted Cumulative KIP-714 client-metric series dropped by the Prometheus sink, labelled by reason: ttl, disconnect.
+# TYPE krabka_broker_client_metrics_series_evicted counter
+krabka_broker_client_metrics_series_evicted_total{reason="disconnect"} 0
+krabka_broker_client_metrics_series_evicted_total{reason="ttl"} 0
+# HELP krabka_broker_client_metrics_retained_series KIP-714 client-metric series currently held by the Prometheus sink.
+# TYPE krabka_broker_client_metrics_retained_series gauge
+krabka_broker_client_metrics_retained_series 0
 # HELP krabka_broker_log_cleaner_runs Cumulative count of clean log-compaction sweeps run by this broker's cleaner (one per tick_all pass that failed no partition)..
 # TYPE krabka_broker_log_cleaner_runs counter
 krabka_broker_log_cleaner_runs_total 0

@@ -527,6 +527,61 @@ pub struct FetchDrainPathLabel {
     pub path: FetchDrainPath,
 }
 
+/// Why the KIP-714 Prometheus sink refused client-metric series.
+///
+/// The four ceilings are the retained-series bounds of the client-metrics
+/// collector, from the narrowest to the widest; a point that would pass more
+/// than one counts against the narrowest. `Validation` is a push that failed
+/// decompression, OTLP decoding, the subscription filter or the per-push
+/// bounds, which the broker answers with an error and stores nothing from.
+///
+/// `ALL` lists every reason. Registration creates all five series at zero
+/// from it.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(case = "snake_case", all, label_value)]
+pub enum ClientMetricsRejection {
+    /// The client instance already holds its ceiling of series.
+    InstanceCeiling,
+    /// The `client_id` already holds its ceiling of series.
+    ClientCeiling,
+    /// The authenticated principal already holds its ceiling of series.
+    PrincipalCeiling,
+    /// The collector already holds its broker-wide ceiling of series.
+    GlobalCeiling,
+    /// The push failed validation and none of its series were stored.
+    Validation,
+}
+
+/// Rejection-reason label set, paired with the `client_metrics_series_rejected`
+/// counter family. Cardinality is bounded at five, because the field is the
+/// closed [`ClientMetricsRejection`] enum.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ClientMetricsRejectionLabel {
+    pub reason: ClientMetricsRejection,
+}
+
+/// Why the KIP-714 Prometheus sink dropped series it had retained.
+///
+/// `ALL` lists every reason. Registration creates both series at zero from
+/// it.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, krabka_macros::EnumStr)]
+#[enum_str(case = "snake_case", all, label_value)]
+pub enum ClientMetricsEviction {
+    /// The series outlived `client_metrics_prom_snapshot_ttl` without an
+    /// update.
+    Ttl,
+    /// The connection that created the series' client instance closed.
+    Disconnect,
+}
+
+/// Eviction-reason label set, paired with the `client_metrics_series_evicted`
+/// counter family. Cardinality is bounded at two, because the field is the
+/// closed [`ClientMetricsEviction`] enum.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct ClientMetricsEvictionLabel {
+    pub reason: ClientMetricsEviction,
+}
+
 #[cfg(test)]
 mod tests {
     use {
