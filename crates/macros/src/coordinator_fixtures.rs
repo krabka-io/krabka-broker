@@ -2,14 +2,14 @@
 
 use {
     crate::{
-        meta::{expect_name, grouped_value, native_groups, nonempty_paths},
+        meta::{expect_name, grouped_value, native_groups, next_group, nonempty_paths},
         sweep_loop::{SpliceValue, splice},
     },
     moxy::{ast::ParseError, token::TokenStream},
     proc_macro::{Delimiter, Group, TokenStream as NativeTokenStream},
 };
 
-pub(crate) fn heartbeat(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn heartbeat(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let responses = nonempty_paths(input, "expected heartbeat response paths")?;
     Ok(moxy::template! {
         @for response in responses {
@@ -80,9 +80,9 @@ fn key_boundary_template(input: &TokenStream) -> Result<TokenStream, ParseError>
     })
 }
 
-pub(crate) fn key_boundaries(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn key_boundaries(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let template = key_boundary_template(&input.clone().into())?;
-    let factory = native_groups(input).next().expect("validated factory");
+    let factory = next_group(&mut native_groups(input), "a factory")?;
     let mut group = Group::new(Delimiter::None, factory.stream());
     group.set_span(factory.span());
     Ok(splice(
@@ -149,13 +149,13 @@ fn commit_template(input: &TokenStream) -> Result<TokenStream, ParseError> {
 
 /// Land the commit-wait fixture's changes after its wait has started. Capture
 /// statements and leader/notify actions stay explicit at each caller.
-pub(crate) fn commit_changes(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn commit_changes(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let template = commit_template(&input.clone().into())?;
     let mut groups = native_groups(input);
-    let captures = groups.next().expect("validated captures");
-    let _parameters = groups.next().expect("validated bindings");
-    let leader = groups.next().expect("validated leader operation");
-    let notify = groups.next().expect("validated notify operation");
+    let captures = next_group(&mut groups, "captures")?;
+    let _parameters = next_group(&mut groups, "bindings")?;
+    let leader = next_group(&mut groups, "a leader operation")?;
+    let notify = next_group(&mut groups, "a notify operation")?;
     let mut capture_group = Group::new(Delimiter::None, captures.stream());
     capture_group.set_span(captures.span());
     let values = [

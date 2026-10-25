@@ -60,12 +60,13 @@ pub(super) fn checkpoint_truncation_bounds_fetch(
         && (match observed_last { Some(last) => last@ == ends@[j]@ - 1, None => false }) && cut@ <= ends@[j]@)]
     #[variant(ends@.len() - i@)]
     while i < ends.len() {
-        let last = ends[i] - 1;
-        if observed_last.is_none() && cut <= ends[i] {
+        let &batch_end = ends.get(i)?;
+        let last = batch_end - 1;
+        if observed_last.is_none() && cut <= batch_end {
             observed_last = Some(last);
         }
         if truncation_batch_retained(last, cut) {
-            actual_end = ends[i];
+            actual_end = batch_end;
             kept += 1;
         }
         i += 1;

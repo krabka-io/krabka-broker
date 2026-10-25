@@ -16,7 +16,7 @@ mod reader;
 mod voters;
 mod writer;
 
-pub(crate) use self::{reader::SnapshotReader, writer::SnapshotWriter};
+pub use self::{reader::SnapshotReader, writer::SnapshotWriter};
 
 const SNAPSHOT_HEADER_BASE_OFFSET: i64 = 0;
 const SNAPSHOT_KRAFT_VERSION_BASE_OFFSET: i64 = 1;
@@ -25,7 +25,7 @@ const SNAPSHOT_DATA_BASE_OFFSET: i64 = 3;
 
 /// KIP-853 control state carried at the front of every metadata snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SnapshotControlState {
+pub struct SnapshotControlState {
     pub(crate) kraft_version: u16,
     pub(crate) voters: VoterSet,
 }
@@ -42,7 +42,7 @@ impl SnapshotControlState {
 /// A decoded snapshot, with Raft control state kept separate from KIP-631
 /// metadata records.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct SnapshotContents {
+pub struct SnapshotContents {
     /// KIP-853 controls. Snapshots written before dynamic membership omit
     /// these batches and recover membership from the level-0 configuration.
     pub(crate) control_state: Option<SnapshotControlState>,

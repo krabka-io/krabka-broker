@@ -24,19 +24,19 @@ mod aborted_txns;
 mod blocking;
 mod delivery;
 mod fetch;
-pub(crate) mod lineage;
+pub mod lineage;
 mod partition_read;
 mod pool;
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 mod tiered_offsets;
 mod timestamp_lookup;
 
-pub(crate) use {delivery::segment_activation_frontier, pool::ReaderPool};
+pub use {delivery::segment_activation_frontier, pool::ReaderPool};
 
 /// One decoded aborted-transaction entry from a remote segment's `.txnindex`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AbortedTxnEntry {
+pub struct AbortedTxnEntry {
     pub(crate) start_offset: LogOffset,
     pub(crate) last_offset: LogOffset,
     pub(crate) producer_id: i64,
@@ -49,7 +49,7 @@ pub(crate) struct AbortedTxnEntry {
 /// [`RemoteReaderLimits::unbounded`] is the shape the in-process tests use:
 /// no cap and no cache, which is what the reader did before KIP-405's own
 /// limits were wired in.
-pub(crate) struct RemoteReaderLimits {
+pub struct RemoteReaderLimits {
     pub(crate) index_cache: Arc<RemoteIndexCache>,
     pub(crate) pool: ReaderPool,
 }
@@ -67,7 +67,7 @@ impl RemoteReaderLimits {
 }
 
 /// Holds the broker's shared `RSM` and `RLMM`, and serves remote reads.
-pub(crate) struct RemoteReader {
+pub struct RemoteReader {
     pub(crate) rsm: Arc<dyn RemoteStorageManager>,
     pub(crate) rlmm: Arc<dyn RemoteLogMetadataManager>,
     /// The bounded on-disk cache of the segments' index objects.
@@ -79,7 +79,7 @@ pub(crate) struct RemoteReader {
 /// The last offset durably copied to the remote tier and the leader epoch
 /// that owns it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TieredOffset {
+pub struct TieredOffset {
     pub(crate) offset: LogOffset,
     pub(crate) leader_epoch: LeaderEpoch,
 }

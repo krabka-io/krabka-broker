@@ -9,14 +9,14 @@ use opentelemetry_proto::tonic::metrics::v1::{
     number_data_point,
 };
 
-pub(crate) fn number_point(value: number_data_point::Value) -> NumberDataPoint {
+pub fn number_point(value: number_data_point::Value) -> NumberDataPoint {
     NumberDataPoint {
         value: Some(value),
         ..Default::default()
     }
 }
 
-pub(crate) fn metrics_data(metrics: Vec<Metric>) -> MetricsData {
+pub fn metrics_data(metrics: Vec<Metric>) -> MetricsData {
     MetricsData {
         resource_metrics: vec![ResourceMetrics {
             scope_metrics: vec![ScopeMetrics {
@@ -29,7 +29,7 @@ pub(crate) fn metrics_data(metrics: Vec<Metric>) -> MetricsData {
 }
 
 /// A one-point gauge for the OTLP input fixtures; expected Prometheus output stays explicit.
-pub(crate) fn gauge_metric(name: &str, value: number_data_point::Value) -> Metric {
+pub fn gauge_metric(name: &str, value: number_data_point::Value) -> Metric {
     Metric {
         name: name.into(),
         data: Some(metric::Data::Gauge(Gauge {

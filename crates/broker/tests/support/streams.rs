@@ -12,6 +12,7 @@ use {
         update_features_request::UpdateFeaturesRequest,
     },
     std::time::Duration,
+    tokio::time,
 };
 pub async fn finalize_streams_version(client: &Client) {
     let resp = client
@@ -132,7 +133,7 @@ pub async fn streams_join_and_converge(
         // intentional: retry/backoff between bounded streams-heartbeat RPC polls;
         // task-assignment convergence is streams-coordinator-local state, not in
         // the metadata image and exposed by no metric — no awaiter can observe it.
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
         let active = request_active_tasks(&resp);
         resp = client
             .send(

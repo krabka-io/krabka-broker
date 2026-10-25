@@ -144,7 +144,7 @@ pub enum Role {
 
 impl Default for Role {
     fn default() -> Self {
-        Role::Unattached {
+        Self::Unattached {
             election_deadline: SimInstant(0),
         }
     }
@@ -152,7 +152,7 @@ impl Default for Role {
 
 impl Role {
     #[must_use]
-    pub fn is_leader(&self) -> bool { matches!(self, Role::Leader { .. }) }
+    pub fn is_leader(&self) -> bool { matches!(self, Self::Leader { .. }) }
 }
 
 #[cfg(test)]

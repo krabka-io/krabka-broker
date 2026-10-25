@@ -4,9 +4,15 @@
 //! test replaces the real clock with one it advances by hand and the liveness
 //! windows stay deterministic.
 
-#[cfg(test)]
-use std::time::Duration;
 use std::time::Instant;
+#[cfg(test)]
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 /// Monotonic time source for liveness tracking.
 ///
@@ -18,21 +24,16 @@ use std::time::Instant;
 pub(super) enum Clock {
     Real,
     #[cfg(test)]
-    Test(std::sync::Arc<TestClockInner>),
+    Test(Arc<TestClockInner>),
 }
 
 impl Clock {
     pub(super) fn now(&self) -> Instant {
         match self {
-            Clock::Real => Instant::now(),
+            Self::Real => Instant::now(),
             #[cfg(test)]
-            Clock::Test(inner) => {
-                inner.base
-                    + Duration::from_nanos(
-                        inner
-                            .offset_nanos
-                            .load(std::sync::atomic::Ordering::Relaxed),
-                    )
+            Self::Test(inner) => {
+                inner.base + Duration::from_nanos(inner.offset_nanos.load(Ordering::Relaxed))
             }
         }
     }
@@ -41,7 +42,7 @@ impl Clock {
 #[cfg(test)]
 pub(super) struct TestClockInner {
     base: Instant,
-    offset_nanos: std::sync::atomic::AtomicU64,
+    offset_nanos: AtomicU64,
 }
 
 /// Test handle for the controllable [`Clock`]. It shares its inner state with
@@ -49,23 +50,23 @@ pub(super) struct TestClockInner {
 /// liveness state under test observes every `advance`. Tests in other modules
 /// reach it through [`ControllerLivenessState::with_test_clock`].
 #[cfg(test)]
-pub(crate) struct TestClock(std::sync::Arc<TestClockInner>);
+pub struct TestClock(Arc<TestClockInner>);
 
 #[cfg(test)]
 impl TestClock {
     pub(crate) fn new() -> Self {
-        Self(std::sync::Arc::new(TestClockInner {
+        Self(Arc::new(TestClockInner {
             base: Instant::now(),
-            offset_nanos: std::sync::atomic::AtomicU64::new(0),
+            offset_nanos: AtomicU64::new(0),
         }))
     }
 
     pub(crate) fn advance(&self, by: Duration) {
         self.0.offset_nanos.fetch_add(
             u64::try_from(by.as_nanos()).expect("advance fits u64 nanos"),
-            std::sync::atomic::Ordering::Relaxed,
+            Ordering::Relaxed,
         );
     }
 
-    pub(super) fn clock(&self) -> Clock { Clock::Test(self.0.clone()) }
+    pub(super) fn clock(&self) -> Clock { Clock::Test(Arc::clone(&self.0)) }
 }

@@ -13,14 +13,15 @@ use {
         Decode, Encode,
         owned::no_op_record::NoOpRecord,
         records::{
-            Record, RecordBatch,
+            self, Record, RecordBatch,
             metadata::{KraftMetadataRecord, control::ControlRecord, decode_value_header},
         },
     },
 };
 
-/// Decodes the committed metadata value at `offset` against `image`, as every
-/// controller replay path reads it: live apply, restart recovery, the
+/// Decodes the committed metadata value at `offset` against `image`.
+///
+/// Every controller replay path reads it so: live apply, restart recovery, the
 /// downgrade-snapshot rebuild and the leader's walk of an earlier epoch's
 /// tail.
 ///
@@ -124,7 +125,7 @@ pub fn metadata_record_batch(
     }
 
     let deltas = krabka_verified::metadata_record_offset_deltas(blobs.len()).ok_or_else(|| {
-        RaftError::ChangeRejected("metadata batch offset deltas exceed i32".to_string())
+        RaftError::ChangeRejected("metadata batch offset deltas exceed i32".to_owned())
     })?;
     // The kernel returns one delta per record, so the batch is non-empty.
     let last_offset_delta = deltas.last().copied().unwrap_or_default();
@@ -165,7 +166,7 @@ pub fn typed_control_batch(
         .collect::<Result<Vec<_>, krabka_protocol::ProtocolError>>()?;
     Ok(RecordBatch {
         partition_leader_epoch: i32::try_from(leader_epoch).unwrap_or(i32::MAX),
-        attributes: krabka_protocol::records::Attributes::default().with_control(true),
+        attributes: records::Attributes::default().with_control(true),
         last_offset_delta: i32::try_from(controls.len().saturating_sub(1)).unwrap_or(i32::MAX),
         records,
         ..Default::default()
@@ -373,7 +374,9 @@ pub fn next_batch_offset(batches: &[RecordBatch]) -> Option<Offset> {
 
 #[cfg(test)]
 mod metadata_record_batch_tests {
-    use {super::*, assert2::check};
+    use {
+        super::*, assert2::check, krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord,
+    };
 
     #[yare::parameterized(
         empty = { Vec::new(), Vec::new() },
@@ -407,7 +410,7 @@ mod metadata_record_batch_tests {
     #[test]
     fn metadata_control_batch_keeps_the_leader_epoch() {
         let control = typed_control_batch(7, &[ControlRecord::KRaftVersion(
-            krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord::default(),
+            KRaftVersionRecord::default(),
         )])
         .expect("control batch");
         check!(control.partition_leader_epoch == 7);

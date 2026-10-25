@@ -127,7 +127,6 @@ impl FailoverState {
                     }
                     RequestOutcome::NotLeader | RequestOutcome::Duplicate => return None,
                 }
-                Some(s)
             }
             Decision::Duplicate { base_offset } => {
                 if outcome != RequestOutcome::Duplicate {
@@ -160,12 +159,11 @@ impl FailoverState {
                     s.last_result = Some(ProduceResult::AppendedUnacked);
                     s.witnesses.mark(WITNESS_APPENDED_UNACKED);
                 }
-                Some(s)
             }
             Decision::OutOfOrder | Decision::Fenced => {
                 s.batch = BatchState::Failed;
-                Some(s)
             }
         }
+        Some(s)
     }
 }

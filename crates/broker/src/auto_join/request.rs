@@ -9,15 +9,19 @@
 
 use {
     crate::host_port::{HostPort, advertised_host, local_host_name, parse_host_port},
-    krabka_protocol::owned::add_raft_voter_request::{AddRaftVoterRequest, Listener},
+    krabka_protocol::{
+        owned::add_raft_voter_request::{AddRaftVoterRequest, Listener},
+        primitives::uuid::Uuid,
+    },
+    std::net::SocketAddr,
 };
 
 /// The `CONTROLLER` listener of a controller bound to `bound`: the bound
 /// address, or this machine's host name for a wildcard bind, as
 /// [`crate::host_port::advertised_host`] decides.
-pub(super) fn controller_listener(bound: std::net::SocketAddr) -> Listener {
+pub(super) fn controller_listener(bound: SocketAddr) -> Listener {
     Listener {
-        name: "CONTROLLER".to_string(),
+        name: "CONTROLLER".to_owned(),
         host: advertised_host(bound.ip(), local_host_name),
         port: bound.port(),
         ..Default::default()
@@ -39,7 +43,7 @@ pub(super) fn controller_listener(bound: std::net::SocketAddr) -> Listener {
 /// so it is published only by a machine that reports no host name.
 pub(super) fn advertised_controller_listener(
     advertised: Option<&str>,
-    bound: std::net::SocketAddr,
+    bound: SocketAddr,
 ) -> Listener {
     if !bound.ip().is_unspecified() {
         return controller_listener(bound);
@@ -51,15 +55,22 @@ pub(super) fn advertised_controller_listener(
         return controller_listener(bound);
     };
     Listener {
-        name: "CONTROLLER".to_string(),
+        name: "CONTROLLER".to_owned(),
         host,
         port,
         ..Default::default()
     }
 }
 
-pub(super) fn select_bootstrap_server(bootstrap_servers: &[String], attempt: usize) -> &str {
-    &bootstrap_servers[attempt % bootstrap_servers.len()]
+/// The bootstrap server for `attempt`, rotating across `bootstrap_servers`,
+/// or `None` when there is none.
+pub(super) fn select_bootstrap_server(
+    bootstrap_servers: &[String],
+    attempt: usize,
+) -> Option<&str> {
+    bootstrap_servers
+        .get(attempt.checked_rem(bootstrap_servers.len())?)
+        .map(String::as_str)
 }
 
 /// Where a join request goes, and where that server came from.
@@ -81,12 +92,12 @@ pub(super) struct JoinTarget {
 ///
 /// `attempt` rotates across the bootstrap servers, and
 /// [`JoinTarget::from_bootstrap`] says whether the target is a bootstrap
-/// server.
+/// server. `None` when no leader is known and there is no bootstrap server.
 pub(super) fn join_target(
     quorum: &krabka_raft::QuorumState,
     bootstrap_servers: &[String],
     attempt: usize,
-) -> JoinTarget {
+) -> Option<JoinTarget> {
     let leader_endpoint = quorum
         .current_leader
         .and_then(|leader| quorum.voter_nodes.get(&leader))
@@ -97,22 +108,26 @@ pub(super) fn join_target(
                 .find(|endpoint| endpoint.name.eq_ignore_ascii_case("CONTROLLER"))
                 .or_else(|| leader.endpoints.first())
         });
-    match leader_endpoint {
-        Some(endpoint) => JoinTarget {
-            server: format!("{}:{}", endpoint.host, endpoint.port),
-            from_bootstrap: false,
+    leader_endpoint.map_or_else(
+        || {
+            select_bootstrap_server(bootstrap_servers, attempt).map(|server| JoinTarget {
+                server: server.to_owned(),
+                from_bootstrap: true,
+            })
         },
-        None => JoinTarget {
-            server: select_bootstrap_server(bootstrap_servers, attempt).to_owned(),
-            from_bootstrap: true,
+        |endpoint| {
+            Some(JoinTarget {
+                server: format!("{}:{}", endpoint.host, endpoint.port),
+                from_bootstrap: false,
+            })
         },
-    }
+    )
 }
 
 pub(super) fn build_add_raft_voter_request(
     cluster_id: Option<uuid::Uuid>,
     voter_id: i32,
-    directory_id: krabka_protocol::primitives::uuid::Uuid,
+    directory_id: Uuid,
     listener: Listener,
     timeout_ms: i32,
 ) -> AddRaftVoterRequest {
@@ -131,6 +146,7 @@ pub(super) fn build_add_raft_voter_request(
 mod tests {
     use {
         super::*,
+        crate::host_port,
         assert2::assert,
         bytes::BytesMut,
         krabka_protocol::{Decode, Encode, owned::add_raft_voter_request},
@@ -260,8 +276,7 @@ mod tests {
             advertised_controller_listener(None, bound)
                 == Listener {
                     name: "CONTROLLER".to_owned(),
-                    host: crate::host_port::local_host_name()
-                        .unwrap_or_else(|| "127.0.0.1".to_owned()),
+                    host: host_port::local_host_name().unwrap_or_else(|| "127.0.0.1".to_owned()),
                     port: 19093,
                     ..Default::default()
                 }
@@ -290,10 +305,11 @@ mod tests {
             .map(str::to_owned)
             .collect();
 
-        assert2::assert!((select_bootstrap_server(&servers, 0)) == (servers[0].as_str()));
-        assert2::assert!((select_bootstrap_server(&servers, 2)) == (servers[2].as_str()));
-        assert2::assert!((select_bootstrap_server(&servers, 3)) == (servers[0].as_str()));
-        assert2::assert!((select_bootstrap_server(&servers, 5)) == (servers[2].as_str()));
+        assert2::assert!((select_bootstrap_server(&servers, 0)) == Some(servers[0].as_str()));
+        assert2::assert!((select_bootstrap_server(&servers, 2)) == Some(servers[2].as_str()));
+        assert2::assert!((select_bootstrap_server(&servers, 3)) == Some(servers[0].as_str()));
+        assert2::assert!((select_bootstrap_server(&servers, 5)) == Some(servers[2].as_str()));
+        assert2::assert!((select_bootstrap_server(&[], 5)) == None);
     }
 
     #[yare::parameterized(
@@ -332,7 +348,7 @@ mod tests {
             .into_iter()
             .map(str::to_owned)
             .collect();
-        let target = join_target(&quorum, &bootstrap, attempt);
+        let target = join_target(&quorum, &bootstrap, attempt).unwrap();
         assert2::assert!(
             (target.server.as_str(), target.from_bootstrap) == expected,
             "{case}"
@@ -347,7 +363,7 @@ mod tests {
         let req = build_add_raft_voter_request(
             Some(cluster_id),
             7,
-            krabka_protocol::primitives::uuid::Uuid(*dir.as_bytes()),
+            Uuid(*dir.as_bytes()),
             listener,
             1_234,
         );
@@ -376,7 +392,7 @@ mod tests {
         let req = build_add_raft_voter_request(
             None,
             7,
-            krabka_protocol::primitives::uuid::Uuid(*uuid::Uuid::from_u128(7).as_bytes()),
+            Uuid(*uuid::Uuid::from_u128(7).as_bytes()),
             listener,
             30_000,
         );

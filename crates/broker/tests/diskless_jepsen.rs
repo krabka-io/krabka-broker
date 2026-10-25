@@ -54,6 +54,7 @@
 //! metadata, [`history`] produces the ledger and checks it for
 //! linearizability, [`faults`] injects each fault and holds the witness, and
 //! [`readback`] reads the acknowledged offsets back with both clients.
+#![cfg(test)]
 
 mod support;
 

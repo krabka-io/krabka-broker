@@ -19,6 +19,9 @@ use {
     },
     assert2::{assert, check},
     krabka_broker::coordinator::AUDIT_TOPIC,
+    krabka_log::name,
+    ring::{signature, signature::UnparsedPublicKey},
+    std::fs,
 };
 
 /// The `PrivilegedAction` records whose `api.operation` is `operation`.
@@ -101,7 +104,7 @@ async fn every_kfc9_phase_writes_one_chained_audit_record() {
 
     w.cluster.broker.shutdown().await;
 
-    let partition = krabka_log::name::partition_dir(&w.cluster.log_dir, AUDIT_TOPIC, 0);
+    let partition = name::partition_dir(&w.cluster.log_dir, AUDIT_TOPIC, 0);
     let report =
         krabka_audit::verify_partition_dir(&partition, &krabka_audit::TrustedKeys::default())
             .expect("read the audit partition off disk");
@@ -276,8 +279,8 @@ async fn a_signed_freeze_reverifies_from_the_audit_topic_with_no_metadata_image(
     // emit time, which would verify here and be wrong.
     check!(set_at_ms == w.freeze_set_at_ms);
     check!(freeze["time"].as_i64() != Some(set_at_ms));
-    let public = std::fs::read(&w.cluster.alice_key.public_path).expect("the operator public key");
-    let key = ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, &public);
+    let public = fs::read(&w.cluster.alice_key.public_path).expect("the operator public key");
+    let key = UnparsedPublicKey::new(&signature::ED25519, &public);
     check!(
         key.verify(&freeze_signing_bytes(&signed), &signature)
             .is_ok(),

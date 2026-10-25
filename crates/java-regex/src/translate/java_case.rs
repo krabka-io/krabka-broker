@@ -27,7 +27,7 @@
 //! Rust's version of Unicode, which is newer than the one in JDK 17, so it
 //! also folds the letters that Unicode 14 and later added.
 
-use std::{fmt::Write as _, sync::OnceLock};
+use std::{fmt::Write as _, iter, sync::OnceLock};
 
 /// An inclusive range of code points.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -140,9 +140,7 @@ fn with_key(wanted: u32) -> impl Iterator<Item = u32> {
 }
 
 /// `Pattern.SingleU(lower)`: `lower`, and the code points with that key.
-fn single_u(lower: u32) -> impl Iterator<Item = u32> {
-    std::iter::once(lower).chain(with_key(lower))
-}
+fn single_u(lower: u32) -> impl Iterator<Item = u32> { iter::once(lower).chain(with_key(lower)) }
 
 /// Sorts `ranges`, and merges those that overlap or touch.
 fn normalize(mut ranges: Ranges) -> Ranges {

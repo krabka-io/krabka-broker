@@ -5,6 +5,7 @@
 //! keeps its offsets. A streams group with a live member rejects that
 //! `JoinGroup` with `INCONSISTENT_GROUP_PROTOCOL`. The admin handlers List,
 //! Describe, and Delete respect the type lock.
+#![cfg(test)]
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling

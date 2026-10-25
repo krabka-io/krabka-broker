@@ -19,6 +19,7 @@ use {
     crate::error::BrokerError,
     assert2::assert,
     kafka_error_table::{KAFKA_ERROR_TABLE, KAFKA_ERROR_TABLE_IMAGE_DIGEST},
+    std::io::Error,
 };
 
 /// The digest `//MODULE.bazel` pins for `apache_kafka_4_3_1`.
@@ -189,7 +190,7 @@ fn krabka_private_codes_sit_above_the_whole_kafka_table() {
         COORDINATOR_LOAD_IN_PROGRESS,
     },
     log_io_error = {
-        BrokerError::Log(krabka_log::LogError::Io(std::io::Error::other("EIO"))),
+        BrokerError::Log(krabka_log::LogError::Io(Error::other("EIO"))),
         KAFKA_STORAGE_ERROR,
     },
     catch_all = { BrokerError::Txn("test".into()), UNKNOWN_SERVER_ERROR },

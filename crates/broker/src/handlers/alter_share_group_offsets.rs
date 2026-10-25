@@ -48,7 +48,7 @@ use {
     },
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: AlterShareGroupOffsetsRequest,
     _version: ApiVersion,
@@ -64,7 +64,6 @@ pub(crate) async fn handle(
         ));
     }
 
-    let ng_opt = Some(broker.group_coordinator.clone());
     let gid = req.group_id;
 
     // ── ACL preamble ────────────────────────────────────
@@ -215,7 +214,7 @@ pub(crate) async fn handle(
     // `getOrMaybeCreateShareGroup(groupId, true)`: a group id with no prior
     // type lock is created as a share group here, exactly as the first
     // `ShareGroupHeartbeat` would create it.
-    let ng = ng_opt.as_ref().expect("group coordinator is installed");
+    let ng = &broker.group_coordinator;
     ng.mark_share(&gid);
     let actor = ng.get_or_create_share(&gid);
     let asked = ask(&actor.tx, |reply| ShareGroupActorMessage::ResetOffsets {
@@ -248,8 +247,13 @@ pub(crate) async fn handle(
     for ((topic_slot, partition_slot), error_code) in
         actor_response_slots.into_iter().zip(result_codes)
     {
-        let topic_id = uuid::Uuid::from_bytes(responses[topic_slot].topic_id.0);
-        let partition = &mut responses[topic_slot].partitions[partition_slot];
+        let Some(topic) = responses.get_mut(topic_slot) else {
+            continue;
+        };
+        let topic_id = uuid::Uuid::from_bytes(topic.topic_id.0);
+        let Some(partition) = topic.partitions.get_mut(partition_slot) else {
+            continue;
+        };
         partition.error_code = error_code;
         if error_code == codes::NONE {
             broker
@@ -272,12 +276,15 @@ mod tests {
     use {
         super::handle as alter_share_group_offsets_handle,
         crate::{
-            authorizer::AuthorizationResult,
+            authorizer::{AllowAllAuthorizer, AuthorizationResult},
             broker::BrokerHandle,
             codes,
             coordinator::unified::{
                 GroupType, ShareGroupSeed,
-                share::actor::{ShareGroupActorHandle, ShareGroupActorMessage},
+                share::{
+                    actor::{ShareGroupActorHandle, ShareGroupActorMessage},
+                    persistence::ShareGroupStatePartitionMetadataValue,
+                },
             },
             handlers::{
                 RequestContext,
@@ -313,6 +320,7 @@ mod tests {
             primitives::uuid::Uuid,
         },
         std::sync::Arc,
+        tokio::sync::oneshot,
     };
 
     /// Join the actor directly with the client identity used by the offset-reset cases.
@@ -322,7 +330,7 @@ mod tests {
         member: &str,
         topics: Vec<String>,
     ) -> ShareGroupHeartbeatResponse {
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         actor
             .tx
             .send(ShareGroupActorMessage::Heartbeat {
@@ -466,7 +474,7 @@ mod tests {
             ),
             ShareRefusalCase {
                 name: "unknown topic preserves topic and partition fields",
-                authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
+                authorizer: Arc::new(AllowAllAuthorizer),
                 enabled: ShareApiSupport::Enabled,
                 input: AlterOffsetsInput {
                     topic_name: "missing-topic",
@@ -585,7 +593,7 @@ mod tests {
                 group_read: group == GroupGrant::ReadOnly,
                 group_alter: group == GroupGrant::AlterOnly,
                 denied_topics: if topic == TopicState::Denied {
-                    vec![topic_name.to_string()]
+                    vec![topic_name.to_owned()]
                 } else {
                     Vec::new()
                 },
@@ -792,7 +800,7 @@ mod tests {
             bind(broker_handle, _dir, broker);
             boot [handler_fixture_support::start_share_allow_all()];
         };
-        let coordinator = broker.group_coordinator.clone();
+        let coordinator = Arc::clone(&broker.group_coordinator);
 
         coordinator.mark_share("busy");
         let actor = coordinator.get_or_create_share("busy");
@@ -846,7 +854,7 @@ mod tests {
 
         broker.group_coordinator.mark_share("g-reset");
         let actor = broker.group_coordinator.get_or_create_share("g-reset");
-        let (seed_tx, seed_rx) = tokio::sync::oneshot::channel();
+        let (seed_tx, seed_rx) = oneshot::channel();
         actor
             .tx
             .send(ShareGroupActorMessage::Seed(ShareGroupSeed {
@@ -894,7 +902,7 @@ mod tests {
             assert!(seed.group_epoch == 7);
             assert!(
                 seed.state_partition_metadata
-                    == crate::coordinator::unified::share::persistence::ShareGroupStatePartitionMetadataValue {
+                    == ShareGroupStatePartitionMetadataValue {
                         initialized: vec![
                             crate::coordinator::unified::share::persistence::TopicPartitionsInfo {
                                 topic_id,

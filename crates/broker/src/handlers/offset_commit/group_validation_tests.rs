@@ -34,14 +34,15 @@ use {
     krabka_protocol::owned::{
         create_topics_request::{self},
         offset_commit_request::{
-            OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
+            API_KEY, OffsetCommitRequest, OffsetCommitRequestPartition, OffsetCommitRequestTopic,
         },
         offset_commit_response::{
             OffsetCommitResponse, OffsetCommitResponsePartition, OffsetCommitResponseTopic,
         },
     },
     krabka_security::Principal,
-    std::{net::SocketAddr, sync::Arc},
+    std::{collections::HashMap, net::SocketAddr, sync::Arc},
+    tokio::sync::oneshot,
 };
 
 const TOPIC: &str = "group-validation";
@@ -141,11 +142,8 @@ async fn seed(broker: &Broker, group_id: &str, group: Group) {
             state.add_member(classic_member(MEMBER));
             state.state = GroupState::Stable;
             state.generation_id = GENERATION;
-            let seeded = CoordinatorGroup::seeded(
-                group_id,
-                GroupKind::Classic(state),
-                std::collections::HashMap::new(),
-            );
+            let seeded =
+                CoordinatorGroup::seeded(group_id, GroupKind::Classic(state), HashMap::new());
             broker
                 .group_coordinator
                 .seed_classic(group_id, Box::new(seeded));
@@ -179,18 +177,11 @@ async fn drive(broker: &BrokerHandle, row: usize, case: Case) -> Driven {
     let group_id = format!("group-validation-{row}");
     seed(&shared, &group_id, case.group).await;
     let request = offset_commit_request(group_id.clone(), case.generation, case.member_id, vec![
-        super::test_topic_row().name(TOPIC.to_string()).call(),
+        super::test_topic_row().name(TOPIC.to_owned()).call(),
     ]);
     let identity = consumer_identity();
     let ctx = identity.context();
-    let response = dispatch_wire(
-        &shared,
-        krabka_protocol::owned::offset_commit_request::API_KEY,
-        case.version,
-        &request,
-        &ctx,
-    )
-    .await;
+    let response = dispatch_wire(&shared, API_KEY, case.version, &request, &ctx).await;
     Driven {
         response,
         group_exists: shared.group_coordinator.find(&group_id).is_some(),
@@ -297,7 +288,7 @@ async fn commit_is_fenced_by_kafka_group_rule() {
             case.member_id,
             OffsetCommitResponse {
                 topics: vec![OffsetCommitResponseTopic {
-                    name: TOPIC.to_string(),
+                    name: TOPIC.to_owned(),
                     partitions: resp_parts,
                     ..Default::default()
                 }],
@@ -337,7 +328,7 @@ async fn topic_read_is_checked_before_the_group() {
     seed(&shared, "authz-mixed", Group::ClassicWithMember).await;
 
     let row = |name: &str| OffsetCommitRequestTopic {
-        name: name.to_string(),
+        name: name.to_owned(),
         partitions: vec![OffsetCommitRequestPartition {
             partition_index: 0,
             committed_offset: 42,
@@ -346,7 +337,7 @@ async fn topic_read_is_checked_before_the_group() {
         ..Default::default()
     };
     let answer = |name: &str, error_code| OffsetCommitResponseTopic {
-        name: name.to_string(),
+        name: name.to_owned(),
         partitions: vec![OffsetCommitResponsePartition {
             partition_index: 0,
             error_code,
@@ -371,14 +362,8 @@ async fn topic_read_is_checked_before_the_group() {
     let ctx = identity.context();
     for (group_id, topics, answers) in cases {
         let request = offset_commit_request(group_id, GENERATION + 1, MEMBER, topics);
-        let response: OffsetCommitResponse = dispatch_wire(
-            &shared,
-            krabka_protocol::owned::offset_commit_request::API_KEY,
-            9,
-            &request,
-            &ctx,
-        )
-        .await;
+        let response: OffsetCommitResponse =
+            dispatch_wire(&shared, API_KEY, 9, &request, &ctx).await;
         assert!(
             response
                 == OffsetCommitResponse {
@@ -413,9 +398,9 @@ async fn oversized_metadata_is_refused_through_the_handler() {
         ..Default::default()
     };
     let request = OffsetCommitRequest {
-        group_id: GROUP_ID.to_string(),
+        group_id: GROUP_ID.to_owned(),
         topics: vec![OffsetCommitRequestTopic {
-            name: TOPIC.to_string(),
+            name: TOPIC.to_owned(),
             partitions: vec![partition],
             ..Default::default()
         }],
@@ -423,20 +408,13 @@ async fn oversized_metadata_is_refused_through_the_handler() {
     };
     let identity = consumer_identity();
     let ctx = identity.context();
-    let response: OffsetCommitResponse = dispatch_wire(
-        &shared,
-        krabka_protocol::owned::offset_commit_request::API_KEY,
-        9,
-        &request,
-        &ctx,
-    )
-    .await;
+    let response: OffsetCommitResponse = dispatch_wire(&shared, API_KEY, 9, &request, &ctx).await;
 
     let actor = shared
         .group_coordinator
         .find(GROUP_ID)
         .expect("simple group");
-    let (reply, offsets) = tokio::sync::oneshot::channel();
+    let (reply, offsets) = oneshot::channel();
     actor
         .tx
         .send(GroupActorMessage::FetchOffsets { reply })
@@ -446,7 +424,7 @@ async fn oversized_metadata_is_refused_through_the_handler() {
 
     let expected = OffsetCommitResponse {
         topics: vec![OffsetCommitResponseTopic {
-            name: TOPIC.to_string(),
+            name: TOPIC.to_owned(),
             partitions: vec![OffsetCommitResponsePartition {
                 partition_index: 0,
                 error_code: codes::OFFSET_METADATA_TOO_LARGE,
@@ -501,18 +479,18 @@ fn consumer_group_seed(topic_id: WireUuid) -> GroupSeed {
         target_epoch: 5,
         assignment_timestamp_ms: 0,
         members: [
-            ("native".to_string(), metadata(false)),
-            ("classic".to_string(), metadata(true)),
+            ("native".to_owned(), metadata(false)),
+            ("classic".to_owned(), metadata(true)),
         ]
         .into(),
         target_per_member: [
-            ("native".to_string(), target.clone()),
-            ("classic".to_string(), target),
+            ("native".to_owned(), target.clone()),
+            ("classic".to_owned(), target),
         ]
         .into(),
         current_per_member: [
-            ("native".to_string(), current.clone()),
-            ("classic".to_string(), current),
+            ("native".to_owned(), current.clone()),
+            ("classic".to_owned(), current),
         ]
         .into(),
         ..GroupSeed::default()
@@ -649,14 +627,8 @@ async fn consumer_group_commit_follows_kip_1251() {
                 ..Default::default()
             },
         ]);
-        let response: OffsetCommitResponse = dispatch_wire(
-            &shared,
-            krabka_protocol::owned::offset_commit_request::API_KEY,
-            row.version,
-            &request,
-            &ctx,
-        )
-        .await;
+        let response: OffsetCommitResponse =
+            dispatch_wire(&shared, API_KEY, row.version, &request, &ctx).await;
         actual.push((row.member_id, row.epoch, row.version, response));
         expected.push((
             row.member_id,

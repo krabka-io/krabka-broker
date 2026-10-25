@@ -50,11 +50,14 @@
 use {
     krabka_metadata::{
         KRaftVersionRecord, MetadataRecord, ScramCredentialRecord, VoterSet, VotersRecord,
+        metadata_version,
     },
     krabka_security::scram::{MIN_SCRAM_ITERATIONS, hash_scram_password_with_salt},
     ring::rand::{SecureRandom, SystemRandom},
     std::{
-        io::Write,
+        fmt::Display,
+        fs,
+        io::{self, Write},
         path::{Path, PathBuf},
     },
 };
@@ -142,7 +145,7 @@ pub async fn run(args: FormatArgs) -> i32 { run_with_records(args, Vec::new()).a
 /// point, so reaching the panic means that validation and this branch have
 /// drifted apart.
 pub async fn run_with_records(args: FormatArgs, extra: Vec<MetadataRecord>) -> i32 {
-    run_with_records_to(args, extra, &mut std::io::stdout()).await
+    run_with_records_to(args, extra, &mut io::stdout()).await
 }
 
 /// [`run_with_records`], with Kafka's progress lines written to `progress`
@@ -189,7 +192,7 @@ struct Failure {
 
 /// Prefixes `message` with the command name, as every krabka-specific
 /// message is. Kafka's own messages are printed bare.
-fn krabka(code: i32, message: impl std::fmt::Display) -> Failure {
+fn krabka(code: i32, message: impl Display) -> Failure {
     Failure {
         code,
         message: format!("krabka format: {message}"),
@@ -274,7 +277,7 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
         args.unstable_feature_versions_enable,
     )
     .map_err(|e| krabka(EXIT_INVALID_FEATURE, e))?;
-    let metadata_version = krabka_metadata::metadata_version::from_feature_level(bootstrap_mv)
+    let metadata_version = metadata_version::from_feature_level(bootstrap_mv)
         .map_or_else(|| bootstrap_mv.to_string(), |mv| mv.ivn().to_owned());
 
     // The `kraft.version` rules come after the release and the feature names,
@@ -305,7 +308,12 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
         DirectoryId(
             initial_voters
                 .get(args.node_id)
-                .expect("validated local initial controller")
+                .ok_or_else(|| {
+                    krabka(
+                        EXIT_BOOTSTRAP_FAIL,
+                        "--initial-controllers has no entry for this node",
+                    )
+                })?
                 .directory_id,
         )
     };
@@ -346,7 +354,8 @@ fn plan(args: FormatArgs, extra: Vec<MetadataRecord>) -> Result<Plan, Failure> {
 
     let metadata_log_dir = args
         .metadata_log_dir
-        .unwrap_or_else(|| args.log_dirs[0].clone());
+        .or_else(|| args.log_dirs.first().cloned())
+        .ok_or_else(|| krabka(EXIT_BOOTSTRAP_FAIL, "no log directory to format"))?;
     let log_dirs = directory_set(&metadata_log_dir, args.log_dirs);
     let ensemble = Ensemble::load(&log_dirs).map_err(|error| match error {
         SurveyError::Foreign(dir) => krabka(
@@ -472,7 +481,8 @@ fn metadata_directory_kind(
 /// `krabka-security`, so the record on disk carries the stretched keys and
 /// never the plain password.
 fn scram_records(args: &FormatArgs) -> Result<Vec<MetadataRecord>, Failure> {
-    let min = u32::try_from(MIN_SCRAM_ITERATIONS).expect("SCRAM minimum is positive");
+    // The minimum is positive, so its magnitude is the minimum itself.
+    let min = MIN_SCRAM_ITERATIONS.unsigned_abs();
     let mut records = Vec::with_capacity(args.add_scram.len());
     for spec in &args.add_scram {
         if spec.iterations < min {
@@ -568,7 +578,7 @@ impl Plan {
         let dir = &target.dir;
         remove_partial_output(dir)
             .map_err(|e| format!("cannot clear log directory {}: {e}", dir.display()))?;
-        std::fs::create_dir_all(dir)
+        fs::create_dir_all(dir)
             .map_err(|e| format!("cannot create log directory {}: {e}", dir.display()))?;
         if target.kind.is_dynamic_metadata() {
             write_dynamic_checkpoint(

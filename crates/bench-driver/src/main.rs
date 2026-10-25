@@ -2,7 +2,7 @@
 //! `RunOutput` JSON file.
 
 use {
-    anyhow::{Context, Result},
+    anyhow::{Context, Result, anyhow},
     clap::Parser,
     krabka_bench_driver::{
         scenario::{Scenario, Stack},
@@ -15,7 +15,9 @@ use {
         ClientFrameMax, ConnectionDispatchQueueCapacity, DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
     },
     krabka_units::{fmt::Human as _, parse, prelude::*},
+    rustls::crypto::aws_lc_rs,
     std::path::PathBuf,
+    tokio::fs,
     tracing_subscriber::EnvFilter,
 };
 
@@ -177,7 +179,7 @@ fn parse_client_request_timeout(input: &str) -> Result<Time, String> {
     if Time::from_millis(millis) == value && value <= MAX_CLIENT_REQUEST_TIMEOUT {
         Ok(value)
     } else {
-        Err("request timeout must be a whole positive i32 millisecond count".to_string())
+        Err("request timeout must be a whole positive i32 millisecond count".to_owned())
     }
 }
 
@@ -194,7 +196,7 @@ fn parse_sample_interval(input: &str) -> Result<Time, String> {
     if millis > 0 && Time::from_millis(millis) == value {
         Ok(value)
     } else {
-        Err("sample interval must be a whole positive millisecond count".to_string())
+        Err("sample interval must be a whole positive millisecond count".to_owned())
     }
 }
 
@@ -222,12 +224,12 @@ async fn main() -> Result<()> {
     // exactly once before any TLS code runs. The `kube` and `reqwest`
     // rustls features both rely on this. Failing to install means TLS
     // operations panic with "no process-level CryptoProvider available".
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
 
     let cli = Cli::parse();
     let consumer_build_retry_policy = resolve_consumer_build_retry_policy(&cli)?;
 
-    let yaml = tokio::fs::read_to_string(&cli.scenario)
+    let yaml = fs::read_to_string(&cli.scenario)
         .await
         .with_context(|| format!("read scenario {}", cli.scenario.display()))?;
     let scenario: Scenario = serde_saphyr::from_str(&yaml).context("parse scenario yaml")?;
@@ -269,9 +271,9 @@ async fn main() -> Result<()> {
         client_dispatch_queue_capacity: ConnectionDispatchQueueCapacity::new(
             cli.client_dispatch_queue_capacity,
         )
-        .expect("validated by clap"),
+        .map_err(|error| anyhow!("--client-dispatch-queue-capacity: {error}"))?,
         client_frame_max: ClientFrameMax::try_from(cli.client_frame_max)
-            .expect("validated by clap"),
+            .map_err(|error| anyhow!("--client-frame-max: {error}"))?,
         topic: cli.topic,
         stack,
         namespace: cli.namespace,
@@ -292,10 +294,10 @@ async fn main() -> Result<()> {
     let out = workload::run(scenario, cfg).await?;
 
     if let Some(parent) = cli.out.parent() {
-        tokio::fs::create_dir_all(parent).await.ok();
+        let _ = fs::create_dir_all(parent).await;
     }
     let json = serde_json::to_string_pretty(&out).context("encode run output")?;
-    tokio::fs::write(&cli.out, json)
+    fs::write(&cli.out, json)
         .await
         .with_context(|| format!("write run output to {}", cli.out.display()))?;
 
@@ -331,6 +333,7 @@ mod tests {
         super::*,
         assert2::{assert, check},
         clap::Parser,
+        std::{env, iter, process::Command},
     };
 
     fn required_args(stack: &'static str) -> Vec<&'static str> {
@@ -353,10 +356,10 @@ mod tests {
 
     // Each environment case executes in a separate process, preserving parallel test isolation.
     fn run_environment_child(marker: &str, test: &str, env: &[EnvVar<'_>]) -> bool {
-        if std::env::var_os(marker).is_some() {
+        if env::var_os(marker).is_some() {
             return false;
         }
-        let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        let status = Command::new(env::current_exe().expect("test executable"))
             .args(["--exact", test])
             .env(marker, "1")
             .envs(env.iter().map(|var| (var.name, var.value)))
@@ -802,7 +805,7 @@ mod tests {
                         .into_iter()
                         .filter(|(flag, _)| *flag != long)
                         .map(|(flag, value)| format!("--{flag}={value}"));
-                        let args = std::iter::once("krabka-bench-driver".to_owned())
+                        let args = iter::once("krabka-bench-driver".to_owned())
                             .chain(required)
                             .chain([format!("--{long}={probe}")]);
                         if command.clone().try_get_matches_from(args).is_ok() {

@@ -17,7 +17,7 @@ use {
 
 /// One JVM tool run: how it exited, and everything it printed.
 #[derive(Debug)]
-pub(super) struct ToolRun {
+pub struct ToolRun {
     /// The container's exit status. Three of the four cases here are about a
     /// non-zero one, which is why this suite cannot use
     /// [`crate::jvm_acceptance::docker_run_kafka_tool_with_image`]: that helper
@@ -61,7 +61,7 @@ impl ToolRun {
 ///
 /// The container is named rather than anonymous so that a run killed
 /// mid-flight leaves something an operator can find and remove.
-pub(super) fn run_tool(
+pub fn run_tool(
     props: Option<&ClientPropsFile>,
     stdin: Option<&str>,
     args: &[&str],
@@ -90,7 +90,7 @@ pub(super) fn run_tool(
 /// failure, and exits zero; with it the producer awaits the future, the
 /// broker's refusal surfaces as an `ExecutionException`, and the tool exits
 /// one. An exit code is the only part of this that a runbook can branch on.
-pub(super) fn jvm_produce(
+pub fn jvm_produce(
     bootstrap: &str,
     topic: &str,
     props: Option<&ClientPropsFile>,
@@ -114,7 +114,7 @@ pub(super) fn jvm_produce(
 ///
 /// Preferred election is not gated, so the election type is the whole of what
 /// puts this request in front of the two-person rule.
-pub(super) fn jvm_unclean_election(bootstrap: &str, props: &ClientPropsFile) -> ToolRun {
+pub fn jvm_unclean_election(bootstrap: &str, props: &ClientPropsFile) -> ToolRun {
     run_tool(Some(props), None, &[
         "kafka-leader-election",
         "--bootstrap-server",
@@ -131,7 +131,7 @@ pub(super) fn jvm_unclean_election(bootstrap: &str, props: &ClientPropsFile) -> 
 }
 
 /// Read one topic's dynamic configs with `kafka-configs --describe`.
-pub(super) fn jvm_describe_configs(bootstrap: &str) -> ToolRun {
+pub fn jvm_describe_configs(bootstrap: &str) -> ToolRun {
     run_tool(None, None, &[
         "kafka-configs",
         "--bootstrap-server",

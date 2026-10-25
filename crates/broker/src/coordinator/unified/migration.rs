@@ -15,7 +15,7 @@ mod downgrade;
 mod hosted_classic;
 mod upgrade;
 
-pub(crate) use self::{
+pub use self::{
     assignment::target_to_consumer_assignment,
     downgrade::{convert_consumer_to_classic, downgrade_pending_records},
     hosted_classic::{

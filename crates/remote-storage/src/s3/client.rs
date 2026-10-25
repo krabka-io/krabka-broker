@@ -22,7 +22,8 @@ use {
     },
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
     object_store::ObjectStore,
-    std::sync::Arc,
+    std::{future::Future, sync::Arc, thread},
+    tokio::{runtime, runtime::Handle, task},
 };
 
 impl S3RemoteStorage {
@@ -157,22 +158,22 @@ impl S3RemoteStorage {
     /// available. The `block_on` bridge lives here, never in the substrate.
     pub(super) fn block_os<T, F>(fut: F) -> Result<T, ObjectStoreError>
     where
-        F: std::future::Future<Output = Result<T, ObjectStoreError>>,
+        F: Future<Output = Result<T, ObjectStoreError>>,
     {
-        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+        let handle = Handle::try_current().map_err(|_| {
             ObjectStoreError::Backend(
                 "S3RemoteStorage requires an active Tokio runtime; call from spawn_blocking".into(),
             )
         })?;
-        tokio::task::block_in_place(|| handle.block_on(fut))
+        task::block_in_place(|| handle.block_on(fut))
     }
 }
 
 fn verify_worm_bucket(bucket: &WormBucket) -> Result<(), RemoteStorageError> {
-    std::thread::scope(|scope| {
+    thread::scope(|scope| {
         scope
             .spawn(|| {
-                tokio::runtime::Builder::new_current_thread()
+                runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                     .map_err(ObjectStoreError::from)?

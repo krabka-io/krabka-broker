@@ -16,7 +16,10 @@ use {
         },
     },
     assert2::check,
-    std::collections::{HashMap, HashSet},
+    std::{
+        collections::{HashMap, HashSet},
+        sync::atomic::Ordering,
+    },
     tokio::sync::oneshot,
 };
 
@@ -32,7 +35,7 @@ fn entry(offset: i64, topic_id: Option<uuid::Uuid>) -> OffsetEntry {
     }
 }
 
-fn key(topic: &str, partition: i32) -> (String, i32) { (topic.to_string(), partition) }
+fn key(topic: &str, partition: i32) -> (String, i32) { (topic.to_owned(), partition) }
 
 #[derive(Clone, Copy)]
 enum AppendResult {
@@ -114,7 +117,7 @@ async fn deleting_a_topic_tombstones_its_offsets_in_the_group() {
         let handle = coordinator.find("g").unwrap();
         log.fail_next.store(
             matches!(row.append_result, AppendResult::Failure),
-            std::sync::atomic::Ordering::SeqCst,
+            Ordering::SeqCst,
         );
 
         let (reply, deleted) = oneshot::channel();
@@ -125,7 +128,7 @@ async fn deleting_a_topic_tombstones_its_offsets_in_the_group() {
                     .deleted
                     .iter()
                     .map(|name| DeletedTopic {
-                        name: (*name).to_string(),
+                        name: (*name).to_owned(),
                         topic_id: OLD_ORDERS,
                     })
                     .collect(),

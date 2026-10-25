@@ -43,7 +43,7 @@ use self::{groups::handle_groups, legacy::handle_legacy};
 
 // cargo-mutants: coordinator-backed response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: OffsetFetchRequest,
     version: ApiVersion,

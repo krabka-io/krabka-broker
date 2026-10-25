@@ -26,8 +26,9 @@ use {
         records::{Record, RecordBatch},
     },
     krabka_units::{Time, convert::TimeExt as _, millis},
+    prometheus_client::encoding::text,
     std::time::{Duration, Instant},
-    tokio::net::TcpStream,
+    tokio::{net::TcpStream, task::JoinHandle, time},
     tokio_util::codec::Framed,
 };
 
@@ -142,7 +143,7 @@ pub(super) async fn seed_anonymous_quotas(handle: &BrokerHandle, quotas: &[Anony
 /// against it.
 pub(super) async fn connect_to_serve_loop(
     handle: &BrokerHandle,
-) -> (tokio::task::JoinHandle<()>, Framed<TcpStream, KafkaCodec>) {
+) -> (JoinHandle<()>, Framed<TcpStream, KafkaCodec>) {
     plaintext_loop(handle.broker_arc_for_test()).await
 }
 
@@ -264,9 +265,7 @@ async fn read_after_mute(
     muted_at: Instant,
 ) -> MutedRead {
     check!(
-        tokio::time::timeout(CLIENT_TIMEOUT, framed.next())
-            .await
-            .is_err(),
+        time::timeout(CLIENT_TIMEOUT, framed.next()).await.is_err(),
         "a muted connection must serve no further request inside the throttle window"
     );
     let frame = response_frame(
@@ -692,7 +691,7 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
 
         send_api_versions(&mut framed, 2).await;
         if exempt {
-            let next = tokio::time::timeout(CLIENT_TIMEOUT, framed.next()).await;
+            let next = time::timeout(CLIENT_TIMEOUT, framed.next()).await;
             check!(
                 next.is_ok(),
                 "{}: an exempt request does not mute the connection",
@@ -797,7 +796,7 @@ async fn a_controller_mutation_and_the_request_quota_resolve_in_one_observation(
         let metrics = &handle.broker_arc_for_test().metrics;
         let registry = metrics.registry.lock().await;
         let mut out = String::new();
-        prometheus_client::encoding::text::encode(&mut out, &registry).expect("encode registry");
+        text::encode(&mut out, &registry).expect("encode registry");
         out
     };
     check!(
@@ -823,24 +822,21 @@ async fn response_frame(
     timeout: Duration,
     context: &str,
 ) -> BytesMut {
-    tokio::time::timeout(timeout, framed.next())
+    time::timeout(timeout, framed.next())
         .await
         .expect(context)
         .expect("a response frame")
         .expect("response decode")
 }
 
-async fn close_serve_loop(
-    framed: Framed<TcpStream, KafkaCodec>,
-    server: tokio::task::JoinHandle<()>,
-) {
+async fn close_serve_loop(framed: Framed<TcpStream, KafkaCodec>, server: JoinHandle<()>) {
     drop(framed);
     server.await.expect("serve loop joins on client EOF");
 }
 
 async fn finish_muted_connection(
     mut framed: Framed<TcpStream, KafkaCodec>,
-    server: tokio::task::JoinHandle<()>,
+    server: JoinHandle<()>,
     handle: BrokerHandle,
     answered_at: Instant,
     window: Time,
@@ -855,7 +851,7 @@ async fn finish_muted_connection(
 struct QuotaConnection {
     handle: BrokerHandle,
     dir: tempfile::TempDir,
-    server: tokio::task::JoinHandle<()>,
+    server: JoinHandle<()>,
     framed: Framed<TcpStream, KafkaCodec>,
 }
 

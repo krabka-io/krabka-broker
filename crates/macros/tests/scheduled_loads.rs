@@ -1,4 +1,5 @@
 //! Load failures retain their declaration's log target and selected message.
+#![cfg(test)]
 
 use {
     assert2::assert,
@@ -11,6 +12,7 @@ use {
         },
     },
     tokio::task::{JoinError, JoinHandle},
+    tracing::subscriber,
 };
 
 static FINISH_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -35,7 +37,7 @@ mod share_loads {
 
     #[derive(Debug, Default, krabka_macros::ScheduledLoads)]
     #[scheduled_loads(failure_message = "__share_group_state load task failed")]
-    pub(super) struct Loads {
+    pub struct Loads {
         pub(super) tasks: Vec<JoinHandle<()>>,
     }
 }
@@ -45,7 +47,7 @@ mod transaction_loads {
 
     #[derive(Debug, Default, krabka_macros::ScheduledLoads)]
     #[scheduled_loads(failure_message = "__transaction_state load task failed")]
-    pub(super) struct Loads {
+    pub struct Loads {
         pub(super) tasks: Vec<JoinHandle<()>>,
     }
 }
@@ -80,7 +82,7 @@ async fn finished_forwards_handles_once_and_warns_at_each_declarations_target() 
         .with_ansi(false)
         .with_writer(move || output.clone())
         .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let _guard = subscriber::set_default(subscriber);
     assert!(share_loads::Loads::default().tasks.is_empty());
     let task = tokio::spawn(pending::<()>());
     task.abort();

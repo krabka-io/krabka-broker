@@ -28,7 +28,9 @@ use {
     krabka_ids::Offset,
     std::{
         collections::HashMap,
-        fs::File,
+        fs::{self, File},
+        io::{self, ErrorKind},
+        mem,
         path::{Path, PathBuf},
         sync::{Arc, Mutex},
     },
@@ -73,10 +75,10 @@ impl CrashingIo {
     }
 
     /// Record `op`, and fail it if the disk has died.
-    fn step(&self, state: &mut CrashState, op: String) -> std::io::Result<()> {
+    fn step(&self, state: &mut CrashState, op: String) -> io::Result<()> {
         state.ops.push(op);
         if state.ops.len() > self.crash_at {
-            Err(std::io::Error::other("crashed"))
+            Err(io::Error::other("crashed"))
         } else {
             Ok(())
         }
@@ -89,7 +91,7 @@ impl CrashingIo {
     /// Undo the pending directory operations whose bit is set in `lost`, the
     /// newest first.
     fn lose(&self, lost: u32) {
-        let pending = std::mem::take(&mut self.state.lock().unwrap().pending);
+        let pending = mem::take(&mut self.state.lock().unwrap().pending);
         for (index, op) in pending.into_iter().enumerate().rev() {
             if lost & (1 << index) == 0 {
                 continue;
@@ -100,12 +102,12 @@ impl CrashingIo {
                     to,
                     displaced,
                 } => {
-                    std::fs::rename(&to, &from).unwrap();
+                    fs::rename(&to, &from).unwrap();
                     if let Some(contents) = displaced {
-                        std::fs::write(&to, contents).unwrap();
+                        fs::write(&to, contents).unwrap();
                     }
                 }
-                Pending::Remove { path, contents } => std::fs::write(path, contents).unwrap(),
+                Pending::Remove { path, contents } => fs::write(path, contents).unwrap(),
             }
         }
     }
@@ -121,42 +123,46 @@ fn has_extension(file: &str, extensions: &[&str]) -> bool {
 fn file_name(path: &Path) -> String { path.file_name().unwrap().to_string_lossy().into_owned() }
 
 impl LogIo for CrashingIo {
-    fn sync_file(&self, _target: IoTarget, file: &File) -> std::io::Result<()> {
+    fn sync_file(&self, _target: IoTarget, file: &File) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
         self.step(&mut state, "sync_file".to_owned())?;
+        drop(state);
         file.sync_data()
     }
 
-    fn sync_dir(&self, _dir: &Path) -> std::io::Result<()> {
+    fn sync_dir(&self, _dir: &Path) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
         self.step(&mut state, "sync_dir".to_owned())?;
         state.pending.clear();
+        drop(state);
         Ok(())
     }
 
-    fn rename(&self, _target: IoTarget, from: &Path, to: &Path) -> std::io::Result<()> {
+    fn rename(&self, _target: IoTarget, from: &Path, to: &Path) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
         let op = format!("rename {} {}", file_name(from), file_name(to));
         self.step(&mut state, op)?;
-        let displaced = std::fs::read(to).ok();
-        std::fs::rename(from, to)?;
+        let displaced = fs::read(to).ok();
+        fs::rename(from, to)?;
         state.pending.push(Pending::Rename {
             from: from.to_path_buf(),
             to: to.to_path_buf(),
             displaced,
         });
+        drop(state);
         Ok(())
     }
 
-    fn remove_file(&self, _target: IoTarget, path: &Path) -> std::io::Result<()> {
+    fn remove_file(&self, _target: IoTarget, path: &Path) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
         self.step(&mut state, format!("remove {}", file_name(path)))?;
-        let contents = std::fs::read(path)?;
-        std::fs::remove_file(path)?;
+        let contents = fs::read(path)?;
+        fs::remove_file(path)?;
         state.pending.push(Pending::Remove {
             path: path.to_path_buf(),
             contents,
         });
+        drop(state);
         Ok(())
     }
 }
@@ -197,19 +203,19 @@ fn compactable(dir: &Path, survivor_txnindex: bool) -> RewriteOutput {
         )
         .unwrap()
     };
-    std::fs::write(name::txnindex_path(dir, 0), b"stale 0").unwrap();
-    std::fs::write(name::txnindex_path(dir, 10), b"stale 10").unwrap();
+    fs::write(name::txnindex_path(dir, 0), b"stale 0").unwrap();
+    fs::write(name::txnindex_path(dir, 10), b"stale 10").unwrap();
 
     let to_cleaned = |from: &Path, ext: &str| {
         let to = cleaned_path(dir, 0, ext);
         if from != to {
-            std::fs::rename(from, &to).unwrap();
+            fs::rename(from, &to).unwrap();
         }
         to
     };
     let txnindex_swap = survivor_txnindex.then(|| {
         let path = cleaned_path(dir, 0, "txnindex");
-        std::fs::write(&path, b"survivor").unwrap();
+        fs::write(&path, b"survivor").unwrap();
         path
     });
     RewriteOutput {
@@ -353,7 +359,7 @@ fn a_committed_swap_is_completed_even_when_its_base_segment_survives() {
         (&rewrite.timeindex_swap, "timeindex"),
         (&rewrite.log_swap, "log"),
     ] {
-        std::fs::rename(from, swap_path(dir.path(), 0, ext)).unwrap();
+        fs::rename(from, swap_path(dir.path(), 0, ext)).unwrap();
     }
     for path in [
         name::log_path(dir.path(), 10),
@@ -361,7 +367,7 @@ fn a_committed_swap_is_completed_even_when_its_base_segment_survives() {
         name::timeindex_path(dir.path(), 10),
         name::txnindex_path(dir.path(), 10),
     ] {
-        std::fs::remove_file(path).unwrap();
+        fs::remove_file(path).unwrap();
     }
     check!(name::log_path(dir.path(), 0).exists());
 
@@ -377,11 +383,11 @@ fn a_failed_unlink_fails_the_swap_and_recovery_completes_it() {
     #[derive(Debug)]
     struct FailRemove;
     impl LogIo for FailRemove {
-        fn remove_file(&self, _target: IoTarget, path: &Path) -> std::io::Result<()> {
+        fn remove_file(&self, _target: IoTarget, path: &Path) -> io::Result<()> {
             if path == name::log_path(path.parent().unwrap(), 10) {
-                return Err(std::io::ErrorKind::PermissionDenied.into());
+                return Err(ErrorKind::PermissionDenied.into());
             }
-            std::fs::remove_file(path)
+            fs::remove_file(path)
         }
     }
 

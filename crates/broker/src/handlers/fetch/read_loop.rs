@@ -24,10 +24,15 @@ use {
         partition::Partition,
         quota::{Timed, with_active_time},
     },
+    futures_util::future,
     krabka_log::Offset,
     krabka_protocol::owned::fetch_response::PartitionData,
     krabka_units::convert::ByteSizeExt as _,
-    std::time::Duration,
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
 /// The initial pass and a long-poll re-read use the same planned read inputs.
@@ -39,7 +44,7 @@ fn planned_read_request(
 ) -> ReadRequest {
     ReadRequest {
         topic_id: Some(uuid::Uuid::from_bytes(read.topic_id.0)),
-        hot_tail: Some(broker.hot_tail.clone()),
+        hot_tail: Some(Arc::clone(&broker.hot_tail)),
         fetch_offset: Offset(read.fetch_offset),
         max_bytes,
         read_committed: read.read_committed,
@@ -108,12 +113,14 @@ impl PartitionBytes {
 
     fn total(&self) -> usize { self.total }
 
-    fn get(&self, index: usize) -> usize { self.entries[index] }
+    fn get(&self, index: usize) -> usize { self.entries.get(index).copied().unwrap_or(0) }
 
     /// Replaces entry `index` with `bytes` and moves the total by the
     /// difference.
     fn set(&mut self, index: usize, bytes: usize) {
-        let entry = &mut self.entries[index];
+        let Some(entry) = self.entries.get_mut(index) else {
+            return;
+        };
         // Every entry is part of the total, so the total never falls below
         // the entry it gives back.
         self.total = self.total - *entry + bytes;
@@ -158,8 +165,19 @@ impl LongPollState {
         self.remaining_response_bytes = self.remaining_response_bytes.saturating_sub(served);
     }
 
+    /// Whether the cold tier answered entry `index`.
+    fn cold_served(&self, index: usize) -> bool {
+        self.cold_served.get(index).copied().unwrap_or(false)
+    }
+
+    fn set_cold_served(&mut self, index: usize, served: bool) {
+        if let Some(entry) = self.cold_served.get_mut(index) {
+            *entry = served;
+        }
+    }
+
     fn record_read(&mut self, index: usize, read: &mut PendingRead, result: ReadAccounting) {
-        self.cold_served[index] = result.cold_bytes > 0;
+        self.set_cold_served(index, result.cold_bytes > 0);
         let served = result.local_bytes + result.cold_bytes;
         // A withheld read is Kafka's `MemoryRecords.EMPTY` row: it adds
         // nothing toward `min_bytes`, so a fetch with nothing else to send
@@ -170,7 +188,7 @@ impl LongPollState {
         {
             discard_to_metadata_only(read);
             self.bytes.set(index, 0);
-            self.cold_served[index] = false;
+            self.set_cold_served(index, false);
         } else {
             self.bytes.set(index, served);
             self.charge(served);
@@ -193,7 +211,7 @@ fn arm_waits(pending: &[PendingRead]) -> Vec<Wait> {
         let Some(part) = read.partition.as_ref() else {
             continue;
         };
-        waits.push(Wait::new(index, part.append_notify.clone()));
+        waits.push(Wait::new(index, Arc::clone(&part.append_notify)));
         // KIP-392: a consumer reading from a follower becomes unblocked
         // when the follower's HW advances (via set_follower_hw), not only
         // on raw append. Follower (inter-broker) fetches don't need this.
@@ -205,8 +223,8 @@ fn arm_waits(pending: &[PendingRead]) -> Vec<Wait> {
         // consumer sleeps out its whole long poll in the one case the
         // feature exists for.
         if !read.is_follower_fetch {
-            waits.push(Wait::new(index, part.hw_advance_notify.clone()));
-            waits.push(Wait::new(index, part.delivery.advance_notify.clone()));
+            waits.push(Wait::new(index, Arc::clone(&part.hw_advance_notify)));
+            waits.push(Wait::new(index, Arc::clone(&part.delivery.advance_notify)));
         }
     }
     waits
@@ -233,7 +251,7 @@ fn arm_leadership_waits(pending: &[PendingRead]) -> Vec<Wait> {
         .filter(|(_, read)| read.is_follower_fetch && read.fetch_only_leader)
         .filter_map(|(index, read)| {
             let part = read.partition.as_ref()?;
-            Some(Wait::new(index, part.hw_advance_notify.clone()))
+            Some(Wait::new(index, Arc::clone(&part.hw_advance_notify)))
         })
         .collect()
 }
@@ -249,7 +267,7 @@ fn arm_leadership_waits(pending: &[PendingRead]) -> Vec<Wait> {
 /// high watermark wakes the fetch, and the fetch reads the row again.
 async fn refresh_follower_bounds(pending: &mut [PendingRead], state: &LongPollState) {
     for (index, read) in pending.iter_mut().enumerate() {
-        if !read.is_follower_fetch || read.out.error_code != codes::NONE || state.cold_served[index]
+        if !read.is_follower_fetch || read.out.error_code != codes::NONE || state.cold_served(index)
         {
             continue;
         }
@@ -332,7 +350,7 @@ pub(super) async fn execute_pending_reads(
         let requested_max_bytes = read.max_bytes;
         let budget = state.partition_read_budget(requested_max_bytes);
         let min_one_batch = state.total() == 0;
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         // Kafka's `Partition.readRecords` takes the log end offset with the
         // high watermark before it reads. The follower update after the read
         // compares the fetch offset with that log end offset.
@@ -397,8 +415,7 @@ pub(super) async fn execute_pending_reads(
     // reads finish or `remote.fetch.max.wait.ms` passes, and neither
     // `min.bytes` nor the request's `max.wait.ms` holds it any longer.
     let remote_fetch = state.remote_wait.dispatched();
-    let mut long_poll_active = Duration::ZERO;
-    if state.total() < state.min_bytes
+    let long_poll_active = if state.total() < state.min_bytes
         && max_wait_ms > 0
         && !has_preferred_read_replica
         && !remote_fetch
@@ -417,8 +434,10 @@ pub(super) async fn execute_pending_reads(
             phases,
         )))
         .await;
-        long_poll_active = active;
-    }
+        active
+    } else {
+        Duration::ZERO
+    };
     GroupedResponses {
         long_poll_active,
         ..group_into_topic_responses(pending)
@@ -447,7 +466,7 @@ async fn long_poll_then_reread(
     phases: &RequestPhases,
 ) {
     let max_wait = Duration::from_millis(u64::from(u32::try_from(state.max_wait_ms).unwrap_or(0)));
-    let deadline = tokio::time::Instant::now() + max_wait;
+    let deadline = time::Instant::now() + max_wait;
     let mut waits: Vec<WaitFut> = waits.into_iter().map(Wait::boxed).collect();
     loop {
         if revalidate_epochs(broker, pending).await
@@ -463,9 +482,8 @@ async fn long_poll_then_reread(
         // it holds and is waiting for someone else to append, so the time
         // belongs beside the Produce `acks=all` gate and not beside the local
         // read.
-        let parked = std::time::Instant::now();
-        let outcome =
-            tokio::time::timeout_at(deadline, futures_util::future::select_all(waits)).await;
+        let parked = Instant::now();
+        let outcome = time::timeout_at(deadline, future::select_all(waits)).await;
         phases.add_remote(parked.elapsed());
         let Ok((woken, _fired, rest)) = outcome else {
             // The deadline passed. Nothing more will be read but the rows the
@@ -581,7 +599,7 @@ async fn reread_woken(
     // log does not hold the offset -- that is what sent it to the tier in the
     // first place -- so a re-read would trade a served batch for another
     // object-store round trip.
-    if state.cold_served[index] {
+    if state.cold_served(index) {
         return;
     }
     // `do_read` fills `aborted_transactions` only for a `read_committed`
@@ -604,7 +622,7 @@ async fn reread_woken(
     // Time the re-read so its duration accumulates into the same
     // per-partition CPU counter as the first pass (wall-clock delta;
     // see the first-pass comment for why this replaces TaskMonitor).
-    let read_start = std::time::Instant::now();
+    let read_start = Instant::now();
     let bytes = do_read(
         &part,
         planned_read_request(broker, read, read_budget, state.sendfile_capable),
@@ -653,9 +671,10 @@ async fn reread_withheld(
         return;
     }
     for index in 0..pending.len() {
-        let throttled = pending[index]
-            .follower_position
-            .is_some_and(|position| position.leader_throttled);
+        let throttled = pending.get(index).is_some_and(|read| {
+            read.follower_position
+                .is_some_and(|position| position.leader_throttled)
+        });
         if throttled && state.bytes.get(index) == 0 {
             reread_woken(broker, pending, index, state, phases).await;
         }
@@ -726,7 +745,7 @@ async fn serve_from_cold_tier(
     if read.out.error_code != codes::OFFSET_OUT_OF_RANGE {
         return 0;
     }
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     // Boxed: the cold read holds the remote-wait deadline and the reader
     // permit across several awaits, and inline it would make every fetch
     // future, local or cold, carry its whole state.
@@ -745,7 +764,7 @@ mod tests {
         crate::{
             broker::{Broker, BrokerHandle, spawn_partition},
             codes::{self, NONE, OFFSET_OUT_OF_RANGE},
-            diskless::wal_index::WalFlushRecord,
+            diskless::wal_index::{WalFlushRecord, WalIndexEntry},
             handlers::{
                 fetch::test_support::append_epoch_batches,
                 test_support::{self as handler_fixture_support, partition},
@@ -760,13 +779,14 @@ mod tests {
         krabka_ids::Offset,
         krabka_log::{Log, LogConfig},
         krabka_protocol::{
-            owned::fetch_response::AbortedTransaction,
+            owned::fetch_response::{AbortedTransaction, EpochEndOffset, FetchableTopicResponse},
             primitives::uuid::Uuid as WireUuid,
             records::{Record, RecordBatch, RecordsPayload},
         },
         object_store::{ObjectStoreExt as _, PutPayload, path::Path},
-        std::sync::Arc,
+        std::{fs, iter, path::Path as FsPath, sync::Arc, time::Duration},
         tempfile::TempDir,
+        tokio::{sync::Notify, time},
     };
 
     /// Keep a live broker and its log directory around one local read partition.
@@ -949,25 +969,25 @@ mod tests {
         }
     }
 
-    fn open_fixture_log(dir: &std::path::Path, topic: &str) -> Log {
+    fn open_fixture_log(dir: &FsPath, topic: &str) -> Log {
         let part_dir = dir.join(format!("{topic}-0"));
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        fs::create_dir_all(&part_dir).expect("partition dir");
         Log::open(&part_dir, LogConfig::default()).expect("open partition log")
     }
 
     fn spawn_fixture_partition(
         broker: &Broker,
-        dir: &std::path::Path,
+        dir: &FsPath,
         log: Log,
         setup: StandalonePartitionSetup<'_>,
-    ) -> std::sync::Arc<Partition> {
+    ) -> Arc<Partition> {
         spawn_partition(
             setup.topic.to_owned(),
             setup.partition,
             dir.to_path_buf(),
             log,
             broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
+            Arc::clone(&broker.producer_state),
             setup.storage == StorageMode::Diskless,
         )
     }
@@ -986,10 +1006,10 @@ mod tests {
     #[bon::builder]
     async fn nonempty_local_partition(
         broker: &Broker,
-        dir: &std::path::Path,
+        dir: &FsPath,
         #[builder(default = "orders")] topic: &'_ str,
         #[builder(default = b"v")] payload: &'static [u8],
-    ) -> std::sync::Arc<Partition> {
+    ) -> Arc<Partition> {
         let setup = NonemptyPartitionSetup { topic, payload };
         let NonemptyPartitionSetup { topic, payload } = setup;
         let part = spawn_fixture_partition(
@@ -1047,8 +1067,8 @@ mod tests {
 
         let request = wide_partition_fetch_request();
         let pending = vec![
-            planned_follower(TOPIC_A, &part_a, &request, crate::codes::NONE),
-            planned_follower(TOPIC_B, &part_b, &request, crate::codes::NONE),
+            planned_follower(TOPIC_A, &part_a, &request, codes::NONE),
+            planned_follower(TOPIC_B, &part_b, &request, codes::NONE),
         ];
         // A response budget far smaller than either partition's one batch:
         // the first partition's read still serves it whole, which alone
@@ -1064,7 +1084,7 @@ mod tests {
         // no records, not a second oversized batch.
         assert!(served_b.records.is_none());
         assert!(served_b.high_watermark == 1);
-        assert!(served_b.error_code == crate::codes::NONE);
+        assert!(served_b.error_code == codes::NONE);
         broker_handle.shutdown().await;
     }
 
@@ -1103,7 +1123,7 @@ mod tests {
         } = super::execute_pending_reads(&broker, pending(), 0, 150, 0, false, &phases).await;
         // A fetch that does not wait is all handler work, none of it a long
         // poll.
-        assert!(long_poll_active == std::time::Duration::ZERO);
+        assert!(long_poll_active == Duration::ZERO);
         let first_bytes = topics[0].partitions[0]
             .records
             .as_ref()
@@ -1206,8 +1226,8 @@ mod tests {
             .await;
         let request = wide_partition_fetch_request();
         let pending = |count: usize| -> Vec<super::PendingRead> {
-            (0..count)
-                .map(|_| planned_follower(TOPIC, &part, &request, NONE))
+            iter::repeat_with(|| planned_follower(TOPIC, &part, &request, NONE))
+                .take(count)
                 .collect()
         };
         let phases = RequestPhases::default();
@@ -1248,14 +1268,14 @@ mod tests {
 
     /// A local partition and the temporary directory that holds its log.
     struct ConsumerPartition {
-        partition: std::sync::Arc<Partition>,
+        partition: Arc<Partition>,
         dir: tempfile::TempDir,
     }
 
     /// A local partition whose log holds `batches`, with its high watermark
     /// at the log end, read as a consumer (`fetch_only_leader` off).
     async fn consumer_partition(mut batches: Vec<RecordBatch>) -> ConsumerPartition {
-        let (part, dir) = test_partition(std::sync::Arc::new(tokio::sync::Notify::new()));
+        let (part, dir) = test_partition(Arc::new(Notify::new()));
         let end = {
             let mut log = part.log.lock().expect("log mutex poisoned");
             for batch in &mut batches {
@@ -1265,7 +1285,7 @@ mod tests {
         };
         part.replica_state.lock().await.hw = end;
         ConsumerPartition {
-            partition: std::sync::Arc::new(part),
+            partition: Arc::new(part),
             dir,
         }
     }
@@ -1273,7 +1293,7 @@ mod tests {
     /// A consumer read of `topic`'s partition 0 from offset 0.
     fn consumer_read(
         topic: &str,
-        part: &std::sync::Arc<Partition>,
+        part: &Arc<Partition>,
         read_committed: bool,
     ) -> super::PendingRead {
         super::PendingRead {
@@ -1288,7 +1308,7 @@ mod tests {
             is_follower_fetch: false,
             fetch_only_leader: false,
             follower_position: None,
-            partition: Some(std::sync::Arc::clone(part)),
+            partition: Some(Arc::clone(part)),
             out: super::PartitionData {
                 partition_index: 0,
                 ..Default::default()
@@ -1414,7 +1434,7 @@ mod tests {
                 topics[1].partitions[0]
                     == super::PartitionData {
                         partition_index: 0,
-                        error_code: crate::codes::NONE,
+                        error_code: codes::NONE,
                         high_watermark: 2,
                         last_stable_offset: 2,
                         log_start_offset: 0,
@@ -1431,11 +1451,7 @@ mod tests {
     /// A partition whose local log holds one record and then has it trimmed
     /// away, so a fetch at offset 0 falls straight through to the cold tier
     /// -- the shape [`serve_from_cold_tier`] exists for.
-    fn evicted_diskless_partition(
-        broker: &Broker,
-        dir: &std::path::Path,
-        topic: &str,
-    ) -> std::sync::Arc<Partition> {
+    fn evicted_diskless_partition(broker: &Broker, dir: &FsPath, topic: &str) -> Arc<Partition> {
         let mut log = open_fixture_log(dir, topic);
         log.append(&mut RecordBatch {
             records: vec![Record {
@@ -1508,7 +1524,7 @@ mod tests {
         read_handle.index.lock().await.apply(&WalFlushRecord {
             object_key: "diskless-wal/a".into(),
             format_version: WalFlushRecord::FORMAT_VERSION,
-            entries: vec![crate::diskless::wal_index::WalIndexEntry {
+            entries: vec![WalIndexEntry {
                 topic_id: topic_a,
                 partition: 0,
                 first_offset: 0,
@@ -1538,7 +1554,7 @@ mod tests {
             object_key: "diskless-wal/b".into(),
             format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![
-                crate::diskless::wal_index::WalIndexEntry {
+                WalIndexEntry {
                     topic_id: topic_b,
                     partition: 0,
                     first_offset: 0,
@@ -1547,7 +1563,7 @@ mod tests {
                     byte_len: u32::try_from(first.len()).expect("small run"),
                     max_timestamp_ms: 0,
                 },
-                crate::diskless::wal_index::WalIndexEntry {
+                WalIndexEntry {
                     topic_id: topic_b,
                     partition: 0,
                     first_offset: 1,
@@ -1583,13 +1599,13 @@ mod tests {
                 super::PendingRead {
                     topic_name: TOPIC_A.into(),
                     topic_id: WireUuid(topic_a.into_bytes()),
-                    partition: Some(std::sync::Arc::clone(&part_a)),
+                    partition: Some(Arc::clone(&part_a)),
                     ..request_for(WireUuid(topic_a.into_bytes()))
                 },
                 super::PendingRead {
                     topic_name: TOPIC_B.into(),
                     topic_id: WireUuid(topic_b.into_bytes()),
-                    partition: Some(std::sync::Arc::clone(&part_b)),
+                    partition: Some(Arc::clone(&part_b)),
                     ..request_for(WireUuid(topic_b.into_bytes()))
                 },
             ]
@@ -1655,7 +1671,7 @@ mod tests {
         read_handle.index.lock().await.apply(&WalFlushRecord {
             object_key: "diskless-wal/cold".into(),
             format_version: WalFlushRecord::FORMAT_VERSION,
-            entries: vec![crate::diskless::wal_index::WalIndexEntry {
+            entries: vec![WalIndexEntry {
                 topic_id,
                 partition: 0,
                 first_offset: 0,
@@ -1683,7 +1699,7 @@ mod tests {
             is_follower_fetch: false,
             fetch_only_leader: false,
             follower_position: None,
-            partition: Some(std::sync::Arc::clone(&part)),
+            partition: Some(Arc::clone(&part)),
             out: super::PartitionData {
                 error_code: OFFSET_OUT_OF_RANGE,
                 high_watermark: 1,
@@ -1704,7 +1720,7 @@ mod tests {
         .await;
 
         assert!(served == flushed.len());
-        assert!(pending.out.error_code == crate::codes::NONE);
+        assert!(pending.out.error_code == codes::NONE);
         assert!(phases.remote_seconds() > 0.0);
         // The object-store trip is charged to exactly one phase: the local
         // phase belongs to `do_read`, which this call does not make.
@@ -1757,14 +1773,11 @@ mod tests {
         let mut state = state_for().pending(&pending).call();
         super::long_poll_then_reread(&broker, &mut pending, Vec::new(), &mut state, &phases).await;
 
-        assert!(pending[0].out.error_code == crate::codes::FENCED_LEADER_EPOCH);
+        assert!(pending[0].out.error_code == codes::FENCED_LEADER_EPOCH);
         // A fenced-epoch row never touches the log, so it carries the -1
         // sentinels of a refused read (#872/#873): `records` is present but
         // empty, not null.
-        assert!(
-            pending[0].out.records
-                == Some(krabka_protocol::records::RecordsPayload::Raw(Bytes::new()))
-        );
+        assert!(pending[0].out.records == Some(RecordsPayload::Raw(Bytes::new())));
         broker_handle.shutdown().await;
     }
 
@@ -1798,7 +1811,7 @@ mod tests {
             .call()
             .await;
 
-        assert!(pending[0].out.error_code == crate::codes::OFFSET_OUT_OF_RANGE);
+        assert!(pending[0].out.error_code == codes::OFFSET_OUT_OF_RANGE);
         broker_handle.shutdown().await;
     }
 
@@ -1832,9 +1845,9 @@ mod tests {
         // waiters before it, the leadership waiters after it.
         let mut waits = super::arm_waits(&pending);
         waits.extend(super::arm_leadership_waits(&pending));
-        let demoted = std::sync::Arc::clone(&part);
+        let demoted = Arc::clone(&part);
         let demote = tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            time::sleep(Duration::from_millis(50)).await;
             demoted
                 .install_replication_target(None, node_id + 1, 0)
                 .await;
@@ -1849,8 +1862,7 @@ mod tests {
         demote.await.expect("demote task");
 
         assert!(
-            pending[0].out
-                == super::super::plan::refused_read(0, crate::codes::NOT_LEADER_OR_FOLLOWER)
+            pending[0].out == super::super::plan::refused_read(0, codes::NOT_LEADER_OR_FOLLOWER)
         );
         broker_handle.shutdown().await;
     }
@@ -1928,7 +1940,7 @@ mod tests {
             pending[0].out
                 == super::PartitionData {
                     aborted_transactions: None,
-                    diverging_epoch: krabka_protocol::owned::fetch_response::EpochEndOffset {
+                    diverging_epoch: EpochEndOffset {
                         epoch: 1,
                         end_offset: 4,
                         ..Default::default()
@@ -1979,8 +1991,8 @@ mod tests {
             .minimum(setup.minimum)
             .wait(setup.wait)
             .call();
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
+        time::timeout(
+            Duration::from_secs(2),
             super::long_poll_then_reread(broker, pending, waits, &mut state, &phases),
         )
         .await
@@ -2020,12 +2032,11 @@ mod tests {
 
     /// The base offsets of the batches a fetch answered with, in order.
     fn served_base_offsets(out: &super::PartitionData) -> Vec<i64> {
-        let Some(krabka_protocol::records::RecordsPayload::Raw(raw)) = out.records.as_ref() else {
+        let Some(RecordsPayload::Raw(raw)) = out.records.as_ref() else {
             return Vec::new();
         };
-        let krabka_protocol::records::RecordsPayload::V2(batches) =
-            krabka_protocol::records::RecordsPayload::from_bytes(raw.clone())
-                .expect("decode served")
+        let RecordsPayload::V2(batches) =
+            RecordsPayload::from_bytes(raw.clone()).expect("decode served")
         else {
             return Vec::new();
         };
@@ -2060,10 +2071,10 @@ mod tests {
         let one_batch = sized.len();
         let min_bytes = i32::try_from(one_batch * 2 + 1).expect("small floor");
 
-        let producer = std::sync::Arc::clone(&part);
+        let producer = Arc::clone(&part);
         let appends = tokio::spawn(async move {
             for _ in 0..3 {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                time::sleep(Duration::from_millis(20)).await;
                 producer
                     .produce_batch(sized_batch(PAYLOAD))
                     .await
@@ -2079,7 +2090,7 @@ mod tests {
             log_start_offset: -1,
             partition_max_bytes: i32::try_from(one_batch * 8).expect("small budget"),
         };
-        let pending = vec![planned_follower(TOPIC, &part, &request, crate::codes::NONE)];
+        let pending = vec![planned_follower(TOPIC, &part, &request, codes::NONE)];
         let phases = RequestPhases::default();
         let GroupedResponses {
             responses: topics,
@@ -2101,7 +2112,7 @@ mod tests {
         assert!(
             (
                 served_base_offsets(served),
-                long_poll_active > std::time::Duration::ZERO
+                long_poll_active > Duration::ZERO
             ) == (vec![0, 1, 2], true)
         );
         broker_handle.shutdown().await;
@@ -2140,8 +2151,8 @@ mod tests {
             .expect("append");
 
         let phases = RequestPhases::default();
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+        time::timeout(
+            Duration::from_secs(5),
             super::long_poll_then_reread(&broker, &mut pending, waits, &mut state, &phases),
         )
         .await
@@ -2154,7 +2165,7 @@ mod tests {
     async fn read_with_tiny_budget(
         broker: &Broker,
         pending: Vec<super::PendingRead>,
-    ) -> Vec<krabka_protocol::owned::fetch_response::FetchableTopicResponse> {
+    ) -> Vec<FetchableTopicResponse> {
         let phases = RequestPhases::default();
         let GroupedResponses { responses, .. } =
             super::execute_pending_reads(broker, pending, 0, 8, 0, false, &phases).await;
@@ -2163,7 +2174,7 @@ mod tests {
 
     fn planned_follower(
         topic: &str,
-        part: &std::sync::Arc<Partition>,
+        part: &Arc<Partition>,
         request: &super::EffectivePartition,
         error_code: i16,
     ) -> super::PendingRead {
@@ -2175,7 +2186,7 @@ mod tests {
                 read_committed: false,
                 is_follower_fetch: true,
             },
-            Some(std::sync::Arc::clone(part)),
+            Some(Arc::clone(part)),
             super::PartitionData {
                 partition_index: 0,
                 error_code,
@@ -2184,11 +2195,7 @@ mod tests {
         )
     }
 
-    fn follower_read(
-        topic: &str,
-        part: &std::sync::Arc<Partition>,
-        error_code: i16,
-    ) -> super::PendingRead {
+    fn follower_read(topic: &str, part: &Arc<Partition>, error_code: i16) -> super::PendingRead {
         planned_follower(
             topic,
             part,

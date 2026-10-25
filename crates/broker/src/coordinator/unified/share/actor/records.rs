@@ -32,8 +32,8 @@ use {
     std::collections::HashMap,
 };
 
-#[derive(Debug, Default, PartialEq)]
-pub(crate) struct PendingShareRecords {
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PendingShareRecords {
     pub group_metadata: Option<ShareGroupMetadataValue>,
     /// `Some(value)` writes the record. `None` writes a tombstone, which is a
     /// null value.

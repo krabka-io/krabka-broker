@@ -86,6 +86,7 @@ use {
     },
     krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult,
     krabka_units::convert::TimeExt as _,
+    std::iter,
 };
 
 /// The per-listener key for `listener_name`. The name in the middle is
@@ -143,7 +144,7 @@ pub(super) fn idle_window_entries(
         let value = idle.millis_i64().to_string();
         // The listener's own value first, then the broker-wide tail it falls
         // back through.
-        let layers: Vec<Layer<'_>> = std::iter::once(Layer {
+        let layers: Vec<Layer<'_>> = iter::once(Layer {
             source: CONFIG_SOURCE_STATIC_BROKER,
             name: &key,
             value: &value,

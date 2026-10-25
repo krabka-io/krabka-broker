@@ -68,7 +68,7 @@ fn type_arguments(ty: &str) -> Option<TokenStream> {
 }
 
 /// Expands `#[krabka_env]` on `item`.
-pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let prefix = prefix(&{ meta })?;
     let mut item = moxy::parse!({ item } as ItemStruct)?;
     let Fields::Named(named) = &mut item.fields else {

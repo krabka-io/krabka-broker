@@ -1,6 +1,7 @@
 //! Decoding keeps version, request ownership and the native operation's control flow.
+#![cfg(test)]
 
-use {assert2::assert, std::cell::Cell};
+use {assert2::assert, std::cell::Cell, tokio::task, tracing::subscriber};
 
 type ApiVersion = i16;
 type DispatchResult = Result<Vec<u8>, &'static str>;
@@ -38,10 +39,7 @@ impl Decode for Request {
 mod handlers {
     use super::{ApiVersion, Decode};
 
-    pub(crate) fn decode_request<R: Decode>(
-        bytes: &[u8],
-        version: ApiVersion,
-    ) -> Result<R, &'static str> {
+    pub fn decode_request<R: Decode>(bytes: &[u8], version: ApiVersion) -> Result<R, &'static str> {
         R::decode(bytes, version)
     }
 }
@@ -52,7 +50,7 @@ mod immutable {
     /// Native documentation and tracing remain attached to the entry point.
     #[krabka_macros::decode_dispatch(request = Request, binding(req))]
     #[tracing::instrument(skip_all)]
-    pub(super) async fn dispatch(
+    pub async fn dispatch(
         broker: &Broker,
         version: ApiVersion,
         req_bytes: &[u8],
@@ -139,7 +137,7 @@ async fn mutable_request_binding_remains_an_owned_local() {
         )
         [request = Request, binding(mut req)] -> DispatchResult
         {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
             req.value += u8::try_from(negotiated).unwrap();
             source.operations.set(usize::from(req.value));
             Ok(vec![req.value, caller.correlation_id])
@@ -196,22 +194,25 @@ mod extension_handlers {
         }
     }
 
-    pub(super) mod control {
-        use super::{ApiVersion, Broker, DispatchResult, Request, RequestContext};
+    pub mod control {
+        use {
+            super::{ApiVersion, Broker, DispatchResult, Request, RequestContext},
+            tokio::task,
+        };
 
         #[krabka_macros::extension_wire(
             name = "handle_extension_control",
             api = "ExtensionControl",
             level = "info"
         )]
-        pub(crate) async fn handle(
+        pub async fn handle(
             broker: &Broker,
             req: Request,
             version: ApiVersion,
             ctx: &RequestContext<'_>,
         ) -> DispatchResult {
             broker.operations.set(broker.operations.get() + 1);
-            tokio::task::yield_now().await;
+            task::yield_now().await;
             if ctx.principal == "guest" {
                 Err("control refused")
             } else {
@@ -220,7 +221,7 @@ mod extension_handlers {
         }
     }
 
-    pub(super) mod marker {
+    pub mod marker {
         use super::{ApiVersion, Broker, DispatchResult, MarkerRequest, RequestContext};
 
         #[krabka_macros::extension_wire(
@@ -228,7 +229,7 @@ mod extension_handlers {
             api = "ExtensionMarker",
             level = "debug"
         )]
-        pub(crate) async fn handle(
+        pub async fn handle(
             broker: &Broker,
             req: MarkerRequest,
             version: ApiVersion,
@@ -259,7 +260,7 @@ async fn extension_spans_wrap_decoding_and_native_operations_at_their_original_l
         .with_span_events(FmtSpan::NEW)
         .with_writer(|| OUTPUT.make_writer())
         .finish();
-    let _tracing = tracing::subscriber::set_default(subscriber);
+    let _tracing = subscriber::set_default(subscriber);
     let broker = Broker {
         operations: Cell::new(0),
     };

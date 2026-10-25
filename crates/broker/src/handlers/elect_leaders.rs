@@ -57,7 +57,8 @@ use {
         elect_leaders_response::{ElectLeadersResponse, ReplicaElectionResult},
     },
     krabka_raft::RaftError,
-    std::{future::Future, sync::Arc, time::Duration},
+    std::{future::Future, mem, sync::Arc, time::Duration},
+    tokio::time::Instant,
 };
 
 mod batch;
@@ -80,7 +81,7 @@ const WIRE_ELECTION_UNCLEAN: i8 = 1;
 const CLUSTER_ALTER_DENIED_MESSAGE: &str = "Request ElectLeaders needs ALTER permission.";
 
 /// Forward the original operation before selecting leaders from metadata.
-pub(crate) async fn dispatch(
+pub async fn dispatch(
     broker: &Broker,
     version: i16,
     req_bytes: &[u8],
@@ -117,7 +118,7 @@ fn request_refusal(
     whole_request_error(request, code, message.unwrap_or_default())
 }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ElectLeadersRequest,
     _version: ApiVersion,
@@ -126,7 +127,7 @@ pub(crate) async fn handle(
     let budget = Duration::from_millis(req.timeout_ms.max(0).unsigned_abs().into());
     let result = guarded_operation_on_source(
         broker.controller.as_ref(),
-        tokio::time::Instant::now() + budget,
+        Instant::now() + budget,
         |image| elect_leaders_once(broker, &req, ctx, image),
     )
     .await;
@@ -219,7 +220,7 @@ async fn elect_leaders_once(
     // records selected under obsolete authority.
     let mut submit_failure = None;
     if !batch.records.is_empty() {
-        let records = std::mem::take(&mut batch.records);
+        let records = mem::take(&mut batch.records);
         let admission = submit_election_after_audit(
             broker.controller.as_ref(),
             Arc::clone(&image),

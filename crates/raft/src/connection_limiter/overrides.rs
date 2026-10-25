@@ -14,8 +14,9 @@ use {
     std::{
         collections::{BTreeMap, HashMap},
         net::IpAddr,
-        sync::{Arc, Mutex, PoisonError},
+        sync::{Arc, Mutex, MutexGuard, PoisonError},
     },
+    tokio::net,
     tracing::warn,
 };
 
@@ -51,7 +52,7 @@ async fn resolve_host(host: &str) -> Option<IpAddr> {
     if let Ok(address) = host.parse::<IpAddr>() {
         return Some(address.to_canonical());
     }
-    tokio::net::lookup_host((host, 0))
+    net::lookup_host((host, 0))
         .await
         .ok()?
         .next()
@@ -59,7 +60,7 @@ async fn resolve_host(host: &str) -> Option<IpAddr> {
 }
 
 impl OverrideAddresses {
-    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+    fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -106,13 +107,14 @@ impl OverrideAddresses {
         state.applied = hosts;
         if unresolved.is_empty() {
             state.addresses = Arc::new(addresses);
-        } else {
-            warn!(
-                ?unresolved,
-                "max.connections.per.ip.overrides names hosts that do not resolve; keeping the \
-                 previous overrides"
-            );
+            return;
         }
+        drop(state);
+        warn!(
+            ?unresolved,
+            "max.connections.per.ip.overrides names hosts that do not resolve; keeping the \
+             previous overrides"
+        );
     }
 }
 
@@ -122,6 +124,7 @@ mod tests {
         super::*,
         assert2::assert,
         std::time::{Duration, Instant},
+        tokio::time,
     };
 
     fn hosts(entries: &[(&str, usize)]) -> BTreeMap<String, usize> {
@@ -143,7 +146,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while cache.state().applied != *hosts {
             assert!(Instant::now() < deadline, "the lookup never finished");
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         }
     }
 

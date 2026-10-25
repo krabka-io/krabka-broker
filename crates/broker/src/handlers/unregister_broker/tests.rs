@@ -39,7 +39,7 @@ use {
     },
     krabka_protocol::owned::unregister_broker_response::{self, UnregisterBrokerResponse},
     krabka_security::Principal,
-    std::{net::SocketAddr, sync::Arc},
+    std::{net::SocketAddr, slice, sync::Arc},
     uuid::Uuid,
 };
 
@@ -170,7 +170,7 @@ fn an_unregistration_with_no_proposal_appends_nothing() {
 #[test]
 fn an_approved_unregistration_appends_the_consume_beside_the_unregister() {
     let proposal = approved_proposal(GatedAction::UnregisterBroker, "7");
-    let image = image_of(std::slice::from_ref(&proposal));
+    let image = image_of(slice::from_ref(&proposal));
 
     let records = unregister_records(&image, &gated_config(), DOOMED, DOOMED_EPOCH, NOW_MS)
         .expect("the proposal authorizes the unregistration");

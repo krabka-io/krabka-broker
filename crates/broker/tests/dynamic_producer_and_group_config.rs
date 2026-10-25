@@ -9,6 +9,7 @@
 //! reads the current value for the next target assignment. Each case alters
 //! the `BROKER` resource with `IncrementalAlterConfigs` and observes the
 //! effect on the wire.
+#![cfg(test)]
 
 mod support;
 
@@ -25,7 +26,7 @@ use {
         transactions::claim_idempotent_producer,
     },
     assert2::{assert, check},
-    krabka_broker::{BrokerConfig, BrokerHandle},
+    krabka_broker::{BrokerConfig, BrokerHandle, codes},
     krabka_client_core::Client,
     krabka_protocol::{
         owned::{
@@ -38,6 +39,7 @@ use {
         records::RecordBatch,
     },
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 /// Kafka's `TransactionLogConfig.PRODUCER_ID_EXPIRATION_MS_CONFIG`.
@@ -109,7 +111,7 @@ async fn alter_broker(
         .into_iter()
         .next()
         .expect("one resource row");
-    if row.error_code == krabka_broker::codes::NONE {
+    if row.error_code == codes::NONE {
         let want = value.map(ToOwned::to_owned);
         broker
             .wait_for_image(|image| scope.image_value(broker, image, key) == want)
@@ -121,7 +123,7 @@ async fn alter_broker(
 /// The response row of an alter that succeeded on `scope`.
 fn accepted(broker: &BrokerHandle, scope: Scope) -> AlterConfigsResourceResponse {
     AlterConfigsResourceResponse {
-        error_code: krabka_broker::codes::NONE,
+        error_code: codes::NONE,
         error_message: None,
         resource_type: BROKER_RESOURCE,
         resource_name: scope.resource_name(broker),
@@ -194,7 +196,7 @@ async fn a_dynamic_producer_id_expiration_reaches_the_running_expiry_sweep() {
         assert!(appended.responses[0].partition_responses[0].error_code == 0);
 
         // Several sweeps under the static day-long window keep the producer.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
         let kept = active_producer_ids(&p.client, &topic).await;
         check!(kept == [producer.producer_id], "{scope:?}");
 
@@ -213,7 +215,7 @@ async fn a_dynamic_producer_id_expiration_reaches_the_running_expiry_sweep() {
             if remaining.is_empty() || Instant::now() >= deadline {
                 break remaining;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            time::sleep(Duration::from_millis(50)).await;
         };
         check!(
             remaining == Vec::<i64>::new(),
@@ -348,7 +350,7 @@ async fn a_dynamic_consumer_assignment_interval_holds_back_the_next_assignment()
         if answer.assignment.is_some() || Instant::now() >= deadline {
             break answer;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     };
     check!(joined_at.elapsed() >= INTERVAL);
     check!(
@@ -388,7 +390,7 @@ async fn an_assignment_interval_above_the_broker_maximum_is_refused() {
     }
 
     let refusal = |scope: Scope, protocol: &str| AlterConfigsResourceResponse {
-        error_code: krabka_broker::codes::INVALID_REQUEST,
+        error_code: codes::INVALID_REQUEST,
         error_message: Some(format!(
             "group.{protocol}.assignment.interval.ms must be less than or equal to \
              group.{protocol}.max.assignment.interval.ms"

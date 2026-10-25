@@ -73,7 +73,7 @@ impl Walk {
         });
         self.head = Some(head);
         self.last = Some(LastManifest {
-            key: key.to_string(),
+            key: key.to_owned(),
             seq: body.chain.seq,
         });
     }
@@ -86,7 +86,7 @@ impl Walk {
         reason: String,
         span: Option<EpochSpan>,
     ) -> Self {
-        self.first_break.get_or_insert(VerifyBreak {
+        self.first_break.get_or_insert_with(|| VerifyBreak {
             manifest_key: key.to_owned(),
             seq: Some(manifest.body.chain.seq),
             reason,
@@ -111,7 +111,7 @@ impl Walk {
             && self.untrusted == 0
             && orphan_objects.is_empty();
         let report = PartitionVerifyReport {
-            partition_dir: dir.to_string(),
+            partition_dir: dir.to_owned(),
             manifests: self.manifests,
             objects_checked: self.objects_checked,
             create_precondition_objects: self.create_precondition_objects,
@@ -142,7 +142,7 @@ impl Walk {
         // With nothing verified there is no manifest to point at, so the
         // break names the directory that should have held one.
         let (manifest_key, seq) = self.last.as_ref().map_or_else(
-            || (dir.to_string(), None),
+            || (dir.to_owned(), None),
             |last| (last.key.clone(), Some(last.seq)),
         );
         Some(VerifyBreak {
@@ -261,7 +261,7 @@ fn chain_continuation(
             "chain head mismatch: the manifest records prev_head {}, the running head is {head}",
             chain.prev_head
         )),
-        ChainStep::Exhausted => Err("chain sequence exhausted".to_string()),
+        ChainStep::Exhausted => Err("chain sequence exhausted".to_owned()),
         ChainStep::Continue(next_seq) => Ok(next_seq),
     }
 }

@@ -3,7 +3,7 @@
 use {
     crate::{
         fixtures::{name, named_arguments},
-        meta::{ItemBody, arguments, item_body, named_body},
+        meta::{ItemBody, argument_array, body_group, item_body, named_body},
     },
     moxy::{
         ast::ParseError,
@@ -11,7 +11,7 @@ use {
     },
 };
 
-pub(crate) fn flag_metadata_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn flag_metadata_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(input)?;
     Ok(moxy::template! {
         fn {{ name }}(arg: &::clap::Arg) -> (&str, String, Vec<String>) {
@@ -23,9 +23,8 @@ pub(crate) fn flag_metadata_fixture(input: TokenStream) -> Result<TokenStream, P
     })
 }
 
-pub(crate) fn bind_retry_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let (name, mut arguments) = named_arguments(input, 2)?;
-    let timeout = arguments.next().unwrap();
+pub fn bind_retry_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let (name, [timeout]) = named_arguments(input)?;
     Ok(moxy::template! {
         pub(super) async fn {{ name }}(addr: ::std::net::SocketAddr) -> ::tokio::net::TcpListener {
             let deadline = ::tokio::time::Instant::now() + {{ timeout }};
@@ -43,7 +42,7 @@ pub(crate) fn bind_retry_fixture(input: TokenStream) -> Result<TokenStream, Pars
     })
 }
 
-pub(crate) fn dispatch_capacity_parser(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn dispatch_capacity_parser(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(input)?;
     Ok(moxy::template! {
         fn {{ name }}(value: &str) -> Result<usize, String> {
@@ -55,24 +54,30 @@ pub(crate) fn dispatch_capacity_parser(input: TokenStream) -> Result<TokenStream
 }
 
 fn no_options(meta: TokenStream) -> Result<(), ParseError> {
-    match meta.into_iter().next() {
-        Some(token) => Err(ParseError::new(
+    meta.into_iter().next().map_or(Ok(()), |token| {
+        Err(ParseError::new(
             token.span(),
             "this attribute takes no arguments",
-        )),
-        None => Ok(()),
-    }
+        ))
+    })
 }
 
-pub(crate) fn argv_entrypoint(
-    meta: TokenStream,
-    item: TokenStream,
-) -> Result<TokenStream, ParseError> {
+pub fn argv_entrypoint(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     no_options(meta)?;
     let ItemBody { tokens, body_index } =
         item_body(item, "argv_entrypoint", TokenTree::is_keyword_fn)?;
-    let function = tokens.iter().position(TokenTree::is_keyword_fn).unwrap();
-    let declaration = &tokens[function + 1..body_index];
+    let header_error = || ParseError::new(Span::call_site(), "expected an entry point function");
+    let function = tokens
+        .iter()
+        .position(TokenTree::is_keyword_fn)
+        .ok_or_else(header_error)?;
+    let (Some(prefix), Some(declaration), Some(body)) = (
+        tokens.get(..function),
+        tokens.get(function + 1..body_index),
+        tokens.get(body_index),
+    ) else {
+        return Err(header_error());
+    };
     let [
         TokenTree::Ident(name),
         TokenTree::Group(arguments),
@@ -96,8 +101,7 @@ pub(crate) fn argv_entrypoint(
             "expected an entry point declared as fn name(...) -> i32",
         ));
     }
-    let prefix: TokenStream = tokens[..function].to_vec().into();
-    let body = &tokens[body_index];
+    let prefix: TokenStream = prefix.to_vec().into();
     let extra = &arguments.tokens;
     Ok(moxy::template! {
         {{ prefix }} fn {{ name }}<I, T>(argv: I, {{ extra }}) -> i32
@@ -108,7 +112,7 @@ pub(crate) fn argv_entrypoint(
     })
 }
 
-pub(crate) fn bootstrap_cli_fields(
+pub fn bootstrap_cli_fields(
     meta: TokenStream,
     item: TokenStream,
 ) -> Result<TokenStream, ParseError> {
@@ -117,9 +121,7 @@ pub(crate) fn bootstrap_cli_fields(
         mut tokens,
         body_index: body,
     } = named_body(item, "bootstrap_cli_fields")?;
-    let TokenTree::Group(group) = &mut tokens[body] else {
-        unreachable!()
-    };
+    let group = body_group(&mut tokens, body)?;
     if !group.tokens.is_empty() {
         return Err(ParseError::new(
             group.span(),
@@ -138,7 +140,7 @@ pub(crate) fn bootstrap_cli_fields(
     Ok(tokens.into())
 }
 
-pub(crate) fn duration_cases(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn duration_cases(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(input)?;
     let assertion = duration_parse_assertion();
     Ok(moxy::template! {
@@ -156,10 +158,9 @@ fn duration_parse_assertion() -> TokenStream {
     }
 }
 
-pub(crate) fn directory_tree(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let (name, mut arguments) = named_arguments(input, 4)?;
-    let element = arguments.next().unwrap();
-    let docs = arguments.next().unwrap().into_iter().collect::<Vec<_>>();
+pub fn directory_tree(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let (name, [element, docs, project]) = named_arguments(input)?;
+    let docs = docs.into_iter().collect::<Vec<_>>();
     let [TokenTree::Group(docs)] = docs.as_slice() else {
         return Err(ParseError::new(
             Span::call_site(),
@@ -173,7 +174,7 @@ pub(crate) fn directory_tree(input: TokenStream) -> Result<TokenStream, ParseErr
         ));
     }
     let docs = &docs.tokens;
-    let project: Vec<_> = arguments.next().unwrap().into_iter().collect();
+    let project: Vec<_> = project.into_iter().collect();
     let project: TokenStream = match project.as_slice() {
         [TokenTree::Group(group)] if group.delim.is_paren() => group.tokens.clone(),
         _ => project.into(),
@@ -210,7 +211,7 @@ fn documentation(input: TokenStream) -> Result<TokenStream, ParseError> {
     }
 }
 
-pub(crate) fn parsed_cli_entrypoint(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn parsed_cli_entrypoint(input: TokenStream) -> Result<TokenStream, ParseError> {
     let docs = documentation(input)?;
     Ok(moxy::template! {
         {{ docs }}
@@ -224,10 +225,10 @@ pub(crate) fn parsed_cli_entrypoint(input: TokenStream) -> Result<TokenStream, P
     })
 }
 
-pub(crate) fn duration_parser_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let mut arguments = arguments(input, 2)?.into_iter();
-    let docs = documentation(arguments.next().unwrap())?;
-    let cases: Vec<_> = arguments.next().unwrap().into_iter().collect();
+pub fn duration_parser_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [docs, cases] = argument_array(input)?;
+    let docs = documentation(docs)?;
+    let cases: Vec<_> = cases.into_iter().collect();
     let [TokenTree::Group(cases)] = cases.as_slice() else {
         return Err(ParseError::new(
             Span::call_site(),
@@ -252,10 +253,8 @@ pub(crate) fn duration_parser_fixture(input: TokenStream) -> Result<TokenStream,
     })
 }
 
-pub(crate) fn bootstrap_parser_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let mut arguments = arguments(input, 2)?.into_iter();
-    let refused = arguments.next().unwrap();
-    let accepted = arguments.next().unwrap();
+pub fn bootstrap_parser_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [refused, accepted] = argument_array(input)?;
     Ok(moxy::template! {
         /// `--bootstrap-server` is the one flag every subcommand needs, so the
         /// parser refuses a command line without it rather than defaulting to a
@@ -268,7 +267,7 @@ pub(crate) fn bootstrap_parser_fixture(input: TokenStream) -> Result<TokenStream
     })
 }
 
-pub(crate) fn snapshot_node_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn snapshot_node_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(input)?;
     Ok(moxy::template! {
         fn {{ name }}() -> ::tempfile::TempDir {
@@ -281,11 +280,8 @@ pub(crate) fn snapshot_node_fixture(input: TokenStream) -> Result<TokenStream, P
     })
 }
 
-pub(crate) fn connect_cli_client(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let mut arguments = arguments(input, 3)?.into_iter();
-    let bootstrap = arguments.next().unwrap();
-    let client_id = arguments.next().unwrap();
-    let unreachable = arguments.next().unwrap();
+pub fn connect_cli_client(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [bootstrap, client_id, unreachable] = argument_array(input)?;
     Ok(moxy::template! {
         match ::krabka_client_core::Client::builder()
             .bootstrap({{ bootstrap }})
@@ -300,7 +296,7 @@ pub(crate) fn connect_cli_client(input: TokenStream) -> Result<TokenStream, Pars
     })
 }
 
-pub(crate) fn format_directories_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn format_directories_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(input)?;
     Ok(moxy::template! {
         fn {{ name }}() -> (::tempfile::TempDir, ::std::path::PathBuf, ::std::path::PathBuf) {

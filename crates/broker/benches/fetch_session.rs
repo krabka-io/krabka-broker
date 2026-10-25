@@ -53,7 +53,7 @@
 
 use {
     assert2::assert,
-    criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main},
+    criterion::{BatchSize, BenchmarkId, Criterion, Throughput, abs_file, criterion_main},
     krabka_broker::{
         config::DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
         fetch_session::{
@@ -67,11 +67,17 @@ use {
     },
     qubit_clock::ManualMonotonicClock,
     std::{
+        env,
+        error::Error,
+        process,
         sync::Arc,
         thread,
         time::{Duration, Instant},
     },
 };
+
+/// Any failure while building or measuring a case; it stops the run.
+type BenchError = Box<dyn Error + Send + Sync>;
 
 /// Cache capacity, taken from the broker's own default so the bench measures
 /// the size a real broker runs at.
@@ -98,7 +104,7 @@ const NAME_FETCH_VERSION: i16 = 12;
 /// Sizes large enough to distinguish linear work from a partition-by-partition
 /// scan, while retaining the issue's 8,000-partition reproduction as the top
 /// row.
-const WIDE_PARTITIONS: [usize; 4] = [1_000, 2_000, 4_000, 8_000];
+const WIDE_PARTITIONS: [u16; 4] = [1_000, 2_000, 4_000, 8_000];
 
 /// One partition of a session's partition set: its key and cached state.
 #[derive(Clone)]
@@ -112,7 +118,7 @@ fn partition_set() -> Vec<CachedPartition> {
     (0..PARTITIONS)
         .map(|partition| CachedPartition {
             key: FetchSessionKey {
-                topic_name: TOPIC.to_string(),
+                topic_name: TOPIC.to_owned(),
                 topic_id: WireUuid::ZERO,
                 partition,
             },
@@ -130,7 +136,7 @@ fn new_session_request() -> FetchRequest {
         session_id: INVALID_SESSION_ID,
         session_epoch: INITIAL_EPOCH,
         topics: vec![FetchTopic {
-            topic: TOPIC.to_string(),
+            topic: TOPIC.to_owned(),
             topic_id: WireUuid::ZERO,
             partitions: (0..PARTITIONS)
                 .map(|partition| FetchPartition {
@@ -145,14 +151,14 @@ fn new_session_request() -> FetchRequest {
     }
 }
 
-fn wide_partition_set(partitions: usize) -> Vec<(FetchSessionKey, CachedPartitionState)> {
+fn wide_partition_set(partitions: u16) -> Vec<(FetchSessionKey, CachedPartitionState)> {
     (0..partitions)
         .map(|partition| {
             (
                 FetchSessionKey {
-                    topic_name: TOPIC.to_string(),
+                    topic_name: TOPIC.to_owned(),
                     topic_id: WireUuid::ZERO,
-                    partition: i32::try_from(partition).expect("benchmark partition fits i32"),
+                    partition: i32::from(partition),
                 },
                 CachedPartitionState {
                     max_bytes: 1024 * 1024,
@@ -163,27 +169,27 @@ fn wide_partition_set(partitions: usize) -> Vec<(FetchSessionKey, CachedPartitio
         .collect()
 }
 
-fn wide_cache(partitions: usize) -> (FetchSessionCache, i32) {
+fn wide_cache(partitions: u16) -> (FetchSessionCache, i32) {
     let cache = FetchSessionCache::new(1);
     let session_id = cache.try_allocate(
         false,
         false,
-        PRINCIPAL.to_string(),
+        PRINCIPAL.to_owned(),
         wide_partition_set(partitions),
     );
     assert!(session_id != INVALID_SESSION_ID, "wide session was refused");
     (cache, session_id)
 }
 
-fn merge_request(session_id: i32, partitions: usize) -> FetchRequest {
+fn merge_request(session_id: i32, partitions: u16) -> FetchRequest {
     FetchRequest {
         session_id,
         session_epoch: 1,
         topics: vec![FetchTopic {
-            topic: TOPIC.to_string(),
+            topic: TOPIC.to_owned(),
             partitions: (0..partitions)
                 .map(|partition| FetchPartition {
-                    partition: i32::try_from(partition).expect("benchmark partition fits i32"),
+                    partition: i32::from(partition),
                     fetch_offset: 1,
                     partition_max_bytes: 1024 * 1024,
                     ..FetchPartition::default()
@@ -195,23 +201,20 @@ fn merge_request(session_id: i32, partitions: usize) -> FetchRequest {
     }
 }
 
-fn forget_request(session_id: i32, partitions: usize) -> FetchRequest {
+fn forget_request(session_id: i32, partitions: u16) -> FetchRequest {
     FetchRequest {
         session_id,
         session_epoch: 1,
         forgotten_topics_data: vec![ForgottenTopic {
-            topic: TOPIC.to_string(),
-            partitions: (0..partitions)
-                .step_by(2)
-                .map(|partition| i32::try_from(partition).expect("benchmark partition fits i32"))
-                .collect(),
+            topic: TOPIC.to_owned(),
+            partitions: (0..partitions).step_by(2).map(i32::from).collect(),
             ..ForgottenTopic::default()
         }],
         ..FetchRequest::default()
     }
 }
 
-fn finalize_case(partitions: usize) -> (FetchSessionCache, i32, Vec<SentPartition>) {
+fn finalize_case(partitions: u16) -> (FetchSessionCache, i32, Vec<SentPartition>) {
     let (cache, session_id) = wide_cache(partitions);
     let sent = wide_partition_set(partitions)
         .into_iter()
@@ -238,14 +241,14 @@ struct ClockedCache {
 /// and the manual clock it stamps sessions from.
 fn prefilled(occupancy: usize) -> ClockedCache {
     let clock = ManualMonotonicClock::new_shared();
-    let cache = FetchSessionCache::with_clock(SLOTS, clock.clone());
+    let cache = FetchSessionCache::with_clock(SLOTS, Arc::<ManualMonotonicClock>::clone(&clock));
     let template = partition_set();
     for _ in 0..(SLOTS * occupancy / 100) {
         let partitions = template
             .iter()
             .map(|partition| (partition.key.clone(), partition.state.clone()))
             .collect();
-        let id = cache.try_allocate(false, false, PRINCIPAL.to_string(), partitions);
+        let id = cache.try_allocate(false, false, PRINCIPAL.to_owned(), partitions);
         assert!(id != INVALID_SESSION_ID, "prefill was refused a session");
     }
     ClockedCache { cache, clock }
@@ -276,15 +279,15 @@ fn timed_session_turns(
     template: &[CachedPartition],
     close_explicitly: bool,
     ops: u64,
-) -> Duration {
+) -> Result<Duration, BenchError> {
     let mut elapsed = Duration::ZERO;
     for _ in 0..ops {
         let partitions = template
             .iter()
             .map(|partition| (partition.key.clone(), partition.state.clone()))
             .collect();
-        let principal = PRINCIPAL.to_string();
-        clock.advance(STALE).expect("manual time moves forward");
+        let principal = PRINCIPAL.to_owned();
+        clock.advance(STALE)?;
 
         let start = Instant::now();
         let decision = cache.classify(request, NAME_FETCH_VERSION);
@@ -300,7 +303,7 @@ fn timed_session_turns(
         assert!(matches!(decision, SessionDecision::NewSession));
         assert!(id != INVALID_SESSION_ID, "allocation was refused");
     }
-    elapsed
+    Ok(elapsed)
 }
 
 /// Spread `iters` session turns over `threads` callers of one cache, and
@@ -309,7 +312,11 @@ fn timed_session_turns(
 /// Summing the per-thread totals rather than taking the wall clock keeps the
 /// thread spawn out of the measurement and makes `total / iters` the mean
 /// latency of one turn, contention included.
-fn timed_across_threads(occupancy: usize, threads: u32, iters: u64) -> Duration {
+fn timed_across_threads(
+    occupancy: usize,
+    threads: u32,
+    iters: u64,
+) -> Result<Duration, BenchError> {
     let ClockedCache { cache, clock } = prefilled(occupancy);
     let cache = Arc::new(cache);
     let request = new_session_request();
@@ -318,57 +325,83 @@ fn timed_across_threads(occupancy: usize, threads: u32, iters: u64) -> Duration 
 
     let threads = u64::from(threads);
     thread::scope(|scope| {
-        let workers: Vec<_> = (0..threads)
-            .map(|worker| {
-                // Hand out the remainder one op at a time, so the workers
-                // together run exactly `iters` turns.
-                let ops = iters / threads + u64::from(worker < iters % threads);
-                let cache = Arc::clone(&cache);
-                let clock = Arc::clone(&clock);
-                let request = &request;
-                let template = &template;
-                scope.spawn(move || {
-                    timed_session_turns(
-                        CacheRefs {
-                            cache: &cache,
-                            clock: &clock,
-                        },
-                        request,
-                        template,
-                        close_explicitly,
-                        ops,
-                    )
-                })
-            })
-            .collect();
-        workers
-            .into_iter()
-            .map(|worker| worker.join().expect("a bench worker panicked"))
-            .sum()
+        // Every worker is spawned before the first is joined, so they run
+        // side by side.
+        let mut workers = Vec::new();
+        for worker in 0..threads {
+            // Hand out the remainder one op at a time, so the workers
+            // together run exactly `iters` turns.
+            let ops = iters / threads + u64::from(worker < iters % threads);
+            let cache = Arc::clone(&cache);
+            let clock = Arc::clone(&clock);
+            let request = &request;
+            let template = &template;
+            workers.push(scope.spawn(move || {
+                timed_session_turns(
+                    CacheRefs {
+                        cache: &cache,
+                        clock: &clock,
+                    },
+                    request,
+                    template,
+                    close_explicitly,
+                    ops,
+                )
+            }));
+        }
+        let mut total = Duration::ZERO;
+        for worker in workers {
+            total += worker
+                .join()
+                .map_err(|_| BenchError::from("a bench worker panicked"))??;
+        }
+        Ok(total)
     })
 }
 
-fn bench_fetch_session_allocate(c: &mut Criterion) {
-    let mut group = c.benchmark_group("broker/fetch_session");
+/// The first error a timed closure met. Criterion's `iter_custom` closure must
+/// return a [`Duration`], so the error waits here until criterion returns.
+#[derive(Default)]
+struct FirstError(Option<BenchError>);
 
-    for occupancy in OCCUPANCY {
-        for threads in CONCURRENCY {
-            group.bench_function(format!("full{occupancy}pct/threads{threads}"), |b| {
-                b.iter_custom(|iters| timed_across_threads(occupancy, threads, iters));
-            });
-        }
+impl FirstError {
+    /// The measured time, or zero after keeping the error.
+    fn time(&mut self, timed: Result<Duration, BenchError>) -> Duration {
+        timed.unwrap_or_else(|error| {
+            self.0.get_or_insert(error);
+            Duration::ZERO
+        })
     }
 
-    group.finish();
+    /// The kept error, if any.
+    fn into_result(self) -> Result<(), BenchError> { self.0.map_or(Ok(()), Err) }
+}
+
+fn bench_fetch_session_allocate(c: &mut Criterion) -> Result<(), BenchError> {
+    let mut failure = FirstError::default();
+    {
+        let mut group = c.benchmark_group("broker/fetch_session");
+
+        for occupancy in OCCUPANCY {
+            for threads in CONCURRENCY {
+                group.bench_function(format!("full{occupancy}pct/threads{threads}"), |b| {
+                    b.iter_custom(|iters| {
+                        failure.time(timed_across_threads(occupancy, threads, iters))
+                    });
+                });
+            }
+        }
+
+        group.finish();
+    }
+    failure.into_result()
 }
 
 fn bench_wide_sessions(c: &mut Criterion) {
     for operation in ["merge", "forget", "finalize"] {
         let mut group = c.benchmark_group(format!("broker/fetch_session/wide_{operation}"));
         for partitions in WIDE_PARTITIONS {
-            group.throughput(Throughput::Elements(
-                u64::try_from(partitions).expect("benchmark size fits u64"),
-            ));
+            group.throughput(Throughput::Elements(u64::from(partitions)));
             group.bench_with_input(
                 BenchmarkId::from_parameter(partitions),
                 &partitions,
@@ -404,7 +437,7 @@ fn bench_wide_sessions(c: &mut Criterion) {
 /// That last column is the claim the O(1) victim lookup exists to support: it
 /// should stay near 1 as occupancy rises, where a scan of the session map made
 /// it grow with [`SLOTS`].
-fn bench_occupancy_ratio(_c: &mut Criterion) {
+fn bench_occupancy_ratio(_c: &mut Criterion) -> Result<(), BenchError> {
     /// Session turns per measurement run, shared out across the workers. It is
     /// a total rather than a per-worker count, so the 64-thread row does not
     /// run 64 times the work of the single-threaded one.
@@ -426,30 +459,67 @@ fn bench_occupancy_ratio(_c: &mut Criterion) {
         "threads", "0% full", "50% full", "100% full", "100%/0%"
     );
     for threads in CONCURRENCY {
-        let means: Vec<f64> = OCCUPANCY
-            .into_iter()
-            .map(|occupancy| {
-                (0..RUNS)
-                    .map(|_| {
-                        let elapsed = timed_across_threads(occupancy, threads, u64::from(SAMPLES));
-                        elapsed.as_secs_f64() * 1.0e9 / f64::from(SAMPLES)
-                    })
-                    .fold(f64::INFINITY, f64::min)
-            })
-            .collect();
-        let (empty, half, full) = (means[0], means[1], means[2]);
+        let [empty, half, full] =
+            OCCUPANCY.map(|occupancy| fastest_nanos(occupancy, threads, SAMPLES, RUNS));
+        let (empty, half, full) = (empty?, half?, full?);
         println!(
             "{threads:<10} {empty:>12.0} {half:>12.0} {full:>12.0} {:>15.2}x",
             full / empty
         );
     }
     println!();
+    Ok(())
 }
 
-criterion_group!(
-    benches,
-    bench_fetch_session_allocate,
-    bench_wide_sessions,
-    bench_occupancy_ratio
-);
+/// Nanoseconds per session turn at `occupancy` over `threads` workers: the
+/// fastest of `runs` measurement runs of `samples` turns each.
+fn fastest_nanos(
+    occupancy: usize,
+    threads: u32,
+    samples: u32,
+    runs: u32,
+) -> Result<f64, BenchError> {
+    let mut fastest = f64::INFINITY;
+    for _ in 0..runs {
+        let elapsed = timed_across_threads(occupancy, threads, u64::from(samples))?;
+        fastest = fastest.min(elapsed.as_secs_f64() * 1.0e9 / f64::from(samples));
+    }
+    Ok(fastest)
+}
+
+/// A benchmark target, under the name `criterion_group!` would give it.
+type Target = (&'static str, fn(&mut Criterion) -> Result<(), BenchError>);
+
+/// Every benchmark target, in run order.
+const TARGETS: [Target; 3] = [
+    ("bench_fetch_session_allocate", bench_fetch_session_allocate),
+    ("bench_wide_sessions", |c| {
+        bench_wide_sessions(c);
+        Ok(())
+    }),
+    ("bench_occupancy_ratio", bench_occupancy_ratio),
+];
+
+/// Runs every target in [`TARGETS`], stopping at the first one that fails.
+fn run_targets(criterion: &mut Criterion) -> Result<(), (&'static str, BenchError)> {
+    for (name, target) in TARGETS {
+        if env::var("CODSPEED_ENV").is_ok() {
+            criterion.set_current_file(abs_file!());
+            criterion.set_macro_group(format!("benches::{name}"));
+        }
+        target(criterion).map_err(|error| (name, error))?;
+    }
+    Ok(())
+}
+
+/// The benchmark group, written out by hand where `criterion_group!` would
+/// generate it, so that a failing target reports its error and stops the run.
+fn benches() {
+    let result = run_targets(&mut Criterion::default().configure_from_args());
+    if let Err((name, error)) = result {
+        eprintln!("{name}: {error}");
+        process::exit(1);
+    }
+}
+
 criterion_main!(benches);

@@ -18,7 +18,7 @@ impl Parse for Arguments {
     fn skip(cursor: Cursor<'_>) -> Option<Cursor<'_>> { parse_skip::<Self>(cursor) }
 }
 
-pub(crate) fn scram_client_first(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn scram_client_first(input: TokenStream) -> Result<TokenStream, ParseError> {
     let span = input.span();
     let arguments = moxy::parse!({ input } as Arguments)?.0;
     let expressions: Vec<_> = arguments.iter().collect();
@@ -39,7 +39,7 @@ pub(crate) fn scram_client_first(input: TokenStream) -> Result<TokenStream, Pars
     })
 }
 
-pub(crate) fn scram_client_proof(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn scram_client_proof(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(input)?;
     Ok(moxy::template! {
         pub(crate) fn {{ name }}(client_key: &[u8], signature: &[u8]) -> Vec<u8> {

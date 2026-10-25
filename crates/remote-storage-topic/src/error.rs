@@ -2,7 +2,7 @@
 //! [`RemoteLogMetadataManager`](krabka_remote_storage::RemoteLogMetadataManager)
 //! and the underlying [`MetadataEventLog`](crate::MetadataEventLog).
 
-use krabka_remote_storage::RemoteStorageError;
+use {krabka_remote_storage::RemoteStorageError, std::io};
 
 /// Failures from the publish/subscribe transport that backs the
 /// `__remote_log_metadata` topic.
@@ -37,7 +37,7 @@ impl MetadataLogError {
     /// transport failures through the synchronous SPI.
     #[must_use]
     pub fn into_storage(self) -> RemoteStorageError {
-        RemoteStorageError::Io(std::io::Error::other(self.to_string()))
+        RemoteStorageError::Io(io::Error::other(self.to_string()))
     }
 }
 
@@ -72,7 +72,7 @@ pub enum CodecError {
 pub enum SnapshotError {
     /// The snapshot file could not be read or written.
     #[error("snapshot io error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// A snapshot format version the loader does not understand.
     #[error("unsupported snapshot format version {0}")]

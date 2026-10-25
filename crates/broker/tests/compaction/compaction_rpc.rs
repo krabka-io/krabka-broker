@@ -29,13 +29,13 @@ use {
 };
 
 /// Create a topic with config overrides, on PLAINTEXT and with no SASL.
-pub(crate) async fn create_topic_with_configs(addr: SocketAddr, setup: CreateTopicSetup<'_>) {
+pub async fn create_topic_with_configs(addr: SocketAddr, setup: CreateTopicSetup<'_>) {
     kafka_wire::create_topic_from_setup(addr, CLIENT_ID, setup).await;
 }
 
 /// Get `topic_id` with Metadata. Produce and Fetch v9+ need it.
-pub(crate) async fn get_topic_id(addr: SocketAddr, topic: &str) -> Uuid {
-    let req = named_topic_metadata(topic.to_string());
+pub async fn get_topic_id(addr: SocketAddr, topic: &str) -> Uuid {
+    let req = named_topic_metadata(topic.to_owned());
     let version: i16 = 12; // flexible
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     let resp: MetadataResponse = kafka_wire::exchange()
@@ -56,7 +56,7 @@ pub(crate) async fn get_topic_id(addr: SocketAddr, topic: &str) -> Uuid {
 
 /// One keyed record for the compacted single-partition topic.
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct ProduceRecordSetup<'a> {
+pub struct ProduceRecordSetup<'a> {
     #[default("compacted")]
     pub topic: &'a str,
     pub topic_id: Uuid,
@@ -68,7 +68,7 @@ pub(crate) struct ProduceRecordSetup<'a> {
 
 /// Produce one record with an explicit key and value to (topic, partition 0).
 #[bon::builder]
-pub(crate) async fn produce_record(
+pub async fn produce_record(
     addr: SocketAddr,
     #[builder(default = "compacted")] topic: &'_ str,
     #[builder(default)] topic_id: Uuid,
@@ -97,7 +97,7 @@ pub(crate) async fn produce_record(
     };
 
     let req = batch_request(batch, SinglePartitionProduceSetup {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         topic_id,
         ..Default::default()
     });

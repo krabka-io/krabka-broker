@@ -109,7 +109,7 @@ pub fn write_reference_tree(out_dir: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
 
-    use {super::*, tempfile::tempdir};
+    use {super::*, std::fs, tempfile::tempdir};
     #[test]
     fn page_front_matter_wraps_body() {
         let s = page_front_matter("Kafka", 10, "hello");
@@ -130,9 +130,9 @@ mod tests {
         ] {
             assert2::assert!(dir.path().join(page).exists());
         }
-        let apis = std::fs::read_to_string(dir.path().join("broker/protocol-apis.md")).unwrap();
+        let apis = fs::read_to_string(dir.path().join("broker/protocol-apis.md")).unwrap();
         assert2::assert!(apis.contains("template = \"docs/page.html\""));
-        let idx = std::fs::read_to_string(dir.path().join("_index.md")).unwrap();
+        let idx = fs::read_to_string(dir.path().join("_index.md")).unwrap();
         assert2::assert!(idx.contains("template = \"docs/section.html\""));
     }
 }

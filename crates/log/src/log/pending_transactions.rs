@@ -59,10 +59,10 @@ impl PendingTransactions {
     }
 
     fn remove_start(&mut self, start: Offset) {
-        let entry = self
-            .starts
-            .get_mut(&start)
-            .expect("every pending producer has an indexed start");
+        // Every pending producer has an indexed start.
+        let Some(entry) = self.starts.get_mut(&start) else {
+            return;
+        };
         *entry -= 1;
         if *entry == 0 {
             self.starts.remove(&start);

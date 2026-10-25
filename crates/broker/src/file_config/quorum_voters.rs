@@ -46,7 +46,7 @@ pub fn parse_quorum_voter(entry: &str) -> Result<(krabka_raft::NodeId, String), 
     port_str.parse::<u16>().map_err(|e| {
         FileConfigError::InvalidQuorumVoter(format!("{entry:?}: invalid port {port_str:?}: {e}"))
     })?;
-    Ok((node_id, host_port.to_string()))
+    Ok((node_id, host_port.to_owned()))
 }
 
 #[cfg(test)]
@@ -82,7 +82,7 @@ mod tests {
             let cfg = configured_unwrap_parse(source).unwrap();
             let expected: Vec<(krabka_raft::NodeId, String)> = expected
                 .into_iter()
-                .map(|(node, host)| (node, host.to_string()))
+                .map(|(node, host)| (node, host.to_owned()))
                 .collect();
             assert!(cfg.controller_quorum_voters == expected, "{source}");
         }
@@ -118,7 +118,7 @@ mod tests {
 
         // Seed a pre-existing single self-voter as the binary would.
         let seeded: Vec<(krabka_raft::NodeId, String)> =
-            vec![(krabka_audit::NodeId(7), "127.0.0.1:9093".to_string())];
+            vec![(krabka_audit::NodeId(7), "127.0.0.1:9093".to_owned())];
         let mut cfg = BrokerConfig {
             controller_quorum_voters: seeded.clone(),
             ..BrokerConfig::default()

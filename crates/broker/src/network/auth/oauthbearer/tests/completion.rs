@@ -1,4 +1,7 @@
-use {super::*, crate::network::auth::AuthenticatedSnapshot, assert2::assert, std::sync::Arc};
+use {
+    super::*, crate::network::auth::AuthenticatedSnapshot, assert2::assert, std::sync::Arc,
+    tokio::task,
+};
 
 #[derive(Debug)]
 struct CompletingIntrospection {
@@ -13,7 +16,7 @@ impl krabka_security::IntrospectionClient for CompletingIntrospection {
         &self,
         _token: &str,
     ) -> Result<serde_json::Value, krabka_security::IntrospectionError> {
-        tokio::task::yield_now().await;
+        task::yield_now().await;
         self.clock.store(self.completed_ms, Ordering::Release);
         Ok(serde_json::json!({"active": true, "sub": "alice", "exp": self.expiry_seconds}))
     }

@@ -1,8 +1,4 @@
-// rustc 1.95 clippy ICEs on `clippy::pedantic` / `clippy::unwrap_in_result`
-// for files that build Kafka wire frames with `.expect()` inside a
-// `Result`-returning helper — same upstream annotate-snippets bug noted in
-// `tests/elect_leaders.rs`. Suppress locally; the rest of the workspace
-// still enforces the full lint gate.
+#![cfg(test)]
 
 //! KIP-966 end-to-end: offset-aware **unclean recovery** elects the survivor
 //! that is known to be complete, and only falls back to the most complete
@@ -59,7 +55,8 @@ use {
     krabka_metadata::{
         BrokerConfigRecord, MetadataRecord, PartitionElrRecord, PartitionRecord, TopicConfigRecord,
     },
-    std::{net::SocketAddr, time::Duration},
+    std::{iter, net::SocketAddr, time::Duration},
+    tokio::time,
 };
 
 mod kafka_wire;
@@ -111,12 +108,11 @@ use crate::support::{
 /// The recovery strategy that routes an UNCLEAN election through the URM.
 fn topic_config(topic: &str) -> MetadataRecord {
     MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: topic.to_string(),
-        overrides: [(
-            "unclean.recovery.strategy".to_string(),
-            "Aggressive".to_string(),
-        )]
-        .into_iter()
+        topic: topic.to_owned(),
+        overrides: iter::once((
+            "unclean.recovery.strategy".to_owned(),
+            "Aggressive".to_owned(),
+        ))
         .collect(),
     })
 }
@@ -211,7 +207,7 @@ async fn offline_partition_with_diverged_logs(
     //    so the direct-append divergence we set up next stays deterministic
     //    — otherwise the leader's replicator races with our test appends. ──
     let forged = MetadataRecord::V1Partition(PartitionRecord {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         partition: 0,
         leader: krabka_broker::NodeId(99),
         replicas: vec![
@@ -248,7 +244,7 @@ async fn offline_partition_with_diverged_logs(
     // intentional: fetcher teardown is a background reconcile action with no
     // metadata-image or metric signal to await; the barrier keeps the direct
     // appends deterministic.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    time::sleep(Duration::from_millis(500)).await;
 
     // ── Force the surviving replicas' local logs to DIVERGE deterministically.
     //    `produce_records_for_test` appends directly to each broker's hosted
@@ -302,8 +298,8 @@ async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_
     if let Some(id) = witness {
         h1.submit_metadata_record_for_test(MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
             node_id: krabka_broker::NodeId(id),
-            config_name: WITNESS_CONFIG_KEY.to_string(),
-            config_value: Some("true".to_string()),
+            config_name: WITNESS_CONFIG_KEY.to_owned(),
+            config_value: Some("true".to_owned()),
         }))
         .await
         .expect("publish broker.witness for the witness node");
@@ -323,7 +319,7 @@ async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_
             .map(|id| krabka_broker::NodeId(id.parse().expect("ELR broker id")))
             .collect();
         h1.submit_metadata_record_for_test(MetadataRecord::V1PartitionElr(PartitionElrRecord {
-            topic: topic.to_string(),
+            topic: topic.to_owned(),
             partition: 0,
             eligible_leader_replicas,
             last_known_elr: vec![],
@@ -361,7 +357,7 @@ async fn run_unclean_recovery(elr: Option<&str>, witness: Option<u64>, expected_
         .addr(elect_addr)
         .client_id(CLIENT_ID)
         .election(ElectionSetup {
-            topic: (topic).to_string(),
+            topic: (topic).to_owned(),
             kind: ElectionKind::Unclean,
             ..Default::default()
         })

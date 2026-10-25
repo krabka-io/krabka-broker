@@ -23,8 +23,9 @@ use {
     krabka_ids::Offset,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes},
     std::{
-        fs::File,
-        io::Write as _,
+        ffi::OsStr,
+        fs::{self, File},
+        io::{self, ErrorKind, Write as _},
         path::Path,
         sync::{
             Arc, Mutex,
@@ -57,7 +58,7 @@ impl DiskFull {
 }
 
 impl LogIo for DiskFull {
-    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> std::io::Result<usize> {
+    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> io::Result<usize> {
         if target != self.target {
             return (&*file).write(buf);
         }
@@ -71,9 +72,7 @@ impl LogIo for DiskFull {
 struct DirSyncFull;
 
 impl LogIo for DirSyncFull {
-    fn sync_dir(&self, _dir: &Path) -> std::io::Result<()> {
-        Err(std::io::ErrorKind::StorageFull.into())
-    }
+    fn sync_dir(&self, _dir: &Path) -> io::Result<()> { Err(ErrorKind::StorageFull.into()) }
 }
 
 /// A read-only remount seen from one file: the first attempt to rename or
@@ -105,30 +104,30 @@ impl FailSegmentDeletionOnce {
 }
 
 impl LogIo for FailSegmentDeletionOnce {
-    fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> std::io::Result<()> {
+    fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> io::Result<()> {
         if target == IoTarget::SegmentDeletion
             && self.on_rename
             && self.fires_for(from, &self.file_name)
         {
-            return Err(std::io::ErrorKind::PermissionDenied.into());
+            return Err(ErrorKind::PermissionDenied.into());
         }
-        std::fs::rename(from, to)
+        fs::rename(from, to)
     }
 
-    fn remove_file(&self, target: IoTarget, path: &Path) -> std::io::Result<()> {
+    fn remove_file(&self, target: IoTarget, path: &Path) -> io::Result<()> {
         let tombstone = format!("{}.deleted", self.file_name);
         if target == IoTarget::SegmentDeletion
             && !self.on_rename
             && self.fires_for(path, &tombstone)
         {
-            return Err(std::io::ErrorKind::PermissionDenied.into());
+            return Err(ErrorKind::PermissionDenied.into());
         }
-        std::fs::remove_file(path)
+        fs::remove_file(path)
     }
 }
 
 /// The extension of `path`, if it has one.
-fn extension_of(path: &Path) -> Option<&str> { path.extension().and_then(std::ffi::OsStr::to_str) }
+fn extension_of(path: &Path) -> Option<&str> { path.extension().and_then(OsStr::to_str) }
 
 /// `true` for a segment `.log`, whether it is still under its live name or has
 /// already been renamed to its `.deleted` tombstone. Both occupy the disk the
@@ -145,7 +144,7 @@ fn holds_segment_bytes(path: &Path) -> bool {
 
 /// The bytes the directory really holds for segment data.
 fn on_disk_log_bytes(dir: &Path) -> u64 {
-    std::fs::read_dir(dir)
+    fs::read_dir(dir)
         .unwrap()
         .filter_map(Result::ok)
         .filter(|entry| holds_segment_bytes(&entry.path()))
@@ -155,7 +154,7 @@ fn on_disk_log_bytes(dir: &Path) -> u64 {
 
 /// Assert `error` is the injected disk-full write.
 fn is_storage_full(error: &LogError) -> bool {
-    matches!(error, LogError::Io(io) if io.kind() == std::io::ErrorKind::StorageFull)
+    matches!(error, LogError::Io(io) if io.kind() == ErrorKind::StorageFull)
 }
 
 /// The two failure shapes every seam case is run against: an outright
@@ -340,7 +339,7 @@ fn a_disk_full_compaction_swap_leaves_the_pre_compaction_log_intact() {
             reopened.log_end_offset() == before,
             "{label}: an unwritten swap must not move the log end"
         );
-        let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+        let leftovers: Vec<String> = fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)
             .map(|entry| entry.path())
@@ -416,7 +415,7 @@ fn a_failed_segment_deletion_keeps_the_bytes_accounted_for_and_the_next_tick_ret
         .tick(SystemTime::now(), krabka_ids::Offset(i64::MAX))
         .expect_err("a failed unlink must be reported, not discarded");
     check!(
-        matches!(&error, LogError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied),
+        matches!(&error, LogError::Io(io) if io.kind() == ErrorKind::PermissionDenied),
         "on_rename={on_rename}: {error:?}"
     );
     check!(
@@ -463,7 +462,7 @@ fn log_open_reclaims_what_an_interrupted_segment_deletion_left_behind() {
     let tombstone = dir
         .path()
         .join(format!("{}.log.deleted", name::format_base_offset(0)));
-    std::fs::rename(name::log_path(dir.path(), 0), &tombstone).unwrap();
+    fs::rename(name::log_path(dir.path(), 0), &tombstone).unwrap();
     let stranded = [
         name::index_path(dir.path(), 0),
         name::timeindex_path(dir.path(), 0),

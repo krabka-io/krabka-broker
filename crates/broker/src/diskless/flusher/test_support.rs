@@ -16,6 +16,7 @@ use {
     krabka_metadata::NodeId,
     krabka_protocol::records::RecordBatch,
     std::{
+        fs,
         path::Path,
         sync::{Arc, atomic::Ordering},
     },
@@ -78,7 +79,7 @@ pub(super) fn test_partition(
         leader,
     } = setup;
     let partition_dir = root.join(format!("{topic}-{partition}"));
-    std::fs::create_dir_all(&partition_dir).unwrap();
+    fs::create_dir_all(&partition_dir).unwrap();
     let mut log = Log::open(&partition_dir, LogConfig::default()).unwrap();
     log.append(&mut batch(3)).unwrap();
     let handle = spawn_partition(

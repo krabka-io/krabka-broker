@@ -5,10 +5,12 @@
 //! [`run_bfs`] holds that sequence. Each caller supplies its own unique-state
 //! pin to [`assert_pinned_count`] and calls `assert_properties`.
 
+use std::{fmt::Debug, hash::Hash};
+
 krabka_macros::bounded_bfs!(run_bfs);
 
 /// Reject changes to the reachable state set using each model's independent pin.
-pub(crate) fn assert_pinned_count(actual: usize, expected: usize, label: &str) {
+pub fn assert_pinned_count(actual: usize, expected: usize, label: &str) {
     // Pin: a changed count is a changed model, not a retuning knob.
     assert2::assert!(
         actual == expected,
@@ -17,11 +19,11 @@ pub(crate) fn assert_pinned_count(actual: usize, expected: usize, label: &str) {
 }
 
 /// Run an exhaustive model with its independent unique-state bound and pin.
-pub(crate) fn check_model<M>(model: M, label: &str, limits: (usize, usize, usize), pinned: usize)
+pub fn check_model<M>(model: M, label: &str, limits: (usize, usize, usize), pinned: usize)
 where
     M: stateright::Model + Send + Sync + 'static,
-    M::State: std::fmt::Debug + std::hash::Hash + Send + Sync + Clone + PartialEq + 'static,
-    M::Action: std::fmt::Debug + Clone + PartialEq,
+    M::State: Debug + Hash + Send + Sync + Clone + PartialEq + 'static,
+    M::Action: Debug + Clone + PartialEq,
 {
     use stateright::Checker as _;
     let (depth, states, unique) = limits;

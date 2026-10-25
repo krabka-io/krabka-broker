@@ -85,14 +85,14 @@ impl VerificationClient {
         }
         let request = AddPartitionsToTxnRequest {
             transactions: vec![AddPartitionsToTxnTransaction {
-                transactional_id: check.transactional_id.to_string(),
+                transactional_id: check.transactional_id.to_owned(),
                 producer_id: check.producer_id.get(),
                 producer_epoch: check.producer_epoch,
                 topics: topics.clone(),
                 verify_only: check.verify_only,
                 ..Default::default()
             }],
-            v3_and_below_transactional_id: check.transactional_id.to_string(),
+            v3_and_below_transactional_id: check.transactional_id.to_owned(),
             v3_and_below_producer_id: check.producer_id.get(),
             v3_and_below_producer_epoch: check.producer_epoch,
             v3_and_below_topics: topics,
@@ -162,33 +162,35 @@ impl VerificationClient {
             client_id: format!("krabka-broker-txn-{}", self.node_id),
             ..Default::default()
         };
-        match self
+        let connection = match self
             .inter_broker_client
             .connect_as_connection(host, port, self.protocol, &self.server_name, options)
             .await
         {
-            Ok(connection) => {
-                if let Some(stale) = connections.insert(leader, VerificationConnection {
-                    address: VerificationEndpoint {
-                        host: host.to_string(),
-                        port,
-                    },
-                    connection: connection.clone(),
-                }) {
-                    stale.connection.close();
-                }
-                Some(connection)
-            }
+            Ok(connection) => connection,
             Err(error) => {
                 tracing::warn!(%error, %host, port, "transaction partition check connect failed");
-                None
+                return None;
             }
+        };
+        let stale = connections.insert(leader, VerificationConnection {
+            address: VerificationEndpoint {
+                host: host.to_owned(),
+                port,
+            },
+            connection: connection.clone(),
+        });
+        drop(connections);
+        if let Some(stale) = stale {
+            stale.connection.close();
         }
+        Some(connection)
     }
 
     /// Forget and close the connection to `leader` after a failed call.
     async fn drop_verification_connection(&self, leader: NodeId) {
-        if let Some(stale) = self.connections.lock().await.remove(&leader) {
+        let stale = self.connections.lock().await.remove(&leader);
+        if let Some(stale) = stale {
             stale.connection.close();
         }
     }

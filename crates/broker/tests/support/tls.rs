@@ -12,6 +12,7 @@ pub use tokio_rustls::{
         pki_types::{CertificateDer, ServerName, UnixTime, pem::PemObject},
     },
 };
+use {crate::support::listeners, std::path::PathBuf, tokio_rustls::rustls::Error};
 pub const DEV_CERT: &str = include_str!("../fixtures/security/dev_cert.pem");
 pub const DEV_KEY: &str = include_str!("../fixtures/security/dev_key.pem");
 pub const DEV_CLIENT_CA: &str = include_str!("../fixtures/security/dev_client_ca.pem");
@@ -35,7 +36,7 @@ impl ServerCertVerifier for PinnedCertVerifier {
         _message: &[u8],
         _cert: &CertificateDer<'_>,
         _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+    ) -> Result<HandshakeSignatureValid, Error> {
         Ok(HandshakeSignatureValid::assertion())
     }
 
@@ -44,7 +45,7 @@ impl ServerCertVerifier for PinnedCertVerifier {
         message: &[u8],
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+    ) -> Result<HandshakeSignatureValid, Error> {
         self.verify_tls12_signature(message, cert, dss)
     }
 
@@ -55,11 +56,11 @@ impl ServerCertVerifier for PinnedCertVerifier {
         _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
         _now: UnixTime,
-    ) -> Result<ServerCertVerified, tokio_rustls::rustls::Error> {
+    ) -> Result<ServerCertVerified, Error> {
         if end_entity.as_ref() == self.pinned.as_ref() {
             Ok(ServerCertVerified::assertion())
         } else {
-            Err(tokio_rustls::rustls::Error::General(self.mismatch.into()))
+            Err(Error::General(self.mismatch.into()))
         }
     }
 
@@ -82,15 +83,15 @@ pub fn fixture_signature_schemes() -> Vec<SignatureScheme> {
 
 /// A loopback SSL listener with the suite's certificate and client-auth policy.
 pub fn ssl_config(
-    log_dir: std::path::PathBuf,
+    log_dir: PathBuf,
     tls: krabka_security::TlsConfig,
 ) -> krabka_broker::BrokerConfig {
     let mut config = krabka_broker::BrokerConfig::for_tests(log_dir);
-    config.listeners = vec![crate::support::listeners::loopback_listener(
+    config.listeners = vec![listeners::loopback_listener(
         "SSL",
         krabka_security::ListenerProtocol::Ssl,
     )];
-    config.inter_broker_listener_name = "SSL".to_string();
+    config.inter_broker_listener_name = "SSL".to_owned();
     config.tls_config = Some(tls);
     config
 }

@@ -5,8 +5,11 @@
 
 use {
     super::OperatorKeyEntry,
-    ring::signature::{Ed25519KeyPair, KeyPair as _},
-    std::path::PathBuf,
+    ring::{
+        rand::SystemRandom,
+        signature::{Ed25519KeyPair, KeyPair as _},
+    },
+    std::{fs, path::PathBuf},
     tempfile::TempDir,
 };
 
@@ -16,8 +19,7 @@ mod verify;
 
 // A fresh Ed25519 key pair plus its raw public key bytes.
 fn fresh_key() -> (Ed25519KeyPair, Vec<u8>) {
-    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
-        .expect("generate Ed25519 key");
+    let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate Ed25519 key");
     let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse generated key");
     let public = pair.public_key().as_ref().to_vec();
     (pair, public)
@@ -26,7 +28,7 @@ fn fresh_key() -> (Ed25519KeyPair, Vec<u8>) {
 // Write `bytes` to `<dir>/<name>` and return the path.
 fn write_key_file(dir: &TempDir, name: &str, bytes: &[u8]) -> PathBuf {
     let path = dir.path().join(name);
-    std::fs::write(&path, bytes).expect("write key file");
+    fs::write(&path, bytes).expect("write key file");
     path
 }
 

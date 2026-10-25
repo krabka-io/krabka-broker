@@ -13,7 +13,8 @@ use {
     krabka_security::Principal,
     krabka_units::{millis, minutes, secs},
     qubit_clock::ManualMonotonicClock,
-    std::{collections::HashSet, net::SocketAddr, time::Duration},
+    std::{collections::HashSet, net::SocketAddr, sync::Arc, thread, time::Duration},
+    tokio::runtime::Builder,
     uuid::Uuid,
     wiremock::{
         Mock, MockServer, ResponseTemplate,
@@ -62,7 +63,7 @@ fn req<'a>(p: &'a Principal, h: &'a SocketAddr, topic: &'a str) -> Authorization
 
 fn opa_url(server: &MockServer) -> String { format!("{}/v1/data/kafka/authz/allow", server.uri()) }
 
-fn supers(names: &[&str]) -> HashSet<String> { names.iter().map(|s| (*s).to_string()).collect() }
+fn supers(names: &[&str]) -> HashSet<String> { names.iter().map(|s| (*s).to_owned()).collect() }
 
 fn authorizer(super_users: HashSet<String>, url: String, allow_on_error: bool) -> OpaAuthorizer {
     OpaAuthorizer::new(super_users, url, allow_on_error, 100, minutes(1), secs(5)).unwrap()
@@ -95,8 +96,8 @@ async fn current_thread_invocation_follows_configured_error_policy_without_panic
         (true, AuthorizationResult::Allow),
     ] {
         let auth = authorizer(HashSet::new(), opa_url(&mock), allow_on_error);
-        let result = std::thread::spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
+        let result = thread::spawn(move || {
+            Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap()
@@ -214,7 +215,7 @@ async fn cache_entry_expires_after_ttl() {
         100,
         millis(10),
         secs(5),
-        timeline.clone(),
+        Arc::<ManualMonotonicClock>::clone(&timeline),
     )
     .unwrap();
     // Cache miss -> HTTP call #1; caches the decision with expires_at = now+10ms.
@@ -232,7 +233,7 @@ async fn nonpositive_cache_ttl_is_rejected() {
     for ttl in [millis(0), krabka_units::Time::from_millis(-1)] {
         let result = OpaAuthorizer::with_clock(
             HashSet::new(),
-            "http://opa.invalid/v1/data/kafka/authz/allow".to_string(),
+            "http://opa.invalid/v1/data/kafka/authz/allow".to_owned(),
             false,
             1,
             ttl,

@@ -21,17 +21,19 @@ use {
     krabka_ids::LeaderEpoch,
     krabka_metadata::{
         MetadataRecord, NodeId, PartitionOffsetAdvanceRecord, PartitionRecord, TopicRecord,
+        metadata_version,
     },
     krabka_remote_storage::{
         ArchiveVerifyReport, ChainHead, ChainStamp, RemoteLogSegmentState, WormChainRecord,
         parse_partition_dir_name,
     },
-    krabka_remote_storage_topic::Snapshot,
+    krabka_remote_storage_topic::{Snapshot, snapshot},
     std::{
         collections::{HashMap, HashSet},
-        io::Write,
-        path::Path,
+        io::{self, Error, Write},
+        path::{Path, PathBuf},
     },
+    tokio::fs,
     uuid::Uuid,
 };
 
@@ -74,7 +76,7 @@ pub async fn format_target(
 }
 
 /// Format from retained authenticated bytes when supplied, without reopening the source path.
-pub(crate) async fn format_target_with_snapshot(
+pub async fn format_target_with_snapshot(
     args: &RestoreArgs,
     inventory: &ArchiveInventory,
     authenticated_snapshot: Option<&[u8]>,
@@ -143,7 +145,7 @@ pub(crate) async fn format_target_with_snapshot(
     // stdout is the report's: `--report json` piped to `jq` must hold the
     // report alone, so the formatter's progress lines go to stderr. A dry run
     // drops them, because it formats nothing the operator keeps.
-    let (mut stderr, mut sink) = (std::io::stderr(), std::io::sink());
+    let (mut stderr, mut sink) = (io::stderr(), io::sink());
     let progress: &mut (dyn Write + Send) = if args.dry_run { &mut sink } else { &mut stderr };
     let code = krabka_format::run_from_args_with_records_to(format_argv, extra, progress).await;
     if code == 0 {
@@ -171,7 +173,7 @@ pub fn seed_rlmm_snapshot(
 }
 
 /// Seed from the decoded authenticated snapshot when supplied, without reopening its path.
-pub(crate) fn seed_rlmm_snapshot_from(
+pub fn seed_rlmm_snapshot_from(
     args: &RestoreArgs,
     authenticated: Option<&ArchiveVerifyReport>,
     authenticated_snapshot: Option<&Snapshot>,
@@ -200,10 +202,10 @@ pub(crate) fn seed_rlmm_snapshot_from(
                 .target
                 .log_dir
                 .join("remote-log-metadata")
-                .join(krabka_remote_storage_topic::snapshot::SNAPSHOT_FILE_NAME),
+                .join(snapshot::SNAPSHOT_FILE_NAME),
         )
         .map_err(|error| {
-            RestoreError::Io(std::io::Error::other(format!(
+            RestoreError::Io(Error::other(format!(
                 "cannot seed restored RLMM snapshot: {error}"
             )))
         })
@@ -276,8 +278,8 @@ async fn read_metadata_snapshot(
     let bytes = if let Some(bytes) = authenticated_snapshot {
         bytes
     } else {
-        loaded = tokio::fs::read(path).await.map_err(|error| {
-            RestoreError::Io(std::io::Error::new(
+        loaded = fs::read(path).await.map_err(|error| {
+            RestoreError::Io(Error::new(
                 error.kind(),
                 format!("cannot read metadata snapshot {}: {error}", path.display()),
             ))
@@ -316,7 +318,7 @@ struct TopicTally {
 fn seed_metadata_records(
     inventory: &ArchiveInventory,
     node_id: NodeId,
-    snapshot: Option<std::path::PathBuf>,
+    snapshot: Option<PathBuf>,
     snapshot_records: Option<&[MetadataRecord]>,
     diskless_next_offsets: &[DisklessNextOffset],
 ) -> Result<SeededMetadata, RestoreError> {
@@ -428,8 +430,8 @@ fn seed_metadata_records(
                 .filter(|feature| {
                     !matches!(
                         feature.name(),
-                        krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE
-                            | krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+                        metadata_version::KRAFT_VERSION_FEATURE
+                            | metadata_version::METADATA_VERSION_FEATURE
                     ) && !snapshot_features.contains(feature.name())
                 })
                 .map(|feature| {
@@ -457,10 +459,9 @@ fn seed_metadata_records(
         let TopicTally {
             topic_id,
             partitions,
-        } = topics
-            .get(topic)
-            .copied()
-            .expect("every topic in topic_order was inserted into topics above");
+        } = topics.get(topic).copied().ok_or_else(|| {
+            RestoreError::Integrity(format!("topic {topic} has no partition tally"))
+        })?;
         records.push(MetadataRecord::V1Topic(TopicRecord {
             name: (*topic).to_owned(),
             topic_id,
@@ -519,6 +520,7 @@ mod tests {
         crate::{
             authenticity::authenticate_captured_snapshot,
             discover::UnrecognizedKeys,
+            error,
             materialize::test_support::{args_from, partition_inventory},
         },
         assert2::check,
@@ -532,6 +534,7 @@ mod tests {
             TopicIdPartition,
         },
         krabka_security::SaslMechanism,
+        std::{fs, slice},
     };
 
     fn delete_marked_dump() -> RlmmCacheDump {
@@ -644,7 +647,7 @@ mod tests {
         let SeededMetadata { report, .. } = seed_metadata_records(
             &inventory,
             NodeId(7),
-            Some(std::path::PathBuf::from("cluster-metadata.checkpoint")),
+            Some(PathBuf::from("cluster-metadata.checkpoint")),
             Some(&snapshot),
             &[],
         )
@@ -728,7 +731,7 @@ mod tests {
             &target
                 .path()
                 .join("remote-log-metadata")
-                .join(krabka_remote_storage_topic::snapshot::SNAPSHOT_FILE_NAME),
+                .join(snapshot::SNAPSHOT_FILE_NAME),
         )
         .expect("read restored snapshot")
         .expect("restored snapshot exists");
@@ -753,9 +756,9 @@ mod tests {
             committed_offsets: vec![19],
             dump: delete_marked_dump(),
         };
-        let rlmm_bytes = snapshot.encode();
-        std::fs::write(&metadata_path, &metadata_bytes).unwrap();
-        std::fs::write(&rlmm_path, &rlmm_bytes).unwrap();
+        let rlmm_bytes = snapshot.encode().unwrap();
+        fs::write(&metadata_path, &metadata_bytes).unwrap();
+        fs::write(&rlmm_path, &rlmm_bytes).unwrap();
         let retained_metadata = authenticate_captured_snapshot(
             Some(&metadata_path),
             Some(Sha256Digest::of(&metadata_bytes)),
@@ -774,8 +777,8 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
-        std::fs::write(&metadata_path, b"changed metadata").unwrap();
-        std::fs::write(&rlmm_path, b"changed RLMM").unwrap();
+        fs::write(&metadata_path, b"changed metadata").unwrap();
+        fs::write(&rlmm_path, b"changed RLMM").unwrap();
         check!(
             read_metadata_snapshot(Some(&metadata_path), Some(&retained_metadata))
                 .await
@@ -809,7 +812,7 @@ mod tests {
         let source = tempfile::tempdir().expect("source tempdir");
         let target = tempfile::tempdir().expect("target tempdir");
         let source_path = source.path().join("snapshot");
-        std::fs::write(&source_path, b"not a snapshot").expect("write malformed snapshot");
+        fs::write(&source_path, b"not a snapshot").expect("write malformed snapshot");
         let args = args_from(
             &[
                 "--rlmm-snapshot",
@@ -883,7 +886,7 @@ mod tests {
             epoch.clone(),
             feature.clone(),
         ];
-        let snapshot = std::path::PathBuf::from("/backup/metadata.checkpoint");
+        let snapshot = PathBuf::from("/backup/metadata.checkpoint");
 
         let SeededMetadata { records, report } = seed_metadata_records(
             &inventory,
@@ -897,7 +900,7 @@ mod tests {
         let mut expected = vec![feature];
         expected.extend(feature_level_records(&[
             "metadata.version",
-            krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE,
+            metadata_version::KRAFT_VERSION_FEATURE,
         ]));
         expected.extend([
             epoch,
@@ -957,7 +960,7 @@ mod tests {
             &inventory,
             NodeId(7),
             None,
-            Some(std::slice::from_ref(&group_version)),
+            Some(slice::from_ref(&group_version)),
             &[],
         )
         .expect("seed metadata");
@@ -966,7 +969,7 @@ mod tests {
         expected.extend(feature_level_records(&[
             "metadata.version",
             "group.version",
-            krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE,
+            metadata_version::KRAFT_VERSION_FEATURE,
         ]));
         check!(records == expected);
     }
@@ -1039,7 +1042,7 @@ mod tests {
         let result = read_metadata_snapshot(Some(&missing), None).await;
 
         let error = result.unwrap_err();
-        check!(error.exit_code() == crate::error::EXIT_MATERIALIZE);
+        check!(error.exit_code() == error::EXIT_MATERIALIZE);
         check!(matches!(error, RestoreError::Io(_)));
     }
 
@@ -1047,11 +1050,11 @@ mod tests {
     async fn corrupt_metadata_snapshot_is_an_integrity_failure() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("metadata.checkpoint");
-        std::fs::write(&path, b"not a metadata snapshot").expect("write corrupt snapshot");
+        fs::write(&path, b"not a metadata snapshot").expect("write corrupt snapshot");
 
         let error = read_metadata_snapshot(Some(&path), None).await.unwrap_err();
 
-        check!(error.exit_code() == crate::error::EXIT_INTEGRITY);
+        check!(error.exit_code() == error::EXIT_INTEGRITY);
         check!(matches!(
             error,
             RestoreError::MetadataSnapshot {

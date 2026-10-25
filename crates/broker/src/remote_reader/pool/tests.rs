@@ -59,6 +59,7 @@ async fn an_unbounded_pool_never_refuses() {
     for _ in 0..64 {
         permits.push(pool.acquire().await.expect("unbounded pool never refuses"));
     }
+    check!(permits.len() == 64);
     check!(pool.rejected() == 0);
     check!(pool.queue_size() == 0);
 }

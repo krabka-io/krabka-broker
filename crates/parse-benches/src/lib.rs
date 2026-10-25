@@ -35,20 +35,21 @@ use {
     serde::{Deserialize, Serialize},
     std::{
         collections::BTreeMap,
+        env,
         fs::{self, File},
-        io::{BufRead, BufReader, Write},
+        io::{self, BufRead, BufReader, Write},
         path::{Path, PathBuf},
         sync::LazyLock,
         time::SystemTime,
     },
     thiserror::Error,
+    time::format_description::well_known::Rfc3339,
 };
 
-static BENCHER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+static BENCHER_REGEX: LazyLock<Result<Regex, regex::Error>> = LazyLock::new(|| {
     Regex::new(
         r"test\s+([\w\/\-\.]+)\s+\.\.\.\s+bench:\s+([\d,]+)\s+ns\/iter\s+\(\+\/-\s+([\d,]+)\)",
     )
-    .expect("static regex pattern is valid")
 });
 
 /// Errors encountered while parsing benchmark output.
@@ -80,9 +81,13 @@ pub enum ParseBenchesError {
     #[error("failed to parse numeric benchmark value: {0}")]
     InvalidNumber(String),
 
+    /// The bencher line pattern did not compile.
+    #[error("bencher line pattern: {0}")]
+    Pattern(#[source] regex::Error),
+
     /// Underlying I/O error.
     #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// Underlying JSON serialization error.
     #[error("JSON error: {0}")]
@@ -224,16 +229,19 @@ pub struct BenchmarkVerdict {
     pub passed: bool,
 }
 
-/// The median of `values`, which must not be empty; an even count averages
-/// the middle two.
+/// The median of `values`; an even count averages the middle two. An empty
+/// `values` has no median, and gives NaN.
 #[must_use]
 pub fn median(mut values: Vec<f64>) -> f64 {
     values.sort_by(f64::total_cmp);
     let middle = values.len() / 2;
-    if values.len().is_multiple_of(2) {
-        f64::midpoint(values[middle - 1], values[middle])
-    } else {
-        values[middle]
+    let lower = middle.checked_sub(1).and_then(|lower| values.get(lower));
+    match (lower, values.get(middle)) {
+        (Some(&lower), Some(&upper)) if values.len().is_multiple_of(2) => {
+            f64::midpoint(lower, upper)
+        }
+        (_, Some(&upper)) => upper,
+        (_, None) => f64::NAN,
     }
 }
 
@@ -261,7 +269,9 @@ fn side_executables(
     side: &'static str,
     summaries: &[BenchmarkSummary],
 ) -> Result<Vec<BenchExecutable>, ParseBenchesError> {
-    let first = &summaries[0].executables;
+    let Some(first) = summaries.first().map(|summary| &summary.executables) else {
+        return Err(ParseBenchesError::TooFewSamples { side, count: 0 });
+    };
     if first.is_empty() {
         return Err(ParseBenchesError::MissingExecutableIdentity(side));
     }
@@ -306,7 +316,15 @@ pub fn compare_summaries(
             });
         }
     }
-    let reference_names: Vec<_> = reference[0].benchmarks.keys().collect();
+    let reference_names: Vec<_> = reference
+        .first()
+        .ok_or(ParseBenchesError::TooFewSamples {
+            side: "reference",
+            count: 0,
+        })?
+        .benchmarks
+        .keys()
+        .collect();
     if reference_names.is_empty() {
         return Err(ParseBenchesError::EmptyBenchmarkSet);
     }
@@ -335,14 +353,21 @@ pub fn compare_summaries(
 
     let mut benchmarks = BTreeMap::new();
     for name in reference_names {
-        let reference_values: Vec<_> = reference
-            .iter()
-            .map(|summary| summary.benchmarks[name].ns_per_iter)
-            .collect();
-        let candidate_values: Vec<_> = candidate
-            .iter()
-            .map(|summary| summary.benchmarks[name].ns_per_iter)
-            .collect();
+        // Every summary holds exactly the reference names, checked above.
+        let side_values = |summaries: &[BenchmarkSummary]| {
+            summaries
+                .iter()
+                .map(|summary| {
+                    summary
+                        .benchmarks
+                        .get(name)
+                        .map(|metric| metric.ns_per_iter)
+                })
+                .collect::<Option<Vec<_>>>()
+                .ok_or(ParseBenchesError::BenchmarkSetMismatch)
+        };
+        let reference_values = side_values(reference)?;
+        let candidate_values = side_values(candidate)?;
         let mut values = reference_values.iter().chain(&candidate_values);
         if values.clone().all(|value| *value == 0.0) {
             benchmarks.insert(name.clone(), BenchmarkComparison {
@@ -536,7 +561,10 @@ pub enum Command {
 /// Returns [`ParseBenchesError::InvalidNumber`] if matched numeric fields cannot
 /// be parsed into floats.
 pub fn parse_bencher_line(line: &str) -> Result<Option<NamedMetric>, ParseBenchesError> {
-    let Some(caps) = BENCHER_REGEX.captures(line) else {
+    let regex = BENCHER_REGEX
+        .as_ref()
+        .map_err(|error| ParseBenchesError::Pattern(error.clone()))?;
+    let Some(caps) = regex.captures(line) else {
         return Ok(None);
     };
 
@@ -642,8 +670,8 @@ pub fn format_rfc3339_utc(time: SystemTime) -> String {
         .replace_nanosecond(0)
         .unwrap_or_else(|_| time::OffsetDateTime::from(time));
     offset_time
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
 }
 
 /// Resolves commit SHA from an optional CLI argument, falling back to an optional environment SHA.
@@ -655,17 +683,16 @@ pub fn resolve_commit_sha(commit_arg: Option<&str>, env_sha: Option<&str>) -> St
             (!t.is_empty()).then_some(t)
         })
         .or_else(|| {
-            env_sha.and_then(|s| {
-                let t = s.trim();
-                (!t.is_empty()).then_some(t)
-            })
+            let s = env_sha?;
+            let t = s.trim();
+            (!t.is_empty()).then_some(t)
         });
 
     let Some(trimmed) = raw else {
-        return "unknown".to_string();
+        return "unknown".to_owned();
     };
 
-    trimmed.to_string()
+    trimmed.to_owned()
 }
 
 /// Generates a [`BenchmarkSummary`] from the provided command-line arguments.
@@ -675,7 +702,7 @@ pub fn resolve_commit_sha(commit_arg: Option<&str>, env_sha: Option<&str>) -> St
 /// Returns [`ParseBenchesError`] if directory scanning or metric parsing fails.
 pub fn generate_summary(args: &Args) -> Result<BenchmarkSummary, ParseBenchesError> {
     let benchmarks = parse_benchmark_dir(&args.results_dir)?;
-    let env_sha = std::env::var("GITHUB_SHA").ok();
+    let env_sha = env::var("GITHUB_SHA").ok();
     let commit = resolve_commit_sha(args.commit.as_deref(), env_sha.as_deref());
     let timestamp = format_rfc3339_utc(SystemTime::now());
     let executables = match (&args.executables, &args.cargo_log) {

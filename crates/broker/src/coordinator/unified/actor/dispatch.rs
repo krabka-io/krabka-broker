@@ -8,7 +8,7 @@
 use {
     super::{
         ActorServices, ErrorCode, GroupActorMessage, ParkedWaiters,
-        classic_join::handle_classic_join_message,
+        classic_join::{ClassicJoinMessage, handle_classic_join_message},
         classic_leave::{handle_classic_delete_message, handle_classic_leave_message},
         classic_sync::handle_classic_sync_message,
         commit_validation::validate_commit_message,
@@ -23,9 +23,10 @@ use {
         views::{build_classic_view, build_describe, inspect_any},
         waiters::drain_parked_for_unload,
     },
-    crate::{
-        codes,
-        coordinator::unified::{ClientIdentity, classic_ops, group::CoordinatorGroup, migration},
+    crate::coordinator::unified::{
+        ClientIdentity, classic_ops,
+        group::{CoordinatorGroup, GroupKind},
+        migration,
     },
     krabka_protocol::owned::{
         heartbeat_request::HeartbeatRequest, leave_group_request::LeaveGroupRequest,
@@ -37,12 +38,9 @@ fn handle_classic_heartbeat_message(
     group: &mut CoordinatorGroup,
     request: &HeartbeatRequest,
 ) -> ErrorCode {
-    if let Some(state) = group.as_classic_mut() {
-        classic_ops::handle_heartbeat(state, request)
-    } else if let Some(state) = group.as_consumer_mut() {
-        migration::serve_classic_heartbeat(state, request)
-    } else {
-        codes::UNKNOWN_MEMBER_ID
+    match &mut group.kind {
+        GroupKind::Classic(state) => classic_ops::handle_heartbeat(state, request),
+        GroupKind::Consumer(state) => migration::serve_classic_heartbeat(state, request),
     }
 }
 
@@ -109,17 +107,16 @@ pub(super) async fn handle_actor_message(
             regex_resolver,
             reply,
         } => {
-            handle_classic_join_message(
-                group,
-                parked,
-                services,
-                req,
+            handle_classic_join_message(group, parked, services, ClassicJoinMessage {
+                request: req,
                 version,
-                &client_id,
-                &client_host,
-                &*regex_resolver,
+                client: ClientIdentity {
+                    id: &client_id,
+                    host: &client_host,
+                },
+                regex_resolver: &*regex_resolver,
                 reply,
-            )
+            })
             .await
         }
         GroupActorMessage::ClassicSync { req, reply } => {
@@ -150,9 +147,7 @@ pub(super) async fn handle_actor_message(
             true
         }
         GroupActorMessage::InspectAny { reply } => {
-            if let Some(snapshot) = inspect_any(group, services.metadata) {
-                let _ = reply.send(snapshot);
-            }
+            let _ = reply.send(inspect_any(group, services.metadata));
             true
         }
         GroupActorMessage::CommitOffsets {
@@ -275,18 +270,21 @@ pub(super) async fn handle_actor_message(
 mod tests {
     use {
         super::*,
-        crate::coordinator::{
-            test_support::offset_entry,
-            unified::{
-                GroupCoordinator,
-                actor::{
-                    GroupActorHandle,
-                    test_support::{
-                        classic_member, make_coordinator, rpc, seed_completing_classic,
+        crate::{
+            codes,
+            coordinator::{
+                test_support::offset_entry,
+                unified::{
+                    GroupCoordinator,
+                    actor::{
+                        GroupActorHandle,
+                        test_support::{
+                            classic_member, make_coordinator, rpc, seed_completing_classic,
+                        },
                     },
+                    classic_state::OffsetEntry,
+                    offsets_log::fake::InMemoryOffsetsLog,
                 },
-                classic_state::OffsetEntry,
-                offsets_log::fake::InMemoryOffsetsLog,
             },
         },
         assert2::assert,
@@ -362,7 +360,7 @@ mod tests {
         let group = Box::new(CoordinatorGroup::seeded(
             "g",
             GroupKind::Classic(cs),
-            [(("t".to_string(), 0), OffsetEntry {
+            [(("t".to_owned(), 0), OffsetEntry {
                 offset: Offset(7),
                 leader_epoch: 0,
                 metadata: String::new(),
@@ -377,15 +375,7 @@ mod tests {
         // Seeded committed offsets and member are visible.
         let handle = coord.find("g").expect("seeded actor");
         let rx = rpc::begin(&handle, |tx| GroupActorMessage::FetchOffsets { reply: tx }).await;
-        assert!(
-            rx.await
-                .unwrap()
-                .committed
-                .get(&("t".to_string(), 0))
-                .unwrap()
-                .offset
-                == 7
-        );
+        assert!(rx.await.unwrap().committed[&("t".to_owned(), 0)].offset == 7);
         // Non-empty group cannot be deleted.
         assert!(
             coord.delete_group("g").await == Err(crate::coordinator::DeleteGroupError::NonEmpty)
@@ -405,7 +395,7 @@ mod tests {
     ) -> Receiver<Result<(), ErrorCode>> {
         rpc::begin(handle, |reply| GroupActorMessage::CommitOffsets {
             batch: RecordBatch::default(),
-            entries: vec![(("t".to_string(), partition), offset_entry(offset))],
+            entries: vec![(("t".to_owned(), partition), offset_entry(offset))],
             reply,
         })
         .await
@@ -447,7 +437,7 @@ mod tests {
     fn offsets(entries: &[(i32, i64)]) -> HashMap<(String, i32), OffsetEntry> {
         entries
             .iter()
-            .map(|&(partition, offset)| (("t".to_string(), partition), offset_entry(offset)))
+            .map(|&(partition, offset)| (("t".to_owned(), partition), offset_entry(offset)))
             .collect()
     }
 

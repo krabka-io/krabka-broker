@@ -13,9 +13,15 @@ use {
         },
         test_support::{encode, single_partition_topic},
     },
+    krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax,
     krabka_metadata::NodeId,
-    krabka_units::prelude::{Time, TimeExt as _, millis, secs},
-    tokio::io::AsyncReadExt,
+    krabka_protocol::owned::describe_quorum_request,
+    krabka_units::{
+        prelude,
+        prelude::{Time, TimeExt as _, millis, secs},
+    },
+    std::{sync::Arc, time::Duration},
+    tokio::{io::AsyncReadExt, time},
     uuid::Uuid,
 };
 
@@ -90,17 +96,17 @@ pub(super) fn test_engine_with_voters(
         ControllerFetchMissLimit::default(),
         MetadataRaftCommandQueueCapacity::default(),
         MetadataRaftFetchMax::default(),
-        std::sync::Arc::new(NullPeerSender),
+        Arc::new(NullPeerSender),
         0,
-        krabka_units::prelude::bytes(0),
+        prelude::bytes(0),
         millis(0),
-        krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax::default(),
+        MetadataSnapshotFetchMax::default(),
         MetadataLogConfig {
             max_idle_interval: millis(0),
             ..MetadataLogConfig::default()
         },
         Activation::default(),
-        std::sync::Arc::new(NoEventQueueRecorder),
+        Arc::new(NoEventQueueRecorder),
         |_| Ok(()),
     )
     .expect("open engine");
@@ -116,19 +122,19 @@ pub(super) fn single_voter_engine() -> (KraftController, tempfile::TempDir) {
 
 pub(super) async fn wait_for_leader(engine: &KraftController) {
     let mut rx = engine.watch_leader();
-    tokio::time::timeout(TEST_LEADER_DEADLINE.to_std(), rx.wait_for(Option::is_some))
+    time::timeout(TEST_LEADER_DEADLINE.to_std(), rx.wait_for(Option::is_some))
         .await
         .expect("leader elected")
         .expect("leader channel open");
 }
 
 pub(super) async fn activate_dynamic_membership(engine: &KraftController) {
-    tokio::time::timeout(TEST_LEADER_DEADLINE.to_std(), async {
+    time::timeout(TEST_LEADER_DEADLINE.to_std(), async {
         loop {
             match engine.finalize_kraft_version(1).await {
                 Ok(_) => return,
                 Err(RaftError::ReconfigInProgress) => {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    time::sleep(Duration::from_millis(10)).await;
                 }
                 Err(error) => panic!("activate kraft.version 1: {error}"),
             }
@@ -160,7 +166,7 @@ where
 pub(super) fn quorum_request(
     topic: &str,
     partition: i32,
-) -> krabka_protocol::owned::describe_quorum_request::DescribeQuorumRequest {
+) -> describe_quorum_request::DescribeQuorumRequest {
     use krabka_protocol::owned::describe_quorum_request::{
         DescribeQuorumRequest, PartitionData, TopicData,
     };

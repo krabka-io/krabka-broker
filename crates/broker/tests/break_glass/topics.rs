@@ -16,6 +16,7 @@ use {
         metadata_request::MetadataRequest,
     },
     std::time::Duration,
+    tokio::{time, time::Instant},
 };
 
 /// `retry.backoff.ms`: the first wait of a Kafka admin client before a retry.
@@ -26,7 +27,7 @@ const RETRY_BACKOFF_MAX: Duration = Duration::from_secs(1);
 const DEFAULT_API_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Create `name` with one partition and the given replication factor.
-pub(super) async fn create_topic(client: &Client, name: &str, replication_factor: i16) {
+pub async fn create_topic(client: &Client, name: &str, replication_factor: i16) {
     let response = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
@@ -45,7 +46,7 @@ pub(super) async fn create_topic(client: &Client, name: &str, replication_factor
 }
 
 /// Delete `name`, and answer the row's error code.
-pub(super) async fn delete_topic(client: &Client, name: &str) -> i16 {
+pub async fn delete_topic(client: &Client, name: &str) -> i16 {
     try_delete_topic(client, name).await.expect("DeleteTopics")
 }
 
@@ -82,8 +83,8 @@ async fn try_delete_topic(client: &Client, name: &str) -> Result<i16, ClientErro
 /// before the first retry and doubles the wait up to `retry.backoff.max.ms`. It
 /// stops when `default.api.timeout.ms` passes. Any other code is final, so this
 /// helper answers it at once.
-pub(super) async fn delete_topic_as_admin_client(bootstrap: &Client, name: &str) -> i16 {
-    let deadline = tokio::time::Instant::now() + DEFAULT_API_TIMEOUT;
+pub async fn delete_topic_as_admin_client(bootstrap: &Client, name: &str) -> i16 {
+    let deadline = Instant::now() + DEFAULT_API_TIMEOUT;
     let mut backoff = RETRY_BACKOFF;
     loop {
         let failure = match delete_through_controller(bootstrap, name).await {
@@ -94,11 +95,11 @@ pub(super) async fn delete_topic_as_admin_client(bootstrap: &Client, name: &str)
             Err(error) => error.to_string(),
         };
         assert!(
-            tokio::time::Instant::now() + backoff < deadline,
+            Instant::now() + backoff < deadline,
             "DeleteTopics {name} still failed after {DEFAULT_API_TIMEOUT:?}: {failure}"
         );
         eprintln!("DeleteTopics {name} failed with {failure}; retrying after {backoff:?}");
-        tokio::time::sleep(backoff).await;
+        time::sleep(backoff).await;
         backoff = (backoff * 2).min(RETRY_BACKOFF_MAX);
     }
 }
@@ -120,7 +121,7 @@ async fn delete_through_controller(bootstrap: &Client, name: &str) -> Result<i16
 }
 
 /// Whether `client`'s cluster still knows `name`.
-pub(super) async fn topic_exists(client: &Client, name: &str) -> bool {
+pub async fn topic_exists(client: &Client, name: &str) -> bool {
     client
         // Null topics is "every topic", the request `kafka-topics --list`
         // sends; an empty list would ask for none.

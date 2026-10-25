@@ -165,10 +165,11 @@ enum Engine {
 #[error("{0}")]
 pub struct PatternError(String);
 
-/// A match this crate gives no answer for: a replacement string Java's
-/// `Matcher.appendReplacement` refuses, which Java reports as
-/// `IllegalArgumentException` or `IndexOutOfBoundsException`, or a search
-/// that ran past the backtrack limit.
+/// A match this crate gives no answer for.
+///
+/// That is a replacement string Java's `Matcher.appendReplacement` refuses,
+/// which Java reports as `IllegalArgumentException` or
+/// `IndexOutOfBoundsException`, or a search that ran past the backtrack limit.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
 pub struct MatchError(String);
@@ -177,6 +178,9 @@ impl MatchError {
     /// A search that gave no answer, as the error a caller rejects the name
     /// by.
     fn search(error: impl Display) -> Self { Self(error.to_string()) }
+
+    /// A match whose span is off the input or not on a char boundary.
+    fn position() -> Self { Self("the match is not on the input's char boundaries".to_owned()) }
 }
 
 impl JavaPattern {
@@ -362,7 +366,11 @@ impl JavaPattern {
             let Some(whole) = groups.first().cloned().flatten() else {
                 break;
             };
-            out.push_str(&input[copied..whole.start]);
+            out.push_str(
+                input
+                    .get(copied..whole.start)
+                    .ok_or_else(MatchError::position)?,
+            );
             self.append_replacement(&mut out, replacement, input, &groups)?;
             copied = whole.end;
             if !all {
@@ -370,7 +378,7 @@ impl JavaPattern {
             }
             search_from = next_search_start(input, &whole);
         }
-        out.push_str(&input[copied..]);
+        out.push_str(input.get(copied..).ok_or_else(MatchError::position)?);
         Ok(out)
     }
 
@@ -530,9 +538,9 @@ fn check_input_length(limit: Option<usize>, input: &str) -> Result<(), MatchErro
 /// empty match at the end.
 fn next_search_start(input: &str, whole: &Range<usize>) -> usize {
     if whole.is_empty() {
-        input[whole.end..]
-            .chars()
-            .next()
+        input
+            .get(whole.end..)
+            .and_then(|rest| rest.chars().next())
             .map_or(input.len() + 1, |next| whole.end + next.len_utf8())
     } else {
         whole.end
@@ -2925,7 +2933,7 @@ mod tests {
                 false,
                 format!("{xs}<y>"),
             ),
-            ("(?<!x{1,1000000000})y", xs_y.clone(), false, xs_y.clone()),
+            ("(?<!x{1,1000000000})y", xs_y.clone(), false, xs_y),
         ];
         for (source, input, matches, replaced) in cases {
             let compiled = pattern(source);

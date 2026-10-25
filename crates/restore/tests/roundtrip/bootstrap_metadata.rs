@@ -14,13 +14,13 @@ use {
         topic_configuration::check_topic_configuration,
     },
     assert2::{assert, check},
-    krabka_broker::BrokerConfig,
+    krabka_broker::{BrokerConfig, authorizer::SimpleAclAuthorizer},
     krabka_metadata::{
         AclEntry, AclOperation, MetadataImage, MetadataRecord, NodeId, PatternType, PermissionType,
         ResourceType, TopicConfigRecord, TopicRecord,
     },
     krabka_protocol::owned::describe_acls_request::DescribeAclsRequest,
-    std::path::Path,
+    std::{fs, iter, path::Path, sync::Arc},
     uuid::Uuid,
 };
 
@@ -83,10 +83,9 @@ async fn restored_bootstrap_metadata_carries_the_archived_topic_ids_and_partitio
     check!(baseline_code == 0);
 
     let record_count = |dir: &Path| -> u64 {
-        let manifest: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(dir.join("bootstrap.json")).expect("bootstrap.json"),
-        )
-        .expect("bootstrap.json is JSON");
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("bootstrap.json")).expect("bootstrap.json"))
+                .expect("bootstrap.json is JSON");
         manifest["record_count"]
             .as_u64()
             .expect("record_count is a JSON number")
@@ -95,8 +94,8 @@ async fn restored_bootstrap_metadata_carries_the_archived_topic_ids_and_partitio
         u64::try_from(Fixture::topic_count() + fixture.partitions().len()).expect("small count");
     check!(record_count(&restored.log_dir) == record_count(&baseline_dir) + extra_records);
 
-    let bin = std::fs::read(restored.log_dir.join("bootstrap.records.bin"))
-        .expect("bootstrap.records.bin");
+    let bin =
+        fs::read(restored.log_dir.join("bootstrap.records.bin")).expect("bootstrap.records.bin");
     for topic_id in [fixture.orders_id, fixture.payments_id] {
         let topic_id_bytes: [u8; 16] = topic_id.into_bytes();
         check!(
@@ -151,7 +150,7 @@ async fn restored_snapshot_reaches_describe_configs_and_describe_acls() {
     let snapshot_path = snapshot_dir
         .path()
         .join("00000000000000000042-0000000001.checkpoint");
-    std::fs::write(
+    fs::write(
         &snapshot_path,
         krabka_raft::serialize_metadata_snapshot(&image, 1_700_000_000_000)
             .expect("serialize metadata snapshot"),
@@ -173,8 +172,8 @@ async fn restored_snapshot_reaches_describe_configs_and_describe_acls() {
     // `ANONYMOUS`, which the authorizer's own super-user set lets past the
     // cluster-describe gate in front of the listing.
     let mut config = BrokerConfig::for_tests(log_dir);
-    config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-        std::iter::once("ANONYMOUS".to_owned()).collect(),
+    config.authorizer = Arc::new(SimpleAclAuthorizer::new(
+        iter::once("ANONYMOUS".to_owned()).collect(),
     ));
     let broker = controller.start(config).await;
     let client = krabka_client_core::Client::builder()

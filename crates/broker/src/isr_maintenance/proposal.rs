@@ -11,9 +11,13 @@ use {
     krabka_log::Offset,
     krabka_metadata::PartitionRecord,
     krabka_raft::NodeId,
-    krabka_verified::isr::{IsrCandidateFacts, IsrMemberRole},
+    krabka_verified::{
+        isr,
+        isr::{IsrCandidateFacts, IsrMemberRole},
+    },
     std::{
         collections::{BTreeSet, HashSet},
+        sync::PoisonError,
         time::Instant,
     },
 };
@@ -45,10 +49,7 @@ pub(super) struct Proposal {
 /// `None` when the log records no start for `epoch`, which Kafka's rule reads
 /// as "admit nobody yet".
 fn leader_epoch_start(part: &Partition, epoch: LeaderEpoch) -> Option<Offset> {
-    let log = part
-        .log
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
     log.epoch_checkpoint()
         .entries()
         .iter()
@@ -72,9 +73,26 @@ pub(super) async fn compute_proposal(
     // offset once per scan, as here.
     let leader_leo = part.log_end_offset();
     let epoch_start = leader_epoch_start(part, LeaderEpoch(record.leader_epoch.0));
-    let mut st = part.replica_state.lock().await;
+    propose_with_policy(
+        &mut *part.replica_state.lock().await,
+        policy,
+        record,
+        leader_leo,
+        epoch_start,
+    )
+}
+
+/// Install `policy` on `st`, then read the proposal at the current instant.
+/// The caller holds the replica-state lock across both.
+fn propose_with_policy(
+    st: &mut ReplicaState,
+    policy: LeaderPolicy,
+    record: &PartitionRecord,
+    leader_leo: Offset,
+    epoch_start: Option<Offset>,
+) -> Option<Proposal> {
     st.set_policy(policy);
-    proposal_at(&st, record, leader_leo, epoch_start, Instant::now())
+    proposal_at(st, record, leader_leo, epoch_start, Instant::now())
 }
 
 /// [`compute_proposal`] at the scan instant `now`, with the leader's log
@@ -129,7 +147,7 @@ fn proposal_at(
         // A replica with no recorded progress has log end -1 and is out of
         // sync, as Kafka's `Partition.isFollowerOutOfSync` treats a replica
         // it has no state for.
-        if krabka_verified::isr::isr_candidate_selected(IsrCandidateFacts {
+        if isr::isr_candidate_selected(IsrCandidateFacts {
             role,
             follower_log_end: stats.map_or(-1, FollowerStats::log_end),
             leader_log_end: leader_leo.0,
@@ -149,16 +167,12 @@ fn proposal_at(
         .iter()
         .filter(|node| prev_isr.binary_search(node).is_err())
         .count();
-    if krabka_verified::isr::isr_proposal_changed(removed, added) {
-        Some(Proposal {
-            prev_isr,
-            new_isr,
-            leader_epoch: st.current_leader_epoch,
-            partition_epoch: record.partition_epoch,
-        })
-    } else {
-        None
-    }
+    isr::isr_proposal_changed(removed, added).then_some(Proposal {
+        prev_isr,
+        new_isr,
+        leader_epoch: st.current_leader_epoch,
+        partition_epoch: record.partition_epoch,
+    })
 }
 
 #[cfg(test)]

@@ -28,7 +28,7 @@ use {
     },
     tokio::{
         sync::oneshot,
-        task::JoinHandle,
+        task::{self, JoinHandle},
         time::{MissedTickBehavior, interval as ticker},
     },
 };
@@ -75,14 +75,14 @@ struct StatsLine {
 
 /// A container's resources at one sample.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub(crate) struct Usage {
+pub struct Usage {
     pub(crate) cpu_percent: Option<f64>,
     pub(crate) memory_bytes: Option<u64>,
 }
 
 /// The usage of each container in a `docker stats` output, by container name.
 /// A line that does not parse is left out.
-pub(crate) fn parse_stats(output: &str) -> BTreeMap<String, Usage> {
+pub fn parse_stats(output: &str) -> BTreeMap<String, Usage> {
     output
         .lines()
         .filter_map(|line| serde_json::from_str::<StatsLine>(line.trim()).ok())
@@ -101,7 +101,7 @@ pub(crate) fn parse_stats(output: &str) -> BTreeMap<String, Usage> {
 }
 
 /// A percentage such as `12.34%`; `None` for `--` or anything else.
-pub(crate) fn parse_percent(text: &str) -> Option<f64> {
+pub fn parse_percent(text: &str) -> Option<f64> {
     text.trim()
         .strip_suffix('%')?
         .trim()
@@ -113,7 +113,7 @@ pub(crate) fn parse_percent(text: &str) -> Option<f64> {
 /// A size such as `512.3MiB`, `1.2kB` or `0B` in bytes, with decimal (`kB`,
 /// `MB`) and binary (`KiB`, `MiB`) units as Docker prints them. The fraction
 /// is truncated to whole bytes.
-pub(crate) fn parse_size(text: &str) -> Option<u64> {
+pub fn parse_size(text: &str) -> Option<u64> {
     let text = text.trim();
     let split = text
         .find(|c: char| !(c.is_ascii_digit() || c == '.'))
@@ -136,7 +136,7 @@ pub(crate) fn parse_size(text: &str) -> Option<u64> {
         return None;
     }
     // Eighteen digits keep `10^digits` inside a u128 product.
-    let fraction = &fraction[..fraction.len().min(18)];
+    let fraction = fraction.get(..fraction.len().min(18))?;
     let whole: u128 = if whole.is_empty() {
         0
     } else {
@@ -167,7 +167,7 @@ fn sample_text<'a>(body: &'a str, metric: &str) -> Option<&'a str> {
 
 /// The first sample of `metric` as a whole number, rounded; `None` when the
 /// body has no sample of it.
-pub(crate) fn gauge(body: &str, metric: &str) -> Option<i64> {
+pub fn gauge(body: &str, metric: &str) -> Option<i64> {
     let text = sample_text(body, metric)?;
     text.parse::<i64>().ok().or_else(|| {
         let value = text.parse::<f64>().ok().filter(|value| value.is_finite())?;
@@ -177,7 +177,7 @@ pub(crate) fn gauge(body: &str, metric: &str) -> Option<i64> {
 
 /// The `state` label of the `krabka_broker_raft_current_state` series that
 /// reads 1, when one does.
-pub(crate) fn raft_state(body: &str) -> Option<String> {
+pub fn raft_state(body: &str) -> Option<String> {
     body.lines().map(str::trim).find_map(|line| {
         let labels = line.strip_prefix(RAFT_CURRENT_STATE)?.strip_prefix('{')?;
         let (labels, value) = labels.split_once('}')?;
@@ -194,7 +194,7 @@ pub(crate) fn raft_state(body: &str) -> Option<String> {
 /// is `None` when the body has no sample of its series, as on a broker-only
 /// node for the `raft_*` series.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub(crate) struct Progress {
+pub struct Progress {
     pub(crate) active_controller: Option<bool>,
     pub(crate) raft_state: Option<String>,
     pub(crate) raft_current_epoch: Option<i64>,
@@ -211,7 +211,7 @@ pub(crate) struct Progress {
 }
 
 /// The controller progress in a `/metrics` body.
-pub(crate) fn progress(body: &str) -> Progress {
+pub fn progress(body: &str) -> Progress {
     Progress {
         active_controller: gauge(body, ACTIVE_CONTROLLER).map(|value| value >= 1),
         raft_state: raft_state(body),
@@ -231,7 +231,7 @@ pub(crate) fn progress(body: &str) -> Progress {
 
 /// One node at one sample: a line of `telemetry.jsonl`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct TelemetryRow {
+pub struct TelemetryRow {
     /// The sample this row belongs to, counted from 0. Every node's row of one
     /// sample carries the same tick.
     pub(crate) tick: u64,
@@ -250,7 +250,7 @@ pub(crate) struct TelemetryRow {
 
 /// What one node's rows add up to.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
-pub(crate) struct NodeSummary {
+pub struct NodeSummary {
     pub(crate) rows: u64,
     pub(crate) unanswered: u64,
     pub(crate) peak_cpu_percent: Option<f64>,
@@ -269,7 +269,7 @@ pub(crate) struct NodeSummary {
 
 /// What the whole run's rows add up to.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
-pub(crate) struct TelemetrySummary {
+pub struct TelemetrySummary {
     pub(crate) ticks: u64,
     pub(crate) rows: u64,
     pub(crate) unanswered: u64,
@@ -432,7 +432,7 @@ async fn sample(nodes: &Nodes, tick: u64, stats: StatsSource) -> Vec<TelemetryRo
     let roots: Vec<_> = members.iter().map(|node| node.root.clone()).collect();
     // `docker stats --no-stream` takes a couple of seconds and the walk reads
     // every segment's metadata, so both run off the runtime's threads.
-    let (usage, disks) = tokio::task::spawn_blocking(move || {
+    let (usage, disks) = task::spawn_blocking(move || {
         let usage = if names.is_empty() {
             BTreeMap::new()
         } else {
@@ -498,7 +498,7 @@ async fn run(
 }
 
 /// The run's telemetry sampler, running on its own task.
-pub(crate) struct Telemetry {
+pub struct Telemetry {
     stop: oneshot::Sender<()>,
     task: JoinHandle<TelemetrySummary>,
 }
@@ -542,7 +542,8 @@ mod tests {
             topology::{Node, Nodes},
         },
         assert2::{assert, check},
-        std::{collections::BTreeMap, sync::Arc, time::Duration},
+        std::{collections::BTreeMap, fs, sync::Arc, time::Duration},
+        tokio::time,
     };
 
     #[yare::parameterized(
@@ -777,7 +778,7 @@ krabka_broker_offline_partitions_count 0
     async fn an_unanswering_node_still_gets_a_row_for_every_sample() {
         let evidence = tempfile::tempdir().expect("an evidence directory");
         let root = tempfile::tempdir().expect("a data directory");
-        std::fs::write(root.path().join("segment"), [0u8; 10]).expect("write a segment");
+        fs::write(root.path().join("segment"), [0u8; 10]).expect("write a segment");
         let nodes = Arc::new(Nodes::new(vec![Node {
             id: 1,
             container: "k1".to_owned(),
@@ -798,11 +799,11 @@ krabka_broker_offline_partitions_count 0
                     .collect::<Vec<_>>()
                     .join("\n"))
             });
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
         let summary = telemetry.stop().await;
 
         let text =
-            std::fs::read_to_string(evidence.path().join("telemetry.jsonl")).expect("rows written");
+            fs::read_to_string(evidence.path().join("telemetry.jsonl")).expect("rows written");
         let rows: Vec<serde_json::Value> = text
             .lines()
             .map(|line| serde_json::from_str(line).expect("a JSON row"))

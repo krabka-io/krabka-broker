@@ -15,6 +15,7 @@ use {
         RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState, RemotePartitionDeleteMetadata,
         RemoteStorageError, TopicIdPartition,
     },
+    std::sync::PoisonError,
 };
 
 impl TopicBasedRemoteLogMetadataManager {
@@ -55,10 +56,14 @@ impl TopicBasedRemoteLogMetadataManager {
             ))
             .into_storage());
         };
-        let applied = self.applied.lock().expect("applied mutex poisoned");
-        Ok(idx
-            .and_then(|i| applied.get(i).copied())
-            .is_some_and(|applied| applied >= hwm - 1))
+        let applied = idx.and_then(|i| {
+            self.applied
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(i)
+                .copied()
+        });
+        Ok(applied.is_some_and(|applied| applied >= hwm - 1))
     }
 }
 
@@ -79,7 +84,9 @@ impl RemoteLogMetadataManager for TopicBasedRemoteLogMetadataManager {
             });
         }
         let tp = metadata.remote_log_segment_id().topic_id_partition.clone();
-        let event = MetadataEvent::AddSegment(metadata).encode();
+        let event = MetadataEvent::AddSegment(metadata)
+            .encode()
+            .map_err(|error| RemoteStorageError::InvalidArgument(error.to_string()))?;
         self.publish_and_wait(&tp, event)
     }
 
@@ -88,7 +95,9 @@ impl RemoteLogMetadataManager for TopicBasedRemoteLogMetadataManager {
         update: RemoteLogSegmentMetadataUpdate,
     ) -> Result<(), RemoteStorageError> {
         let tp = update.remote_log_segment_id.topic_id_partition.clone();
-        let event = MetadataEvent::UpdateSegment(update).encode();
+        let event = MetadataEvent::UpdateSegment(update)
+            .encode()
+            .map_err(|error| RemoteStorageError::InvalidArgument(error.to_string()))?;
         self.publish_and_wait(&tp, event)
     }
 
@@ -137,7 +146,9 @@ impl RemoteLogMetadataManager for TopicBasedRemoteLogMetadataManager {
         metadata: RemotePartitionDeleteMetadata,
     ) -> Result<(), RemoteStorageError> {
         let tp = metadata.topic_id_partition.clone();
-        let event = MetadataEvent::PartitionDelete(metadata).encode();
+        let event = MetadataEvent::PartitionDelete(metadata)
+            .encode()
+            .map_err(|error| RemoteStorageError::InvalidArgument(error.to_string()))?;
         self.publish_and_wait(&tp, event)
     }
 
@@ -167,7 +178,11 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_remote_storage::RemotePartitionDeleteState,
-        std::sync::Arc,
+        std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        },
+        tokio::task,
     };
 
     krabka_macros::remote_segment_check!(check_finished_segment);
@@ -185,10 +200,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn add_with_wrong_state_is_rejected_eagerly() {
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(2);
-        let m = start_manager(log.clone());
+        let m = start_manager(Arc::clone(&log));
         // Force a non-Started state via the lifecycle helper.
         let bad = started(10, 0, 9).with_update(&finish(10)).unwrap();
-        let m2 = m.clone();
+        let m2 = Arc::clone(&m);
         let err = on_blocking(move || m2.add_remote_log_segment_metadata(bad).unwrap_err()).await;
         assert!(matches!(err, RemoteStorageError::InvalidAdd { .. }));
         // Eager rejection means nothing was published.
@@ -205,7 +220,7 @@ mod tests {
             RemotePartitionDeleteState::DeletePartitionStarted,
             RemotePartitionDeleteState::DeletePartitionFinished,
         ] {
-            let m2 = m.clone();
+            let m2 = Arc::clone(&m);
             on_blocking(move || {
                 m2.put_remote_partition_delete_metadata(RemotePartitionDeleteMetadata {
                     topic_id_partition: tp(),
@@ -226,6 +241,8 @@ mod tests {
         Answer(bool),
         NotReady(i32),
         Io,
+        /// Any other error, by its debug form.
+        Other(String),
     }
 
     impl From<Result<bool, RemoteStorageError>> for CaughtUp {
@@ -234,7 +251,7 @@ mod tests {
                 Ok(answer) => Self::Answer(answer),
                 Err(RemoteStorageError::NotReady { partition }) => Self::NotReady(partition),
                 Err(RemoteStorageError::Io(_)) => Self::Io,
-                Err(other) => panic!("unexpected caught_up error: {other:?}"),
+                Err(other) => Self::Other(format!("{other:?}")),
             }
         }
     }
@@ -258,7 +275,7 @@ mod tests {
     }
 
     async fn ask(m: &Arc<TopicBasedRemoteLogMetadataManager>) -> CaughtUp {
-        let m = m.clone();
+        let m = Arc::clone(m);
         on_blocking(move || m.caught_up(&tp())).await.into()
     }
 
@@ -282,43 +299,45 @@ mod tests {
         let expected = expected(mp);
         let (m, got) = match scenario {
             Scenario::Seeded => {
-                let m = start_manager_all(log.clone()).await;
+                let m = start_manager_all(Arc::<HwmFlakyLog>::clone(&log)).await;
                 seed_finished(&m, &[seed(10, 0, 99)]).await;
                 let got = ask(&m).await;
                 (m, got)
             }
             Scenario::Behind => {
-                let m = start_manager_all(log.clone()).await;
+                let m = start_manager_all(Arc::<HwmFlakyLog>::clone(&log)).await;
                 seed_finished(&m, &[seed(10, 0, 99)]).await;
                 // The pump takes this lock before it applies a record, so
                 // holding it keeps the next record committed but unapplied.
                 let pump_stall = m.mutation_waiters.stall_pump().await;
-                let event = MetadataEvent::AddSegment(started(11, 100, 199)).encode();
+                let event = MetadataEvent::AddSegment(started(11, 100, 199))
+                    .encode()
+                    .unwrap();
                 log.publish(mp, event).await.unwrap();
                 let got = ask(&m).await;
                 drop(pump_stall);
                 (m, got)
             }
             Scenario::Unassigned => {
-                let m = start_manager(log.clone());
+                let m = start_manager(Arc::<HwmFlakyLog>::clone(&log));
                 let got = ask(&m).await;
                 (m, got)
             }
             Scenario::NotReady => {
-                let m = start_manager(log.clone());
+                let m = start_manager(Arc::<HwmFlakyLog>::clone(&log));
                 log.set_fail_hwm(true);
                 m.reconcile_assignment(&[mp]).await;
                 let got = ask(&m).await;
                 (m, got)
             }
             Scenario::HwmFailure => {
-                let m = start_manager_all(log.clone()).await;
+                let m = start_manager_all(Arc::<HwmFlakyLog>::clone(&log)).await;
                 log.set_fail_hwm(true);
                 let got = ask(&m).await;
                 (m, got)
             }
             Scenario::Shutdown => {
-                let m = start_manager_all(log.clone()).await;
+                let m = start_manager_all(Arc::<HwmFlakyLog>::clone(&log)).await;
                 m.shutdown();
                 let got = ask(&m).await;
                 (m, got)
@@ -331,10 +350,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn caught_up_turns_true_once_the_pump_applies_a_peer_write() {
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
-        let reader = start_manager_all(log.clone()).await;
+        let reader = start_manager_all(Arc::clone(&log)).await;
         let writer = start_manager_all(log).await;
         let stall = reader.mutation_waiters.stall_pump().await;
-        let w = writer.clone();
+        let w = Arc::clone(&writer);
         on_blocking(move || {
             w.add_remote_log_segment_metadata(started(10, 0, 99))
                 .unwrap();
@@ -342,13 +361,10 @@ mod tests {
         .await;
         assert!(ask(&reader).await == CaughtUp::Answer(false));
         drop(stall);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(2);
         while ask(&reader).await != CaughtUp::Answer(true) {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "reader never caught up"
-            );
-            tokio::task::yield_now().await;
+            assert!(Instant::now() < deadline, "reader never caught up");
+            task::yield_now().await;
         }
         assert!(reader.list_remote_log_segments(&tp()).unwrap().len() == 1);
         reader.shutdown();

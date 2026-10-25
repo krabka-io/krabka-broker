@@ -1,4 +1,5 @@
 //! The generated schema is consumed by schemars itself.
+#![cfg(test)]
 
 use {
     assert2::assert,

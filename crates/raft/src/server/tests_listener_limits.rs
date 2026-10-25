@@ -13,10 +13,13 @@ use {
         RaftError, RaftHandshakeError, RaftListenerHandshake, kraft::KraftController,
     },
     assert2::check,
-    std::{sync::Arc, time::Duration},
+    krabka_units::prelude,
+    std::{slice, sync::Arc, time::Duration},
     tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
+        io::{self, AsyncReadExt, AsyncWriteExt, DuplexStream},
         net::{TcpListener, TcpStream},
+        task::JoinHandle,
+        time::{self, Instant},
     },
     tokio_util::sync::CancellationToken,
 };
@@ -66,7 +69,7 @@ async fn accepted_controller_sockets_disable_nagle_before_the_handshake() {
             .write_all(&api_versions_request(correlation_id))
             .await
             .unwrap();
-        let reply = tokio::time::timeout(Duration::from_secs(5), read_correlation_id(&mut client))
+        let reply = time::timeout(Duration::from_secs(5), read_correlation_id(&mut client))
             .await
             .expect("the accepted socket serves a complete response");
         check!(reply == correlation_id);
@@ -104,12 +107,12 @@ fn context(limits: ListenerLimits) -> ConnectionContext {
 /// The client end of an in-memory connection, and the task that serves its
 /// other end.
 struct DuplexConnection {
-    client: tokio::io::DuplexStream,
-    connection: tokio::task::JoinHandle<Result<(), RaftError>>,
+    client: DuplexStream,
+    connection: JoinHandle<Result<(), RaftError>>,
 }
 
 fn duplex_connection(engine: KraftController, limits: ListenerLimits) -> DuplexConnection {
-    let (client, server) = tokio::io::duplex(1 << 16);
+    let (client, server) = io::duplex(1 << 16);
     let connection = tokio::spawn(handle_conn(
         server,
         engine,
@@ -135,7 +138,7 @@ async fn read_correlation_id<R: AsyncReadExt + Unpin>(stream: &mut R) -> i32 {
 async fn an_oversize_request_frame_closes_the_connection() {
     let (engine, _dir) = single_voter_engine();
     let limits = ListenerLimits {
-        max_request_size: krabka_units::prelude::bytes(64),
+        max_request_size: prelude::bytes(64),
         ..ListenerLimits::default()
     };
     let DuplexConnection {
@@ -148,7 +151,7 @@ async fn an_oversize_request_frame_closes_the_connection() {
     check!(read_correlation_id(&mut client).await == 7);
 
     client.write_all(&65_i32.to_be_bytes()).await.unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(5), connection)
+    let outcome = time::timeout(Duration::from_secs(5), connection)
         .await
         .expect("the connection ends")
         .expect("the connection task does not panic");
@@ -179,7 +182,7 @@ async fn an_idle_connection_closes_after_the_idle_window() {
 
     // Two requests 20 s apart keep a 30 s window open for 40 s.
     for correlation_id in [1, 2] {
-        tokio::time::sleep(Duration::from_secs(20)).await;
+        time::sleep(Duration::from_secs(20)).await;
         client
             .write_all(&api_versions_request(correlation_id))
             .await
@@ -188,8 +191,8 @@ async fn an_idle_connection_closes_after_the_idle_window() {
         check!(!connection.is_finished());
     }
 
-    tokio::time::sleep(window + Duration::from_secs(1)).await;
-    let outcome = tokio::time::timeout(Duration::from_secs(5), &mut connection)
+    time::sleep(window + Duration::from_secs(1)).await;
+    let outcome = time::timeout(Duration::from_secs(5), &mut connection)
         .await
         .expect("the listener closes the idle connection")
         .expect("the connection task does not panic");
@@ -210,7 +213,7 @@ async fn a_listener_without_an_idle_window_keeps_a_silent_connection() {
     } = duplex_connection(engine, limits);
 
     // Longer than the ten-minute Kafka default, which `None` replaces.
-    tokio::time::sleep(Duration::from_mins(11)).await;
+    time::sleep(Duration::from_mins(11)).await;
     check!(!connection.is_finished());
 }
 
@@ -251,7 +254,7 @@ async fn the_accept_loop_closes_connections_over_the_ceiling(
 
     let mut second = TcpStream::connect(addr).await.unwrap();
     let mut refused = Vec::new();
-    let closed = tokio::time::timeout(Duration::from_secs(5), second.read_to_end(&mut refused))
+    let closed = time::timeout(Duration::from_secs(5), second.read_to_end(&mut refused))
         .await
         .expect("the refused connection is closed");
     check!(closed.map_or(true, |read| read == 0));
@@ -267,7 +270,7 @@ async fn the_accept_loop_closes_connections_over_the_ceiling(
             served = true;
             break;
         }
-        tokio::time::sleep(Duration::from_millis(10 * (attempt % 5 + 1))).await;
+        time::sleep(Duration::from_millis(10 * (attempt % 5 + 1))).await;
     }
     check!(served, "the released slot serves a new connection");
 
@@ -298,8 +301,8 @@ async fn the_idle_window_restarts_on_every_byte_of_a_request() {
     // the frame, ten times the window.
     let request = api_versions_request(1);
     for byte in &request {
-        tokio::time::sleep(gap).await;
-        client.write_all(std::slice::from_ref(byte)).await.unwrap();
+        time::sleep(gap).await;
+        client.write_all(slice::from_ref(byte)).await.unwrap();
     }
     check!(read_correlation_id(&mut client).await == 1);
     check!(!connection.is_finished());
@@ -307,11 +310,11 @@ async fn the_idle_window_restarts_on_every_byte_of_a_request() {
     // Half a frame, then silence.
     let request = api_versions_request(2);
     for byte in &request[..request.len() / 2] {
-        tokio::time::sleep(gap).await;
-        client.write_all(std::slice::from_ref(byte)).await.unwrap();
+        time::sleep(gap).await;
+        client.write_all(slice::from_ref(byte)).await.unwrap();
     }
-    let last_byte = tokio::time::Instant::now();
-    let outcome = tokio::time::timeout(Duration::from_secs(5), &mut connection)
+    let last_byte = Instant::now();
+    let outcome = time::timeout(Duration::from_secs(5), &mut connection)
         .await
         .expect("the listener closes the stalled connection")
         .expect("the connection task does not panic");

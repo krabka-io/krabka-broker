@@ -35,6 +35,7 @@
 //! timestamp in `log_append_time_ms`: `UnifiedLog.append` sets
 //! `logAppendTime` from `BatchMetadata.timestamp`, which is the batch max
 //! timestamp on a `CreateTime` topic.
+#![cfg(test)]
 
 use {
     crate::support::{

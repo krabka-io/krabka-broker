@@ -89,6 +89,7 @@ use {
         },
         primitives::uuid::Uuid as WireUuid,
     },
+    std::collections::HashSet,
 };
 
 // The `async fn` shape matches the other inline-intercept handlers
@@ -96,7 +97,7 @@ use {
 // `await`. The single suspension point is the fenced-broker snapshot the
 // `offline_replicas` projection needs.
 // ACL preamble + pagination + cursor logic
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DescribeTopicPartitionsRequest,
     _version: ApiVersion,
@@ -289,7 +290,7 @@ pub(crate) async fn handle(
 fn partition_response(
     image: &krabka_metadata::MetadataImage,
     partition: &krabka_metadata::PartitionRecord,
-    unavailable: &std::collections::HashSet<u64>,
+    unavailable: &HashSet<u64>,
     listener: &str,
     topic_elr: &TopicElr,
 ) -> DescribeTopicPartitionsResponsePartition {
@@ -323,7 +324,7 @@ fn partition_response(
 fn error_topic(name: &str, error_code: i16) -> DescribeTopicPartitionsResponseTopic {
     DescribeTopicPartitionsResponseTopic {
         error_code,
-        name: Some(name.to_string()),
+        name: Some(name.to_owned()),
         topic_id: WireUuid::ZERO,
         is_internal: false,
         partitions: Vec::new(),
@@ -353,7 +354,7 @@ fn unknown_topic_row(
     };
     DescribeTopicPartitionsResponseTopic {
         error_code,
-        name: Some(name.to_string()),
+        name: Some(name.to_owned()),
         topic_id: WireUuid::ZERO,
         is_internal: is_internal_topic(&broker.config, name),
         partitions: Vec::new(),
@@ -444,7 +445,7 @@ mod tests {
         std::sync::Arc,
     };
 
-    const VERSION: i16 = krabka_protocol::owned::describe_topic_partitions_response::MAX_VERSION;
+    const VERSION: i16 = describe_topic_partitions_response::MAX_VERSION;
 
     #[bon::builder]
     fn expected_topic_row(
@@ -468,7 +469,10 @@ mod tests {
         test_context ["admin-client"];
     }
 
-    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+    use {
+        crate::test_support::start_broker_with_authorizer_no_audit as start_broker,
+        krabka_protocol::owned::describe_topic_partitions_response,
+    };
 
     async fn seed_topic_with_epoch(handle: &BrokerHandle, leader_epoch: LeaderEpoch) {
         handle
@@ -485,7 +489,7 @@ mod tests {
                     leader_epoch,
                     directories: vec![uuid::Uuid::nil()],
                     partition_epoch: 3,
-                    ..crate::handlers::test_support::replicated_partition()
+                    ..replicated_partition()
                         .leader(1)
                         .replicas(&[NodeId(1)])
                         .call()
@@ -506,7 +510,7 @@ mod tests {
             replication_factor,
         } = setup;
         let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
-            name: name.to_string(),
+            name: name.to_owned(),
             topic_id,
             partitions: partitions.0,
             replication_factor: replication_factor.0,
@@ -1134,12 +1138,10 @@ mod tests {
             user ["admin"];
         };
         let req = DescribeTopicPartitionsRequest {
-            topics: vec![
-                krabka_protocol::owned::describe_topic_partitions_request::TopicRequest {
-                    name: "orders".into(),
-                    ..Default::default()
-                },
-            ],
+            topics: vec![TopicRequest {
+                name: "orders".into(),
+                ..Default::default()
+            }],
             response_partition_limit: 2000,
             ..Default::default()
         };

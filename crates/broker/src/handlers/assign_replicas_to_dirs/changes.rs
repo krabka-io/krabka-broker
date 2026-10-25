@@ -28,16 +28,16 @@ use {
 /// What one request does: the records to commit and the response to send
 /// after they commit.
 #[derive(Debug, PartialEq)]
-pub(crate) struct AssignmentPlan {
-    pub(crate) changes: Vec<MetadataRecord>,
-    pub(crate) response: AssignReplicasToDirsResponse,
+pub struct AssignmentPlan {
+    pub changes: Vec<MetadataRecord>,
+    pub response: AssignReplicasToDirsResponse,
 }
 
 /// Plans every directory, topic, and partition in `req` for the broker
 /// `broker_id`. The response mirrors the request's structure, in request
 /// order, with the error code of each partition. The function is pure and
 /// does no I/O.
-pub(crate) fn plan_assignments(
+pub fn plan_assignments(
     image: &MetadataImage,
     broker_id: u64,
     req: &AssignReplicasToDirsRequest,
@@ -57,16 +57,16 @@ pub(crate) fn plan_assignments(
                         .partitions
                         .iter()
                         .map(|p| {
-                            let outcome = match topic_name {
-                                None => Err(codes::UNKNOWN_TOPIC_ID),
-                                Some(topic_name) => assignment_change(
-                                    image,
-                                    broker_id,
-                                    topic_name,
-                                    p.partition_index,
-                                    dir_uuid,
-                                ),
-                            };
+                            let outcome =
+                                topic_name.map_or(Err(codes::UNKNOWN_TOPIC_ID), |topic_name| {
+                                    assignment_change(
+                                        image,
+                                        broker_id,
+                                        topic_name,
+                                        p.partition_index,
+                                        dir_uuid,
+                                    )
+                                });
                             let error_code = match outcome {
                                 Ok(change) => {
                                     changes.extend(change);
@@ -145,7 +145,7 @@ fn assignment_change(
     };
     Ok(Some(MetadataRecord::V1PartitionDirAssignment(
         PartitionDirAssignmentRecord {
-            topic: topic_name.to_string(),
+            topic: topic_name.to_owned(),
             partition,
             replica,
             directory: dir_uuid,

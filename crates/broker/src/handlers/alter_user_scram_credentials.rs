@@ -63,6 +63,7 @@ use {
         features::{METADATA_VERSION, require_feature},
         handlers::{RequestContext, audit_admin_success, audit_resource, cluster_alter_denied},
     },
+    krabka_metadata::metadata_version,
 };
 
 /// The `typed` dispatch entry point: [`answer`] at any version, which the
@@ -73,7 +74,7 @@ use {
     skip_all,
     fields(api = "AlterUserScramCredentials")
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: AlterUserScramCredentialsRequest,
     _version: ApiVersion,
@@ -118,13 +119,7 @@ async fn answer(
     }
 
     // KIP-554/KIP-778: KRaft SCRAM requires metadata.version >= 3.5-IV2.
-    if require_feature(
-        &image,
-        METADATA_VERSION,
-        krabka_metadata::metadata_version::SCRAM_MIN_LEVEL,
-    )
-    .is_err()
-    {
+    if require_feature(&image, METADATA_VERSION, metadata_version::SCRAM_MIN_LEVEL).is_err() {
         return AlterUserScramCredentialsResponse {
             throttle_time_ms: 0,
             results: distinct_requested_users(&req)

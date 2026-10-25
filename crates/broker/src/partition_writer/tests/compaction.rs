@@ -22,8 +22,14 @@ use {
     krabka_log::{CleanupPolicy, LogConfig, Offset, ProducerId, VerbatimBatch, compaction_pause},
     krabka_protocol::records::{Attributes, Record, RecordBatch},
     krabka_units::{bytes, convert::TimeExt as _, gibibytes, millis},
+    std::time::Duration,
     tempfile::tempdir,
-    tokio::sync::oneshot,
+    tokio::{
+        sync,
+        sync::oneshot,
+        task::{self, JoinHandle},
+        time,
+    },
 };
 
 /// The idempotent producer: `(id, epoch)`.
@@ -352,9 +358,9 @@ struct CompactingWriter {
     dir: tempfile::TempDir,
     log: Arc<Mutex<Log>>,
     producer_state: Arc<ProducerState>,
-    replica_state: Arc<tokio::sync::Mutex<ReplicaState>>,
+    replica_state: Arc<sync::Mutex<ReplicaState>>,
     tx: mpsc::Sender<WriterMessage>,
-    writer: tokio::task::JoinHandle<()>,
+    writer: JoinHandle<()>,
 }
 
 /// A writer over a compacted log with one batch for each segment, and no
@@ -369,11 +375,11 @@ fn compacting_writer() -> CompactingWriter {
     };
     let log = Arc::new(Mutex::new(Log::open(dir.path(), config).expect("open log")));
     let producer_state = Arc::new(ProducerState::new());
-    let replica_state = Arc::new(tokio::sync::Mutex::new(ReplicaState::new()));
+    let replica_state = Arc::new(sync::Mutex::new(ReplicaState::new()));
     let (tx, rx) = mpsc::channel(1);
-    let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions {
-        replica_state: replica_state.clone(),
-        producer_state: producer_state.clone(),
+    let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
+        replica_state: Arc::clone(&replica_state),
+        producer_state: Arc::clone(&producer_state),
         ..Default::default()
     });
     CompactingWriter {
@@ -490,12 +496,12 @@ async fn the_writer_takes_produces_while_a_pass_builds() {
         .await
         .expect("send compact");
     let waiting = Arc::clone(&control);
-    tokio::task::spawn_blocking(move || waiting.wait_until_paused())
+    task::spawn_blocking(move || waiting.wait_until_paused())
         .await
         .expect("join");
     // The build is held inside a write. The produce must not wait for it.
-    tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+    time::timeout(
+        Duration::from_secs(5),
         append(Role::Leader, &tx, &producer_state, keyed_batch("k0"), 4),
     )
     .await

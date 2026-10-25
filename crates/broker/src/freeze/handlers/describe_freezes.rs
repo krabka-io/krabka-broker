@@ -42,7 +42,7 @@ use {
     api = "DescribeTopicFreezes",
     level = "info"
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DescribeTopicFreezesRequest,
     version: ApiVersion,

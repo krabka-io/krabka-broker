@@ -40,19 +40,19 @@ use {
 
 /// Kafka's `validateRemoteStorageOnlyIfSystemEnabled` refusal: a topic asks
 /// for tiered storage on a broker with no remote storage backend.
-pub(crate) const REMOTE_STORAGE_DISABLED_MESSAGE: &str = "Tiered Storage functionality is \
+pub const REMOTE_STORAGE_DISABLED_MESSAGE: &str = "Tiered Storage functionality is \
                                                           disabled in the broker. Topic cannot \
                                                           be configured with remote log storage.";
 
 /// Kafka's `validateRemoteStorageRequiresDeleteCleanupPolicy` refusal: a
 /// tiered topic's policy must be `delete` alone or the empty list.
-pub(crate) const REMOTE_STORAGE_POLICY_MESSAGE: &str = "Remote log storage only supports topics \
+pub const REMOTE_STORAGE_POLICY_MESSAGE: &str = "Remote log storage only supports topics \
                                                         with cleanup.policy=delete or \
                                                         cleanup.policy being an empty list.";
 
 /// `true` when `map` holds `key` as a boolean `true`, read the way Kafka
 /// parses a `BOOLEAN`.
-pub(crate) fn flag(map: &BTreeMap<String, String>, key: &str) -> bool {
+pub fn flag(map: &BTreeMap<String, String>, key: &str) -> bool {
     map.get(key).and_then(|value| bool_value(value)) == Some(true)
 }
 
@@ -64,7 +64,7 @@ pub(crate) fn flag(map: &BTreeMap<String, String>, key: &str) -> bool {
 /// check an operator meets here is the one the reference page and
 /// `DescribeConfigs` describe. The key set is Kafka 4.3.1's, which is what a
 /// broker without `unstable.api.versions.enable` serves.
-pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String> {
+pub fn validate_topic_config(key: &str, value: &str) -> Result<(), String> {
     canonical_topic_config(key, value, UnstableApiVersions::Disabled).map(drop)
 }
 
@@ -75,7 +75,7 @@ pub(crate) fn validate_topic_config(key: &str, value: &str) -> Result<(), String
 /// A key the broker does not serve under `unstable` (see
 /// [`super::serves_topic_key`]) is `Unknown topic config name`, the text of
 /// Kafka's `LogConfig.validateNames`.
-pub(crate) fn canonical_topic_config(
+pub fn canonical_topic_config(
     key: &str,
     value: &str,
     unstable: UnstableApiVersions,
@@ -104,7 +104,7 @@ const CONFIG_VALUE_SIZE_MESSAGE: &str = "The configuration value cannot be added
 /// before any per-key validation, and `createTopics` reaches it through
 /// `incrementalAlterConfig` for the configs of a new topic. A `KRaft`
 /// `ConfigRecord` cannot carry a longer value.
-pub(crate) fn check_value_size(value: &str) -> Result<(), String> {
+pub fn check_value_size(value: &str) -> Result<(), String> {
     // UTF-8 never takes fewer bytes than UTF-16 takes code units, so a value
     // that fits in bytes fits in units too and needs no count.
     if value.len() <= MAX_CONFIG_VALUE_LEN || value.encode_utf16().count() <= MAX_CONFIG_VALUE_LEN {
@@ -115,7 +115,7 @@ pub(crate) fn check_value_size(value: &str) -> Result<(), String> {
 }
 
 /// The value check a row carries, over one value.
-pub(crate) fn canonical_value(row: &ConfigKey, value: &str) -> Result<String, String> {
+pub fn canonical_value(row: &ConfigKey, value: &str) -> Result<String, String> {
     let key = row.name;
     match row.check {
         ValueCheck::Bool => parse_bool(key, value).map(|parsed| parsed.to_string()),
@@ -163,9 +163,7 @@ pub(crate) fn canonical_value(row: &ConfigKey, value: &str) -> Result<String, St
 /// backend: every key/value pair through [`validate_topic_config`], then the
 /// cross-key rules in [`validate_config_combination`].
 #[cfg(test)]
-pub(crate) fn validate_topic_config_map(
-    overrides: &BTreeMap<String, String>,
-) -> Result<(), String> {
+pub fn validate_topic_config_map(overrides: &BTreeMap<String, String>) -> Result<(), String> {
     canonical_topic_config_map(
         overrides,
         &TopicDefaults::default(),
@@ -186,7 +184,7 @@ pub(crate) fn validate_topic_config_map(
 /// has a remote storage backend at all. `unstable` is Kafka's
 /// `unstable.api.versions.enable`, which decides whether Kafka trunk's topic
 /// keys are accepted.
-pub(crate) fn canonical_topic_config_map(
+pub fn canonical_topic_config_map(
     overrides: &BTreeMap<String, String>,
     defaults: &TopicDefaults,
     remote_storage_system_enabled: bool,
@@ -231,7 +229,7 @@ pub(crate) fn canonical_topic_config_map(
 /// The other two are the data-path rules in [`validate_diskless_combination`]:
 /// `krabka.diskless=true` excludes both `remote.storage.enable=true` and
 /// `delivery.mode=scheduled`.
-pub(crate) fn validate_config_combination(
+pub fn validate_config_combination(
     overrides: &BTreeMap<String, String>,
     defaults: &TopicDefaults,
     remote_storage_system_enabled: bool,
@@ -281,7 +279,7 @@ pub(crate) fn validate_config_combination(
 /// cluster-wide dynamic broker configs; a key the cluster does not set keeps
 /// its registry default.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct TopicDefaults(BTreeMap<&'static str, String>);
+pub struct TopicDefaults(BTreeMap<&'static str, String>);
 
 impl TopicDefaults {
     /// The effective defaults `image`'s cluster-wide broker configs give each
@@ -321,7 +319,7 @@ impl TopicDefaults {
 /// A broker synonym's `value` in the unit of `topic_key`: minutes and hours
 /// become milliseconds, and a negative `retention.ms` is `-1`. `None` when a
 /// value that needs converting is not a number.
-pub(crate) fn in_topic_unit(topic_key: &str, broker_key: &str, value: &str) -> Option<String> {
+pub fn in_topic_unit(topic_key: &str, broker_key: &str, value: &str) -> Option<String> {
     let per_unit = match broker_key {
         "log.retention.hours" | "log.roll.hours" | "log.roll.jitter.hours" => 3_600_000,
         "log.retention.minutes" => 60_000,
@@ -349,7 +347,10 @@ fn long_or_default(
         .get(key)
         .map(String::as_str)
         .or_else(|| defaults.get(key))
-        .or_else(|| registry::lookup(ConfigScope::Topic, key).and_then(|row| row.default))
+        .or_else(|| {
+            let row = registry::lookup(ConfigScope::Topic, key)?;
+            row.default
+        })
         .and_then(long_value)
 }
 
@@ -510,7 +511,7 @@ fn validate_compaction_lag_order(
 /// # Errors
 /// Returns the refusal message when the alter turns tiered storage off
 /// without `remote.log.delete.on.disable=true` in the resulting map.
-pub(crate) fn validate_remote_storage_disable(
+pub fn validate_remote_storage_disable(
     current: Option<&BTreeMap<String, String>>,
     next: &BTreeMap<String, String>,
 ) -> Result<(), String> {
@@ -537,7 +538,7 @@ pub(crate) fn validate_remote_storage_disable(
 /// changelog topic. The empty list is accepted too, and means no cleanup at
 /// all. A repeated name, an empty element and an unknown name are refused, as
 /// Kafka's `ValidList.in("compact", "delete")` refuses them.
-pub(crate) fn parse_cleanup_policy(value: &str) -> Result<CleanupPolicy, String> {
+pub fn parse_cleanup_policy(value: &str) -> Result<CleanupPolicy, String> {
     let values = check_valid_list(CLEANUP_POLICY, value, CLEANUP_POLICY_VALUES, true)?;
     let compact = values.contains(&"compact");
     let delete = values.contains(&"delete");
@@ -579,7 +580,7 @@ fn parse_ratio_value(value: &str) -> Result<f64, String> {
 }
 
 /// Parse Kafka's `min.cleanable.dirty.ratio` into the ratio the cleaner reads.
-pub(crate) fn parse_dirty_ratio(value: &str) -> Result<krabka_units::Ratio, String> {
+pub fn parse_dirty_ratio(value: &str) -> Result<krabka_units::Ratio, String> {
     parse_ratio_value(value).map(krabka_units::fraction)
 }
 
@@ -598,7 +599,7 @@ pub(crate) fn parse_dirty_ratio(value: &str) -> Result<krabka_units::Ratio, Stri
 /// gzip, producer`. Accepting it here would let a topic be created against
 /// krabka that no Kafka broker would accept the config of, which is the
 /// direction of divergence that breaks a migration back.
-pub(crate) fn parse_compression_type(
+pub fn parse_compression_type(
     value: &str,
 ) -> Result<Option<krabka_compression::CompressionType>, String> {
     use krabka_compression::CompressionType;
@@ -645,7 +646,7 @@ fn parse_gzip_level(value: &str) -> Result<i32, String> {
 /// needs no sentinel probe value. A controller-written key such as
 /// [`super::WRITE_FREEZE`] is not recognized: no alter path may write it.
 #[cfg(test)]
-pub(crate) fn is_recognized(key: &str) -> bool {
+pub fn is_recognized(key: &str) -> bool {
     registry::lookup(ConfigScope::Topic, key).is_some_and(registry::ConfigKey::is_alterable)
 }
 

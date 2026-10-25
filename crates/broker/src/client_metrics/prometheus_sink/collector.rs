@@ -10,7 +10,7 @@ use {
     super::{DataPoint, PointValue},
     std::{
         collections::HashMap,
-        sync::Mutex,
+        sync::{Mutex, PoisonError},
         time::{Duration, Instant},
     },
     uuid::Uuid,
@@ -21,9 +21,9 @@ use {
 /// so a histogram counts each of its buckets plus `_sum` and `_count`. These
 /// include existing series updates; a point that would take a total past
 /// either ceiling is discarded.
-pub(crate) const MAX_RETAINED_SERIES: usize = 10_000;
-pub(crate) const MAX_RETAINED_SERIES_PER_CLIENT: usize = 1_000;
-pub(crate) const MAX_RETAINED_SERIES_PER_INSTANCE: usize = 500;
+pub const MAX_RETAINED_SERIES: usize = 10_000;
+pub const MAX_RETAINED_SERIES_PER_CLIENT: usize = 1_000;
+pub const MAX_RETAINED_SERIES_PER_INSTANCE: usize = 500;
 
 #[derive(Debug)]
 pub(super) struct StoredPoint {
@@ -43,7 +43,7 @@ pub(super) struct SeriesKey {
 }
 
 #[derive(Debug)]
-pub(crate) struct ClientMetricsCollector {
+pub struct ClientMetricsCollector {
     pub(super) points: Mutex<HashMap<SeriesKey, StoredPoint>>,
     pub(super) ttl: Duration,
 }
@@ -61,13 +61,26 @@ impl ClientMetricsCollector {
     /// Records the latest value for each point, replaces any earlier value,
     /// and removes stale points.
     pub(crate) fn ingest(&self, points: &[DataPoint]) {
-        let now = Instant::now();
-        let mut guard = self.points.lock().expect("prom sink mutex poisoned");
-        if self.ttl.is_zero() {
+        Self::ingest_locked(
+            &mut self.points.lock().unwrap_or_else(PoisonError::into_inner),
+            points,
+            Instant::now(),
+            self.ttl,
+        );
+    }
+
+    /// [`Self::ingest`] on the locked series map.
+    fn ingest_locked(
+        guard: &mut HashMap<SeriesKey, StoredPoint>,
+        points: &[DataPoint],
+        now: Instant,
+        ttl: Duration,
+    ) {
+        if ttl.is_zero() {
             guard.clear();
             return;
         }
-        guard.retain(|_, sp| Self::is_live(now.duration_since(sp.at), self.ttl));
+        guard.retain(|_, sp| Self::is_live(now.duration_since(sp.at), ttl));
         let mut total = 0;
         let mut client_counts = HashMap::<String, usize>::new();
         let mut instance_counts = HashMap::<String, usize>::new();
@@ -144,7 +157,7 @@ impl ClientMetricsCollector {
         let instance = instance.to_string();
         self.points
             .lock()
-            .expect("prom sink mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .retain(|key, _| key.client_instance_id != instance);
     }
 
@@ -153,7 +166,7 @@ impl ClientMetricsCollector {
     #[cfg(test)]
     pub(crate) fn live_point_count(&self) -> usize {
         let now = Instant::now();
-        let mut guard = self.points.lock().expect("prom sink mutex poisoned");
+        let mut guard = self.points.lock().unwrap_or_else(PoisonError::into_inner);
         guard.retain(|_, sp| Self::is_live(now.duration_since(sp.at), self.ttl));
         guard.len()
     }

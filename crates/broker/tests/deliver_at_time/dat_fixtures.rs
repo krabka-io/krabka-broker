@@ -12,6 +12,7 @@ use {
     krabka_log::DeliveryPolicy,
     krabka_protocol::records::RecordBatch,
     qubit_clock::{StdWallClock, WallClock as _},
+    std::time::UNIX_EPOCH,
 };
 
 /// How far ahead of produce time a record that must activate during a case is
@@ -76,7 +77,7 @@ impl Visible {
 pub fn now_ms() -> i64 {
     StdWallClock::new()
         .now()
-        .duration_since(std::time::UNIX_EPOCH)
+        .duration_since(UNIX_EPOCH)
         .map_or(0, |since_epoch| {
             i64::try_from(since_epoch.as_millis()).unwrap_or(i64::MAX)
         })

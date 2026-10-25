@@ -40,7 +40,7 @@ pub(super) fn all_metrics_img(interval_ms: &str) -> MetadataImage {
 pub(super) fn apply_config(img: &mut MetadataImage, name: &str, kvs: &[ConfigEntry<'_>]) {
     let mut cfgs = BTreeMap::new();
     for ConfigEntry { key, value } in kvs {
-        cfgs.insert((*key).to_string(), (*value).to_string());
+        cfgs.insert((*key).to_owned(), (*value).to_owned());
     }
     img.apply(&MetadataRecord::V1ClientMetricsConfig(
         ClientMetricsConfigRecord {

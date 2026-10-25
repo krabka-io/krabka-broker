@@ -40,8 +40,10 @@ pub fn wal_reservation_frontier(
 }
 
 /// Admit a controller reservation response bound to the exact request and
-/// leader epoch. `-1` means the caller cannot observe the controller epoch;
-/// the response must still carry a nonnegative epoch committed by the leader.
+/// leader epoch.
+///
+/// `-1` means the caller cannot observe the controller epoch; the response must
+/// still carry a nonnegative epoch committed by the leader.
 #[ensures(match result {
     Some(admitted_base) => request_matches
         && response_epoch@ >= 0

@@ -18,6 +18,7 @@ use {
     crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR,
     krabka_protocol::{
         ProtocolRequest,
+        kafka_3_6_2::{self, owned::fetch_request},
         owned::{
             add_offsets_to_txn_request::AddOffsetsToTxnRequest,
             add_partitions_to_txn_request::AddPartitionsToTxnRequest,
@@ -30,7 +31,8 @@ use {
             alter_replica_log_dirs_request::AlterReplicaLogDirsRequest,
             alter_share_group_offsets_request::AlterShareGroupOffsetsRequest,
             alter_user_scram_credentials_request::AlterUserScramCredentialsRequest,
-            api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersion,
+            api_versions_request::{API_KEY, ApiVersionsRequest},
+            api_versions_response::ApiVersion,
             assign_replicas_to_dirs_request::AssignReplicasToDirsRequest,
             broker_heartbeat_request::BrokerHeartbeatRequest,
             broker_registration_request::BrokerRegistrationRequest,
@@ -40,12 +42,14 @@ use {
             create_acls_request::CreateAclsRequest,
             create_delegation_token_request::CreateDelegationTokenRequest,
             create_partitions_request::CreatePartitionsRequest,
-            create_topics_request::CreateTopicsRequest, delete_acls_request::DeleteAclsRequest,
+            create_topics_request::CreateTopicsRequest,
+            delete_acls_request::DeleteAclsRequest,
             delete_groups_request::DeleteGroupsRequest,
             delete_records_request::DeleteRecordsRequest,
             delete_share_group_offsets_request::DeleteShareGroupOffsetsRequest,
             delete_share_group_state_request::DeleteShareGroupStateRequest,
-            delete_topics_request::DeleteTopicsRequest, describe_acls_request::DescribeAclsRequest,
+            delete_topics_request::DeleteTopicsRequest,
+            describe_acls_request::DescribeAclsRequest,
             describe_client_quotas_request::DescribeClientQuotasRequest,
             describe_cluster_request::DescribeClusterRequest,
             describe_configs_request::DescribeConfigsRequest,
@@ -58,7 +62,8 @@ use {
             describe_topic_partitions_request::DescribeTopicPartitionsRequest,
             describe_transactions_request::DescribeTransactionsRequest,
             describe_user_scram_credentials_request::DescribeUserScramCredentialsRequest,
-            elect_leaders_request::ElectLeadersRequest, end_txn_request::EndTxnRequest,
+            elect_leaders_request::ElectLeadersRequest,
+            end_txn_request::EndTxnRequest,
             expire_delegation_token_request::ExpireDelegationTokenRequest,
             fetch_snapshot_request::FetchSnapshotRequest,
             find_coordinator_request::FindCoordinatorRequest,
@@ -68,14 +73,18 @@ use {
             incremental_alter_configs_request::IncrementalAlterConfigsRequest,
             init_producer_id_request::InitProducerIdRequest,
             initialize_share_group_state_request::InitializeShareGroupStateRequest,
-            join_group_request::JoinGroupRequest, leave_group_request::LeaveGroupRequest,
+            join_group_request::JoinGroupRequest,
+            leave_group_request::LeaveGroupRequest,
             list_config_resources_request::ListConfigResourcesRequest,
             list_groups_request::ListGroupsRequest,
             list_partition_reassignments_request::ListPartitionReassignmentsRequest,
-            list_transactions_request::ListTransactionsRequest, metadata_request::MetadataRequest,
-            offset_commit_request::OffsetCommitRequest, offset_delete_request::OffsetDeleteRequest,
+            list_transactions_request::ListTransactionsRequest,
+            metadata_request::MetadataRequest,
+            offset_commit_request::OffsetCommitRequest,
+            offset_delete_request::OffsetDeleteRequest,
             offset_fetch_request::OffsetFetchRequest,
             offset_for_leader_epoch_request::OffsetForLeaderEpochRequest,
+            produce_request,
             push_telemetry_request::PushTelemetryRequest,
             read_share_group_state_request::ReadShareGroupStateRequest,
             read_share_group_state_summary_request::ReadShareGroupStateSummaryRequest,
@@ -100,6 +109,7 @@ use {
             write_txn_markers_request::WriteTxnMarkersRequest,
         },
     },
+    std::{collections::BTreeMap, ops::RangeInclusive, sync::LazyLock},
 };
 
 /// Read the complete decodable range from the generated request schema.
@@ -206,7 +216,7 @@ impl CatalogApi {
     /// The versions this api is accepted at under `gates`, or `None` when the
     /// api key is not accepted at all.
     #[must_use]
-    pub fn accepted(self, gates: VersionGates) -> Option<std::ops::RangeInclusive<i16>> {
+    pub fn accepted(self, gates: VersionGates) -> Option<RangeInclusive<i16>> {
         let max = match gates.unstable {
             UnstableApiVersions::Enabled => self.max_version,
             UnstableApiVersions::Disabled => self.released_max()?,
@@ -227,7 +237,7 @@ impl CatalogApi {
     #[must_use]
     pub fn advertised(self, gates: VersionGates) -> Option<ApiVersion> {
         let accepted = self.accepted(gates)?;
-        let min_version = if self.api_key == krabka_protocol::owned::produce_request::API_KEY {
+        let min_version = if self.api_key == produce_request::API_KEY {
             PRODUCE_ADVERTISED_MIN_VERSION.min(*accepted.start())
         } else {
             *accepted.start()
@@ -314,9 +324,10 @@ pub enum ClientMetricsReceiver {
     Absent,
 }
 
-/// The api keys scoped to the listener `inter.broker.listener.name` names:
-/// withheld from `ApiVersions` on every other listener (#843), and refused --
-/// connection closed, no response -- when dispatched there (#683).
+/// The api keys scoped to the listener `inter.broker.listener.name` names.
+///
+/// They are withheld from `ApiVersions` on every other listener (#843), and
+/// refused -- connection closed, no response -- when dispatched there (#683).
 ///
 /// Eight of them are tagged `controller` only by their request schema in
 /// `krabka-protocol`, so no Kafka broker listener has ever advertised or
@@ -408,13 +419,12 @@ pub fn dispatched_apis() -> Vec<ApiVersion> {
 
 /// The catalog, keyed for the per-request lookup [`is_disabled_version`]
 /// makes. Computed once.
-static CATALOG_BY_KEY: std::sync::LazyLock<std::collections::BTreeMap<i16, CatalogApi>> =
-    std::sync::LazyLock::new(|| {
-        catalog_apis()
-            .into_iter()
-            .map(|api| (api.api_key, api))
-            .collect()
-    });
+static CATALOG_BY_KEY: LazyLock<BTreeMap<i16, CatalogApi>> = LazyLock::new(|| {
+    catalog_apis()
+        .into_iter()
+        .map(|api| (api.api_key, api))
+        .collect()
+});
 
 /// Whether `version` of `api_key` is a decodable version that `gates`
 /// disables: above Kafka 4.3.1's maximum, below its minimum, or any version of
@@ -433,7 +443,7 @@ static CATALOG_BY_KEY: std::sync::LazyLock<std::collections::BTreeMap<i16, Catal
 /// catalog row and are not disabled by this lookup.
 #[must_use]
 pub fn is_disabled_version(api_key: i16, version: i16, gates: VersionGates) -> bool {
-    if api_key == krabka_protocol::owned::api_versions_request::API_KEY {
+    if api_key == API_KEY {
         return false;
     }
     CATALOG_BY_KEY.get(&api_key).is_some_and(|api| {
@@ -490,12 +500,12 @@ fn client_facing_apis() -> Vec<CatalogApi> {
         // the default gate reads.
         CatalogApi::new(
             owned::produce_request::API_KEY,
-            krabka_protocol::kafka_3_6_2::owned::produce_request::MIN_VERSION,
+            kafka_3_6_2::owned::produce_request::MIN_VERSION,
             owned::produce_request::MAX_VERSION,
         ),
         CatalogApi::new(
             owned::fetch_request::API_KEY,
-            krabka_protocol::kafka_3_6_2::owned::fetch_request::MIN_VERSION,
+            fetch_request::MIN_VERSION,
             owned::fetch_request::MAX_VERSION,
         ),
         CatalogApi::new(
@@ -656,7 +666,7 @@ fn admin_apis() -> Vec<CatalogApi> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert, std::collections::BTreeSet};
+    use {super::*, crate::handlers, assert2::assert, std::collections::BTreeSet};
 
     /// The default gates: Kafka 4.3.1's table exactly.
     const STRICT: VersionGates = VersionGates {
@@ -900,7 +910,7 @@ mod tests {
     /// the inter-broker listener.
     #[test]
     fn the_default_table_is_kafka_4_3_1s() {
-        let released: std::collections::BTreeMap<i16, VersionRange> = krabka_raft::KAFKA_4_3_1_APIS
+        let released: BTreeMap<i16, VersionRange> = krabka_raft::KAFKA_4_3_1_APIS
             .iter()
             .map(|api| (api.api_key, range(api.min_version, api.max_version)))
             .collect();
@@ -917,7 +927,7 @@ mod tests {
                 }
                 (key, Some(&want)) => assert!(advertised == want, "api_key {key}"),
                 (key, None) => assert!(
-                    key >= crate::handlers::KRABKA_PRIVATE_API_KEY_FLOOR,
+                    key >= handlers::KRABKA_PRIVATE_API_KEY_FLOOR,
                     "api_key {key} is not in Kafka 4.3.1"
                 ),
             }

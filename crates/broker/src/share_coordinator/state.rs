@@ -221,19 +221,19 @@ fn sweep_merge(batches: &[StateBatch]) -> Vec<StateBatch> {
     let mut out: Vec<StateBatch> = Vec::new();
     let mut open_from = -1;
     let mut open_winner: Option<Priority> = None;
-    let mut i = 0;
-    while i < events.len() {
-        let offset = events[i].offset;
+    for same_offset in events.chunk_by(|a, b| a.offset == b.offset) {
+        let Some(&SweepEvent { offset, .. }) = same_offset.first() else {
+            continue;
+        };
         if let Some(winner) = open_winner
             && offset > open_from
         {
             append_coalesced(&mut out, open_from, offset - 1, winner);
         }
-        while i < events.len() && events[i].offset == offset {
-            let SweepEvent {
-                is_begin, priority, ..
-            } = events[i];
-            i += 1;
+        for &SweepEvent {
+            is_begin, priority, ..
+        } in same_offset
+        {
             if is_begin {
                 *active.entry(priority).or_insert(0) += 1;
             } else if let Some(count) = active.get_mut(&priority) {

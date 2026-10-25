@@ -8,7 +8,10 @@ use {
         node_log::SimNodeLog,
         timers::{election_timeout_ms_of, election_timeout_of},
     },
-    krabka_kraft_core::simulation_support::NodeFingerprint,
+    krabka_kraft_core::{
+        simulation_support,
+        simulation_support::{NodeFingerprint, StableFingerprint},
+    },
     krabka_raft::kraft::{
         QuorumStateMachine, QuorumTimeouts,
         role::Role,
@@ -78,8 +81,7 @@ impl<L: SimNodeLog> Sim<L> {
     /// replication advance always changes the fingerprint and resets the
     /// counter.
     pub fn run_until_stable(&mut self, max_ticks: usize) {
-        let mut stability =
-            krabka_kraft_core::simulation_support::StableFingerprint::new(self.fingerprint());
+        let mut stability = StableFingerprint::new(self.fingerprint());
         for _ in 0..max_ticks {
             if let Some(msg) = self.queue.pop_front() {
                 self.deliver(msg);
@@ -111,7 +113,7 @@ impl<L: SimNodeLog> Sim<L> {
         self.nodes
             .values()
             .map(|n| {
-                krabka_kraft_core::simulation_support::fingerprint(
+                simulation_support::fingerprint(
                     n.id,
                     &n.machine,
                     n.log.record_count(),
@@ -125,11 +127,7 @@ impl<L: SimNodeLog> Sim<L> {
     /// its timers no longer affect its peers. The node keeps ticking
     /// internally, but no peer can hear it.
     pub fn partition(&mut self, node: NodeId) {
-        krabka_kraft_core::simulation_support::partition_node(
-            &mut self.partitioned,
-            &mut self.queue,
-            node,
-        );
+        simulation_support::partition_node(&mut self.partitioned, &mut self.queue, node);
     }
 
     /// Heals a partition. The node can send and receive again.

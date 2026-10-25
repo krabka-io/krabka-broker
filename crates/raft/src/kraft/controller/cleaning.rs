@@ -15,7 +15,7 @@ use {
     crate::{error::RaftError, kraft::snapshot_fetch::SnapshotId, snapshot::SnapshotReader},
     krabka_ids::Offset,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, Time, TimeExt as _},
-    std::time::SystemTime,
+    std::{fs, path::Path, time::SystemTime},
 };
 
 /// One snapshot the cleaning weighs: its `(end_offset, epoch)` id and the
@@ -43,7 +43,7 @@ pub fn retention_age_breached(now_ms: i64, last_contained_log_timestamp: i64, ma
 /// The snapshots at or above `log_start`, oldest first: the ones Kafka's
 /// `KafkaRaftLog.snapshots` holds. A snapshot below the log start no longer
 /// starts a log a reader could continue from.
-fn retained_snapshots(dir: &std::path::Path, log_start: Offset) -> Vec<RetainedSnapshot> {
+fn retained_snapshots(dir: &Path, log_start: Offset) -> Vec<RetainedSnapshot> {
     let mut ids: Vec<SnapshotId> = checkpoint_ids(dir)
         .into_iter()
         .filter(|id| id.0 >= log_start.0)
@@ -51,7 +51,7 @@ fn retained_snapshots(dir: &std::path::Path, log_start: Offset) -> Vec<RetainedS
     ids.sort_unstable();
     ids.into_iter()
         .filter_map(|id| {
-            let size = std::fs::metadata(dir.join(super::checkpoint::checkpoint_name(id.0, id.1)))
+            let size = fs::metadata(dir.join(super::checkpoint::checkpoint_name(id.0, id.1)))
                 .ok()?
                 .len();
             Some(RetainedSnapshot { id, size })
@@ -90,12 +90,12 @@ impl Engine {
         let snapshots = retained_snapshots(&self.data_dir, self.log.log_start_offset());
         let mut kept: u64 = snapshots.iter().map(|snapshot| snapshot.size).sum();
         let mut cleaned = false;
-        for pair in snapshots.windows(2) {
+        for (older, newer) in snapshots.iter().zip(snapshots.iter().skip(1)) {
             if !retention_size_breached(self.log.size().bytes_u64(), kept, max) {
                 break;
             }
-            kept = kept.saturating_sub(pair[0].size);
-            if !self.delete_before_snapshot(pair[1].id, "size")? {
+            kept = kept.saturating_sub(older.size);
+            if !self.delete_before_snapshot(newer.id, "size")? {
                 break;
             }
             cleaned = true;
@@ -107,14 +107,14 @@ impl Engine {
         let snapshots = retained_snapshots(&self.data_dir, self.log.log_start_offset());
         let now_ms = KraftController::wall_clock_ms();
         let mut cleaned = false;
-        for pair in snapshots.windows(2) {
-            let Some(timestamp) = self.snapshot_timestamp(pair[0].id) else {
+        for (older, newer) in snapshots.iter().zip(snapshots.iter().skip(1)) {
+            let Some(timestamp) = self.snapshot_timestamp(older.id) else {
                 break;
             };
             if !retention_age_breached(now_ms, timestamp, max) {
                 break;
             }
-            if !self.delete_before_snapshot(pair[1].id, "age")? {
+            if !self.delete_before_snapshot(newer.id, "age")? {
                 break;
             }
             cleaned = true;
@@ -166,7 +166,7 @@ impl Engine {
 /// forgotten snapshot for `file.delete.delay.ms` for its open readers. The
 /// delete is best effort: a file that does not delete stays, and the next
 /// cleaning tries it again.
-fn delete_checkpoints_below(dir: &std::path::Path, id: SnapshotId) -> Vec<SnapshotId> {
+fn delete_checkpoints_below(dir: &Path, id: SnapshotId) -> Vec<SnapshotId> {
     let mut below: Vec<SnapshotId> = checkpoint_ids(dir)
         .into_iter()
         .filter(|found| *found < id)
@@ -174,7 +174,7 @@ fn delete_checkpoints_below(dir: &std::path::Path, id: SnapshotId) -> Vec<Snapsh
     below.sort_unstable();
     below.pop();
     below.retain(|found| {
-        std::fs::remove_file(dir.join(super::checkpoint::checkpoint_name(found.0, found.1))).is_ok()
+        fs::remove_file(dir.join(super::checkpoint::checkpoint_name(found.0, found.1))).is_ok()
     });
     below
 }
@@ -185,6 +185,7 @@ mod tests {
         super::*,
         assert2::check,
         krabka_units::prelude::{bytes, millis},
+        std::fs,
     };
 
     /// The size rule counts the log and the snapshots still kept, and breaks
@@ -232,7 +233,7 @@ mod tests {
             ("high-watermark", 1),
             ("00000000000000000004-0000000001.checkpoint.tmp", 1),
         ] {
-            std::fs::write(dir.path().join(name), vec![0u8; size]).expect("write");
+            fs::write(dir.path().join(name), vec![0u8; size]).expect("write");
         }
 
         check!(

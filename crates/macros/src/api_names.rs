@@ -22,7 +22,7 @@ use {
 /// The identifiers derived from one `CamelCase` Kafka api name, the way
 /// `krabka-protocol` and the broker's handler modules spell them.
 #[derive(Debug, Clone)]
-pub(crate) struct ApiNames {
+pub struct ApiNames {
     /// The name as written, which is also the `ApiKey` variant: `CreateAcls`.
     pub(crate) api: Ident,
     /// `create_acls`, the handler module.
@@ -53,24 +53,24 @@ impl ApiNames {
 
 /// Appends text to an identifier, keeping its span so that an error in the
 /// generated code points at the table entry it came from.
-pub(crate) trait Suffixed {
+pub trait Suffixed {
     fn suffixed(&self, suffix: &str) -> Ident;
 }
 
 impl Suffixed for Ident {
     fn suffixed(&self, suffix: &str) -> Ident {
-        Ident::new(format!("{}{suffix}", self.text())).with_span(self.span())
+        Self::new(format!("{}{suffix}", self.text())).with_span(self.span())
     }
 }
 
 /// One table entry: an api name and the tokens after its separator, if any.
-pub(crate) struct Entry {
+pub struct Entry {
     pub(crate) names: ApiNames,
     pub(crate) value: Option<TokenStream>,
 }
 
 /// One `label: entries;` section of a table.
-pub(crate) struct Section {
+pub struct Section {
     pub(crate) label: Ident,
     pub(crate) entries: Vec<Entry>,
 }
@@ -99,7 +99,7 @@ fn error_at(tokens: &[TokenTree], at: usize, message: &str) -> ParseError {
 /// the entry a value (`=>` or `=`); `labels` are the section labels the macro
 /// accepts. A label may appear at most once, and an api name at most once in
 /// the whole table.
-pub(crate) fn parse_sections(
+pub fn parse_sections(
     input: TokenStream,
     separator: &str,
     labels: &[&str],
@@ -110,7 +110,7 @@ pub(crate) fn parse_sections(
     let mut at = 0;
 
     while at < tokens.len() {
-        let Some(label) = tokens[at].as_ident().cloned() else {
+        let Some(label) = tokens.get(at).and_then(TokenTree::as_ident).cloned() else {
             return Err(error_at(&tokens, at, "expected a section label"));
         };
         if !labels.contains(&label.text()) {
@@ -172,7 +172,7 @@ pub(crate) fn parse_sections(
                         &format!("expected tokens after `{separator}`"),
                     ));
                 }
-                Some(TokenStream::from(&tokens[start..at]))
+                tokens.get(start..at).map(TokenStream::from)
             } else {
                 None
             };
@@ -201,7 +201,7 @@ pub(crate) fn parse_sections(
 
 /// The entries of the section labelled `label`, or none when the table leaves
 /// it out.
-pub(crate) fn section<'a>(sections: &'a [Section], label: &str) -> &'a [Entry] {
+pub fn section<'a>(sections: &'a [Section], label: &str) -> &'a [Entry] {
     sections
         .iter()
         .find(|section| section.label == *label)

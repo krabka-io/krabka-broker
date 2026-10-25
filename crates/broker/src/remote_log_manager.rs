@@ -44,6 +44,10 @@ use {
     crate::{
         api_catalog::UnstableApiVersions,
         blocking::spawn_blocking,
+        config::{
+            DEFAULT_REMOTE_COPIER_THREADS, DEFAULT_REMOTE_COPY_TIMEOUT,
+            DEFAULT_REMOTE_EXPIRATION_THREADS,
+        },
         config_keys::resolve_remote_copy_lag,
         freeze::resolve::{FreezeMutationResolution, resolve_freeze_mutation},
         metadata_source::MetadataSource,
@@ -64,8 +68,11 @@ use {
         secs,
     },
     krabka_verified::FreezeMutationKind,
-    std::sync::{Arc, atomic::Ordering},
-    tokio::sync::{Semaphore, SemaphorePermit},
+    std::sync::{Arc, PoisonError, atomic::Ordering},
+    tokio::{
+        sync::{AcquireError, Semaphore, SemaphorePermit},
+        time,
+    },
     tokio_util::sync::CancellationToken,
     tracing::{debug, warn},
 };
@@ -75,10 +82,10 @@ mod copy;
 mod copy_segment;
 mod delete;
 mod delivery;
-pub(crate) mod dynamic_config;
+pub mod dynamic_config;
 mod leader_epoch;
 mod local_retention;
-pub(crate) mod quota;
+pub mod quota;
 mod remote_retention;
 mod rlmm;
 
@@ -131,10 +138,10 @@ async fn disable_and_delete_remote(
     .await;
 
     let local_start = {
-        let log = partition.log.lock().expect("log mutex poisoned");
+        let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
         log.local_log_start_offset()
     };
-    let mut log = partition.log.lock().expect("log mutex poisoned");
+    let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
     if let Err(error) = log.set_log_start_offset(local_start) {
         warn!(topic = %tp.topic, partition = tp.partition, %error,
               "remote-log-manager: failed to raise the log start offset after disabling tiering");
@@ -142,11 +149,11 @@ async fn disable_and_delete_remote(
 }
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 
 #[cfg(test)]
-pub(crate) use self::copy::copy_eligible;
-pub(crate) use self::{
+pub use self::copy::copy_eligible;
+pub use self::{
     archive::ArchiveMode,
     copy::{CopyBound, CopyDelay, CopyFence, CopyIdentity, copy_eligible_delayed},
     delete::{cascade_remote_partition_delete, mark_segments_below},
@@ -162,16 +169,16 @@ const NO_BYTES: ByteSize = bytes(0);
 
 /// Tunables for [`run`].
 #[derive(Debug, Clone, krabka_macros::FieldDefaults)]
-pub(crate) struct RemoteLogManagerConfig {
+pub struct RemoteLogManagerConfig {
     #[default(DEFAULT_TIERING_INTERVAL)]
     pub interval: Time,
     /// Deadline on one segment copy. See [`RemoteTier::copy_timeout`].
-    #[default(crate::config::DEFAULT_REMOTE_COPY_TIMEOUT)]
+    #[default(DEFAULT_REMOTE_COPY_TIMEOUT)]
     pub copy_timeout: Time,
     /// How wide one tick sweeps. See [`SweepConcurrency`].
     pub concurrency: SweepConcurrency,
     /// See [`RemoteTier::unstable_api_versions`].
-    #[default(crate::api_catalog::UnstableApiVersions::Disabled)]
+    #[default(UnstableApiVersions::Disabled)]
     pub unstable_api_versions: UnstableApiVersions,
 }
 
@@ -185,10 +192,10 @@ pub(crate) struct RemoteLogManagerConfig {
 /// slot for the whole of its pass, so the bound counts partitions in flight
 /// rather than object-store calls in flight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::FieldDefaults)]
-pub(crate) struct SweepConcurrency {
-    #[default(crate::config::DEFAULT_REMOTE_COPIER_THREADS)]
+pub struct SweepConcurrency {
+    #[default(DEFAULT_REMOTE_COPIER_THREADS)]
     pub copier: usize,
-    #[default(crate::config::DEFAULT_REMOTE_EXPIRATION_THREADS)]
+    #[default(DEFAULT_REMOTE_EXPIRATION_THREADS)]
     pub expiration: usize,
 }
 
@@ -212,22 +219,19 @@ impl SweepPermits {
         }
     }
 
-    async fn copier(&self) -> SemaphorePermit<'_> {
-        self.copier
-            .acquire()
-            .await
-            .expect("the sweep's copier semaphore is never closed")
+    /// A copier slot. The sweep never closes its semaphores, so this only
+    /// errs on a closed one, and a pass that sees that error skips its work.
+    async fn copier(&self) -> Result<SemaphorePermit<'_>, AcquireError> {
+        self.copier.acquire().await
     }
 
-    async fn expiration(&self) -> SemaphorePermit<'_> {
-        self.expiration
-            .acquire()
-            .await
-            .expect("the sweep's expiration semaphore is never closed")
+    /// An expiration slot, under the same contract as [`Self::copier`].
+    async fn expiration(&self) -> Result<SemaphorePermit<'_>, AcquireError> {
+        self.expiration.acquire().await
     }
 }
 
-pub(crate) struct RemoteLogManagerContext {
+pub struct RemoteLogManagerContext {
     pub partitions: Arc<PartitionRegistry>,
     pub controller: Arc<dyn MetadataSource>,
     /// Whether `rsm` is a write-once archive. It gates every delete this
@@ -254,7 +258,7 @@ pub(crate) struct RemoteLogManagerContext {
 /// where the outcome is recorded, and the index cache is what a delete has to
 /// release so a segment nothing can read stops holding the read path's byte
 /// budget.
-pub(crate) struct RemoteTier<'a> {
+pub struct RemoteTier<'a> {
     pub archive: ArchiveMode,
     pub rsm: &'a Arc<dyn RemoteStorageManager>,
     pub rlmm: &'a Arc<dyn RemoteLogMetadataManager>,
@@ -301,12 +305,12 @@ impl RemoteLogManagerContext {
 /// published. A broker that is stopping has, or is about to have, handed its
 /// partitions to another leader, and that leader copies over the same offsets.
 // task dependencies; bundling would obscure them
-pub(crate) async fn run(
+pub async fn run(
     context: RemoteLogManagerContext,
     cfg: RemoteLogManagerConfig,
     shutdown: CancellationToken,
 ) {
-    let mut ticker = tokio::time::interval(cfg.interval.to_std());
+    let mut ticker = time::interval(cfg.interval.to_std());
     loop {
         // `biased`: a tick that ran past its interval leaves the ticker ready
         // at once, and an unbiased select would then start another whole tick
@@ -369,7 +373,7 @@ async fn tick_all(
 /// The broker a sweep runs on: its node and broker ids, and the token that
 /// stops it.
 #[derive(Clone, Copy)]
-pub(crate) struct SweepingBroker<'a> {
+pub struct SweepingBroker<'a> {
     node_id: NodeId,
     broker_id: i32,
     shutdown: &'a CancellationToken,
@@ -402,7 +406,7 @@ impl CopyFence for LeaderFence<'_> {
         self.partition
             .log
             .lock()
-            .expect("log mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .established_log_start()
     }
 }
@@ -461,7 +465,7 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
         local_log_size,
         lso,
     ) = {
-        let mut log = partition.log.lock().expect("log mutex poisoned");
+        let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
         let cfg = log.config_snapshot();
         (
             cfg,
@@ -482,8 +486,10 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
         // `remote.log.delete.on.disable` came with it, so a partition that
         // arrives here with the flag set is one an operator asked to have
         // erased. Everything else is an ordinary non-tiered partition.
-        if is_leader && log_config.remote_tier.delete_on_disable {
-            let _permit = permits.expiration().await;
+        if is_leader
+            && log_config.remote_tier.delete_on_disable
+            && let Ok(_permit) = permits.expiration().await
+        {
             disable_and_delete_remote(
                 &partition,
                 image,
@@ -533,7 +539,9 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
             leader_epoch: raw_epoch,
             shutdown,
         };
-        let _permit = permits.copier().await;
+        let Ok(_permit) = permits.copier().await else {
+            return;
+        };
         let delay = copy_delay(
             CopyScope {
                 image,
@@ -583,7 +591,9 @@ async fn tick_partition(sweep: PartitionSweep<'_>) {
                "remote-log-manager: a write freeze holds both retention passes");
         return;
     }
-    let _permit = permits.expiration().await;
+    let Ok(_permit) = permits.expiration().await else {
+        return;
+    };
     if shutdown.is_cancelled() {
         return;
     }
@@ -716,7 +726,7 @@ async fn retention_passes(pass: RetentionPasses<'_>, tier: &RemoteTier<'_>) {
     // forward, so a `DeleteRecords` that landed while the pass ran
     // keeps the higher of the two floors.
     if let Some(new_start) = outcome.log_start {
-        let mut log = partition.log.lock().expect("log mutex poisoned");
+        let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
         if let Err(error) = log.set_log_start_offset(new_start) {
             debug!(topic = %partition.topic, partition = tp.partition, %error,
                    "remote-log-manager: could not advance the log start after a remote delete");
@@ -785,7 +795,7 @@ async fn follow_unenforced_floor(
     if remote_retention::archive_enforces_floor(&segments, floor) {
         return;
     }
-    let mut log = partition.log.lock().expect("log mutex poisoned");
+    let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
     if let Err(error) = log.follow_leader_log_start(krabka_log::Offset(reported)) {
         debug!(topic = %partition.topic, partition = tp.partition, %error,
                "remote-log-manager: could not take the leader's log start");
@@ -828,7 +838,7 @@ fn topic_partition(
 }
 
 #[cfg(test)]
-pub(crate) use copy_segment::{ProducerSnapshotExport, export_epoch_map, export_segment_data};
+pub(super) use copy_segment::{ProducerSnapshotExport, export_epoch_map, export_segment_data};
 
 #[cfg(test)]
 mod tests {
@@ -854,9 +864,11 @@ mod tests {
         krabka_ids::PartitionIndex,
         krabka_log::{LogConfig, Offset},
         krabka_metadata::{MetadataImage, MetadataRecord},
+        krabka_protocol::records::Attributes,
         krabka_remote_storage::RemoteLogSegmentState,
         krabka_units::millis,
-        std::time::Duration,
+        std::{path::Path, time::Duration},
+        tokio::{task, time},
     };
 
     mod concurrency;
@@ -866,7 +878,7 @@ mod tests {
 
     fn image_with_orders_topic() -> MetadataImage { test_support::orders_image(1) }
 
-    fn rolled_tiered_partition(log_dir: &std::path::Path) -> Arc<Partition> {
+    fn rolled_tiered_partition(log_dir: &Path) -> Arc<Partition> {
         rolled_tiered_partition_with_config(log_dir, fixtures::rolled_partition_config())
     }
 
@@ -915,7 +927,7 @@ mod tests {
             Metadata::NotReady => Arc::new(NotReadyRlmm),
         };
         let deleted_below = {
-            let mut log = partition.log.lock().expect("log mutex poisoned");
+            let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
             log.set_log_start_offset(Offset(floor)).unwrap();
             log.established_log_start()
         };
@@ -968,7 +980,7 @@ mod tests {
     }
 
     async fn wait_for_remote_segments(rlmm: &Arc<dyn RemoteLogMetadataManager>, expected: usize) {
-        tokio::time::timeout(Duration::from_secs(1), async {
+        time::timeout(Duration::from_secs(1), async {
             loop {
                 // Finished copies only: a copy still in flight when the task is
                 // told to stop is withdrawn, not published.
@@ -981,7 +993,7 @@ mod tests {
                 if finished >= expected {
                     break;
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
@@ -1261,8 +1273,8 @@ mod tests {
                 krabka_metadata::TopicConfigRecord {
                     topic: "orders".into(),
                     overrides: maplit::btreemap! {
-                        "remote.copy.lag.ms".to_string() => ms.to_string(),
-                        "remote.copy.lag.bytes".to_string() => bytes.to_string(),
+                        "remote.copy.lag.ms".to_owned() => ms.to_owned(),
+                        "remote.copy.lag.bytes".to_owned() => bytes.to_owned(),
                     },
                 },
             ));
@@ -1337,7 +1349,7 @@ mod tests {
         let log_dir = tempfile::tempdir().unwrap();
         let sealed_ends: Vec<Offset> = {
             let partition = rolled_tiered_partition(log_dir.path());
-            let log = partition.log.lock().expect("partition log mutex poisoned");
+            let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
             log.tierable_segments()
                 .iter()
                 .map(|export| export.last_offset)
@@ -1400,8 +1412,7 @@ mod tests {
                 batch.producer_id = 7;
                 batch.producer_epoch = 0;
                 batch.base_sequence = 0;
-                batch.attributes =
-                    krabka_protocol::records::Attributes::default().with_transactional(true);
+                batch.attributes = Attributes::default().with_transactional(true);
             }
             log.append(&mut batch).unwrap();
         }
@@ -1512,7 +1523,7 @@ mod tests {
         let exports = partition
             .log
             .lock()
-            .expect("partition log mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .tierable_segments();
         let sealed_before = exports.len();
         let fixtures::RegisteredFixture {

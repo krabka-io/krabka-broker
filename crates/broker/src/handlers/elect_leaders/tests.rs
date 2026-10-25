@@ -38,7 +38,7 @@ use {
             self, ElectLeadersResponse, PartitionResult, ReplicaElectionResult,
         },
     },
-    std::collections::HashSet,
+    std::{collections::HashSet, mem, slice, sync::Arc},
     uuid::Uuid,
 };
 
@@ -106,7 +106,7 @@ async fn broker_with(config: BreakGlassConfig) -> StartedBroker {
         broker: handle,
         dir,
     } = start_broker_no_audit_with(move |cfg| {
-        cfg.authorizer = std::sync::Arc::new(AllowAllAuthorizer);
+        cfg.authorizer = Arc::new(AllowAllAuthorizer);
         cfg.break_glass = config;
     })
     .await;
@@ -140,7 +140,7 @@ async fn elect(broker: &Broker, image: &MetadataImage, election: ElectionType) -
     let row = elect_one(&env, &mut batch, TOPIC, 0).await;
     ElectionOutcome {
         row,
-        records: std::mem::take(&mut batch.records),
+        records: mem::take(&mut batch.records),
     }
 }
 
@@ -167,7 +167,7 @@ async fn an_approved_unclean_election_appends_the_consume_beside_the_leader_chan
     let StartedBroker { handle, dir: _dir } = broker_with(gated_config()).await;
     let broker = handle.broker_arc_for_test();
     let proposal = approved_proposal(BreakGlassAction::UncleanElectLeaders, "orders-0");
-    let image = image_with(std::slice::from_ref(&proposal));
+    let image = image_with(slice::from_ref(&proposal));
 
     let ElectionOutcome { row, records } = elect(&broker, &image, ElectionType::Unclean).await;
 

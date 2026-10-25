@@ -30,16 +30,17 @@ use {
         ByteSize, Time,
         convert::{ByteSizeExt as _, TimeExt as _},
     },
-    krabka_verified::retention::{
-        LocalRetentionSegment, local_retention_prefix, retention_delete_target,
+    krabka_verified::{
+        retention,
+        retention::{LocalRetentionSegment, local_retention_prefix, retention_delete_target},
     },
-    std::sync::Arc,
+    std::sync::{Arc, PoisonError},
     tracing::{debug, info, warn},
 };
 
 /// An inclusive range of offsets, ordered by its start and then its end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct OffsetRange {
+pub struct OffsetRange {
     /// The first offset in the range.
     pub(crate) start: i64,
     /// The last offset in the range.
@@ -68,19 +69,19 @@ impl OffsetRange {
 /// The walk stops at the first gap rather than taking the maximum end, because
 /// a copy that failed between two that succeeded leaves a hole, and the
 /// segments past it cover none of it.
-pub(crate) fn remote_covered_through(finished: &[OffsetRange], local_start: i64) -> Option<i64> {
+pub fn remote_covered_through(finished: &[OffsetRange], local_start: i64) -> Option<i64> {
     let mut ranges = finished.to_vec();
     ranges.sort_unstable();
     let bounds: Vec<_> = ranges
         .iter()
         .map(|range| (range.start, range.end))
         .collect();
-    krabka_verified::retention::remote_covered_through(&bounds, local_start)
+    retention::remote_covered_through(&bounds, local_start)
 }
 
 /// The local log as one local-retention walk reads it: the sealed segments,
 /// the active segment the walk ends on, and the size of the whole.
-pub(crate) struct LocalSegments<'a> {
+pub struct LocalSegments<'a> {
     /// Sealed segments, oldest first.
     pub sealed: &'a [SegmentExport],
     /// The active segment, or `None` when the walk must stop short of it.
@@ -97,7 +98,7 @@ pub(crate) struct LocalSegments<'a> {
 
 /// What one local-retention pass does to a tiered log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct LocalRetentionDecision {
+pub struct LocalRetentionDecision {
     /// The target to pass to
     /// [`krabka_log::Log::delete_local_segments_through`], or `None` when no
     /// sealed segment goes.
@@ -141,7 +142,7 @@ pub(crate) struct LocalRetentionDecision {
 /// deletion"): the next copy uploads the sealed records, and the next pass
 /// deletes them. [`LocalRetentionDecision::roll_active`] is that roll. The
 /// walk never takes an empty active segment, so the roll always seals records.
-pub(crate) fn local_retention_decision(
+pub fn local_retention_decision(
     unstable: UnstableApiVersions,
     local: &LocalSegments<'_>,
     covered_through: Option<i64>,
@@ -174,26 +175,27 @@ pub(crate) fn local_retention_decision(
     // The remote tier is never what holds the active segment back: only the
     // high watermark is, and it already decided whether `local.active` is
     // `Some`.
-    let active = if let Some(active) = local.active {
-        LocalRetentionSegment {
+    let active = local.active.map_or_else(
+        || {
+            let sealed_size = local
+                .sealed
+                .iter()
+                .fold(ByteSize::from_bytes(0), |total, ex| total + ex.size);
+            LocalRetentionSegment {
+                blocked: true,
+                expired: false,
+                size: local
+                    .size
+                    .bytes_u64()
+                    .saturating_sub(sealed_size.bytes_u64()),
+            }
+        },
+        |active| LocalRetentionSegment {
             blocked: false,
             expired: expired(active.max_timestamp, active.last_modified_ms),
             size: active.size.bytes_u64(),
-        }
-    } else {
-        let sealed_size = local
-            .sealed
-            .iter()
-            .fold(ByteSize::from_bytes(0), |total, ex| total + ex.size);
-        LocalRetentionSegment {
-            blocked: true,
-            expired: false,
-            size: local
-                .size
-                .bytes_u64()
-                .saturating_sub(sealed_size.bytes_u64()),
-        }
-    };
+        },
+    );
     facts.push(active);
     let len = local_retention_prefix(&facts, size_debt);
     // `delete_local_segments_through` never removes the active segment, so
@@ -203,7 +205,8 @@ pub(crate) fn local_retention_decision(
         delete_through: retention_delete_target(
             deleted
                 .checked_sub(1)
-                .map(|index| local.sealed[index].last_offset.0),
+                .and_then(|index| local.sealed.get(index))
+                .map(|segment| segment.last_offset.0),
         ),
         roll_active: len == facts.len(),
     }
@@ -214,7 +217,7 @@ pub(crate) fn local_retention_decision(
 /// the local log is `local_log_size`, so the active segment's bytes still
 /// count toward `local.retention.bytes`.
 #[cfg(test)]
-pub(crate) fn local_retention_target(
+pub fn local_retention_target(
     exports: &[SegmentExport],
     covered_through: Option<i64>,
     effective_local: Option<Time>,
@@ -241,7 +244,7 @@ pub(crate) fn local_retention_target(
 /// Where a local-retention pass measures from: the wall clock, and the
 /// partition's high watermark.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct LocalRetentionBounds {
+pub struct LocalRetentionBounds {
     /// Wall-clock time in epoch milliseconds.
     pub now_ms: i64,
     /// Kafka's walk stops at the first segment the high watermark has not
@@ -264,12 +267,10 @@ fn walk_reaches(
     active: &ActiveSegmentExport,
     local_log_start: Offset,
 ) -> bool {
-    match sealed.last() {
-        Some(last) => last.last_offset + 1 == active.base_offset,
-        // No sealed segment is left to walk once none below the active one
-        // holds a record at or above the log start.
-        None => local_log_start >= active.base_offset,
-    }
+    sealed.last().map_or_else(
+        || local_log_start >= active.base_offset,
+        |last| last.last_offset + 1 == active.base_offset,
+    )
 }
 
 /// After the copy pass, drop local sealed segments whose
@@ -284,7 +285,7 @@ fn walk_reaches(
 /// It says it in offsets: see [`remote_covered_through`] for why a follower
 /// cannot read a remote segment's boundaries as its own. Kafka runs
 /// `deleteOldSegments`, and so the roll, on every replica as well.
-pub(crate) fn local_retention_pass(
+pub fn local_retention_pass(
     tp: &TopicIdPartition,
     partition: &Partition,
     exports: &[SegmentExport],
@@ -323,7 +324,7 @@ pub(crate) fn local_retention_pass(
     };
 
     let (decision, deleted, rolled) = {
-        let mut log = partition.log.lock().expect("log mutex poisoned");
+        let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
         let active = log.active_segment_export().filter(|active| {
             bounds.high_watermark >= log.log_end_offset()
                 && walk_reaches(exports, active, log.local_log_start_offset())
@@ -347,6 +348,7 @@ pub(crate) fn local_retention_pass(
             .delete_through
             .map(|target| log.delete_local_segments_through(Offset(target)));
         let rolled = decision.roll_active.then(|| log.roll());
+        drop(log);
         (decision, deleted, rolled)
     };
     let removed = match deleted {
@@ -380,7 +382,7 @@ pub(crate) fn local_retention_pass(
 mod tests;
 
 /// Offset ranges whose remote metadata has reached the copy-finished state.
-pub(crate) fn finished_segment_ranges(
+pub fn finished_segment_ranges(
     segments: &[krabka_remote_storage::RemoteLogSegmentMetadata],
 ) -> Vec<OffsetRange> {
     segments

@@ -2,24 +2,25 @@
 //! client-instance registry, the OTLP decode, and the Prometheus and OTLP
 //! sinks.
 
-pub(crate) mod config;
-pub(crate) mod ingestion;
-pub(crate) mod manager;
-pub(crate) mod otlp_sink;
-pub(crate) mod prometheus_sink;
+pub mod config;
+pub mod ingestion;
+pub mod manager;
+pub mod otlp_sink;
+pub mod prometheus_sink;
 #[cfg(test)]
-pub(crate) mod test_support;
-pub(crate) use manager::ClientMetricsManager;
+pub mod test_support;
+pub use manager::ClientMetricsManager;
 use {
     self::{otlp_sink::OtlpForwarder, prometheus_sink::ClientMetricsCollector},
     krabka_units::{Time, convert::TimeExt as _},
+    prometheus_client::metrics::counter::Counter,
     std::sync::Arc,
 };
 
 /// Broker-held bundle. It holds the manager, which owns the instance state and
 /// the matching, plus the two sinks. The metrics registry shares the Prometheus
 /// collector.
-pub(crate) struct ClientMetrics {
+pub struct ClientMetrics {
     pub manager: ClientMetricsManager,
     pub prometheus: Arc<ClientMetricsCollector>,
     pub otlp: OtlpForwarder,
@@ -33,15 +34,12 @@ impl ClientMetrics {
         otlp_protocol: krabka_telemetry::OtlpProtocol,
         otlp_queue_capacity: usize,
         prometheus_snapshot_ttl: Time,
-        dropped: prometheus_client::metrics::counter::Counter,
-        failed: prometheus_client::metrics::counter::Counter,
+        dropped: Counter,
+        failed: Counter,
     ) -> Self {
-        let otlp = match otlp_endpoint {
-            Some(ep) => {
-                OtlpForwarder::spawn(ep, otlp_protocol, otlp_queue_capacity, dropped, failed)
-            }
-            None => OtlpForwarder::disabled(),
-        };
+        let otlp = otlp_endpoint.map_or_else(OtlpForwarder::disabled, |ep| {
+            OtlpForwarder::spawn(ep, otlp_protocol, otlp_queue_capacity, dropped, failed)
+        });
         Self {
             manager,
             prometheus: Arc::new(ClientMetricsCollector::new(

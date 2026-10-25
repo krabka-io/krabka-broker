@@ -3,7 +3,10 @@
 //! handlers that decide which of them to send.
 
 use {
-    crate::coordinator::unified::share::{config::ShareGroupConfig, state::ShareGroupState},
+    crate::{
+        codes,
+        coordinator::unified::share::{config::ShareGroupConfig, state::ShareGroupState},
+    },
     krabka_protocol::owned::{
         common::share_group_heartbeat_response::topic_partitions::TopicPartitions,
         share_group_heartbeat_response::{
@@ -41,10 +44,9 @@ pub(super) fn build_assignment_resp(
     config: &ShareGroupConfig,
     with_assignment: bool,
 ) -> ShareGroupHeartbeatResponse {
-    let m = state
-        .members
-        .get(member_id)
-        .expect("member exists at build_assignment_resp");
+    let Some(m) = state.members.get(member_id) else {
+        return error_resp(codes::UNKNOWN_MEMBER_ID, config);
+    };
     let assignment = with_assignment.then(|| RespAssignment {
         topic_partitions: m
             .assigned_partitions

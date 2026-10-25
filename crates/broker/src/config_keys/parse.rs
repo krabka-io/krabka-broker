@@ -11,19 +11,20 @@
 //! The validators and every reader of a stored value use these functions, so
 //! a value that validation accepts is read back the same way.
 
+use std::{collections::BTreeSet, fmt};
 /// Java's `String.trim`: every character at or below U+0020 at either end.
-pub(crate) fn java_trim(value: &str) -> &str { value.trim_matches(|c: char| c <= ' ') }
+pub fn java_trim(value: &str) -> &str { value.trim_matches(|c: char| c <= ' ') }
 
 /// The whitespace class `\s` of Kafka's `COMMA_WITH_WHITESPACE` split.
 fn regex_space(c: char) -> bool { matches!(c, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r') }
 
 /// Kafka's `ConfigException(name, value, message)` text.
-pub(crate) fn invalid_value(key: &str, value: impl std::fmt::Display, message: &str) -> String {
+pub fn invalid_value(key: &str, value: impl fmt::Display, message: &str) -> String {
     format!("Invalid value {value} for configuration {key}: {message}")
 }
 
 /// A `BOOLEAN` value: `true` or `false` in any case, after a trim.
-pub(crate) fn bool_value(value: &str) -> Option<bool> {
+pub fn bool_value(value: &str) -> Option<bool> {
     let trimmed = java_trim(value);
     if trimmed.eq_ignore_ascii_case("true") {
         Some(true)
@@ -35,20 +36,20 @@ pub(crate) fn bool_value(value: &str) -> Option<bool> {
 }
 
 /// An `INT` value, as `Integer.parseInt` reads the trimmed string.
-pub(crate) fn int_value(value: &str) -> Option<i32> { java_trim(value).parse().ok() }
+pub fn int_value(value: &str) -> Option<i32> { java_trim(value).parse().ok() }
 
 /// A `LONG` value, as `Long.parseLong` reads the trimmed string.
-pub(crate) fn long_value(value: &str) -> Option<i64> { java_trim(value).parse().ok() }
+pub fn long_value(value: &str) -> Option<i64> { java_trim(value).parse().ok() }
 
 /// A `DOUBLE` value, as `Double.parseDouble` reads the trimmed string: an
 /// optional sign, `NaN`, `Infinity`, or a decimal number with an optional
 /// exponent and an optional `f`, `F`, `d` or `D` suffix.
-pub(crate) fn double_value(value: &str) -> Option<f64> {
+pub fn double_value(value: &str) -> Option<f64> {
     let trimmed = java_trim(value);
-    let (negative, body) = match trimmed.strip_prefix('-') {
-        Some(body) => (true, body),
-        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
-    };
+    let (negative, body) = trimmed.strip_prefix('-').map_or_else(
+        || (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+        |body| (true, body),
+    );
     let magnitude = match body {
         "NaN" => f64::NAN,
         "Infinity" => f64::INFINITY,
@@ -70,7 +71,7 @@ pub(crate) fn double_value(value: &str) -> Option<f64> {
 /// A `LIST` value: empty after a trim, or the trimmed value split on commas,
 /// each element with the whitespace next to its commas removed. An empty
 /// element is kept, as Kafka's split with limit -1 keeps it.
-pub(crate) fn list_value(value: &str) -> Vec<&str> {
+pub fn list_value(value: &str) -> Vec<&str> {
     let trimmed = java_trim(value);
     if trimmed.is_empty() {
         return Vec::new();
@@ -84,7 +85,7 @@ pub(crate) fn list_value(value: &str) -> Vec<&str> {
 /// Java's `Double.toString`, which is how Kafka prints a parsed `DOUBLE` in a
 /// refusal and in `DescribeConfigs`: `2.0` for `2`, and `1.0E7` from ten
 /// million up.
-pub(crate) fn java_double(value: f64) -> String {
+pub fn java_double(value: f64) -> String {
     if value.is_nan() {
         return "NaN".to_owned();
     }
@@ -105,37 +106,37 @@ pub(crate) fn java_double(value: f64) -> String {
 }
 
 /// Parse a `BOOLEAN` for `key`, with Kafka's refusal.
-pub(crate) fn parse_bool(key: &str, value: &str) -> Result<bool, String> {
+pub fn parse_bool(key: &str, value: &str) -> Result<bool, String> {
     bool_value(value)
         .ok_or_else(|| invalid_value(key, value, "Expected value to be either true or false"))
 }
 
 /// Parse an `INT` for `key`, with Kafka's refusal.
-pub(crate) fn parse_int(key: &str, value: &str) -> Result<i32, String> {
+pub fn parse_int(key: &str, value: &str) -> Result<i32, String> {
     int_value(value).ok_or_else(|| invalid_value(key, value, "Not a number of type INT"))
 }
 
 /// Parse a `SHORT` for `key`, with Kafka's refusal.
-pub(crate) fn parse_short(key: &str, value: &str) -> Result<i16, String> {
+pub fn parse_short(key: &str, value: &str) -> Result<i16, String> {
     java_trim(value)
         .parse()
         .map_err(|_| invalid_value(key, value, "Not a number of type SHORT"))
 }
 
 /// Parse a `LONG` for `key`, with Kafka's refusal.
-pub(crate) fn parse_long(key: &str, value: &str) -> Result<i64, String> {
+pub fn parse_long(key: &str, value: &str) -> Result<i64, String> {
     long_value(value).ok_or_else(|| invalid_value(key, value, "Not a number of type LONG"))
 }
 
 /// Parse a `DOUBLE` for `key`, with Kafka's refusal.
-pub(crate) fn parse_double(key: &str, value: &str) -> Result<f64, String> {
+pub fn parse_double(key: &str, value: &str) -> Result<f64, String> {
     double_value(value).ok_or_else(|| invalid_value(key, value, "Not a number of type DOUBLE"))
 }
 
 /// Kafka's `Range` validator over a parsed number: `Value must be at least
 /// <min>` or `Value must be no more than <max>`, with the parsed value
 /// printed.
-pub(crate) fn check_range<T: PartialOrd + std::fmt::Display>(
+pub fn check_range<T: PartialOrd + fmt::Display>(
     key: &str,
     value: T,
     min: Option<T>,
@@ -163,11 +164,7 @@ pub(crate) fn check_range<T: PartialOrd + std::fmt::Display>(
 }
 
 /// Kafka's `ValidString`: the trimmed value must be one of `accepted`.
-pub(crate) fn check_one_of<'a>(
-    key: &str,
-    value: &'a str,
-    accepted: &[&str],
-) -> Result<&'a str, String> {
+pub fn check_one_of<'a>(key: &str, value: &'a str, accepted: &[&str]) -> Result<&'a str, String> {
     let trimmed = java_trim(value);
     if accepted.contains(&trimmed) {
         return Ok(trimmed);
@@ -182,7 +179,7 @@ pub(crate) fn check_one_of<'a>(
 /// Kafka's `ValidList`: no repeated element, no empty element, and, when
 /// `accepted` is not empty, every element one of `accepted`. `empty_allowed`
 /// is `ValidList.in`'s own flag, which is `true` for `cleanup.policy`.
-pub(crate) fn check_valid_list<'a>(
+pub fn check_valid_list<'a>(
     key: &str,
     value: &'a str,
     accepted: &[&str],
@@ -199,7 +196,7 @@ pub(crate) fn check_valid_list<'a>(
             "Configuration '{key}' must not be empty. Valid values include: {valid}"
         ));
     }
-    let distinct: std::collections::BTreeSet<&str> = values.iter().copied().collect();
+    let distinct: BTreeSet<&str> = values.iter().copied().collect();
     if distinct.len() != values.len() {
         return Err(format!(
             "Configuration '{key}' values must not be duplicated."

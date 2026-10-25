@@ -22,10 +22,10 @@ use {
 /// version 0, which maps topic name to partitions.
 ///
 /// See [`consumer_assignment_blob`] for the translation.
-pub(crate) fn target_to_consumer_assignment(
+pub fn target_to_consumer_assignment(
     target: &HashMap<Uuid, Vec<i32>>,
     image: &ReconcileInput,
-) -> Bytes {
+) -> Option<Bytes> {
     consumer_assignment_blob(target, image, 0)
 }
 
@@ -42,11 +42,14 @@ pub(crate) fn target_to_consumer_assignment(
 /// A topic ID that the metadata image does not hold, because the topic was
 /// deleted, is dropped. Topics are ordered by name and partitions ascending,
 /// so the bytes do not depend on map order.
-pub(crate) fn consumer_assignment_blob(
+///
+/// It returns `None` when the assignment does not encode, which the clamp to
+/// a known version rules out.
+pub fn consumer_assignment_blob(
     partitions: &HashMap<Uuid, Vec<i32>>,
     image: &ReconcileInput,
     version: i16,
-) -> Bytes {
+) -> Option<Bytes> {
     let version = version.clamp(0, ASSIGNMENT_MAX_VERSION);
     let id_to_name: HashMap<Uuid, &str> = image
         .topic_id_by_name
@@ -60,7 +63,7 @@ pub(crate) fn consumer_assignment_blob(
                 let mut p = parts.clone();
                 p.sort_unstable();
                 TopicPartition {
-                    topic: (*name).to_string(),
+                    topic: (*name).to_owned(),
                     partitions: p,
                     ..Default::default()
                 }
@@ -74,16 +77,14 @@ pub(crate) fn consumer_assignment_blob(
     };
     let mut out = BytesMut::new();
     out.put_i16(version);
-    assignment
-        .encode(&mut out, version)
-        .expect("ConsumerProtocolAssignment encode is infallible into BytesMut");
-    out.freeze()
+    assignment.encode(&mut out, version).ok()?;
+    Some(out.freeze())
 }
 
 /// Kafka's `ConsumerProtocol.deserializeVersion`: the `i16` version prefix of
 /// a consumer embedded-protocol blob, or `None` when the blob is too short to
 /// hold one.
-pub(crate) fn embedded_protocol_version(blob: &[u8]) -> Option<i16> {
+pub fn embedded_protocol_version(blob: &[u8]) -> Option<i16> {
     let prefix: [u8; 2] = blob.get(..2)?.try_into().ok()?;
     Some(i16::from_be_bytes(prefix))
 }
@@ -97,13 +98,12 @@ mod tests {
         let t1 = Uuid([1; 16]);
         let t2 = Uuid([2; 16]);
         let image = ReconcileInput {
-            topic_id_by_name: [("orders".to_string(), t1), ("events".to_string(), t2)].into(),
+            topic_id_by_name: [("orders".to_owned(), t1), ("events".to_owned(), t2)].into(),
             ..Default::default()
         };
-        let target: std::collections::HashMap<Uuid, Vec<i32>> =
-            [(t1, vec![2, 0, 1]), (t2, vec![5])].into();
+        let target: HashMap<Uuid, Vec<i32>> = [(t1, vec![2, 0, 1]), (t2, vec![5])].into();
 
-        let blob = target_to_consumer_assignment(&target, &image);
+        let blob = target_to_consumer_assignment(&target, &image).unwrap();
         // Strip the version prefix and decode back.
         let mut cur = &blob[..];
         let version = cur.get_i16();
@@ -130,12 +130,11 @@ mod tests {
         let known = Uuid([1; 16]);
         let ghost = Uuid([9; 16]);
         let image = ReconcileInput {
-            topic_id_by_name: [("orders".to_string(), known)].into(),
+            topic_id_by_name: [("orders".to_owned(), known)].into(),
             ..Default::default()
         };
-        let target: std::collections::HashMap<Uuid, Vec<i32>> =
-            [(known, vec![0]), (ghost, vec![0])].into();
-        let blob = target_to_consumer_assignment(&target, &image);
+        let target: HashMap<Uuid, Vec<i32>> = [(known, vec![0]), (ghost, vec![0])].into();
+        let blob = target_to_consumer_assignment(&target, &image).unwrap();
         let mut cur = &blob[..];
         let _ = cur.get_i16();
         let decoded = ConsumerProtocolAssignment::decode(&mut cur, 0).unwrap();

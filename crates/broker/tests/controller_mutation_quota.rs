@@ -9,6 +9,7 @@
 //! 3. `controller_mutation_rate_throttles_delete_topics`. Pre-create a topic
 //!    with 10 partitions. Set rate=2.0 for alice. Alice deletes. Assert
 //!    `throttle_time_ms` > 0.
+#![cfg(test)]
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling
@@ -42,7 +43,9 @@ use {
         topic_admin::{TopicMutationResult, drive_create_topics_sasl, drive_delete_topics_sasl},
     },
     assert2::{assert, check},
+    krabka_broker::codes,
     krabka_metadata::AclOperation,
+    std::net::SocketAddr,
 };
 
 /// Wait until the `controller_mutation_rate` quota is visible in the broker's
@@ -58,7 +61,7 @@ async fn wait_for_mutation_quota_in_image(handle: &krabka_broker::BrokerHandle) 
 }
 
 /// Install Alice's shared mutation quota and return its complete wire response.
-async fn set_controller_mutation_quota(addr: std::net::SocketAddr) -> Vec<(QuotaEntity, i16)> {
+async fn set_controller_mutation_quota(addr: SocketAddr) -> Vec<(QuotaEntity, i16)> {
     alter_user_quota()
         .addr(addr)
         .authentication(PlainAuthenticationSetup::admin(CLIENT_ID))
@@ -115,7 +118,7 @@ async fn controller_mutation_rate_throttles_create_topics() {
         error_code: err_code,
     } = drive_create_topics_sasl(addr, "alice", "alice-secret", "rejected-topic", 1).await;
     check!(
-        err_code == krabka_broker::codes::THROTTLING_QUOTA_EXCEEDED,
+        err_code == codes::THROTTLING_QUOTA_EXCEEDED,
         "expected strict quota rejection, got error {err_code}"
     );
     check!(

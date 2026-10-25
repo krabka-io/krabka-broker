@@ -132,10 +132,14 @@ mod state;
 #[path = "stretch_cluster_model/topology.rs"]
 mod topology;
 
-use self::{
-    config::StretchModel,
-    election::production_elect,
-    runner::{PINNED_UNIQUE_STATES_THREE_SITES, run},
+use {
+    self::{
+        config::StretchModel,
+        election::production_elect,
+        runner::{PINNED_UNIQUE_STATES_THREE_SITES, run},
+    },
+    std::future::Future,
+    tokio::runtime::{Builder, Runtime},
 };
 
 /// Run `future` to completion on a per-thread current-thread tokio runtime.
@@ -143,9 +147,9 @@ use self::{
 /// [`select_new_leader_for_partition`](crate::leader_election::select_new_leader_for_partition)
 /// is `async`, and the stateright BFS runs on plain threads with no runtime.
 /// Each thread builds one runtime and reuses it for every transition.
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
+fn block_on<F: Future>(future: F) -> F::Output {
     thread_local! {
-        static RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_current_thread()
+        static RUNTIME: Runtime = Builder::new_current_thread()
             .build()
             .expect("current-thread tokio runtime");
     }

@@ -6,6 +6,7 @@
 //! key reports that key at `STATIC_BROKER_CONFIG`. The third lets the broker's
 //! own background sweep run and watches a dead group disappear from
 //! `ListGroups`.
+#![cfg(test)]
 
 mod support;
 
@@ -27,7 +28,11 @@ use {
         list_groups_request::ListGroupsRequest,
     },
     krabka_units::{millis, minutes},
-    std::{sync::Arc, time::Duration},
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
 /// `ConfigResource.Type.BROKER`.
@@ -91,7 +96,7 @@ async fn describe_configs_reports_the_retention_knobs() {
         .send(DescribeConfigsRequest {
             resources: vec![describe_resource(
                 RESOURCE_TYPE_BROKER,
-                "1".to_string(),
+                "1".to_owned(),
                 None,
             )],
             include_synonyms: false,
@@ -142,10 +147,10 @@ async fn describe_configs_reports_a_named_knob_as_static() {
     let client = client_for(&broker).await;
 
     let target_keys = vec![
-        OFFSETS_RETENTION_MINUTES.to_string(),
-        OFFSETS_RETENTION_CHECK_INTERVAL_MS.to_string(),
+        OFFSETS_RETENTION_MINUTES.to_owned(),
+        OFFSETS_RETENTION_CHECK_INTERVAL_MS.to_owned(),
     ];
-    let res = describe_resource(RESOURCE_TYPE_BROKER, "1".to_string(), Some(target_keys));
+    let res = describe_resource(RESOURCE_TYPE_BROKER, "1".to_owned(), Some(target_keys));
     let req = DescribeConfigsRequest {
         resources: vec![res],
         ..Default::default()
@@ -215,21 +220,21 @@ async fn the_broker_sweep_reaps_a_dead_group_on_its_own() {
     // --delete-offsets` does. What is left is a memberless group holding
     // nothing.
     let deleted = client
-        .send(offset_delete_request(GROUP.to_string(), vec![
-            offset_delete_topic(TOPIC.to_string(), vec![offset_delete_partition(0)]),
+        .send(offset_delete_request(GROUP.to_owned(), vec![
+            offset_delete_topic(TOPIC.to_owned(), vec![offset_delete_partition(0)]),
         ]))
         .await
         .expect("OffsetDelete");
     assert!(deleted.error_code == codes::NONE);
     assert!(deleted.topics[0].partitions[0].error_code == codes::NONE);
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while listed(Arc::clone(&client)).await {
         assert!(
-            std::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "the sweep never reaped the dead group"
         );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        time::sleep(Duration::from_millis(25)).await;
     }
 
     broker.shutdown().await;

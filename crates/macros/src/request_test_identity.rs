@@ -102,18 +102,15 @@ fn declaration(input: &TokenStream) -> Result<Identity, ParseError> {
     } else {
         &["identity", "address"][..]
     };
-    if !clauses
-        .iter()
-        .take(required.len())
-        .map(String::as_str)
-        .eq(required.iter().copied())
-    {
+    let Some((_, policy)) = clauses
+        .split_at_checked(required.len())
+        .filter(|(head, _)| head.iter().map(String::as_str).eq(required.iter().copied()))
+    else {
         return Err(ParseError::new(
             input.span(),
             "begin with user, or identity then address",
         ));
-    }
-    let policy = &clauses[required.len()..];
+    };
     let default_builder = user && identity.context.is_some() && policy.is_empty();
     let valid_policy = if identity.context.is_none() {
         policy.is_empty()
@@ -183,7 +180,7 @@ fn template(identity: &Identity) -> TokenStream {
     }
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let identity = declaration(&input.clone().into())?;
     let mut groups = native_groups(input).skip(1);
     let placeholders = if identity.user {
@@ -208,13 +205,12 @@ pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, Pars
 }
 
 /// Canonical identity resources stay in the caller's scope, including visible bindings.
-pub(crate) fn user_bindings(
+pub fn user_bindings(
     names: &[Ident],
     user: NativeTokenStream,
     client: Option<NativeTokenStream>,
-) -> NativeTokenStream {
-    let mut identity =
-        binding_names(names, Span::call_site()).expect("validated identity binding count");
+) -> Result<NativeTokenStream, ParseError> {
+    let mut identity = binding_names(names, Span::call_site())?;
     let policy = if identity.context.is_none() {
         ContextPolicy::Absent
     } else if client.is_some() {
@@ -234,7 +230,7 @@ pub(crate) fn user_bindings(
             group: Group::new(Delimiter::None, client),
         });
     }
-    splice(template(&identity).into(), &values, &[])
+    Ok(splice(template(&identity).into(), &values, &[]))
 }
 
 #[cfg(test)]

@@ -20,14 +20,18 @@ pub fn unique_aborted_transaction_rows(rows: &[(i64, i64)]) -> Vec<(i64, i64)> {
     #[invariant(crate::sequence::distinct(selected@))]
     #[variant(rows@.len() - index@)]
     while index < rows.len() {
-        let row = rows[index];
+        let Some(&row) = rows.get(index) else {
+            break;
+        };
         let mut scan = 0usize;
         // ponytail: linear duplicate search; use an indexed set if abort
         // lists become large enough to affect Fetch latency.
         #[invariant(scan@ <= selected@.len())]
         #[invariant(forall<j: Int> 0 <= j && j < scan@ ==> selected@[j] != row)]
         #[variant(selected@.len() - scan@)]
-        while scan < selected.len() && !(selected[scan].0 == row.0 && selected[scan].1 == row.1) {
+        while scan < selected.len()
+            && !matches!(selected.get(scan), Some(kept) if kept.0 == row.0 && kept.1 == row.1)
+        {
             scan += 1;
         }
         if scan == selected.len() {

@@ -15,10 +15,15 @@ use {
     },
     assert2::{assert, check},
     krabka_log::Offset,
-    krabka_metadata::{FeatureLevelRecord, MetadataRecord},
-    std::{cell::Cell, time::Duration},
+    krabka_metadata::{
+        FeatureLevelRecord, MetadataRecord, metadata_version::SHARE_VERSION_FEATURE,
+    },
+    std::{cell::Cell, path::Path, time::Duration},
     tempfile::tempdir,
-    tokio::sync::Mutex,
+    tokio::{
+        sync::Mutex,
+        time::{Instant, sleep},
+    },
 };
 
 const T1: uuid::Uuid = uuid::Uuid::from_bytes([61; 16]);
@@ -107,10 +112,8 @@ async fn collected_keys_do_not_authorize_a_new_load_generation() {
     let dir = tempdir().unwrap();
     let TwoKeys { coord, .. } = two_keys(dir.path(), ShareCoordinatorConfig::default()).await;
     let bucket = populated_bucket(&coord).await;
-    {
-        let active = coord.active(bucket.term.partition).await.unwrap();
-        check!(bucket.still_active(&active));
-    }
+    let still_active = bucket.still_active(&coord.active(bucket.term.partition).await.unwrap());
+    check!(still_active);
     let removed = bucket.keys[0].clone();
     coord.state.remove(&removed);
     let fresh = (0..10_000)
@@ -133,6 +136,7 @@ async fn collected_keys_do_not_authorize_a_new_load_generation() {
     let active = coord.active(bucket.term.partition).await.unwrap();
     check!(!bucket.still_active(&active));
     let current = coord.current_partition_keys(bucket, &active, |_| true);
+    drop(active);
     check!(current.contains(&fresh));
     check!(!current.contains(&removed));
 }
@@ -158,6 +162,7 @@ async fn collected_keys_include_an_initialize_in_the_same_generation() {
     check!(bucket.still_active(&active));
     check!(bucket.revision != coord.state_key_revision(active.term.partition));
     let current = coord.current_partition_keys(bucket, &active, |topic_id| *topic_id == T1);
+    drop(active);
     check!(current.contains(&(fresh, T1, 0)));
 }
 
@@ -179,7 +184,7 @@ async fn populated_bucket(coord: &ShareCoordinator) -> PartitionKeys {
 
 /// A coordinator with key A (`ga`, T1, 0) and key B (`gb`, T2, 0), both
 /// initialized at [`NOW_MS`].
-async fn two_keys(dir: &std::path::Path, config: ShareCoordinatorConfig) -> TwoKeys {
+async fn two_keys(dir: &Path, config: ShareCoordinatorConfig) -> TwoKeys {
     let ConfiguredCoordinator {
         coord,
         registry: _reg,
@@ -289,7 +294,7 @@ async fn cold_snapshot_then_prune_frees_the_log_prefix() {
 
 fn with_share_version(mut image: MetadataImage, level: i16) -> Arc<MetadataImage> {
     image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-        name: krabka_metadata::metadata_version::SHARE_VERSION_FEATURE.into(),
+        name: SHARE_VERSION_FEATURE.into(),
         level,
     }));
     Arc::new(image)
@@ -305,12 +310,12 @@ fn periodic_jobs_follow_share_version() {
 
 /// Waits until `done` holds, for at most ten seconds.
 async fn eventually(mut done: impl FnMut() -> bool) -> bool {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while tokio::time::Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
         if done() {
             return true;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
     }
     done()
 }
@@ -355,7 +360,7 @@ async fn run_loop_reacts_to_images_and_timers() {
                 "level {level}"
             );
         } else {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            sleep(Duration::from_millis(200)).await;
             let snapshots = logged_records(&coord, b_partition)
                 .iter()
                 .filter(|record| matches!(record.logged, Logged::Snapshot(_)))

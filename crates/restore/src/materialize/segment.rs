@@ -65,7 +65,7 @@ pub async fn write_segment(
 }
 
 /// Write a segment, allowing a forward offset gap only after discovery skipped a corrupt predecessor.
-pub(crate) async fn write_segment_after_skip(
+pub async fn write_segment_after_skip(
     args: &RestoreArgs,
     partition: &TopicIdPartition,
     segment: &VerifiedSegment,
@@ -102,8 +102,7 @@ pub(crate) async fn write_segment_after_skip(
 
     let raw: &[u8] = &segment.log;
     let mut pos = 0usize;
-    while pos < raw.len() {
-        let mut cursor = &raw[pos..];
+    while let Some(mut cursor) = raw.get(pos..).filter(|rest| !rest.is_empty()) {
         let remaining_before = cursor.len();
         // `<_>::default()` stands in for `RecordDecompressionPolicy::default()`.
         // `krabka-compression`, which defines that type, is only a transitive
@@ -224,6 +223,7 @@ mod tests {
         assert2::check,
         krabka_log::{LogConfig, name},
         krabka_protocol::records::{Attributes, RecordBatch},
+        std::{fs, slice},
     };
 
     // Preserve each archived batch's span even when filtering empties it.
@@ -310,7 +310,7 @@ mod tests {
             record_with_key(1, "drop"),
             record(2, "keep2"),
         ]);
-        let segment = verified_segment(0, std::slice::from_ref(&batch_a));
+        let segment = verified_segment(0, slice::from_ref(&batch_a));
 
         let outcome = write_segment(&args, &partition, &segment, &predicates)
             .await
@@ -377,13 +377,13 @@ mod tests {
         write_segment(
             &args,
             &partition,
-            &verified_segment(0, std::slice::from_ref(&prefix)),
+            &verified_segment(0, slice::from_ref(&prefix)),
             &predicates,
         )
         .await
         .unwrap();
         let suffix = batch(20, vec![record(2, "tail")]);
-        let segment = verified_segment(20, std::slice::from_ref(&suffix));
+        let segment = verified_segment(20, slice::from_ref(&suffix));
         check!(
             write_segment(&args, &partition, &segment, &predicates)
                 .await
@@ -414,14 +414,14 @@ mod tests {
         let (_target, args, partition, predicates) = materialization_context(&[]);
 
         let batch_1 = batch(0, vec![record(0, "a"), record(1, "b")]);
-        let segment_1 = verified_segment(0, std::slice::from_ref(&batch_1));
+        let segment_1 = verified_segment(0, slice::from_ref(&batch_1));
         let outcome_1 = write_segment(&args, &partition, &segment_1, &predicates)
             .await
             .expect("segment 1");
         check!(outcome_1.end_offset == Offset(1));
 
         let batch_2 = batch(2, vec![record(0, "c")]);
-        let segment_2 = verified_segment(2, std::slice::from_ref(&batch_2));
+        let segment_2 = verified_segment(2, slice::from_ref(&batch_2));
         let outcome_2 = write_segment(&args, &partition, &segment_2, &predicates)
             .await
             .expect("segment 2");
@@ -480,11 +480,11 @@ mod tests {
             .await
             .expect("real write");
         let real_dir = name::partition_dir(&real_args.target.log_dir, "orders", 0);
-        let log_bytes: u64 = std::fs::read_dir(real_dir)
+        let log_bytes: u64 = fs::read_dir(real_dir)
             .expect("target partition")
             .map(|entry| entry.expect("directory entry").path())
             .filter(|path| path.extension().is_some_and(|extension| extension == "log"))
-            .map(|path| std::fs::metadata(path).expect("log metadata").len())
+            .map(|path| fs::metadata(path).expect("log metadata").len())
             .sum();
         check!(real_outcome.bytes_written == log_bytes);
 

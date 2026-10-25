@@ -10,7 +10,7 @@ use {
 };
 
 #[async_trait]
-pub(crate) trait OffsetSequencer: Send + Sync {
+pub trait OffsetSequencer: Send + Sync {
     /// Reserve `count` offsets of `partition` of `topic`, and return the first
     /// of them.
     ///
@@ -47,7 +47,7 @@ fn controller_unavailable(error: &RaftError) -> Option<BrokerError> {
     Some(BrokerError::Raft(RaftError::NotLeader { current_leader }))
 }
 
-pub(crate) struct ControllerSequencer {
+pub struct ControllerSequencer {
     metadata: Arc<dyn MetadataSource>,
 }
 
@@ -114,10 +114,7 @@ impl OffsetSequencer for ControllerSequencer {
 }
 
 fn controller_epoch_coordinate(epoch: Option<u64>) -> i64 {
-    match epoch {
-        None => -1,
-        Some(epoch) => i64::try_from(epoch).unwrap_or(-2),
-    }
+    epoch.map_or(-1, |epoch| i64::try_from(epoch).unwrap_or(-2))
 }
 
 #[cfg(test)]
@@ -137,7 +134,7 @@ mod tests {
         leader_epoch: u64,
     ) -> OffsetReservation {
         OffsetReservation {
-            topic: topic.to_string(),
+            topic: topic.to_owned(),
             partition,
             base_offset,
             count,
@@ -152,7 +149,7 @@ mod tests {
     fn expected_submissions() -> Vec<Vec<MetadataRecord>> {
         vec![vec![MetadataRecord::V1PartitionOffsetAdvance(
             PartitionOffsetAdvanceRecord {
-                topic: "topic".to_string(),
+                topic: "topic".to_owned(),
                 partition: 0,
                 count: 3,
             },

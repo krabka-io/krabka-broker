@@ -18,7 +18,7 @@ mod decode;
 mod encode;
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 
 pub use self::{
     decode::{decode_message_set, decode_message_set_with_policy},

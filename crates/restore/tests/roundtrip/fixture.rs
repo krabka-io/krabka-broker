@@ -22,6 +22,7 @@ use {
         partition_dir_name, segment_file_name,
     },
     krabka_remote_storage_topic::Snapshot,
+    std::{fs, sync::Arc},
     tempfile::TempDir,
     uuid::Uuid,
 };
@@ -29,7 +30,7 @@ use {
 /// One archived segment: the id it was archived under, and the exact batch
 /// (with its real, log-assigned `base_offset`) a correct restore must
 /// reproduce verbatim.
-pub(crate) struct SegmentFixture {
+pub struct SegmentFixture {
     pub(crate) segment_id: Uuid,
     pub(crate) batch: RecordBatch,
     /// The remote metadata this segment was archived under. It is what a
@@ -40,7 +41,7 @@ pub(crate) struct SegmentFixture {
 
 /// One archived partition: its identity, and every segment archived for it,
 /// in base-offset order.
-pub(crate) struct PartitionFixture {
+pub struct PartitionFixture {
     pub(crate) topic: &'static str,
     pub(crate) topic_id: Uuid,
     pub(crate) partition: i32,
@@ -154,7 +155,7 @@ fn build_partition(storage: &LocalTieredStorage, spec: PartitionSpec<'_>) -> Par
 /// partitions, "payments" with two), one partition ("orders-0") with two
 /// archived segments, and one ("payments-1") whose oldest archived segment
 /// begins above offset 0.
-pub(crate) struct Fixture {
+pub struct Fixture {
     pub(crate) archive_root: TempDir,
     pub(crate) orders_id: Uuid,
     pub(crate) payments_id: Uuid,
@@ -231,14 +232,12 @@ impl Fixture {
             dump: RlmmCacheDump { partitions },
         }
         .encode()
+        .unwrap()
     }
 
     /// Seal every archived segment into a signed WORM chain. Signers rotate by
     /// segment position, so two signers exercise trusted-key rotation.
-    pub(crate) fn sign_worm(
-        &self,
-        signers: &[std::sync::Arc<FileEd25519Signer>],
-    ) -> Vec<(String, String)> {
+    pub(crate) fn sign_worm(&self, signers: &[Arc<FileEd25519Signer>]) -> Vec<(String, String)> {
         assert!(!signers.is_empty());
         let mut heads = Vec::new();
         for partition in self.partitions() {
@@ -253,7 +252,7 @@ impl Fixture {
                     .clone()
                     .with_custom_metadata(WormChainRecord::request(stamp).to_custom_metadata());
                 let partition_dir = partition_dir_name(&metadata);
-                let objects = std::fs::read_dir(self.archive_root.path().join(&partition_dir))
+                let objects = fs::read_dir(self.archive_root.path().join(&partition_dir))
                     .expect("read archive partition")
                     .filter_map(Result::ok)
                     .filter_map(|entry| {
@@ -263,7 +262,7 @@ impl Fixture {
                             && parsed.segment_id == metadata.remote_log_segment_id().id
                             && parsed.suffix != MANIFEST_SUFFIX)
                             .then(|| {
-                                let bytes = std::fs::read(entry.path()).expect("read artifact");
+                                let bytes = fs::read(entry.path()).expect("read artifact");
                                 ObjectEntry {
                                     suffix: parsed.suffix.to_owned(),
                                     key: format!("{partition_dir}/{name}"),
@@ -276,10 +275,10 @@ impl Fixture {
                             })
                     })
                     .collect();
-                let sealed = WormArchiver::new(Some(signers[index % signers.len()].clone()))
+                let sealed = WormArchiver::new(Some(Arc::clone(&signers[index % signers.len()])))
                     .seal(&metadata, objects)
                     .expect("seal WORM manifest");
-                std::fs::write(
+                fs::write(
                     self.archive_root
                         .path()
                         .join(&partition_dir)
@@ -298,7 +297,7 @@ impl Fixture {
     }
 }
 
-pub(crate) fn build_fixture() -> Fixture {
+pub fn build_fixture() -> Fixture {
     let archive_root = tempfile::tempdir().expect("archive root");
     let storage = LocalTieredStorage::new(archive_root.path());
     let orders_id = Uuid::new_v4();

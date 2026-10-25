@@ -59,7 +59,7 @@ fn roll_trigger() -> RecordBatch {
 /// path round-trips verbatim -- ready to reuse as expected values.
 ///
 /// Returns the archive root, to pass as `--archive-local`.
-pub(crate) fn build_archive(topic: &str, partition: i32, batches: &mut [RecordBatch]) -> TempDir {
+pub fn build_archive(topic: &str, partition: i32, batches: &mut [RecordBatch]) -> TempDir {
     assert!(!batches.is_empty(), "a fixture needs at least one batch");
     let local = tempfile::tempdir().expect("local log tempdir");
     let mut log = Log::open(local.path(), roll_after_every_batch()).expect("open local log");

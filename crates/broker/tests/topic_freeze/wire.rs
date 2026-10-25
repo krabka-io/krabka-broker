@@ -23,13 +23,13 @@ use {
     krabka_broker::{BrokerHandle, codes},
     krabka_client_core::Client,
     krabka_protocol::{
-        owned::produce_response::PartitionProduceResponse, primitives::uuid::Uuid as WireUuid,
-        records::RecordBatch,
+        krabka::freeze, owned::produce_response::PartitionProduceResponse,
+        primitives::uuid::Uuid as WireUuid, records::RecordBatch,
     },
 };
 
 /// The unfrozen topic that every case produces to beside the frozen one.
-pub(super) const CONTROL: &str = "control";
+pub const CONTROL: &str = "control";
 
 /// The wire's "no offset assigned", which is `ProduceResponse.INVALID_OFFSET`.
 /// A row refused before any append carries it in `base_offset`.
@@ -41,7 +41,7 @@ krabka_macros::unix_millis_fixture!(
 );
 
 /// Create a one-partition topic and wait for its partition to exist locally.
-pub(super) async fn create_topic(broker: &BrokerHandle, client: &Client, name: &str) -> WireUuid {
+pub async fn create_topic(broker: &BrokerHandle, client: &Client, name: &str) -> WireUuid {
     let resp = client
         .send(create_topic_request(
             creatable_topic().name((name).into()).call(),
@@ -59,7 +59,7 @@ pub(super) async fn create_topic(broker: &BrokerHandle, client: &Client, name: &
 }
 
 /// Create the target and its live control in the same order as every freeze case.
-pub(super) async fn create_controlled_topic(
+pub async fn create_controlled_topic(
     broker: &BrokerHandle,
     client: &Client,
     target: &str,
@@ -70,14 +70,14 @@ pub(super) async fn create_controlled_topic(
 }
 
 /// The standard in-process fixture with its target and live control topics ready.
-pub(super) async fn controlled_fixture(target: &str) -> (support::InProcess, WireUuid, WireUuid) {
+pub async fn controlled_fixture(target: &str) -> (support::InProcess, WireUuid, WireUuid) {
     let p = support::start().await;
     let (frozen, control) = create_controlled_topic(&p.broker, &p.client, target).await;
     (p, frozen, control)
 }
 
 /// Rejoined partitions need both local writers and local leadership before a write.
-pub(super) async fn wait_controlled_partitions(broker: &BrokerHandle, target: &str) {
+pub async fn wait_controlled_partitions(broker: &BrokerHandle, target: &str) {
     for topic in [target, CONTROL] {
         broker.wait_until_partition_present(topic, 0).await;
         broker
@@ -101,11 +101,7 @@ fn one_record(value: &str) -> RecordBatch {
 }
 
 /// Produce one record and hand back the partition row.
-pub(super) async fn produce(
-    client: &Client,
-    topic: &str,
-    topic_id: WireUuid,
-) -> PartitionProduceResponse {
+pub async fn produce(client: &Client, topic: &str, topic_id: WireUuid) -> PartitionProduceResponse {
     let resp = send_batch(&client, one_record("v"), SinglePartitionProduceSetup {
         topic: (topic).into(),
         topic_id,
@@ -126,7 +122,7 @@ pub(super) async fn produce(
 /// `POLICY_VIOLATION` and still claimed offset 0 would tell a producer its
 /// batch landed at the head of the log.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ProduceOutcome {
+pub struct ProduceOutcome {
     error_code: i16,
     error_message: Option<String>,
     base_offset: i64,
@@ -134,7 +130,7 @@ pub(super) struct ProduceOutcome {
 }
 
 /// Produce one record and read the partition's log end offset afterwards.
-pub(super) async fn produce_outcome(
+pub async fn produce_outcome(
     broker: &BrokerHandle,
     client: &Client,
     topic: &str,
@@ -153,7 +149,7 @@ pub(super) async fn produce_outcome(
 ///
 /// Every produce here sends one single-record batch, so the offset it was
 /// assigned is the one the log ended just past.
-pub(super) fn accepted(log_end_offset: i64) -> ProduceOutcome {
+pub fn accepted(log_end_offset: i64) -> ProduceOutcome {
     ProduceOutcome {
         error_code: codes::NONE,
         error_message: None,
@@ -170,12 +166,7 @@ pub(super) fn accepted(log_end_offset: i64) -> ProduceOutcome {
 /// whole argument for reusing code 44 instead of minting a private one is that
 /// the message carries the detail. A message that stopped naming the scope
 /// would leave an operator with a non-retriable failure and no next step.
-pub(super) fn refused(
-    kind: &str,
-    scope: &str,
-    reason: &str,
-    log_end_offset: i64,
-) -> ProduceOutcome {
+pub fn refused(kind: &str, scope: &str, reason: &str, log_end_offset: i64) -> ProduceOutcome {
     ProduceOutcome {
         error_code: codes::POLICY_VIOLATION,
         error_message: Some(format!(
@@ -187,11 +178,7 @@ pub(super) fn refused(
 }
 
 /// Check that the unfrozen control still accepts a record before shutting down.
-pub(super) async fn finish_with_control_record(
-    broker: BrokerHandle,
-    client: &Client,
-    control: WireUuid,
-) {
+pub async fn finish_with_control_record(broker: BrokerHandle, client: &Client, control: WireUuid) {
     check!(produce_outcome(&broker, client, CONTROL, control).await == accepted(1));
     broker.shutdown().await;
 }
@@ -199,7 +186,7 @@ pub(super) async fn finish_with_control_record(
 // Keep expected outcomes and optional scenario labels at the assertion site.
 
 /// Create a topic with one accepted record, freeze it and verify refusal.
-pub(super) async fn frozen_topic_with_record(
+pub async fn frozen_topic_with_record(
     broker: &BrokerHandle,
     client: &Client,
     topic: &str,
@@ -207,13 +194,7 @@ pub(super) async fn frozen_topic_with_record(
 ) -> (WireUuid, WireUuid) {
     let (frozen, control) = create_controlled_topic(broker, client, topic).await;
     check!(produce_outcome(broker, client, topic, frozen).await == accepted(1));
-    freeze_scope(
-        client,
-        krabka_protocol::krabka::freeze::PATTERN_TYPE_LITERAL,
-        topic,
-        reason,
-    )
-    .await;
+    freeze_scope(client, freeze::PATTERN_TYPE_LITERAL, topic, reason).await;
     check!(
         produce_outcome(broker, client, topic, frozen).await
             == refused("literal", topic, reason, 1)

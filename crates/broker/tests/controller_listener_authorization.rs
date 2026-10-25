@@ -10,6 +10,7 @@
 //! Each case talks to a live one-node cluster over a raw controller-listener
 //! socket, with a `SimpleAclAuthorizer` whose only super user is the node's
 //! own inter-broker principal.
+#![cfg(test)]
 
 mod support;
 
@@ -45,6 +46,8 @@ use {
         KrabkaMetadataFetchResponse, KrabkaSubmitChangeRequest, KrabkaSubmitChangeResponse,
     },
     krabka_security::{ListenerProtocol, SaslMechanism},
+    rustls::crypto::aws_lc_rs,
+    std::{fs, iter, sync::Arc},
     tokio::{
         io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _},
         net::TcpStream,
@@ -88,7 +91,7 @@ async fn start_with(
     let (broker, dir) = start_with_bound_listeners(|config| {
         config.controller_listener_protocol = protocol;
         config.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
-        for Credential { user, password } in std::iter::once(&NODE).chain(users) {
+        for Credential { user, password } in iter::once(&NODE).chain(users) {
             config
                 .plain_credentials
                 .insert((*user).to_owned(), (*password).to_owned());
@@ -97,9 +100,8 @@ async fn start_with(
             username: NODE.user.to_owned(),
             password: NODE.password.to_owned(),
         });
-        config.super_users = std::iter::once(NODE.user.to_owned()).collect();
-        config.authorizer =
-            std::sync::Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
+        config.super_users = iter::once(NODE.user.to_owned()).collect();
+        config.authorizer = Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
         adjust(config);
     })
     .await;
@@ -489,11 +491,11 @@ use crate::support::tls::{
 /// then it is served on the same connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_principal() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
     let pem_dir = tempfile::TempDir::new().expect("tempdir");
     let write = |name: &str, contents: &str| {
         let path = pem_dir.path().join(name);
-        std::fs::write(&path, contents).expect("write fixture");
+        fs::write(&path, contents).expect("write fixture");
         path
     };
     let tls = krabka_security::TlsConfig {
@@ -520,7 +522,7 @@ async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_
         PrivateKeyDer::from_pem_slice(DEV_CLIENT_KEY.as_bytes()).expect("parse client key");
     let client = ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(std::sync::Arc::new(PinnedCertVerifier {
+        .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier {
             pinned: server_certificate,
             schemes: fixture_signature_schemes(),
             mismatch: "not the pinned fixture certificate",
@@ -530,7 +532,7 @@ async fn an_ssl_controller_listener_authorizes_each_request_for_the_certificate_
     let tcp = TcpStream::connect(broker.controller_addr())
         .await
         .expect("connect controller listener");
-    let mut stream = tokio_rustls::TlsConnector::from(std::sync::Arc::new(client))
+    let mut stream = tokio_rustls::TlsConnector::from(Arc::new(client))
         .connect(
             ServerName::try_from("krabka-dev").expect("server name"),
             tcp,

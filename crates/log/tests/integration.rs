@@ -2,6 +2,7 @@
 //!
 //! These tests carry `#[ignore]`, so `cargo test` does not pull Docker by
 //! default. Run them with `--include-ignored` or `--ignored`.
+#![cfg(test)]
 use {
     bytes::Bytes,
     krabka_log::{Log, LogConfig},
@@ -9,12 +10,13 @@ use {
     krabka_units::prelude::gibibytes,
     std::{
         path::Path,
-        process::{Command, Stdio},
+        process::{Command, Output, Stdio},
         time::{Duration, SystemTime, UNIX_EPOCH},
     },
     tempfile::tempdir,
     testcontainers::{ImageExt, core::Mount, runners::AsyncRunner},
     testcontainers_modules::kafka::{KAFKA_PORT, Kafka},
+    tokio::time,
 };
 
 const TOPIC: &str = "krabka-log-itest";
@@ -29,7 +31,7 @@ const CONTAINER_START_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// `docker exec <container_id> <args...>`. This fails the test on a non-zero
 /// exit.
-fn docker_exec(container_id: &str, args: &[&str]) -> std::process::Output {
+fn docker_exec(container_id: &str, args: &[&str]) -> Output {
     let mut cmd = Command::new("docker");
     cmd.arg("exec").arg(container_id).args(args);
     let out = cmd
@@ -79,7 +81,7 @@ fn docker_cp(container_id: &str, src: &str, dst: &Path) {
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn read_jvm_produced_log_dir() {
-    let kafka = tokio::time::timeout(
+    let kafka = time::timeout(
         CONTAINER_START_TIMEOUT,
         Kafka::default()
             .with_name(KAFKA_IMAGE)
@@ -89,7 +91,7 @@ async fn read_jvm_produced_log_dir() {
     .await
     .expect("kafka container start timed out")
     .expect("start kafka container");
-    let container_id = kafka.id().to_string();
+    let container_id = kafka.id().to_owned();
 
     // testcontainers-modules' Confluent Kafka module advertises
     //   PLAINTEXT://localhost:<host-mapped-port>,BROKER://localhost:9092
@@ -168,7 +170,7 @@ async fn jvm_consumes_rust_written_log_dir() {
         .path()
         .to_str()
         .expect("temporary path must be UTF-8");
-    let kafka = tokio::time::timeout(
+    let kafka = time::timeout(
         CONTAINER_START_TIMEOUT,
         Kafka::default()
             .with_name(KAFKA_IMAGE)
@@ -183,7 +185,7 @@ async fn jvm_consumes_rust_written_log_dir() {
     .await
     .expect("kafka container start timed out")
     .expect("start kafka container");
-    let container_id = kafka.id().to_string();
+    let container_id = kafka.id().to_owned();
     let bootstrap = "localhost:9092";
 
     docker_exec(&container_id, &[
@@ -240,7 +242,7 @@ async fn jvm_consumes_rust_written_log_dir() {
     log.append(&mut batch).expect("append Rust-written batch");
     drop(log);
 
-    tokio::time::timeout(CONTAINER_START_TIMEOUT, kafka.start())
+    time::timeout(CONTAINER_START_TIMEOUT, kafka.start())
         .await
         .expect("kafka container restart timed out")
         .expect("restart kafka container");

@@ -27,6 +27,7 @@ use {
 /// rather than leaving the broker enforcing nothing where the operator wrote
 /// a rule.
 #[krabka_macros::config_table(strict)]
+#[derive(Eq)]
 pub struct FileTopicPolicyConfig {
     /// Lowest replication factor `CreateTopics` may be asked for. The
     /// effective factor is checked, so a request that leaves it `-1` is

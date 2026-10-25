@@ -16,13 +16,19 @@
 use super::sendfile::sendfile_region;
 #[krabka_macros::sendfile_cfg]
 use bytes::BytesMut;
+#[krabka_macros::sendfile_cfg]
+use std::mem;
 use {
     super::{WriteOp, sink::SendfileSink},
     crate::{
         error::BrokerError,
         metrics::{BrokerMetrics, FetchDrainPath},
     },
-    std::io::{Error, ErrorKind, IoSlice},
+    krabka_protocol::records::FileRegion,
+    std::{
+        io::{Error, ErrorKind, IoSlice},
+        iter,
+    },
     tokio::io::{AsyncWrite, AsyncWriteExt},
 };
 
@@ -54,9 +60,8 @@ async fn write_inline_vectored<S: AsyncWrite + Unpin>(
         .map(IoSlice::new)
         .collect();
     let mut remaining = slices.as_mut_slice();
-    while !remaining.is_empty() {
-        let count = remaining.len().min(MAX_IO_SLICES);
-        let written = match stream.write_vectored(&remaining[..count]).await {
+    while let Some(batch) = remaining.chunks(MAX_IO_SLICES).next() {
+        let written = match stream.write_vectored(batch).await {
             Ok(0) => {
                 return Err(BrokerError::Io(Error::new(
                     ErrorKind::WriteZero,
@@ -125,9 +130,7 @@ where
     }
     let mut ops = ops.into_iter();
     let first = ops.next().ok_or_else(|| {
-        BrokerError::Io(std::io::Error::other(
-            "fetch handler produced an empty write plan",
-        ))
+        BrokerError::Io(Error::other("fetch handler produced an empty write plan"))
     })?;
     // The path the ops actually took, not the one the handler asked for. An
     // inline op claims the vectored path only if no file op has spoken yet; a
@@ -140,7 +143,7 @@ where
     // syscall and, on a `TCP_NODELAY` socket, its own segment, so a small
     // fetch response cost four sends and as many wakeups at the reader.
     let mut coalesced = Vec::new();
-    for op in std::iter::once(first).chain(ops) {
+    for op in iter::once(first).chain(ops) {
         krabka_macros::sendfile_match! { match op {
             WriteOp::Inline(b) => {
                 if b.len() < COALESCE_BELOW {
@@ -170,27 +173,24 @@ where
 /// and non-sendfile fallback for `WriteOp::File`. `read_at` (`FileExt`) is
 /// portable across every SENDFILE-alias unix.
 #[krabka_macros::sendfile_cfg]
-fn read_region_exact(
-    region: &krabka_protocol::records::FileRegion,
-    dst: &mut [u8],
-) -> Result<(), BrokerError> {
+fn read_region_exact(region: &FileRegion, dst: &mut [u8]) -> Result<(), BrokerError> {
     use std::os::unix::fs::FileExt;
     assert2::assert!((dst.len()) == (region.len));
-    let mut filled = 0usize;
+    let mut rest = dst;
     let mut offset = region.offset;
-    while filled < dst.len() {
-        match region.file.read_at(&mut dst[filled..], offset) {
+    while !rest.is_empty() {
+        match region.file.read_at(rest, offset) {
             Ok(0) => {
-                return Err(BrokerError::Io(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
+                return Err(BrokerError::Io(Error::new(
+                    ErrorKind::UnexpectedEof,
                     "FileRegion read hit EOF before len bytes",
                 )));
             }
             Ok(n) => {
-                filled += n;
+                rest = mem::take(&mut rest).get_mut(n..).unwrap_or_default();
                 offset += n as u64;
             }
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
             Err(e) => return Err(BrokerError::Io(e)),
         }
     }
@@ -207,17 +207,14 @@ fn read_region_exact(
 #[krabka_macros::sendfile_cfg]
 async fn drain_file_region<S>(
     stream: &mut S,
-    region: &krabka_protocol::records::FileRegion,
+    region: &FileRegion,
 ) -> Result<FetchDrainPath, BrokerError>
 where
     S: AsyncWrite + SendfileSink + Unpin,
 {
-    if stream.tcp_for_sendfile().is_some() {
-        // Re-borrow immutably for the readiness loop. `writable()`/`try_io()`
-        // take `&self`, so this never conflicts with the (released) `&mut`.
-        let tcp = stream
-            .tcp_for_sendfile()
-            .expect("checked Some on the line above");
+    // Borrow immutably for the readiness loop. `writable()`/`try_io()` take
+    // `&self`, so this never conflicts with the (released) `&mut`.
+    if let Some(tcp) = stream.tcp_for_sendfile() {
         sendfile_region(tcp, region, stream.write_idle_window()).await?;
         Ok(FetchDrainPath::Sendfile)
     } else {
@@ -231,7 +228,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::metrics::FetchDrainPathLabel};
+    use {
+        super::*,
+        crate::metrics::FetchDrainPathLabel,
+        std::{io::Cursor, iter},
+        tokio::{
+            io::duplex,
+            net::{TcpListener, TcpStream},
+        },
+    };
 
     /// A bounded pipe forces writes to stop inside and between slices. More than 64 nonempty slices also cross the per-write vector bound.
     #[tokio::test]
@@ -239,7 +244,7 @@ mod tests {
         use {bytes::Bytes, tokio::io::AsyncReadExt as _};
 
         let expected: Vec<_> = (0..=u8::MAX)
-            .flat_map(|byte| std::iter::repeat_n(byte, 9))
+            .flat_map(|byte| iter::repeat_n(byte, 9))
             .collect();
         let ops: Vec<_> = expected
             .chunks(9)
@@ -250,7 +255,7 @@ mod tests {
                 ]
             })
             .collect();
-        let (mut writer, mut reader) = tokio::io::duplex(7);
+        let (mut writer, mut reader) = duplex(7);
         let send = async {
             write_inline_vectored(&mut writer, &ops).await.unwrap();
             writer.shutdown().await.unwrap();
@@ -264,7 +269,7 @@ mod tests {
     #[tokio::test]
     async fn a_zero_vectored_write_fails_instead_of_spinning() {
         let mut storage = [0; 3];
-        let mut writer = std::io::Cursor::new(storage.as_mut_slice());
+        let mut writer = Cursor::new(storage.as_mut_slice());
         let ops = [WriteOp::Inline(bytes::Bytes::from_static(b"abcdef"))];
         let error = write_inline_vectored(&mut writer, &ops).await.unwrap_err();
         assert2::assert!(
@@ -289,10 +294,8 @@ mod tests {
 
     #[tokio::test]
     async fn writer_rejects_an_empty_fetch_plan() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let connect = tokio::spawn(tokio::net::TcpStream::connect(
-            listener.local_addr().unwrap(),
-        ));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let connect = tokio::spawn(TcpStream::connect(listener.local_addr().unwrap()));
         let (mut server, _) = listener.accept().await.unwrap();
         let client = connect.await.unwrap().unwrap();
         let metrics = BrokerMetrics::new();
@@ -314,10 +317,10 @@ mod tests {
     async fn inline_only_plan_counts_as_the_vectored_path() {
         use {bytes::Bytes, tokio::io::AsyncReadExt as _};
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let client = tokio::spawn(async move {
-            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let mut stream = TcpStream::connect(addr).await.unwrap();
             let mut got = Vec::new();
             stream.read_to_end(&mut got).await.unwrap();
             got
@@ -351,15 +354,21 @@ mod tests {
                 test_support::tcp_pair,
             },
             bytes::Bytes,
+            krabka_protocol::records::RecordsPayload,
+            rustls::crypto::aws_lc_rs,
+            std::{
+                io::Result,
+                pin::Pin,
+                task::{self, Poll},
+            },
+            tokio::task::JoinHandle,
         };
 
         fn sequence_records(count: u32) -> Bytes {
             Bytes::from((0..count).flat_map(u32::to_le_bytes).collect::<Vec<_>>())
         }
 
-        async fn receive_records(
-            len: usize,
-        ) -> (tokio::net::TcpStream, tokio::task::JoinHandle<Vec<u8>>) {
+        async fn receive_records(len: usize) -> (TcpStream, JoinHandle<Vec<u8>>) {
             use tokio::io::AsyncReadExt;
             let (server, mut client) = tcp_pair().await;
             let reader = tokio::spawn(async move {
@@ -370,7 +379,7 @@ mod tests {
             (server, reader)
         }
 
-        fn file_operations(payload: &krabka_protocol::records::RecordsPayload) -> Vec<WriteOp> {
+        fn file_operations(payload: &RecordsPayload) -> Vec<WriteOp> {
             let ops = resolve_records_sendfile(payload).unwrap();
             assert2::assert!(ops.iter().any(|o| matches!(o, WriteOp::File(_))));
             ops
@@ -378,7 +387,7 @@ mod tests {
 
         async fn drain_file_and_close<S: AsyncWrite + SendfileSink + Unpin>(
             mut server: S,
-            payload: &krabka_protocol::records::RecordsPayload,
+            payload: &RecordsPayload,
         ) -> BrokerMetrics {
             let ops = file_operations(payload);
             let metrics = BrokerMetrics::new();
@@ -437,23 +446,23 @@ mod tests {
         /// lend its socket, which is the shape of a stream that encrypts in
         /// userspace. It drives the drain's `pread` arm without standing up a
         /// TLS session, whose handshake is not what that arm is about.
-        struct NoSendfileStream(tokio::net::TcpStream);
+        struct NoSendfileStream(TcpStream);
 
         impl SendfileSink for NoSendfileStream {
             fn is_sendfile_capable(&self) -> bool { true }
 
-            fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream> { None }
+            fn tcp_for_sendfile(&self) -> Option<&TcpStream> { None }
         }
 
-        impl tokio::io::AsyncWrite for NoSendfileStream {
+        impl AsyncWrite for NoSendfileStream {
             krabka_macros::async_write_delegate!(tuple);
 
             fn poll_write(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
+                mut self: Pin<&mut Self>,
+                cx: &mut task::Context<'_>,
                 buf: &[u8],
-            ) -> std::task::Poll<std::io::Result<usize>> {
-                std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+            ) -> Poll<Result<usize>> {
+                Pin::new(&mut self.0).poll_write(cx, buf)
             }
         }
 
@@ -489,7 +498,7 @@ mod tests {
             // also exercises the kTLS RX path on the server side.
             const REQ: &[u8] = b"fetch-request";
 
-            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+            let _ = aws_lc_rs::default_provider().install_default();
 
             // Records large enough to span several TLS records + partial writes.
             let mut records = Vec::new();

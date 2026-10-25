@@ -6,6 +6,8 @@
 //!
 //! [`build_registry`]: super::build_registry
 
+#[cfg(test)]
+use std::ops::RangeInclusive;
 use {
     super::{AuthHandler, ContextHandler, ProduceHandler, TelemetryHandler},
     crate::{
@@ -13,6 +15,7 @@ use {
         handlers::{ApiKeyCode, ApiVersion},
     },
     krabka_protocol::api_key::ApiKey,
+    std::collections::HashMap,
 };
 
 /// How the KIP-124 request quota reaches an api.
@@ -23,7 +26,7 @@ use {
 /// `Produce` with `acks = 0`, and it answers `SaslHandshake` and
 /// `SaslAuthenticate` in the authenticator, outside `KafkaApis`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RequestQuotaPolicy {
+pub enum RequestQuotaPolicy {
     /// The dispatch loop charges the quota once the handler returns, and
     /// reports the delay in the response's `ThrottleTimeMs`.
     ApplyFallbackAccounting,
@@ -34,7 +37,7 @@ pub(crate) enum RequestQuotaPolicy {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum DispatchKind {
+pub enum DispatchKind {
     Context(ContextHandler),
     Produce(ProduceHandler),
     Telemetry(TelemetryHandler),
@@ -44,7 +47,7 @@ pub(crate) enum DispatchKind {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct DispatchEntry {
+pub struct DispatchEntry {
     api_key: ApiKeyCode,
     min_version: ApiVersion,
     max_version: ApiVersion,
@@ -54,16 +57,12 @@ pub(crate) struct DispatchEntry {
 }
 
 #[derive(Default)]
-pub(crate) struct DispatchRegistry {
-    table: std::collections::HashMap<ApiKeyCode, DispatchEntry>,
+pub struct DispatchRegistry {
+    table: HashMap<ApiKeyCode, DispatchEntry>,
 }
 
 impl DispatchEntry {
-    pub(crate) fn context(
-        api_key: ApiKeyCode,
-        flexible_min: ApiVersion,
-        handler: ContextHandler,
-    ) -> Self {
+    pub fn context(api_key: ApiKeyCode, flexible_min: ApiVersion, handler: ContextHandler) -> Self {
         Self {
             api_key,
             min_version: 0,
@@ -82,7 +81,7 @@ impl DispatchEntry {
     /// reach it -- see
     /// [`crate::network::dispatch::throttle_audit`]. Charging in the handler,
     /// as `Produce` and `Fetch` do, is what lets the field carry the delay.
-    pub(crate) fn self_accounted_context(
+    pub fn self_accounted_context(
         api_key: ApiKeyCode,
         flexible_min: ApiVersion,
         handler: ContextHandler,
@@ -93,7 +92,7 @@ impl DispatchEntry {
         }
     }
 
-    pub(crate) fn produce(flexible_min: ApiVersion, handler: ProduceHandler) -> Self {
+    pub fn produce(flexible_min: ApiVersion, handler: ProduceHandler) -> Self {
         Self {
             api_key: ApiKey::Produce as i16,
             min_version: 0,
@@ -104,7 +103,7 @@ impl DispatchEntry {
         }
     }
 
-    pub(crate) fn telemetry(
+    pub fn telemetry(
         api_key: ApiKeyCode,
         flexible_min: ApiVersion,
         handler: TelemetryHandler,
@@ -119,11 +118,7 @@ impl DispatchEntry {
         }
     }
 
-    pub(crate) fn auth(
-        api_key: ApiKeyCode,
-        flexible_min: ApiVersion,
-        handler: AuthHandler,
-    ) -> Self {
+    pub fn auth(api_key: ApiKeyCode, flexible_min: ApiVersion, handler: AuthHandler) -> Self {
         Self {
             api_key,
             min_version: 0,
@@ -134,7 +129,7 @@ impl DispatchEntry {
         }
     }
 
-    pub(crate) fn fetch(flexible_min: ApiVersion) -> Self {
+    pub fn fetch(flexible_min: ApiVersion) -> Self {
         Self {
             api_key: ApiKey::Fetch as i16,
             min_version: 0,
@@ -145,7 +140,7 @@ impl DispatchEntry {
         }
     }
 
-    pub(crate) fn sasl_metadata(api_key: ApiKeyCode, flexible_min: ApiVersion) -> Self {
+    pub fn sasl_metadata(api_key: ApiKeyCode, flexible_min: ApiVersion) -> Self {
         Self {
             api_key,
             min_version: 0,
@@ -156,35 +151,33 @@ impl DispatchEntry {
         }
     }
 
-    pub(crate) fn kind(self) -> DispatchKind { self.kind }
+    pub fn kind(self) -> DispatchKind { self.kind }
 
-    pub(crate) fn quota_policy(self) -> RequestQuotaPolicy { self.quota_policy }
+    pub fn quota_policy(self) -> RequestQuotaPolicy { self.quota_policy }
 
-    pub(crate) fn body_flexible(self, version: ApiVersion) -> bool {
+    pub fn body_flexible(self, version: ApiVersion) -> bool {
         self.flexible_min != i16::MAX && version >= self.flexible_min
     }
 
-    pub(crate) fn supports_version(self, version: ApiVersion) -> bool {
+    pub fn supports_version(self, version: ApiVersion) -> bool {
         (self.min_version..=self.max_version).contains(&version)
     }
 
     #[cfg(test)]
-    pub(crate) fn version_range(self) -> std::ops::RangeInclusive<ApiVersion> {
-        self.min_version..=self.max_version
-    }
+    pub fn version_range(self) -> RangeInclusive<ApiVersion> { self.min_version..=self.max_version }
 
     #[cfg(test)]
-    pub(crate) fn is_context(self) -> bool { matches!(self.kind, DispatchKind::Context(_)) }
+    pub fn is_context(self) -> bool { matches!(self.kind, DispatchKind::Context(_)) }
 }
 
 impl DispatchRegistry {
-    pub(crate) fn new() -> Self { Self::default() }
+    pub fn new() -> Self { Self::default() }
 
-    pub(crate) fn register(&mut self, entry: DispatchEntry) -> bool {
+    pub fn register(&mut self, entry: DispatchEntry) -> bool {
         self.table.insert(entry.api_key, entry).is_none()
     }
 
-    pub(crate) fn apply_api_catalog(&mut self) {
+    pub fn apply_api_catalog(&mut self) {
         for api in dispatched_apis() {
             let entry = self
                 .table
@@ -197,7 +190,7 @@ impl DispatchRegistry {
 
     /// Exempt `api_key` from the KIP-124 request quota, as Kafka answers it
     /// through `sendResponseExemptThrottle`.
-    pub(crate) fn exempt_from_request_quota(&mut self, api_key: ApiKeyCode) {
+    pub fn exempt_from_request_quota(&mut self, api_key: ApiKeyCode) {
         let entry = self
             .table
             .get_mut(&api_key)
@@ -207,7 +200,7 @@ impl DispatchRegistry {
 
     /// Marks a registered api as one whose handler charges the request quota
     /// and sets `ThrottleTimeMs` itself.
-    pub(crate) fn self_account_request_quota(&mut self, api_key: ApiKeyCode) {
+    pub fn self_account_request_quota(&mut self, api_key: ApiKeyCode) {
         let entry = self
             .table
             .get_mut(&api_key)
@@ -215,12 +208,12 @@ impl DispatchRegistry {
         entry.quota_policy = RequestQuotaPolicy::SelfAccounted;
     }
 
-    pub(crate) fn get(&self, api_key: ApiKeyCode) -> Option<DispatchEntry> {
+    pub fn get(&self, api_key: ApiKeyCode) -> Option<DispatchEntry> {
         self.table.get(&api_key).copied()
     }
 
     #[cfg(test)]
-    pub(crate) fn get_context(&self, api_key: ApiKeyCode) -> Option<ContextHandler> {
+    pub fn get_context(&self, api_key: ApiKeyCode) -> Option<ContextHandler> {
         match self.get(api_key)?.kind {
             DispatchKind::Context(handler) => Some(handler),
             _ => None,
@@ -228,11 +221,11 @@ impl DispatchRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) fn registered_api_keys(&self) -> impl Iterator<Item = ApiKeyCode> + '_ {
+    pub fn registered_api_keys(&self) -> impl Iterator<Item = ApiKeyCode> + '_ {
         self.table.keys().copied()
     }
 
-    pub(crate) fn body_flexible(&self, api_key: ApiKeyCode, version: ApiVersion) -> bool {
+    pub fn body_flexible(&self, api_key: ApiKeyCode, version: ApiVersion) -> bool {
         self.get(api_key)
             .is_some_and(|entry| entry.body_flexible(version))
     }

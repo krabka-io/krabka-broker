@@ -48,17 +48,18 @@ use {
         handlers::cluster_describe_denied,
         log_dir::{self, DiscoveredPartition},
     },
+    std::sync::Arc,
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DescribeLogDirsRequest,
     _version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<DescribeLogDirsResponse, BrokerError> {
     let log_dirs = broker.config.all_log_dirs();
-    let partitions = broker.partitions.clone();
-    let future_logs = broker.future_logs.clone();
+    let partitions = Arc::clone(&broker.partitions);
+    let future_logs = Arc::clone(&broker.future_logs);
     let log_dir_status = broker.log_dir_status.clone();
 
     // ── ACL preamble ────────────────────────────────────────────

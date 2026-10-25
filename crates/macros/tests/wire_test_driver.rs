@@ -1,4 +1,5 @@
 //! A typed plain driver forwards the owned request and preserves transport errors.
+#![cfg(test)]
 
 use {
     assert2::assert,
@@ -71,7 +72,10 @@ mod support {
 }
 
 mod kafka_wire {
-    use super::{Reply, Request, SocketAddr, io, support::wire::ApiRequestSetup};
+    use {
+        super::{Reply, Request, SocketAddr, io, support::wire::ApiRequestSetup},
+        std::{future, future::Ready},
+    };
 
     #[derive(Clone)]
     pub struct PlainAuthenticationSetup<'a> {
@@ -88,12 +92,12 @@ mod kafka_wire {
         address: SocketAddr,
         request: &Request,
         setup: &PlainRequestSetup<'_>,
-    ) -> std::future::Ready<io::Result<Reply>> {
+    ) -> Ready<io::Result<Reply>> {
         assert2::assert!(address.port() == 9092);
         assert2::assert!(setup.authentication.username == "alice");
         assert2::assert!(setup.api.key == 42 && setup.api.version == 7);
         assert2::assert!(setup.operation == "probe response");
-        std::future::ready(if request.value == 0 {
+        future::ready(if request.value == 0 {
             Err(io::Error::new(
                 io::ErrorKind::ConnectionReset,
                 "transport failure",

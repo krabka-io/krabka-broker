@@ -14,15 +14,16 @@ use {
     krabka_object_store::fault::{FaultInjectingStore, FaultPolicy},
     object_store::{ObjectStore, memory::InMemory},
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
-    std::sync::Arc,
+    std::{fs, path::Path, sync::Arc},
     tempfile::TempDir,
+    tokio::task,
     uuid::Uuid,
 };
 
 pub(super) const WORM_KEY_ID: &str = "s3-worm-key";
 
 pub(super) fn rsm(prefix: Option<&str>) -> S3RemoteStorage {
-    S3RemoteStorage::with_store(Arc::new(InMemory::new()), prefix.map(str::to_string))
+    S3RemoteStorage::with_store(Arc::new(InMemory::new()), prefix.map(str::to_owned))
 }
 
 /// A remote storage over a counting store, and the store.
@@ -40,7 +41,7 @@ pub(super) fn counting_rsm() -> CountingRsm {
         FaultPolicy::none(),
     ));
     CountingRsm {
-        store: S3RemoteStorage::with_store(counter.clone(), None),
+        store: S3RemoteStorage::with_store(Arc::<FaultInjectingStore>::clone(&counter), None),
         counter,
     }
 }
@@ -110,7 +111,7 @@ pub(super) async fn seeded_blocking(
         metadata: md,
         transaction_index,
     } = setup;
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         let src = TempDir::new().unwrap();
         store
             .copy_log_segment_data(&md, &sample_data(src.path(), transaction_index))
@@ -126,13 +127,13 @@ pub(super) fn worm_epoch() -> EpochId { EpochId(Uuid::from_u128(0x5eed)) }
 
 /// A [`WormConfig`] naming a throwaway PKCS#8 Ed25519 key written into
 /// `dir`. `ring` mints it because `krabka-audit` exposes no key generator.
-pub(super) fn worm_config(dir: &std::path::Path, access: WormAccess) -> WormConfig {
+pub(super) fn worm_config(dir: &Path, access: WormAccess) -> WormConfig {
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
     let path = dir.join("worm.pk8");
-    std::fs::write(&path, pkcs8.as_ref()).unwrap();
+    fs::write(&path, pkcs8.as_ref()).unwrap();
     WormConfig {
         signing_key_path: Some(path),
-        signing_key_id: Some(WORM_KEY_ID.to_string()),
+        signing_key_id: Some(WORM_KEY_ID.to_owned()),
         write_only: access == WormAccess::WriteOnly,
     }
 }

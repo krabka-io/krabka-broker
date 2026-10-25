@@ -146,8 +146,9 @@ mod tests {
             metadata_observer::{ObserverConfig, test_support::observer_config},
             metadata_source::test_support::{StartedController, start_controller, topic_record},
         },
-        std::sync::Mutex,
+        std::{sync, sync::Mutex, time::Duration},
         tempfile::TempDir,
+        tokio::{task, time},
         uuid::Uuid,
     };
 
@@ -193,7 +194,10 @@ mod tests {
         let rec_writer = Arc::new(RecordingWriter {
             calls: Mutex::new(Vec::new()),
         });
-        let source = ObserverSource::new(observer.clone(), rec_writer.clone());
+        let source = ObserverSource::new(
+            sync::Arc::clone(&observer),
+            sync::Arc::<RecordingWriter>::clone(&rec_writer),
+        );
 
         assert2::assert!((source.current_image().cluster_id()) == (cluster_id));
         assert2::assert!((source.current_metadata_offset()) == (-1));
@@ -208,7 +212,7 @@ mod tests {
             .await
             .expect("submit via writer");
         {
-            let calls = rec_writer.calls.lock().unwrap();
+            let calls = rec_writer.calls.lock().unwrap().clone();
             assert2::assert!((calls.len()) == (1));
             assert2::assert!(
                 matches!(&calls[0][0], MetadataRecord::V1Topic(t) if t.name == "forwarded-topic")
@@ -257,12 +261,12 @@ mod tests {
         });
         let source = ObserverSource::new(observer, writer);
 
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        time::timeout(Duration::from_secs(5), async {
             loop {
                 if source.current_metadata_offset() == expected_offset {
                     break;
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await

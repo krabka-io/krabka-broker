@@ -6,9 +6,10 @@ use {
         FILE_NAME, FORMAT_VERSION, ProofError, UNPROVEN, decode, encode, restart_was_clean, take,
         write,
     },
-    crate::test_support::broker_registration,
+    crate::{test_support, test_support::broker_registration},
     assert2::assert,
     krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId},
+    std::fs,
 };
 
 const NODE: NodeId = NodeId(2);
@@ -21,9 +22,7 @@ fn image_registering_node_at(broker_epoch: i64) -> MetadataImage {
             broker_epoch,
             incarnation_id: uuid::Uuid::from_u128(7),
             host: "broker-2".into(),
-            endpoints: vec![crate::test_support::plaintext_broker_endpoint(
-                "broker-2", 9092,
-            )],
+            endpoints: vec![test_support::plaintext_broker_endpoint("broker-2", 9092)],
             log_dirs: vec![uuid::Uuid::from_u128(11)],
             ..broker_registration(NODE)
         },
@@ -72,10 +71,10 @@ fn the_proof_holds_kafkas_bytes() {
     let dir = tempfile::tempdir().expect("temp dir");
     write(dir.path(), 42);
 
-    let on_disk = std::fs::read_to_string(dir.path().join(".kafka_cleanshutdown"))
+    let on_disk = fs::read_to_string(dir.path().join(".kafka_cleanshutdown"))
         .expect("the proof is at Kafka's file name");
     assert!(
-        (FILE_NAME, encode(42), on_disk)
+        (FILE_NAME, encode(42).unwrap(), on_disk)
             == (".kafka_cleanshutdown", GOLDEN.to_owned(), GOLDEN.to_owned())
     );
 }
@@ -132,7 +131,7 @@ fn decode_refuses_documents_that_are_not_kafkas(text: &str) {
 )]
 fn an_unreadable_proof_is_unproven_and_still_spent(text: &str) {
     let dir = tempfile::tempdir().expect("temp dir");
-    std::fs::write(dir.path().join(FILE_NAME), text).expect("seed file");
+    fs::write(dir.path().join(FILE_NAME), text).expect("seed file");
 
     assert2::assert!(take(dir.path()) == UNPROVEN, "take over {text:?}");
     assert2::assert!(!dir.path().join(FILE_NAME).exists(), "{text:?} was spent");

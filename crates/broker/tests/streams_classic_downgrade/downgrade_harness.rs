@@ -28,34 +28,32 @@ use {
         owned::offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
         primitives::uuid::Uuid as WireUuid,
     },
-    std::sync::Arc,
+    std::{path::PathBuf, sync::Arc},
 };
 
-pub(crate) async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
+pub async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
     boot_streams(ElectionReadiness::BrokerElectable).await
 }
 
-pub(crate) async fn connect(bootstrap: &str) -> Arc<Client> {
-    connect_client(bootstrap, "c1").await
-}
+pub async fn connect(bootstrap: &str) -> Arc<Client> { connect_client(bootstrap, "c1").await }
 
-pub(crate) async fn create_topic(client: &Client, topic: &str, partitions: i32) {
+pub async fn create_topic(client: &Client, topic: &str, partitions: i32) {
     create_support_topic(client, topic, partitions).await;
 }
 
 /// Finalizes `streams.version` at level 1, so that the heartbeat and describe
 /// handlers stop returning `UNSUPPORTED_VERSION`. `upgrade_type: 1` is
 /// UPGRADE.
-pub(crate) async fn finalize_streams_version(client: &Client) {
+pub async fn finalize_streams_version(client: &Client) {
     finalize_streams_version_request(client).await;
 }
 
-pub(crate) use crate::support::topic_id_for;
+pub use crate::support::topic_id_for;
 
 /// Commits an offset as the streams member `member_id` at `member_epoch`, as
 /// a Streams client does. Kafka's `StreamsGroup.validateOffsetCommit` refuses
 /// a commit with no member on a group that has members.
-pub(crate) async fn commit_offset_as_member(
+pub async fn commit_offset_as_member(
     client: &Client,
     group_id: &str,
     (member_id, member_epoch): (&str, i32),
@@ -85,7 +83,7 @@ pub(crate) async fn commit_offset_as_member(
     );
 }
 
-pub(crate) fn rejoin_config(log_dir: std::path::PathBuf) -> BrokerConfig {
+pub fn rejoin_config(log_dir: PathBuf) -> BrokerConfig {
     let mut cfg = heartbeat_config(log_dir);
     cfg.bootstrap_mode = BootstrapMode::Rejoin;
     cfg

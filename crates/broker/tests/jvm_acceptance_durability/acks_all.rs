@@ -14,6 +14,8 @@ use {
         },
     },
     assert2::assert,
+    std::{process::Stdio, time::Duration},
+    tokio::time,
 };
 
 // `acks=all` durability gate: 3-broker Krabka cluster, JVM
@@ -74,8 +76,8 @@ async fn acks_all_durability() {
         ])
         .input(ContainerInput::Attached)
         .call()
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .output()
         .expect("spawn kafka-console-producer");
     eprintln!(
@@ -95,7 +97,7 @@ async fn acks_all_durability() {
     // node 3 and its high-watermark to advance before the read_committed
     // consume below. Follower high-watermark/LSO is not in the metadata image
     // and has no krabka awaiter/metric.
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    time::sleep(Duration::from_secs(2)).await;
 
     let bootstrap_3 = format!("host.docker.internal:{}", client_ports[2]);
     let consume_out = consume_committed_at(&bootstrap_3, TOPIC, 100);

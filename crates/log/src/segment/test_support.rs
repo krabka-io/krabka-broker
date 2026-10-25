@@ -8,6 +8,7 @@ use {
     krabka_ids::Offset,
     krabka_protocol::records::RecordBatch,
     krabka_units::prelude::{ByteSize, ByteSizeExt, gibibytes},
+    std::{path::Path, sync::Arc},
     tempfile::tempdir,
 };
 
@@ -178,7 +179,7 @@ pub(super) struct SeededSegmentSetup<'a> {
 
 #[bon::builder]
 pub(super) fn seeded_segment(
-    dir: &std::path::Path,
+    dir: &Path,
     #[builder(into, default)] offset: Offset,
     #[builder(default)] batches: &'_ [SampleBatchSetup],
     #[builder(default = DENSE_INDEX)] index_interval: ByteSize,
@@ -265,8 +266,8 @@ pub(super) fn sample_batches(batches: &[SampleBatchSetup]) -> Vec<RecordBatch> {
 /// `seg` with its I/O routed through a fresh
 /// [`crate::test_support::RecordedAdvice`], which the caller keeps to read the
 /// hints back.
-pub(super) fn recording_advice(seg: &mut Segment) -> std::sync::Arc<RecordedAdvice> {
-    let advice = std::sync::Arc::new(RecordedAdvice::default());
-    seg.set_io(advice.clone());
+pub(super) fn recording_advice(seg: &mut Segment) -> Arc<RecordedAdvice> {
+    let advice = Arc::new(RecordedAdvice::default());
+    seg.set_io(Arc::<RecordedAdvice>::clone(&advice));
     advice
 }

@@ -8,20 +8,30 @@
 #[cfg(unix)]
 use std::fs::OpenOptions;
 #[cfg(unix)]
-use std::io::{IoSlice, Seek, SeekFrom, Write};
+use std::io::{self, IoSlice, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
 use {
-    criterion::{Criterion, black_box, criterion_group, criterion_main},
+    criterion::{
+        BenchmarkGroup, Criterion, black_box, criterion_group, criterion_main,
+        measurement::WallTime,
+    },
     krabka_ids::{LeaderEpoch, Offset, ProducerId},
     krabka_log::{AbortedTxn, Log, LogConfig, SegmentAllocation, TxnIndex, VerbatimBatch},
     krabka_protocol::records::RecordBatch,
     krabka_units::prelude::{ByteSize, bytes, gibibytes, kibibytes, mebibytes},
+    rustix::process::{Resource, getrlimit},
     std::{
-        sync::{Arc, Mutex},
+        cell::RefCell,
+        env,
+        error::Error,
+        fs::{self, File},
+        process,
+        sync::{Arc, Mutex, PoisonError},
         time::Instant,
     },
     tempfile::tempdir,
+    tokio::{runtime::Runtime, task},
 };
 
 /// A read budget larger than the whole benchmark log, so the "unbounded"
@@ -30,17 +40,60 @@ const UNBOUNDED: ByteSize = gibibytes(4);
 
 krabka_macros::record_batch_fixture!(make_batch);
 
-fn make_verbatim_batch(n: i32, payload_size: usize) -> VerbatimBatch {
+/// What a benchmark's setup or measured work returns.
+type BenchResult<T = ()> = Result<T, Box<dyn Error>>;
+
+/// The first error a measured closure hit. A closure that criterion times
+/// cannot return an error, so it records one here and the benchmark function
+/// returns it once the measurement is over.
+#[derive(Default)]
+struct FirstError(Option<Box<dyn Error>>);
+
+impl FirstError {
+    /// The value of `result`, or `None` after recording its error.
+    fn record<T, E: Into<Box<dyn Error>>>(&mut self, result: Result<T, E>) -> Option<T> {
+        match result {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.0.get_or_insert_with(|| error.into());
+                None
+            }
+        }
+    }
+
+    fn into_result(self) -> BenchResult { self.0.map_or(Ok(()), Err) }
+}
+
+/// The error the benchmarks stopped with, which [`report_failures`] reports.
+static FAILURE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Run the benchmarks of one group, keeping the error they stopped with.
+fn run(
+    c: &mut Criterion,
+    name: &str,
+    bench: impl FnOnce(&mut BenchmarkGroup<'_, WallTime>) -> BenchResult,
+) {
+    let mut group = c.benchmark_group(name);
+    if let Err(error) = bench(&mut group) {
+        FAILURE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(|| format!("{name}: {error}"));
+    }
+    group.finish();
+}
+
+fn make_verbatim_batch(n: i32, payload_size: usize) -> BenchResult<VerbatimBatch> {
     make_verbatim_from_batch(&make_batch(n, payload_size))
 }
 
-fn make_verbatim_from_batch(batch: &RecordBatch) -> VerbatimBatch {
+fn make_verbatim_from_batch(batch: &RecordBatch) -> BenchResult<VerbatimBatch> {
     let mut buf = bytes::BytesMut::with_capacity(batch.encoded_len());
-    batch.encode(&mut buf).unwrap();
+    batch.encode(&mut buf)?;
     let is_txn = batch.attributes.is_transactional();
     let epoch = LeaderEpoch(batch.partition_leader_epoch);
     let pid = ProducerId(batch.producer_id);
-    VerbatimBatch {
+    Ok(VerbatimBatch {
         bytes: buf.freeze(),
         last_offset_delta: batch.last_offset_delta,
         max_timestamp: batch.max_timestamp,
@@ -49,7 +102,7 @@ fn make_verbatim_from_batch(batch: &RecordBatch) -> VerbatimBatch {
         producer_epoch: batch.producer_epoch,
         base_sequence: batch.base_sequence,
         is_transactional: is_txn,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -62,19 +115,24 @@ struct TempLog {
     log: Log,
 }
 
-fn open_log(config: LogConfig) -> TempLog {
-    let scratch = tempdir().expect("tempdir");
+fn open_log(config: LogConfig) -> BenchResult<TempLog> {
+    let scratch = tempdir()?;
     let target_path = scratch.path();
-    let log = Log::open(target_path, config).expect("open log");
-    TempLog { dir: scratch, log }
+    let log = Log::open(target_path, config)?;
+    Ok(TempLog { dir: scratch, log })
 }
 
-fn populated_log(config: LogConfig, appends: usize, records: i32, payload: usize) -> TempLog {
-    let TempLog { dir, mut log } = open_log(config);
+fn populated_log(
+    config: LogConfig,
+    appends: usize,
+    records: i32,
+    payload: usize,
+) -> BenchResult<TempLog> {
+    let TempLog { dir, mut log } = open_log(config)?;
     for _ in 0..appends {
-        log.append(&mut make_batch(records, payload)).unwrap();
+        log.append(&mut make_batch(records, payload))?;
     }
-    TempLog { dir, log }
+    Ok(TempLog { dir, log })
 }
 
 /// A shared log in a temporary directory, with a verbatim batch to append to it.
@@ -84,33 +142,32 @@ struct VerbatimFixture {
     batch: VerbatimBatch,
 }
 
-fn verbatim_fixture(payload: usize) -> VerbatimFixture {
-    let TempLog { dir, log } = open_log(LogConfig::default());
-    let batch = make_verbatim_batch(1, payload);
-    VerbatimFixture {
+fn verbatim_fixture(payload: usize) -> BenchResult<VerbatimFixture> {
+    let TempLog { dir, log } = open_log(LogConfig::default())?;
+    let batch = make_verbatim_batch(1, payload)?;
+    Ok(VerbatimFixture {
         dir,
         log: Arc::new(Mutex::new(log)),
         batch,
-    }
+    })
 }
 
 /// An empty file in a temporary directory.
 #[cfg(unix)]
 struct FileFixture {
     dir: tempfile::TempDir,
-    file: std::fs::File,
+    file: File,
 }
 
 #[cfg(unix)]
-fn file_fixture() -> FileFixture {
-    let dir = tempdir().unwrap();
+fn file_fixture() -> BenchResult<FileFixture> {
+    let dir = tempdir()?;
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create_new(true)
-        .open(dir.path().join("bench.log"))
-        .unwrap();
-    FileFixture { dir, file }
+        .open(dir.path().join("bench.log"))?;
+    Ok(FileFixture { dir, file })
 }
 
 /// A [`VerbatimFixture`] with the tokio runtime that drives it.
@@ -118,22 +175,24 @@ struct AsyncVerbatimFixture {
     dir: tempfile::TempDir,
     log: Arc<Mutex<Log>>,
     batch: VerbatimBatch,
-    runtime: tokio::runtime::Runtime,
+    runtime: Runtime,
 }
 
-fn async_verbatim_fixture() -> AsyncVerbatimFixture {
-    let VerbatimFixture { dir, log, batch } = verbatim_fixture(100 * 1024);
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    AsyncVerbatimFixture {
+fn async_verbatim_fixture() -> BenchResult<AsyncVerbatimFixture> {
+    let VerbatimFixture { dir, log, batch } = verbatim_fixture(100 * 1024)?;
+    let runtime = Runtime::new()?;
+    Ok(AsyncVerbatimFixture {
         dir,
         log,
         batch,
         runtime,
-    }
+    })
 }
 
-fn bench_append_record_sizes(c: &mut Criterion) {
-    let mut group = c.benchmark_group("log/append");
+fn bench_append_record_sizes(c: &mut Criterion) { run(c, "log/append", append_record_sizes); }
+
+fn append_record_sizes(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let mut failed = FirstError::default();
 
     for &(records, payload) in &[
         (1i32, 64usize),
@@ -142,26 +201,33 @@ fn bench_append_record_sizes(c: &mut Criterion) {
         (100, 1024),
         (500, 256),
     ] {
-        let TempLog { dir: _dir, mut log } = open_log(LogConfig::default());
+        let TempLog { dir: _dir, mut log } = open_log(LogConfig::default())?;
         group.bench_function(format!("{records}rec_{payload}B"), |b| {
             b.iter(|| {
                 let mut batch = make_batch(records, payload);
-                log.append(&mut batch).unwrap();
+                failed.record(log.append(&mut batch));
             });
         });
     }
 
-    group.finish();
+    failed.into_result()
 }
 
 fn bench_append_large_message_paths(c: &mut Criterion) {
-    let mut group = c.benchmark_group("log/append_large_message");
+    run(c, "log/append_large_message", append_large_message_paths);
+}
+
+fn append_large_message_paths(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let mut failed = FirstError::default();
 
     group.bench_function("owned_1rec_100KiB", |b| {
-        let TempLog { dir: _dir, mut log } = open_log(LogConfig::default());
+        let Some(TempLog { dir: _dir, mut log }) = failed.record(open_log(LogConfig::default()))
+        else {
+            return;
+        };
         b.iter(|| {
             let mut batch = make_batch(1, 100 * 1024);
-            log.append(&mut batch).unwrap();
+            failed.record(log.append(&mut batch));
         });
     });
 
@@ -170,91 +236,113 @@ fn bench_append_large_message_paths(c: &mut Criterion) {
         ("verbatim_1rec_512KiB", 512 * 1024),
     ] {
         group.bench_function(label, |b| {
-            let TempLog { dir: _dir, mut log } = open_log(LogConfig::default());
-            let batch = make_verbatim_batch(1, payload);
+            let Some((TempLog { dir: _dir, mut log }, batch)) = failed.record(
+                open_log(LogConfig::default())
+                    .and_then(|log| Ok((log, make_verbatim_batch(1, payload)?))),
+            ) else {
+                return;
+            };
             b.iter(|| {
-                log.append_verbatim(&batch).unwrap();
+                failed.record(log.append_verbatim(&batch));
             });
         });
     }
 
-    group.finish();
+    failed.into_result()
 }
 
 fn bench_append_direct_groups(c: &mut Criterion) {
-    let Some(path) = std::env::var_os("KRABKA_DIRECT_BENCH_DIR") else {
-        return;
+    run(c, "log/direct_groups", append_direct_groups);
+}
+
+fn append_direct_groups(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let Some(path) = env::var_os("KRABKA_DIRECT_BENCH_DIR") else {
+        return Ok(());
     };
-    let batch = make_verbatim_batch(1, 64);
-    let mut group = c.benchmark_group("log/direct_groups");
-    for count in [8, 32, 64] {
-        group.throughput(criterion::Throughput::Elements(count));
-        let batches = vec![&batch; usize::try_from(count).unwrap()];
+    let batch = make_verbatim_batch(1, 64)?;
+    let mut failed = FirstError::default();
+    for count in [8_usize, 32, 64] {
+        group.throughput(criterion::Throughput::Elements(count as u64));
+        let batches = vec![&batch; count];
         for coalesce in [false, true] {
-            let dir = tempfile::tempdir_in(&path).unwrap();
+            let dir = tempfile::tempdir_in(&path)?;
             let mut log = Log::open(dir.path(), LogConfig {
                 segment_allocation: SegmentAllocation::Preallocate,
                 ..LogConfig::default()
-            })
-            .unwrap();
-            log.append_verbatim(&batch).unwrap();
-            assert2::assert!(
-                log.try_append_verbatim_group(&batches).is_some(),
-                "benchmark directory must support Direct I/O"
-            );
+            })?;
+            log.append_verbatim(&batch)?;
+            if log.try_append_verbatim_group(&batches).is_none() {
+                return Err("benchmark directory must support Direct I/O".into());
+            }
             let mode = if coalesce { "coalesced" } else { "individual" };
             group.bench_function(format!("{mode}_{count}"), |b| {
                 b.iter(|| {
                     if coalesce && let Some(result) = log.try_append_verbatim_group(&batches) {
-                        result.unwrap();
+                        failed.record(result);
                     } else {
                         for &batch in &batches {
-                            log.append_verbatim(batch).unwrap();
+                            failed.record(log.append_verbatim(batch));
                         }
                     }
                 });
             });
         }
     }
-    group.finish();
+    failed.into_result()
 }
 
-fn bench_append_handoff(c: &mut Criterion) {
-    let mut group = c.benchmark_group("log/append_handoff");
+fn bench_append_handoff(c: &mut Criterion) { run(c, "log/append_handoff", append_handoff); }
+
+fn append_handoff(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let mut failed = FirstError::default();
 
     group.bench_function("direct_mutex_verbatim_1rec_100KiB", |b| {
-        let VerbatimFixture {
+        let Some(VerbatimFixture {
             dir: _dir,
             log,
             batch,
-        } = verbatim_fixture(100 * 1024);
+        }) = failed.record(verbatim_fixture(100 * 1024))
+        else {
+            return;
+        };
         b.iter_custom(|iters| {
             let start = Instant::now();
             for _ in 0..iters {
-                log.lock().unwrap().append_verbatim(&batch).unwrap();
+                failed.record(
+                    log.lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .append_verbatim(&batch),
+                );
             }
             start.elapsed()
         });
     });
 
     group.bench_function("spawn_blocking_mutex_verbatim_1rec_100KiB", |b| {
-        let AsyncVerbatimFixture {
+        let Some(AsyncVerbatimFixture {
             dir: _dir,
             log,
             batch,
             runtime: rt,
-        } = async_verbatim_fixture();
+        }) = failed.record(async_verbatim_fixture())
+        else {
+            return;
+        };
         b.iter_custom(|iters| {
             rt.block_on(async {
                 let t0 = Instant::now();
                 for _ in 0..iters {
                     let log = Arc::clone(&log);
                     let batch = batch.clone();
-                    tokio::task::spawn_blocking(move || {
-                        log.lock().unwrap().append_verbatim(&batch).unwrap();
+                    let appended = task::spawn_blocking(move || {
+                        log.lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .append_verbatim(&batch)
                     })
-                    .await
-                    .unwrap();
+                    .await;
+                    if let Some(appended) = failed.record(appended) {
+                        failed.record(appended);
+                    }
                 }
                 t0.elapsed()
             })
@@ -262,18 +350,25 @@ fn bench_append_handoff(c: &mut Criterion) {
     });
 
     group.bench_function("block_in_place_mutex_verbatim_1rec_100KiB", |b| {
-        let AsyncVerbatimFixture {
+        let Some(AsyncVerbatimFixture {
             dir: _dir,
             log,
             batch,
             runtime: rt,
-        } = async_verbatim_fixture();
+        }) = failed.record(async_verbatim_fixture())
+        else {
+            return;
+        };
         b.iter_custom(|iters| {
             rt.block_on(async {
                 let start = Instant::now();
                 for _ in 0..iters {
-                    tokio::task::block_in_place(|| {
-                        log.lock().unwrap().append_verbatim(&batch).unwrap();
+                    task::block_in_place(|| {
+                        failed.record(
+                            log.lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .append_verbatim(&batch),
+                        );
                     });
                 }
                 start.elapsed()
@@ -281,50 +376,72 @@ fn bench_append_handoff(c: &mut Criterion) {
         });
     });
 
-    group.finish();
+    failed.into_result()
 }
 
 #[cfg(unix)]
 fn bench_file_write_shapes(c: &mut Criterion) {
-    let mut group = c.benchmark_group("log/file_write_shapes");
+    run(c, "log/file_write_shapes", file_write_shapes);
+}
+
+#[cfg(unix)]
+fn file_write_shapes(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let mut failed = FirstError::default();
     let header = [0xABu8; 61];
     let body = vec![0xCDu8; (100 * 1024) - header.len()];
 
     group.bench_function("seek_end_writev_100KiB", |b| {
-        let FileFixture { dir: _dir, file } = file_fixture();
+        let Some(FileFixture { dir: _dir, file }) = failed.record(file_fixture()) else {
+            return;
+        };
         b.iter(|| {
-            (&file).seek(SeekFrom::End(0)).unwrap();
-            write_file_payload_vectored(&file, &header, &body);
+            failed.record(
+                (&file)
+                    .seek(SeekFrom::End(0))
+                    .and_then(|_| write_file_payload_vectored(&file, &header, &body)),
+            );
         });
     });
 
     group.bench_function("writev_at_current_cursor_100KiB", |b| {
-        let FileFixture { dir: _dir, file } = file_fixture();
+        let Some(FileFixture { dir: _dir, file }) = failed.record(file_fixture()) else {
+            return;
+        };
         b.iter(|| {
-            write_file_payload_vectored(&file, &header, &body);
+            failed.record(write_file_payload_vectored(&file, &header, &body));
         });
     });
 
     group.bench_function("write_all_at_twice_100KiB", |b| {
-        let FileFixture { dir: _dir, file } = file_fixture();
+        let Some(FileFixture { dir: _dir, file }) = failed.record(file_fixture()) else {
+            return;
+        };
         let mut position = 0u64;
         b.iter(|| {
-            file.write_all_at(&header, position).unwrap();
-            file.write_all_at(&body, position + header.len() as u64)
-                .unwrap();
+            failed.record(
+                file.write_all_at(&header, position)
+                    .and_then(|()| file.write_all_at(&body, position + header.len() as u64)),
+            );
             position += (header.len() + body.len()) as u64;
         });
     });
 
-    group.finish();
+    failed.into_result()
 }
 
 #[cfg(unix)]
-fn write_file_payload_vectored(file: &std::fs::File, header: &[u8], body: &[u8]) {
+fn write_file_payload_vectored(file: &File, header: &[u8], body: &[u8]) -> io::Result<()> {
     let bufs = [IoSlice::new(header), IoSlice::new(body)];
     let mut writer = file;
-    let bytes_written = writer.write_vectored(&bufs).unwrap();
-    assert2::assert!(bytes_written == header.len() + body.len());
+    let bytes_written = writer.write_vectored(&bufs)?;
+    if bytes_written == header.len() + body.len() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "a vectored write took {bytes_written} of {} bytes",
+            header.len() + body.len()
+        )))
+    }
 }
 
 #[cfg(not(unix))]
@@ -334,11 +451,13 @@ fn bench_file_write_shapes(_c: &mut Criterion) {}
 // Read benchmarks at varied offsets / sizes
 // ---------------------------------------------------------------------------
 
-fn bench_read(c: &mut Criterion) {
-    let TempLog { dir: _dir, log } = populated_log(LogConfig::default(), 200, 100, 256);
+fn bench_read(c: &mut Criterion) { run(c, "log/read", read); }
+
+fn read(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let TempLog { dir: _dir, log } = populated_log(LogConfig::default(), 200, 100, 256)?;
     let end = log.log_end_offset();
 
-    let mut group = c.benchmark_group("log/read");
+    let mut failed = FirstError::default();
 
     for (label, offset, budget) in [
         ("from_start_1MiB", Offset(0), mebibytes(1)),
@@ -353,7 +472,7 @@ fn bench_read(c: &mut Criterion) {
     ] {
         group.bench_function(label, |b| {
             b.iter(|| {
-                let out = log.read(black_box(offset), budget).unwrap();
+                let out = failed.record(log.read(black_box(offset), budget));
                 black_box(out);
             });
         });
@@ -372,10 +491,10 @@ fn bench_read(c: &mut Criterion) {
         let TempLog {
             dir,
             log: mut descriptor_log,
-        } = open_log(LogConfig::default());
+        } = open_log(LogConfig::default())?;
         for _ in 0..1024 {
             let mut batch = make_batch(1, 64);
-            descriptor_log.append(&mut batch).unwrap();
+            descriptor_log.append(&mut batch)?;
         }
         let descriptor_end = descriptor_log.log_end_offset();
         (dir, descriptor_log, descriptor_end)
@@ -392,9 +511,11 @@ fn bench_read(c: &mut Criterion) {
     ))]
     group.bench_function("descriptor_small_batches", |b| {
         b.iter(|| {
-            let out = descriptor_log
-                .read_raw_desc(black_box(Offset(0)), descriptor_end, UNBOUNDED)
-                .unwrap();
+            let out = failed.record(descriptor_log.read_raw_desc(
+                black_box(Offset(0)),
+                descriptor_end,
+                UNBOUNDED,
+            ));
             black_box(out);
         });
     });
@@ -412,9 +533,9 @@ fn bench_read(c: &mut Criterion) {
         let TempLog {
             dir,
             log: mut large_batch_log,
-        } = open_log(LogConfig::default());
+        } = open_log(LogConfig::default())?;
         let mut batch = make_batch(1, 1024 * 1024);
-        large_batch_log.append(&mut batch).unwrap();
+        large_batch_log.append(&mut batch)?;
         let end = large_batch_log.log_end_offset();
         (dir, large_batch_log, end)
     };
@@ -430,14 +551,16 @@ fn bench_read(c: &mut Criterion) {
     ))]
     group.bench_function("descriptor_large_batch", |b| {
         b.iter(|| {
-            let out = large_batch_log
-                .read_raw_desc(black_box(Offset(0)), large_batch_end, UNBOUNDED)
-                .unwrap();
+            let out = failed.record(large_batch_log.read_raw_desc(
+                black_box(Offset(0)),
+                large_batch_end,
+                UNBOUNDED,
+            ));
             black_box(out);
         });
     });
 
-    group.finish();
+    failed.into_result()
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +580,7 @@ const TAIL_PAYLOAD: usize = 1024;
 /// A one-byte `segment_size` rolls the active segment on every append after
 /// the first, so the log ends with `segments - 1` sealed segments and an
 /// active one that holds the last batch.
-fn tail_log(segments: usize) -> TempLog {
+fn tail_log(segments: usize) -> BenchResult<TempLog> {
     populated_log(
         LogConfig {
             segment_size: bytes(1),
@@ -485,7 +608,7 @@ fn files_for(segments: usize) -> u64 {
 /// benchmark skips that count rather than fail on `EMFILE` halfway through it.
 #[cfg(target_os = "linux")]
 fn open_files_allow(segments: usize) -> bool {
-    rustix::process::getrlimit(rustix::process::Resource::Nofile)
+    getrlimit(Resource::Nofile)
         .current
         .is_none_or(|limit| limit >= files_for(segments))
 }
@@ -499,8 +622,10 @@ fn open_files_allow(_segments: usize) -> bool { true }
 /// The read finds its first segment by a binary search over the sealed
 /// segments, so the time should not grow with the count. The second read
 /// starts in the last sealed segment and crosses into the active one.
-fn bench_read_tail(c: &mut Criterion) {
-    let mut group = c.benchmark_group("log/read_tail");
+fn bench_read_tail(c: &mut Criterion) { run(c, "log/read_tail", read_tail); }
+
+fn read_tail(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let mut failed = FirstError::default();
 
     for segments in TAIL_SEGMENT_COUNTS {
         if !open_files_allow(segments) {
@@ -510,23 +635,20 @@ fn bench_read_tail(c: &mut Criterion) {
             );
             continue;
         }
-        let TempLog { dir: _dir, log } = tail_log(segments);
+        let TempLog { dir: _dir, log } = tail_log(segments)?;
         let end = log.log_end_offset();
         let last = end - 1;
         let crossing = (end - 2).max(Offset(0));
 
         group.bench_function(format!("decoded_last_batch_{segments}_segments"), |b| {
-            b.iter(|| black_box(log.read(black_box(last), mebibytes(1)).unwrap()));
+            b.iter(|| black_box(failed.record(log.read(black_box(last), mebibytes(1)))));
         });
         group.bench_function(format!("raw_last_batch_{segments}_segments"), |b| {
-            b.iter(|| black_box(log.read_raw(black_box(last), end, mebibytes(1)).unwrap()));
+            b.iter(|| black_box(failed.record(log.read_raw(black_box(last), end, mebibytes(1)))));
         });
         group.bench_function(format!("raw_last_two_batches_{segments}_segments"), |b| {
             b.iter(|| {
-                black_box(
-                    log.read_raw(black_box(crossing), end, mebibytes(1))
-                        .unwrap(),
-                )
+                black_box(failed.record(log.read_raw(black_box(crossing), end, mebibytes(1))))
             });
         });
         #[cfg(any(
@@ -540,23 +662,22 @@ fn bench_read_tail(c: &mut Criterion) {
         ))]
         group.bench_function(format!("descriptor_last_batch_{segments}_segments"), |b| {
             b.iter(|| {
-                black_box(
-                    log.read_raw_desc(black_box(last), end, mebibytes(1))
-                        .unwrap(),
-                )
+                black_box(failed.record(log.read_raw_desc(black_box(last), end, mebibytes(1))))
             });
         });
     }
 
-    group.finish();
+    failed.into_result()
 }
 
 // ---------------------------------------------------------------------------
 // Open / recovery — varied segment counts
 // ---------------------------------------------------------------------------
 
-fn bench_open(c: &mut Criterion) {
-    let mut group = c.benchmark_group("log/open");
+fn bench_open(c: &mut Criterion) { run(c, "log/open", open); }
+
+fn open(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let mut failed = FirstError::default();
 
     for &num_appends in &[50usize, 200, 500] {
         let TempLog { dir, log } = populated_log(
@@ -567,11 +688,11 @@ fn bench_open(c: &mut Criterion) {
             num_appends,
             5,
             64,
-        );
+        )?;
         drop(log);
         group.bench_function(format!("{num_appends}_appends_validate_on_open"), |b| {
             b.iter(|| {
-                let log = Log::open(dir.path(), LogConfig::default()).unwrap();
+                let log = failed.record(Log::open(dir.path(), LogConfig::default()));
                 black_box(log);
             });
         });
@@ -581,47 +702,56 @@ fn bench_open(c: &mut Criterion) {
                 ..LogConfig::default()
             };
             b.iter(|| {
-                let log = Log::open(dir.path(), cfg.clone()).unwrap();
+                let log = failed.record(Log::open(dir.path(), cfg.clone()));
                 black_box(log);
             });
         });
     }
 
-    group.finish();
+    failed.into_result()
 }
 
 // ---------------------------------------------------------------------------
 // Truncate
 // ---------------------------------------------------------------------------
 
-fn bench_truncate(c: &mut Criterion) {
-    let mut group = c.benchmark_group("log/truncate");
+fn bench_truncate(c: &mut Criterion) { run(c, "log/truncate", truncate); }
+
+fn truncate(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let failed = RefCell::new(FirstError::default());
 
     group.bench_function("truncate_recent_offset", |b| {
         b.iter_with_setup(
             || {
-                let TempLog { dir, log } = populated_log(LogConfig::default(), 50, 10, 64);
-                let end = log.log_end_offset();
-                (dir, log, end)
+                failed
+                    .borrow_mut()
+                    .record(populated_log(LogConfig::default(), 50, 10, 64))
+                    .map(|TempLog { dir, log }| {
+                        let end = log.log_end_offset();
+                        (dir, log, end)
+                    })
             },
-            |(_dir, mut log, end)| {
-                log.truncate_to(end - 50).unwrap();
-                black_box(log);
+            |setup| {
+                if let Some((_dir, mut log, end)) = setup {
+                    failed.borrow_mut().record(log.truncate_to(end - 50));
+                    black_box(log);
+                }
             },
         );
     });
 
-    group.finish();
+    failed.into_inner().into_result()
 }
 
 // ---------------------------------------------------------------------------
 // log_end_offset / log_start_offset accessors — should be O(1)
 // ---------------------------------------------------------------------------
 
-fn bench_accessors(c: &mut Criterion) {
-    let TempLog { dir: _dir, log } = populated_log(LogConfig::default(), 100, 10, 64);
+fn bench_accessors(c: &mut Criterion) { run(c, "log/accessors", accessors); }
 
-    let mut group = c.benchmark_group("log/accessors");
+fn accessors(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let TempLog { dir: _dir, log } = populated_log(LogConfig::default(), 100, 10, 64)?;
+
     group.bench_function("log_end_offset", |b| {
         b.iter(|| black_box(&log).log_end_offset());
     });
@@ -631,7 +761,7 @@ fn bench_accessors(c: &mut Criterion) {
     group.bench_function("lso", |b| {
         b.iter(|| black_box(&log).lso());
     });
-    group.finish();
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -661,42 +791,63 @@ fn txn_bytes(entries: impl IntoIterator<Item = AbortedTxn>) -> Vec<u8> {
 
 /// Measure decode/dedup independently from append I/O. Duplicate rates are
 /// exact retries distributed through the file rather than adjacent records.
-fn bench_txn_index_open(c: &mut Criterion) {
-    let mut group = c.benchmark_group("txn_index/open");
+fn bench_txn_index_open(c: &mut Criterion) { run(c, "txn_index/open", txn_index_open); }
+
+fn txn_index_open(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let mut failed = FirstError::default();
     for distinct in [1_000_i64, 10_000, 100_000] {
         for duplicate_percent in [0_i64, 50, 90] {
-            let dir = tempdir().unwrap();
+            let dir = tempdir()?;
             let path = dir.path().join("00000000000000000000.txnindex");
             let total = distinct * 100 / (100 - duplicate_percent);
             let entries = (0..total).map(|n| txn_entry(n % distinct));
-            std::fs::write(&path, txn_bytes(entries)).unwrap();
+            fs::write(&path, txn_bytes(entries))?;
             group.bench_function(
                 format!("{distinct}_distinct_{duplicate_percent}pct_duplicates"),
-                |b| b.iter(|| black_box(TxnIndex::open(path.clone()).unwrap())),
+                |b| {
+                    b.iter(|| black_box(failed.record(TxnIndex::open(path.clone()))));
+                },
             );
         }
     }
-    group.finish();
+    failed.into_result()
 }
 
 /// Exact-duplicate append retries do no file I/O, isolating membership lookup
 /// as the number of distinct transactions in the active segment grows.
 fn bench_txn_index_append_retry(c: &mut Criterion) {
-    let mut group = c.benchmark_group("txn_index/append_retry");
+    run(c, "txn_index/append_retry", txn_index_append_retry);
+}
+
+fn txn_index_append_retry(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let mut failed = FirstError::default();
     for distinct in [1_000_i64, 10_000, 100_000] {
-        let dir = tempdir().unwrap();
+        let dir = tempdir()?;
         let path = dir.path().join("00000000000000000000.txnindex");
-        std::fs::write(&path, txn_bytes((0..distinct).map(txn_entry))).unwrap();
-        let mut index = TxnIndex::open(path).unwrap();
+        fs::write(&path, txn_bytes((0..distinct).map(txn_entry)))?;
+        let mut index = TxnIndex::open(path)?;
         let mut candidate = 0;
         group.bench_function(format!("{distinct}_distinct"), |b| {
             b.iter(|| {
                 candidate = (candidate + 7919) % distinct;
-                index.append(black_box(txn_entry(candidate))).unwrap();
+                failed.record(index.append(black_box(txn_entry(candidate))));
             });
         });
     }
-    group.finish();
+    failed.into_result()
+}
+
+/// Exit with a failure when a benchmark function stopped on an error. It runs
+/// last, after every benchmark that could still measure.
+fn report_failures(_c: &mut Criterion) {
+    let failure = FAILURE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    if let Some(failure) = failure {
+        eprintln!("benchmark failed: {failure}");
+        process::exit(1);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -717,5 +868,6 @@ criterion_group!(
     bench_accessors,
     bench_txn_index_open,
     bench_txn_index_append_retry,
+    report_failures,
 );
 criterion_main!(benches);

@@ -60,9 +60,8 @@ fn check(
         current: ListenerView::new(static_config, None, &map(current)),
         proposed: ListenerView::new(static_config, None, &map(proposed)),
     };
-    change
-        .check_values()
-        .and_then(|()| change.check_reconfiguration())
+    let () = change.check_values()?;
+    change.check_reconfiguration()
 }
 
 fn refused(message: &str) -> Result<(), (i16, String)> {

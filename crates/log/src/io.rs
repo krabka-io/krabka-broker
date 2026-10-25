@@ -11,11 +11,20 @@
 //! and release of `preallocate` and the `O_DIRECT` handle its active segment
 //! writes through.
 
-use std::{
-    fmt::Debug,
-    fs::File,
-    io::{IoSlice, Write},
-    path::Path,
+use {
+    rustix::{
+        fs::{Advice, FallocateFlags, fadvise, fallocate, open, statx},
+        io::{Errno, ReadWriteFlags, preadv2},
+    },
+    std::{
+        fmt::Debug,
+        fs::{self, File},
+        io::{self, ErrorKind, IoSlice, Write},
+        num::NonZeroU64,
+        os::unix::fs::FileExt,
+        path::Path,
+        sync::Arc,
+    },
 };
 
 /// Which on-disk file class an [`LogIo`] operation touches.
@@ -58,13 +67,13 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying write error.
-    fn write(&self, file: &File, buf: &[u8]) -> std::io::Result<usize> { (&*file).write(buf) }
+    fn write(&self, file: &File, buf: &[u8]) -> io::Result<usize> { (&*file).write(buf) }
 
     /// Write byte slices at the active `.log` file's current cursor.
     ///
     /// # Errors
     /// Returns the underlying vectored-write error.
-    fn write_vectored(&self, file: &File, bufs: &[IoSlice<'_>]) -> std::io::Result<usize> {
+    fn write_vectored(&self, file: &File, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
         (&*file).write_vectored(bufs)
     }
 
@@ -72,7 +81,7 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying data-sync error.
-    fn sync_data(&self, file: &File) -> std::io::Result<()> { file.sync_data() }
+    fn sync_data(&self, file: &File) -> io::Result<()> { file.sync_data() }
 
     /// Write bytes at `file`'s current cursor on behalf of `target`.
     ///
@@ -81,7 +90,7 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying write error.
-    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> std::io::Result<usize> {
+    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> io::Result<usize> {
         let _ = target;
         (&*file).write(buf)
     }
@@ -90,7 +99,7 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying data-sync error.
-    fn sync_file(&self, target: IoTarget, file: &File) -> std::io::Result<()> {
+    fn sync_file(&self, target: IoTarget, file: &File) -> io::Result<()> {
         let _ = target;
         file.sync_data()
     }
@@ -100,7 +109,7 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying open or sync error.
-    fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         // Rust's standard directory-open path is supported on Unix, where
         // syncing the parent is what makes a rename or a fresh name durable.
         // Windows offers no equivalent through `std` (`File::open` on a
@@ -122,18 +131,18 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying rename error.
-    fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> std::io::Result<()> {
+    fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> io::Result<()> {
         let _ = target;
-        std::fs::rename(from, to)
+        fs::rename(from, to)
     }
 
     /// Unlink a file on behalf of `target`.
     ///
     /// # Errors
     /// Returns the underlying unlink error.
-    fn remove_file(&self, target: IoTarget, path: &Path) -> std::io::Result<()> {
+    fn remove_file(&self, target: IoTarget, path: &Path) -> io::Result<()> {
         let _ = target;
-        std::fs::remove_file(path)
+        fs::remove_file(path)
     }
 
     /// Tell the kernel that a fetch reads `len` bytes of a `.log` file from
@@ -167,7 +176,7 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying `fallocate` error, or `Unsupported` off Linux.
-    fn reserve(&self, file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+    fn reserve(&self, file: &File, offset: u64, len: u64) -> io::Result<()> {
         reserve(file, offset, len)
     }
 
@@ -182,7 +191,7 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying truncate error.
-    fn release(&self, file: &File, len: u64) -> std::io::Result<()> { file.set_len(len) }
+    fn release(&self, file: &File, len: u64) -> io::Result<()> { file.set_len(len) }
 
     /// Open a second handle on a `.log` file that bypasses the page cache
     /// (`O_DIRECT`), with the alignment every write through it needs.
@@ -199,7 +208,7 @@ pub trait LogIo: Debug + Send + Sync {
     /// # Errors
     /// Returns `Unsupported` where `O_DIRECT` is unavailable or its alignment
     /// unknown, or the underlying `statx` or `open` error.
-    fn open_direct(&self, path: &Path) -> std::io::Result<DirectFile> { open_direct(path) }
+    fn open_direct(&self, path: &Path) -> io::Result<DirectFile> { open_direct(path) }
 
     /// Write `buf` at `offset` through a handle [`LogIo::open_direct`]
     /// opened. `buf`, `offset` and the length are aligned as that handle
@@ -208,7 +217,7 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying write error.
-    fn write_direct(&self, file: &File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
+    fn write_direct(&self, file: &File, buf: &[u8], offset: u64) -> io::Result<usize> {
         write_direct(file, buf, offset)
     }
 
@@ -271,20 +280,19 @@ fn write_alignment(required: u32, fs_block: u32) -> u32 {
 }
 
 #[cfg(target_os = "linux")]
-fn open_direct(path: &Path) -> std::io::Result<DirectFile> {
+fn open_direct(path: &Path) -> io::Result<DirectFile> {
     use rustix::fs::{AtFlags, CWD, Mode, OFlags, StatxFlags};
 
-    let stat = rustix::fs::statx(CWD, path, AtFlags::empty(), StatxFlags::DIOALIGN)?;
+    let stat = statx(CWD, path, AtFlags::empty(), StatxFlags::DIOALIGN)?;
     let reported = stat.stx_mask & StatxFlags::DIOALIGN.bits() != 0;
     // A zero offset alignment is the kernel saying this file cannot be
     // opened `O_DIRECT` at all.
     if !reported || stat.stx_dio_offset_align == 0 || stat.stx_dio_mem_align == 0 {
-        return Err(std::io::ErrorKind::Unsupported.into());
+        return Err(ErrorKind::Unsupported.into());
     }
-    let to_usize = |align: u32| {
-        usize::try_from(align).map_err(|_| std::io::Error::from(std::io::ErrorKind::Unsupported))
-    };
-    let fd = rustix::fs::open(
+    let to_usize =
+        |align: u32| usize::try_from(align).map_err(|_| io::Error::from(ErrorKind::Unsupported));
+    let fd = open(
         path,
         OFlags::RDWR | OFlags::DIRECT | OFlags::CLOEXEC,
         Mode::empty(),
@@ -303,8 +311,8 @@ fn open_direct(path: &Path) -> std::io::Result<DirectFile> {
 }
 
 #[cfg(unix)]
-fn write_direct(file: &File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
-    std::os::unix::fs::FileExt::write_at(file, buf, offset)
+fn write_direct(file: &File, buf: &[u8], offset: u64) -> io::Result<usize> {
+    FileExt::write_at(file, buf, offset)
 }
 
 /// No target without `O_DIRECT` ever opens a handle to write through.
@@ -315,9 +323,8 @@ fn write_direct(file: &File, buf: &[u8], offset: u64) -> std::io::Result<usize> 
 }
 
 #[cfg(target_os = "linux")]
-fn reserve(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
-    rustix::fs::fallocate(file, rustix::fs::FallocateFlags::KEEP_SIZE, offset, len)
-        .map_err(Into::into)
+fn reserve(file: &File, offset: u64, len: u64) -> io::Result<()> {
+    fallocate(file, FallocateFlags::KEEP_SIZE, offset, len).map_err(Into::into)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -328,9 +335,9 @@ fn reserve(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
 
 #[cfg(target_os = "linux")]
 fn advise_will_need(file: &File, offset: u64, len: u64) {
-    if let Some(len) = std::num::NonZeroU64::new(len) {
+    if let Some(len) = NonZeroU64::new(len) {
         // A refused hint leaves the read exactly as it was without one.
-        let _ = rustix::fs::fadvise(file, offset, Some(len), rustix::fs::Advice::WillNeed);
+        let _ = fadvise(file, offset, Some(len), Advice::WillNeed);
     }
 }
 
@@ -345,14 +352,14 @@ fn advise_will_need(file: &File, offset: u64, len: u64) { let _ = (file, offset,
 #[cfg(target_os = "linux")]
 fn is_cached(file: &File, offset: u64) -> Option<bool> {
     let mut byte = [0u8; 1];
-    match rustix::io::preadv2(
+    match preadv2(
         file,
         &mut [std::io::IoSliceMut::new(&mut byte)],
         offset,
-        rustix::io::ReadWriteFlags::NOWAIT,
+        ReadWriteFlags::NOWAIT,
     ) {
-        Err(rustix::io::Errno::OPNOTSUPP | rustix::io::Errno::NOSYS) => None,
-        Err(rustix::io::Errno::AGAIN) | Ok(0) => Some(false),
+        Err(Errno::OPNOTSUPP | Errno::NOSYS) => None,
+        Err(Errno::AGAIN) | Ok(0) => Some(false),
         _ => Some(true),
     }
 }
@@ -373,34 +380,33 @@ fn is_cached(file: &File, offset: u64) -> Option<bool> {
 /// # Errors
 /// Returns the first error the underlying writes produce, or `WriteZero` when
 /// a write makes no progress.
-pub(crate) fn write_all(
-    io: &dyn LogIo,
-    target: IoTarget,
-    file: &File,
-    buf: &[u8],
-) -> std::io::Result<()> {
+pub fn write_all(io: &dyn LogIo, target: IoTarget, file: &File, buf: &[u8]) -> io::Result<()> {
     write_all_with(buf, |remaining| io.write_at(target, file, remaining))
 }
 
 /// Complete a scalar write, retrying interrupts and rejecting zero progress.
-pub(crate) fn write_all_with(
+pub fn write_all_with(
     mut buf: &[u8],
-    mut write: impl FnMut(&[u8]) -> std::io::Result<usize>,
-) -> std::io::Result<()> {
+    mut write: impl FnMut(&[u8]) -> io::Result<usize>,
+) -> io::Result<()> {
     while !buf.is_empty() {
-        buf = &buf[write_progress(|| write(buf))?..];
+        let written = write_progress(|| write(buf))?;
+        buf = buf.get(written..).ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                "a write reported more bytes than it was given",
+            )
+        })?;
     }
     Ok(())
 }
 
 /// Retry an interrupted write and require it to make progress.
-pub(crate) fn write_progress(
-    mut write: impl FnMut() -> std::io::Result<usize>,
-) -> std::io::Result<usize> {
+pub fn write_progress(mut write: impl FnMut() -> io::Result<usize>) -> io::Result<usize> {
     loop {
         match write() {
-            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Ok(0) => return Err(ErrorKind::WriteZero.into()),
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
             result => return result,
         }
     }
@@ -408,13 +414,15 @@ pub(crate) fn write_progress(
 
 /// Replace `path` with `bytes` atomically and durably through real file I/O:
 /// write `tmp`, sync it, rename it over `path`, then sync the parent
-/// directory. This is the entry point for files outside a partition log, such
+/// directory.
+///
+/// This is the entry point for files outside a partition log, such
 /// as the controller's `quorum-state` file and its metadata checkpoints, which
 /// have no fault-injection seam of their own.
 ///
 /// # Errors
 /// Returns the first create, write, sync or rename error.
-pub fn write_file_atomic(tmp: &Path, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub fn write_file_atomic(tmp: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_atomic(&FileIo, IoTarget::External, tmp, path, bytes, true)
 }
 
@@ -428,14 +436,14 @@ pub fn write_file_atomic(tmp: &Path, path: &Path, bytes: &[u8]) -> std::io::Resu
 ///
 /// # Errors
 /// Returns the first create, write, sync or rename error.
-pub(crate) fn write_atomic(
+pub fn write_atomic(
     io: &dyn LogIo,
     target: IoTarget,
     tmp: &Path,
     path: &Path,
     bytes: &[u8],
     sync_dir: bool,
-) -> std::io::Result<()> {
+) -> io::Result<()> {
     {
         let file = File::create(tmp)?;
         write_all(io, target, &file, bytes)?;
@@ -453,7 +461,7 @@ pub(crate) fn write_atomic(
 }
 
 #[derive(Debug)]
-pub(crate) struct FileIo;
+pub struct FileIo;
 
 impl LogIo for FileIo {
     fn submits_direct_writes(&self) -> bool { true }
@@ -461,14 +469,21 @@ impl LogIo for FileIo {
 
 /// The shared handle every structure defaults to before a test installs its
 /// own.
-pub(crate) fn file_io() -> std::sync::Arc<dyn LogIo> { std::sync::Arc::new(FileIo) }
+pub fn file_io() -> Arc<dyn LogIo> { Arc::new(FileIo) }
 
 #[cfg(test)]
 mod tests {
     use {
         super::*,
         assert2::check,
-        std::{path::PathBuf, sync::Mutex},
+        rustix::fs::fstatvfs,
+        std::{
+            fs,
+            io::{self, ErrorKind},
+            path::PathBuf,
+            sync::Mutex,
+            vec,
+        },
     };
 
     /// A writer that replays a script of results, recording what each call was
@@ -478,12 +493,12 @@ mod tests {
     /// -- are only reachable through one of these.
     #[derive(Debug)]
     struct Scripted {
-        script: Mutex<std::vec::IntoIter<std::io::Result<usize>>>,
+        script: Mutex<vec::IntoIter<io::Result<usize>>>,
         seen: Mutex<Vec<Vec<u8>>>,
     }
 
     impl Scripted {
-        fn new(script: Vec<std::io::Result<usize>>) -> Self {
+        fn new(script: Vec<io::Result<usize>>) -> Self {
             Self {
                 script: Mutex::new(script.into_iter()),
                 seen: Mutex::new(Vec::new()),
@@ -492,7 +507,7 @@ mod tests {
     }
 
     impl LogIo for Scripted {
-        fn write_at(&self, _target: IoTarget, _file: &File, buf: &[u8]) -> std::io::Result<usize> {
+        fn write_at(&self, _target: IoTarget, _file: &File, buf: &[u8]) -> io::Result<usize> {
             self.seen.lock().unwrap().push(buf.to_vec());
             self.script
                 .lock()
@@ -527,7 +542,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state");
         let tmp = dir.path().join("state.tmp");
-        std::fs::write(&path, contents).unwrap();
+        fs::write(&path, contents).unwrap();
         ExistingState { dir, path, tmp }
     }
 
@@ -541,7 +556,7 @@ mod tests {
 
         for contents in [b"new".as_slice(), b"newer"] {
             write_file_atomic(&tmp, &path, contents).unwrap();
-            check!(std::fs::read(&path).unwrap() == contents.to_vec());
+            check!(fs::read(&path).unwrap() == contents.to_vec());
             check!(!tmp.exists());
         }
     }
@@ -554,12 +569,10 @@ mod tests {
             tmp,
         } = existing_state(b"old");
 
-        let io = Scripted::new(vec![Err(std::io::Error::from(
-            std::io::ErrorKind::StorageFull,
-        ))]);
+        let io = Scripted::new(vec![Err(io::Error::from(ErrorKind::StorageFull))]);
         let error = write_atomic(&io, IoTarget::External, &tmp, &path, b"new", true).unwrap_err();
-        check!(error.kind() == std::io::ErrorKind::StorageFull);
-        check!(std::fs::read(&path).unwrap() == b"old".to_vec());
+        check!(error.kind() == ErrorKind::StorageFull);
+        check!(fs::read(&path).unwrap() == b"old".to_vec());
     }
 
     #[test]
@@ -576,11 +589,7 @@ mod tests {
             ]),
             // An interrupted write is retried with the same bytes, not skipped past.
             (
-                vec![
-                    Ok(2),
-                    Err(std::io::Error::from(std::io::ErrorKind::Interrupted)),
-                    Ok(4),
-                ],
+                vec![Ok(2), Err(io::Error::from(ErrorKind::Interrupted)), Ok(4)],
                 vec![b"abcdef".to_vec(), b"cdef".to_vec(), b"cdef".to_vec()],
             ),
         ] {
@@ -590,14 +599,11 @@ mod tests {
         }
         for (script, expected) in [
             // A writer that makes no progress is a `WriteZero`, not a spin.
-            (vec![Ok(0)], std::io::ErrorKind::WriteZero),
+            (vec![Ok(0)], ErrorKind::WriteZero),
             // Any other error is returned as it stands.
             (
-                vec![
-                    Ok(1),
-                    Err(std::io::Error::from(std::io::ErrorKind::StorageFull)),
-                ],
-                std::io::ErrorKind::StorageFull,
+                vec![Ok(1), Err(io::Error::from(ErrorKind::StorageFull))],
+                ErrorKind::StorageFull,
             ),
         ] {
             let io = Scripted::new(script);
@@ -637,8 +643,7 @@ mod tests {
         let Ok(direct) = open_direct(&dir.path().join("scratch")) else {
             return;
         };
-        let fs_block =
-            usize::try_from(rustix::fs::fstatvfs(&file).unwrap().f_bsize.min(4096)).unwrap();
+        let fs_block = usize::try_from(fstatvfs(&file).unwrap().f_bsize.min(4096)).unwrap();
         for align in [direct.mem_align, direct.block] {
             check!(align.is_power_of_two());
             check!(align % fs_block == 0);

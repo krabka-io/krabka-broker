@@ -40,6 +40,7 @@ use {
         fmt::{
             FmtContext, FormatEvent, FormatFields, MakeWriter,
             format::Writer,
+            layer as fmt_layer,
             time::{FormatTime, SystemTime},
         },
         layer::Filter,
@@ -158,7 +159,7 @@ where
     W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
     F: Filter<Registry> + Send + Sync + 'static,
 {
-    tracing_subscriber::fmt::layer()
+    fmt_layer()
         .event_format(CloudLogging)
         .with_writer(make_writer)
         .with_filter(filter)
@@ -171,9 +172,10 @@ mod tests {
         super::*,
         assert2::check,
         std::{
-            io::Write,
+            io::{self, Write},
             sync::{Arc, Mutex},
         },
+        tracing::subscriber,
         tracing_subscriber::layer::SubscriberExt as _,
     };
 
@@ -181,16 +183,16 @@ mod tests {
     struct Buf(Arc<Mutex<Vec<u8>>>);
 
     impl Write for Buf {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             self.0.lock().unwrap().extend_from_slice(bytes);
             Ok(bytes.len())
         }
 
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> io::Result<()> { Ok(()) }
     }
 
     impl<'a> MakeWriter<'a> for Buf {
-        type Writer = Buf;
+        type Writer = Self;
 
         fn make_writer(&'a self) -> Self::Writer { self.clone() }
     }
@@ -200,9 +202,9 @@ mod tests {
         let buf = Arc::new(Mutex::new(Vec::new()));
         let subscriber = tracing_subscriber::registry().with(layer(
             tracing_subscriber::EnvFilter::new("trace"),
-            Buf(buf.clone()),
+            Buf(Arc::clone(&buf)),
         ));
-        tracing::subscriber::with_default(subscriber, emit);
+        subscriber::with_default(subscriber, emit);
         let out = String::from_utf8(buf.lock().unwrap().clone()).expect("utf8 log output");
         // The crux of the fix: captured logs carry no ANSI escape sequences.
         assert2::assert!(!out.contains('\u{1b}'));

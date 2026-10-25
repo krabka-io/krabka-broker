@@ -35,7 +35,7 @@ use {
 /// [`BrokerMetrics::request_throttle_duration_seconds`] for what the remainder
 /// is.
 #[derive(Debug, Default)]
-pub(crate) struct RequestPhases {
+pub struct RequestPhases {
     local_nanos: AtomicU64,
     remote_nanos: AtomicU64,
     open_local: Mutex<OpenIntervals>,
@@ -50,7 +50,7 @@ struct OpenIntervals {
 
 /// One open local interval of a request. Dropping it closes the interval.
 #[must_use = "the interval closes when the guard is dropped"]
-pub(crate) struct LocalInterval<'a> {
+pub struct LocalInterval<'a> {
     phases: &'a RequestPhases,
 }
 
@@ -108,10 +108,10 @@ impl RequestPhases {
     /// nearly zero and report a request as instantaneous.
     fn add(slot: &AtomicU64, elapsed: Duration) {
         let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
-        slot.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        // The update always yields a value, so it cannot fail.
+        let _ = slot.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             Some(current.saturating_add(nanos))
-        })
-        .ok();
+        });
     }
 
     /// Round-trips through [`Duration`] rather than dividing the raw count,
@@ -137,7 +137,7 @@ impl BrokerMetrics {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, assert2::assert, std::thread};
 
     #[test]
     fn phases_accumulate_each_kind_independently() {
@@ -185,7 +185,7 @@ mod tests {
     fn a_dropped_interval_charges_the_local_phase() {
         let phases = RequestPhases::default();
         let interval = phases.open_local();
-        std::thread::sleep(Duration::from_millis(2));
+        thread::sleep(Duration::from_millis(2));
         drop(interval);
 
         assert!(phases.local_seconds() >= 0.002);

@@ -1,9 +1,18 @@
 //! Discovery requests with explicit client identity and lookup targets.
 
-use krabka_protocol::owned::{
-    api_versions_request::ApiVersionsRequest,
-    find_coordinator_request::FindCoordinatorRequest,
-    metadata_request::{MetadataRequest, MetadataRequestTopic},
+use {
+    crate::support::topics,
+    krabka_protocol::{
+        owned::{
+            api_versions_request::ApiVersionsRequest,
+            api_versions_response::ApiVersionsResponse,
+            find_coordinator_request::FindCoordinatorRequest,
+            find_coordinator_response::{Coordinator, FindCoordinatorResponse},
+            metadata_request::{MetadataRequest, MetadataRequestTopic},
+            metadata_response::{MetadataResponse, MetadataResponsePartition},
+        },
+        primitives::uuid::Uuid,
+    },
 };
 
 pub fn api_versions_request_for(
@@ -18,9 +27,7 @@ pub fn api_versions_request_for(
 }
 
 /// Send the standard client-identifying `ApiVersions` request.
-pub async fn api_versions(
-    client: &krabka_client_core::Client,
-) -> krabka_protocol::owned::api_versions_response::ApiVersionsResponse {
+pub async fn api_versions(client: &krabka_client_core::Client) -> ApiVersionsResponse {
     client
         .send(api_versions_request_for("krabka-test", "0.0.0"))
         .await
@@ -48,9 +55,9 @@ pub fn topic_metadata_request(topics: Option<Vec<MetadataRequestTopic>>) -> Meta
 }
 
 pub fn named_topic_metadata(topic: impl Into<String>) -> MetadataRequest {
-    topic_metadata_request(Some(vec![crate::support::topics::metadata_topic(
+    topic_metadata_request(Some(vec![topics::metadata_topic(
         Some(topic.into()),
-        krabka_protocol::primitives::uuid::Uuid::default(),
+        Uuid::default(),
     )]))
 }
 
@@ -63,8 +70,8 @@ pub fn expected_coordinator(
     port: i32,
     error_code: i16,
     error_message: Option<String>,
-) -> krabka_protocol::owned::find_coordinator_response::Coordinator {
-    krabka_protocol::owned::find_coordinator_response::Coordinator {
+) -> Coordinator {
+    Coordinator {
         key: key.into(),
         node_id,
         host,
@@ -75,10 +82,8 @@ pub fn expected_coordinator(
     }
 }
 
-pub fn expected_coordinator_response(
-    coordinator: krabka_protocol::owned::find_coordinator_response::Coordinator,
-) -> krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse {
-    krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse {
+pub fn expected_coordinator_response(coordinator: Coordinator) -> FindCoordinatorResponse {
+    FindCoordinatorResponse {
         coordinators: vec![coordinator],
         ..Default::default()
     }
@@ -86,9 +91,9 @@ pub fn expected_coordinator_response(
 
 /// The first partition of the first metadata topic whose name matches exactly.
 pub fn metadata_first_partition<'a>(
-    response: &'a krabka_protocol::owned::metadata_response::MetadataResponse,
+    response: &'a MetadataResponse,
     topic: &str,
-) -> Option<&'a krabka_protocol::owned::metadata_response::MetadataResponsePartition> {
+) -> Option<&'a MetadataResponsePartition> {
     response
         .topics
         .iter()
@@ -97,10 +102,6 @@ pub fn metadata_first_partition<'a>(
 }
 
 /// The first matching partition's leader, with a caller-selected missing-row value.
-pub fn metadata_first_leader(
-    response: &krabka_protocol::owned::metadata_response::MetadataResponse,
-    topic: &str,
-    default: i32,
-) -> i32 {
+pub fn metadata_first_leader(response: &MetadataResponse, topic: &str, default: i32) -> i32 {
     metadata_first_partition(response, topic).map_or(default, |partition| partition.leader_id)
 }

@@ -20,7 +20,8 @@ use {
     },
     krabka_log::Offset,
     krabka_protocol::owned::delete_records_response::DeleteRecordsTopicResult,
-    std::time::Duration,
+    std::{sync::atomic, time::Duration},
+    tokio::{time, time::Instant},
 };
 
 /// How often a waiting request reads the followers' progress again. A
@@ -88,11 +89,16 @@ pub(super) async fn await_followers(
     timeout_ms: i32,
 ) {
     let timeout = Duration::from_millis(u64::try_from(timeout_ms).unwrap_or(0));
-    let deadline = tokio::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     while !waiting.is_empty() {
         let mut still_waiting = Vec::with_capacity(waiting.len());
         for row in waiting {
-            let slot = &mut topics[row.row.topic].partitions[row.row.partition];
+            let Some(slot) = topics
+                .get_mut(row.row.topic)
+                .and_then(|topic| topic.partitions.get_mut(row.row.partition))
+            else {
+                continue;
+            };
             let Some(part) = broker
                 .partitions
                 .get(&row.topic, krabka_ids::PartitionIndex(row.partition))
@@ -100,11 +106,7 @@ pub(super) async fn await_followers(
                 *slot = error_partition_result(row.partition, codes::UNKNOWN_TOPIC_OR_PARTITION);
                 continue;
             };
-            if part
-                .current_leader
-                .load(std::sync::atomic::Ordering::Acquire)
-                != broker.config.node_id
-            {
+            if part.current_leader.load(atomic::Ordering::Acquire) != broker.config.node_id {
                 *slot = error_partition_result(row.partition, codes::NOT_LEADER_OR_FOLLOWER);
                 continue;
             }
@@ -116,10 +118,10 @@ pub(super) async fn await_followers(
             }
         }
         waiting = still_waiting;
-        let now = tokio::time::Instant::now();
+        let now = Instant::now();
         if waiting.is_empty() || now >= deadline {
             return;
         }
-        tokio::time::sleep(POLL_INTERVAL.min(deadline - now)).await;
+        time::sleep(POLL_INTERVAL.min(deadline - now)).await;
     }
 }

@@ -9,6 +9,7 @@ use {
         txn::{coordinator::test_support::test_prelude::*, state::TopicPartition},
     },
     assert2::{assert, check},
+    std::path::Path,
 };
 
 const TID: &str = "tid-completion";
@@ -130,7 +131,7 @@ enum DataPartitionPresence {
 }
 
 async fn loaded_coordinator(
-    dir: &std::path::Path,
+    dir: &Path,
     data_partition: DataPartitionPresence,
 ) -> Arc<TxnCoordinator> {
     let partitions = super::super::test_support::state_registry(dir);

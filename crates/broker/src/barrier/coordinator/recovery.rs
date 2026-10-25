@@ -121,8 +121,14 @@ impl BarrierCoordinator {
                     );
                     continue;
                 }
-                BarrierRecoveryFinalizeDecision::FinalizePartial => pending
-                    .expect("the verified finalization decision requires a pending injection"),
+                BarrierRecoveryFinalizeDecision::FinalizePartial => {
+                    // The verified decision only finalizes a pending injection.
+                    let Some(pending) = pending else {
+                        warn!(group, "no pending injection to finalize");
+                        continue;
+                    };
+                    pending
+                }
             };
 
             let completed_at = now_ms();
@@ -148,6 +154,8 @@ impl BarrierCoordinator {
             );
             self.publish_cut(&group, &mut entry, pending.epoch, cut)
                 .await?;
+            // The group's lock spans the whole finalisation, publish included.
+            drop(entry);
         }
         Ok(())
     }
@@ -252,7 +260,8 @@ fn decode_optional_value<T>(
     value: Option<&[u8]>,
     decode: impl FnOnce(&[u8]) -> Result<T, krabka_protocol::ProtocolError>,
 ) -> Option<T> {
-    value.and_then(|bytes| keep_decoded(partition, decode(bytes)))
+    let bytes = value?;
+    keep_decoded(partition, decode(bytes))
 }
 
 /// Keep a decoded value, and drop one that does not decode.
@@ -289,7 +298,7 @@ mod tests {
                 error::BarrierError,
                 persistence::{
                     CutStatus, GroupValue, InjectionStartValue, MissingPartition, RecordKey,
-                    encode_injection_start,
+                    TopicTarget, encode_injection_start,
                 },
             },
             metadata_source::MetadataSource,
@@ -401,7 +410,7 @@ mod tests {
         InjectionStartValue {
             coordinator_epoch: 3,
             triggered_at: 1_000,
-            targets: vec![crate::barrier::persistence::TopicTarget {
+            targets: vec![TopicTarget {
                 topic: "orders".to_owned(),
                 partition_count: partition_count.0,
             }],
@@ -468,7 +477,7 @@ mod tests {
             ("stale-cut", InjectionStartValue {
                 coordinator_epoch: 4,
                 triggered_at: 1_000,
-                targets: vec![crate::barrier::persistence::TopicTarget {
+                targets: vec![TopicTarget {
                     topic: "orders".to_owned(),
                     partition_count: 2,
                 }],

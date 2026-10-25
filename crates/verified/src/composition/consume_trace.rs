@@ -60,7 +60,10 @@ pub(super) fn metered_consumes_conserve_elapsed_credit(
         && steps@[i@ - 1].1@ >= burst@ / units_per_token@ ==> available@ < units_per_token@))]
     #[cfg_attr(creusot, variant(steps@.len() - i@))]
     while i < steps.len() {
-        let next = last_clock.max(steps[i].0);
+        let Some(&(clock, requested)) = steps.get(i) else {
+            break;
+        };
+        let next = last_clock.max(clock);
         let elapsed = next - last_clock;
         proof_assert!((next@ - start@) * rate@
             == (last_clock@ - start@) * rate@ + elapsed@ * rate@);
@@ -74,7 +77,7 @@ pub(super) fn metered_consumes_conserve_elapsed_credit(
         };
         proof_assert!((refilled.0@ - refilled.1@) * 1_000_000_000 + refilled.2@ + discarded@
             == (available@ - debt@) * 1_000_000_000 + fraction@ + elapsed@ * rate@);
-        let request = quota_whole_request(steps[i].1, refilled.0, units_per_token);
+        let request = quota_whole_request(requested, refilled.0, units_per_token);
         proof_assert!({
             crate::stretch::lemma_div_monotone(refilled.0@, burst@, units_per_token@);
             refilled.0@ / units_per_token@ <= burst@ / units_per_token@

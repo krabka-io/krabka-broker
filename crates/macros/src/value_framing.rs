@@ -2,7 +2,7 @@
 
 use moxy::token::{LitStr, TokenStream};
 
-pub(crate) fn decode_method(record: &LitStr, read: &TokenStream) -> TokenStream {
+pub fn decode_method(record: &LitStr, read: &TokenStream) -> TokenStream {
     moxy::template! {
         /// # Errors
         /// Returns an error when the value version is not 0, or when a

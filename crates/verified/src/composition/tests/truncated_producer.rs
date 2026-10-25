@@ -37,13 +37,12 @@ fn check(
     let match_index = window
         .iter()
         .position(|row| oracle_retry_matches(row, request));
-    let decision = if let Some(index) = match_index {
-        ProducerDecision::Duplicate {
+    let decision = match_index.map_or_else(
+        || oracle_next_producer_decision(kept.last().copied(), request, end),
+        |index| ProducerDecision::Duplicate {
             retained: if index + 1 == window.len() { 4 } else { index },
-        }
-    } else {
-        oracle_next_producer_decision(kept.last().copied(), request, end)
-    };
+        },
+    );
     let witness = match_index.map(|index| {
         let row = window[index];
         (

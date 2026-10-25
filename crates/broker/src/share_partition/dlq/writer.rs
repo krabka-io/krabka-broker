@@ -69,7 +69,13 @@ use {
     },
     krabka_security::ListenerProtocol,
     krabka_units::convert::ByteSizeExt as _,
-    std::{collections::HashMap, future::Future, sync::Arc, time::Duration},
+    std::{
+        collections::{BTreeMap, HashMap},
+        future::Future,
+        sync::{Arc, Mutex, OnceLock, PoisonError},
+        time::Duration,
+    },
+    tokio::{sync::Mutex as AsyncMutex, time::sleep},
 };
 
 /// The attempts of one request, and the pauses between them: Kafka's
@@ -217,7 +223,7 @@ where
             Attempt::Retry(reason) => match delay {
                 Some(delay) => {
                     tracing::debug!(%reason, what, "dead-letter request will retry");
-                    tokio::time::sleep(delay).await;
+                    sleep(delay).await;
                 }
                 None => {
                     return Err(DlqError::Write(format!(
@@ -278,13 +284,13 @@ impl Pooled for krabka_client_core::Connection {
 /// so writers that reach one leader at once use the one connection. Writers
 /// that need a leader with no open connection wait for a single dial.
 struct LeaderConnections<C> {
-    slots: std::sync::Mutex<HashMap<NodeId, Arc<tokio::sync::Mutex<Option<C>>>>>,
+    slots: Mutex<HashMap<NodeId, Arc<AsyncMutex<Option<C>>>>>,
 }
 
 impl<C> Default for LeaderConnections<C> {
     fn default() -> Self {
         Self {
-            slots: std::sync::Mutex::default(),
+            slots: Mutex::default(),
         }
     }
 }
@@ -298,7 +304,7 @@ impl<C: Pooled> LeaderConnections<C> {
         Fut: Future<Output = Result<C, String>>,
     {
         let slot = {
-            let mut slots = self.slots.lock().expect("connection pool lock");
+            let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
             Arc::clone(slots.entry(leader).or_default())
         };
         let mut held = slot.lock().await;
@@ -307,6 +313,7 @@ impl<C: Pooled> LeaderConnections<C> {
         }
         let dialled = dial().await?;
         *held = Some(dialled.clone());
+        drop(held);
         Ok(dialled)
     }
 }
@@ -378,8 +385,8 @@ pub struct DlqWriter {
     /// The remote tier, which a copy reads for a source offset that only the
     /// tier holds (KIP-405). Empty on a broker with no tiered storage, and
     /// until the broker has built its reader.
-    remote_reader: std::sync::OnceLock<Arc<RemoteReader>>,
-    diskless_read: std::sync::OnceLock<Arc<DisklessReadHandle>>,
+    remote_reader: OnceLock<Arc<RemoteReader>>,
+    diskless_read: OnceLock<Arc<DisklessReadHandle>>,
 }
 
 impl DlqWriter {
@@ -412,8 +419,8 @@ impl DlqWriter {
             base_log: config.log_config.clone(),
             decompression: config.record_decompression_policy().unwrap_or_default(),
             metrics,
-            remote_reader: std::sync::OnceLock::new(),
-            diskless_read: std::sync::OnceLock::new(),
+            remote_reader: OnceLock::new(),
+            diskless_read: OnceLock::new(),
         }
     }
 
@@ -608,7 +615,7 @@ impl DlqSink for DlqWriter {
                 .await
             } else {
                 Fetched {
-                    records: std::collections::BTreeMap::new(),
+                    records: BTreeMap::new(),
                     last_resolved: last,
                 }
             };
@@ -634,13 +641,27 @@ impl DlqSink for DlqWriter {
 mod tests {
     use {
         super::{super::coalesce::test_support::FakeBroker, *},
-        crate::test_support::{KafkaErrorCode, broker_registration},
-        assert2::assert,
-        krabka_metadata::{BrokerRegistrationRecord, MetadataRecord, PartitionRecord, TopicRecord},
-        krabka_protocol::owned::{
-            create_topics_response::CreatableTopicResult,
-            produce_response::{PartitionProduceResponse, TopicProduceResponse},
+        crate::{
+            metrics::ShareGroupIdLabel,
+            test_support::{KafkaErrorCode, broker_registration},
         },
+        assert2::assert,
+        futures_util::future::{join, join_all},
+        krabka_metadata::{BrokerRegistrationRecord, MetadataRecord, PartitionRecord, TopicRecord},
+        krabka_protocol::{
+            owned::{
+                create_topics_response::CreatableTopicResult,
+                produce_response::{PartitionProduceResponse, TopicProduceResponse},
+            },
+            records::Record,
+        },
+        std::{
+            cell::Cell,
+            future::ready,
+            iter,
+            sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        tokio::task::yield_now,
     };
 
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -892,7 +913,7 @@ mod tests {
         let batch = RecordBatch {
             last_offset_delta: i32::try_from(records).unwrap() - 1,
             records: (0..records)
-                .map(|delta| krabka_protocol::records::Record {
+                .map(|delta| Record {
                     offset_delta: i32::try_from(delta).unwrap(),
                     ..Default::default()
                 })
@@ -1018,7 +1039,7 @@ mod tests {
     krabka_macros::share_dlq_meters! {
     /// What the meters of `group` count: the records written, the attempts to
     /// produce, and the writes that failed.
-        meters, BrokerMetrics, crate::metrics::ShareGroupIdLabel
+        meters, BrokerMetrics, ShareGroupIdLabel
     }
 
     /// Two writes for the same leader go out in one request, and each write
@@ -1038,7 +1059,7 @@ mod tests {
         });
         let writes = coalesced_writes().broker(broker.clone()).call();
 
-        let (done, refused) = futures_util::future::join(
+        let (done, refused) = join(
             writes.first_write(),
             produce_round(
                 &writes.sender,
@@ -1094,9 +1115,9 @@ mod tests {
             .first_records(1)
             .second_records(3)
             .call();
-        let leaders = std::cell::Cell::new(0_u64);
+        let leaders = Cell::new(0_u64);
 
-        let (done, retried) = futures_util::future::join(
+        let (done, retried) = join(
             writes.first_write(),
             produce_round(
                 &writes.sender,
@@ -1208,7 +1229,7 @@ mod tests {
             _ = &mut write => unreachable!("the request is held"),
             () = async {
                 for _ in 0..20 {
-                    tokio::task::yield_now().await;
+                    yield_now().await;
                 }
             } => {}
         }
@@ -1225,34 +1246,34 @@ mod tests {
     #[derive(Clone)]
     struct FakeConnection {
         dial: usize,
-        open: Arc<std::sync::atomic::AtomicBool>,
+        open: Arc<AtomicBool>,
     }
 
     impl Pooled for FakeConnection {
-        fn is_open(&self) -> bool { self.open.load(std::sync::atomic::Ordering::SeqCst) }
+        fn is_open(&self) -> bool { self.open.load(Ordering::SeqCst) }
     }
 
     /// A dialler that counts its dials, and lets other tasks run mid-dial.
     #[derive(Default)]
     struct Dialler {
-        dials: std::sync::atomic::AtomicUsize,
+        dials: AtomicUsize,
         fail_first: bool,
     }
 
     impl Dialler {
         async fn dial(&self) -> Result<FakeConnection, String> {
-            let dial = self.dials.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            tokio::task::yield_now().await;
+            let dial = self.dials.fetch_add(1, Ordering::SeqCst);
+            yield_now().await;
             if self.fail_first && dial == 0 {
                 return Err("connection refused".to_owned());
             }
             Ok(FakeConnection {
                 dial,
-                open: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                open: Arc::new(AtomicBool::new(true)),
             })
         }
 
-        fn dials(&self) -> usize { self.dials.load(std::sync::atomic::Ordering::SeqCst) }
+        fn dials(&self) -> usize { self.dials.load(Ordering::SeqCst) }
     }
 
     /// The produce requests to one leader share a connection, another leader
@@ -1265,7 +1286,7 @@ mod tests {
         let first = pool.get(NodeId(1), || dialler.dial()).await.unwrap();
         let again = pool.get(NodeId(1), || dialler.dial()).await.unwrap();
         let other = pool.get(NodeId(2), || dialler.dial()).await.unwrap();
-        first.open.store(false, std::sync::atomic::Ordering::SeqCst);
+        first.open.store(false, Ordering::SeqCst);
         let redialled = pool.get(NodeId(1), || dialler.dial()).await.unwrap();
 
         assert!(
@@ -1288,8 +1309,7 @@ mod tests {
         let dialler = Dialler::default();
 
         let connections =
-            futures_util::future::join_all((0..16).map(|_| pool.get(NodeId(1), || dialler.dial())))
-                .await;
+            join_all(iter::repeat_with(|| pool.get(NodeId(1), || dialler.dial())).take(16)).await;
 
         assert!(
             (
@@ -1370,8 +1390,8 @@ mod tests {
     /// last entry holds from then on; each `CreateTopics` gets `answer`.
     /// Returns the outcome and how many requests went out.
     async fn ensure(states: &[Result<TopicState, DlqError>], answer: i16) -> EnsureResult {
-        let looks = std::cell::Cell::new(0_usize);
-        let requests = std::cell::Cell::new(0_usize);
+        let looks = Cell::new(0_usize);
+        let requests = Cell::new(0_usize);
         let outcome = ensure_topic(
             "dlq.g",
             || {
@@ -1381,7 +1401,7 @@ mod tests {
             },
             || {
                 requests.set(requests.get() + 1);
-                std::future::ready(Ok(created(answer)))
+                ready(Ok(created(answer)))
             },
         )
         .await;

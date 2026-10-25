@@ -13,11 +13,11 @@ use {
         version::TxnVersion,
     },
     krabka_log::ProducerId,
-    krabka_verified::transaction::TransactionReaperCompletionDecision,
+    krabka_verified::transaction::{TransactionReaperCompletionDecision, next_producer_identity},
 };
 
 /// Drive the common begin gate and generation stamp, with an optional start-clock write.
-pub(crate) fn begin_transaction(
+pub fn begin_transaction(
     status: &mut i8,
     generation: &mut i16,
     epoch: i16,
@@ -65,7 +65,7 @@ pub fn initialize(
     }
     let reset = entry.state != TxnState::Ongoing;
     let fence_matches = if reset {
-        let (pid, epoch) = krabka_verified::transaction::next_producer_identity(
+        let (pid, epoch) = next_producer_identity(
             true,
             false,
             entry.producer_id.get(),
@@ -73,13 +73,7 @@ pub fn initialize(
             None,
         )
         .expect("model epochs never reach the rotation boundary");
-        entry = TxnEntry::new_empty(
-            "tid".to_string(),
-            ProducerId(pid),
-            epoch,
-            timeout_ms,
-            now_ms,
-        );
+        entry = TxnEntry::new_empty("tid".to_owned(), ProducerId(pid), epoch, timeout_ms, now_ms);
         true
     } else {
         let held = entry.producer_epoch;

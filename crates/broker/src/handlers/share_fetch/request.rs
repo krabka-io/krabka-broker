@@ -20,16 +20,16 @@ use {
 };
 
 /// The authorized member and resolved group settings shared by fetch and ack.
-pub(crate) struct ShareRequestIdentity {
-    pub(crate) group: String,
-    pub(crate) settings: GroupShareSettings,
-    pub(crate) lock_timeout_ms: i32,
-    pub(crate) member: String,
+pub struct ShareRequestIdentity {
+    pub group: String,
+    pub settings: GroupShareSettings,
+    pub lock_timeout_ms: i32,
+    pub member: String,
 }
 
 /// Apply Kafka's feature, group-id, group-read and member-id gates in order.
 /// Settings resolve after authorization and before the member's format check.
-pub(crate) fn resolve_share_identity(
+pub fn resolve_share_identity(
     broker: &Broker,
     image: &MetadataImage,
     ctx: &RequestContext<'_>,

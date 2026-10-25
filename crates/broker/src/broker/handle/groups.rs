@@ -8,25 +8,23 @@ use crate::coordinator::unified::{
     actor::{ClassicView, DescribeView},
     streams::actor::StreamsDescribeView,
 };
-use crate::{
-    broker::{BrokerHandle, TEST_AWAITER_TIMEOUT},
-    coordinator::unified::actor::GroupActorMessage,
+use {
+    crate::{
+        broker::{BrokerHandle, TEST_AWAITER_TIMEOUT},
+        coordinator::unified::actor::GroupActorMessage,
+    },
+    std::sync::Arc,
+    tokio::sync::oneshot,
 };
 
 impl BrokerHandle {
     async fn inspect_group_actor<T>(
         &self,
         group_id: &str,
-        message: impl FnOnce(tokio::sync::oneshot::Sender<T>) -> GroupActorMessage,
+        message: impl FnOnce(oneshot::Sender<T>) -> GroupActorMessage,
     ) -> Option<T> {
-        let handle = self
-            .broker
-            .group_coordinator
-            .groups
-            .get(group_id)?
-            .value()
-            .clone();
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let handle = Arc::clone(self.broker.group_coordinator.groups.get(group_id)?.value());
+        let (tx, rx) = oneshot::channel();
         handle.tx.send(message(tx)).await.ok()?;
         rx.await.ok()
     }
@@ -117,14 +115,14 @@ impl BrokerHandle {
     ) -> Option<StreamsDescribeView> {
         use crate::coordinator::unified::streams::actor::StreamsGroupActorMessage;
 
-        let handle = self
-            .broker
-            .group_coordinator
-            .streams_groups
-            .get(group_id)?
-            .value()
-            .clone();
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let handle = Arc::clone(
+            self.broker
+                .group_coordinator
+                .streams_groups
+                .get(group_id)?
+                .value(),
+        );
+        let (tx, rx) = oneshot::channel();
         handle
             .tx
             .send(StreamsGroupActorMessage::Describe { reply: tx })

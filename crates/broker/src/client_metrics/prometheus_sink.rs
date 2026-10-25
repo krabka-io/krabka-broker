@@ -13,7 +13,7 @@ mod collector;
 mod point;
 mod render;
 
-pub(crate) use self::{
+pub use self::{
     collector::ClientMetricsCollector,
     point::{DataPoint, PointValue},
     render::SharedClientMetricsCollector,

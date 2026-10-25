@@ -1,9 +1,10 @@
 use {super::LocalTruncationPlan, creusot_std::prelude::*};
 
-/// Admit one batch at the expected logical frontier or beyond it, and compute its
-/// inclusive last offset and exclusive successor without signed overflow. A base
-/// past the frontier is a hole in the offsets, which a compacted log has and a
-/// follower of one replicates; a base below it is a duplicate.
+/// Admit one batch at the expected logical frontier or beyond it, and compute
+/// its inclusive last offset and exclusive successor without signed overflow.
+///
+/// A base past the frontier is a hole in the offsets, which a compacted log has
+/// and a follower of one replicates; a base below it is a duplicate.
 #[ensures(match result {
     Some((last, next)) => expected_base@ >= 0
         && supplied_base@ >= expected_base@
@@ -56,15 +57,14 @@ pub fn local_truncation_plan(
     #[invariant(forall<i: Int> 0 <= i && i < retained_sealed@ ==>
         sealed_bases@[i]@ < cut@)]
     #[variant(sealed_bases@.len() - retained_sealed@)]
-    while retained_sealed < sealed_bases.len() && sealed_bases[retained_sealed] < cut {
+    while retained_sealed < sealed_bases.len()
+        && matches!(sealed_bases.get(retained_sealed), Some(&base) if base < cut)
+    {
         retained_sealed += 1;
     }
     LocalTruncationPlan {
         retained_sealed,
-        keep_active: match active_base {
-            Some(base) => base < cut,
-            None => false,
-        },
+        keep_active: matches!(active_base, Some(base) if base < cut),
     }
 }
 

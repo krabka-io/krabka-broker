@@ -26,8 +26,8 @@ use {
     },
     assert2::{assert, check},
     krabka_ids::PartitionIndex,
-    krabka_protocol::primitives::uuid::Uuid,
-    std::collections::HashMap,
+    krabka_protocol::{owned::consumer_group_heartbeat_request, primitives::uuid::Uuid},
+    std::{collections::HashMap, sync::atomic::Ordering},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -130,17 +130,17 @@ async fn an_actor_holds_no_consumer_group_before_the_first_join() {
             == vec![
                 (
                     codes::GROUP_ID_NOT_FOUND,
-                    Some("Consumer group g not found.".to_string())
+                    Some("Consumer group g not found.".to_owned())
                 ),
                 (
                     codes::GROUP_ID_NOT_FOUND,
-                    Some("Group g not found.".to_string())
+                    Some("Group g not found.".to_owned())
                 ),
                 (codes::NONE, None),
                 // The group exists now.
                 (
                     codes::UNKNOWN_MEMBER_ID,
-                    Some("Member m2 is not a member of group g.".to_string())
+                    Some("Member m2 is not a member of group g.".to_owned())
                 ),
                 (codes::NONE, None),
             ]
@@ -207,13 +207,11 @@ fn handoff_keepalive(
         member_epoch,
         rebalance_timeout_ms: -1,
         topic_partitions: owned.map(|partitions| {
-            vec![
-                krabka_protocol::owned::consumer_group_heartbeat_request::TopicPartitions {
-                    topic_id: IDENTITY_TOPIC,
-                    partitions,
-                    ..Default::default()
-                },
-            ]
+            vec![consumer_group_heartbeat_request::TopicPartitions {
+                topic_id: IDENTITY_TOPIC,
+                partitions,
+                ..Default::default()
+            }]
         }),
         ..Default::default()
     })
@@ -295,7 +293,7 @@ fn a_joiner_gets_a_partition_only_after_the_incumbent_reports_it_revoked() {
 
     // `a` reports what it owns now, without the revoked partition. It moves to
     // the target epoch, and `b` is granted the partition at its next heartbeat.
-    let acknowledged = handoff_keepalive(&mut state, "a", 2, Some(kept.clone()));
+    let acknowledged = handoff_keepalive(&mut state, "a", 2, Some(kept));
     check!(acknowledged.response == identity_ok().member_id("a").epoch(3).call());
     check!(state.members["a"].assignment_state == Stable);
     let granted = handoff_keepalive(&mut state, "b", 3, None);
@@ -467,7 +465,7 @@ fn identity_rows() -> Vec<IdentityRow> {
             member_epoch: MemberEpoch(0),
             owned: Some(vec![]),
             expected: identity_error(
-                crate::test_support::KafkaErrorCode(codes::UNRELEASED_INSTANCE_ID),
+                KafkaErrorCode(codes::UNRELEASED_INSTANCE_ID),
                 "Static member s2 with instance id i1 cannot join the group because the instance \
                  id is owned by s1 member.",
             ),
@@ -520,7 +518,7 @@ fn identity_rows() -> Vec<IdentityRow> {
             member_id: "ghost",
             member_epoch: MemberEpoch(-1),
             expected: identity_error(
-                crate::test_support::KafkaErrorCode(codes::UNKNOWN_MEMBER_ID),
+                KafkaErrorCode(codes::UNKNOWN_MEMBER_ID),
                 "Member ghost is not a member of group g.",
             ),
             ..Default::default()
@@ -560,7 +558,7 @@ fn identity_rows() -> Vec<IdentityRow> {
                 krabka_ids::PartitionIndex(3),
             ]),
             expected: identity_error(
-                crate::test_support::KafkaErrorCode(codes::UNKNOWN_MEMBER_ID),
+                KafkaErrorCode(codes::UNKNOWN_MEMBER_ID),
                 "Instance id i9 is unknown.",
             ),
             ..Default::default()
@@ -602,7 +600,7 @@ fn identity_request(
     ConsumerGroupHeartbeatRequest {
         group_id: "g".into(),
         member_id: member_id.into(),
-        instance_id: instance_id.map(str::to_string),
+        instance_id: instance_id.map(str::to_owned),
         member_epoch: member_epoch.0,
         subscribed_topic_names: Some(vec!["t".into()]),
         rebalance_timeout_ms: 60_000,
@@ -641,7 +639,7 @@ fn identity_group() -> GroupState {
         member.assigned_partitions = HashMap::from([(IDENTITY_TOPIC, partitions.clone())]);
         state.add_or_update_member(member);
         state.target.per_member.insert(
-            member_id.to_string(),
+            member_id.to_owned(),
             HashMap::from([(IDENTITY_TOPIC, partitions)]),
         );
     }
@@ -659,7 +657,7 @@ fn heartbeat_identity_rules_follow_kafka() {
     let config = NextGenConfig::assigning_at_once();
     let metadata = StaticMetadata {
         input: ReconcileInput {
-            topic_id_by_name: HashMap::from([("t".to_string(), IDENTITY_TOPIC)]),
+            topic_id_by_name: HashMap::from([("t".to_owned(), IDENTITY_TOPIC)]),
             partitions_per_topic: HashMap::from([(IDENTITY_TOPIC, 4)]),
             ..Default::default()
         },
@@ -737,7 +735,7 @@ struct WrittenMember {
 
 fn written_member(member_id: &str, kind: MemberRecordKind) -> WrittenMember {
     WrittenMember {
-        member_id: member_id.to_string(),
+        member_id: member_id.to_owned(),
         kind,
     }
 }
@@ -1020,8 +1018,7 @@ async fn consumer_heartbeat_upgrades_a_classic_group() {
 async fn failed_upgrade_append_keeps_the_atomic_batch_unpublished() {
     let (coord, log) = make_coordinator_with_topic("t", 1);
     let handle = seed_classic_member().coord(&coord).call();
-    log.fail_next
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    log.fail_next.store(true, Ordering::SeqCst);
 
     let response = consumer_request(
         &handle,
@@ -1038,7 +1035,7 @@ fn step_heartbeat_first_join_targets_all_partitions() {
     let topic_id = Uuid([7; 16]);
     let metadata = StaticMetadata {
         input: ReconcileInput {
-            topic_id_by_name: [("t".to_string(), topic_id)].into(),
+            topic_id_by_name: [("t".to_owned(), topic_id)].into(),
             partitions_per_topic: [(topic_id, 2)].into(),
             ..Default::default()
         },

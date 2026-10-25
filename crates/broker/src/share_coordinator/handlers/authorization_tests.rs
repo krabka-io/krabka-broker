@@ -110,7 +110,7 @@ impl Request {
             Self::Initialize => {
                 let version = initialize_share_group_state_request::MAX_VERSION;
                 let request = InitializeShareGroupStateRequest {
-                    group_id: GROUP.to_string(),
+                    group_id: GROUP.to_owned(),
                     topics: TOPICS
                         .map(|topic_id| InitializeStateData {
                             topic_id,
@@ -138,7 +138,7 @@ impl Request {
             Self::Read => {
                 let version = read_share_group_state_request::MAX_VERSION;
                 let request = ReadShareGroupStateRequest {
-                    group_id: GROUP.to_string(),
+                    group_id: GROUP.to_owned(),
                     topics: TOPICS
                         .map(|topic_id| ReadStateData {
                             topic_id,
@@ -158,7 +158,7 @@ impl Request {
             Self::Write => {
                 let version = write_share_group_state_request::MAX_VERSION;
                 let request = WriteShareGroupStateRequest {
-                    group_id: GROUP.to_string(),
+                    group_id: GROUP.to_owned(),
                     topics: TOPICS
                         .map(|topic_id| WriteStateData {
                             topic_id,
@@ -181,7 +181,7 @@ impl Request {
             Self::Delete => {
                 let version = delete_share_group_state_request::MAX_VERSION;
                 let request = DeleteShareGroupStateRequest {
-                    group_id: GROUP.to_string(),
+                    group_id: GROUP.to_owned(),
                     topics: TOPICS
                         .map(|topic_id| DeleteStateData {
                             topic_id,
@@ -203,7 +203,7 @@ impl Request {
             Self::ReadSummary => {
                 let version = read_share_group_state_summary_request::MAX_VERSION;
                 let request = ReadShareGroupStateSummaryRequest {
-                    group_id: GROUP.to_string(),
+                    group_id: GROUP.to_owned(),
                     topics: TOPICS
                         .map(|topic_id| ReadStateSummaryData {
                             topic_id,

@@ -29,6 +29,11 @@ use {
     krabka_log::Offset,
     krabka_protocol::owned::produce_response::PartitionProduceResponse,
     krabka_units::convert::TimeExt as _,
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
 /// What the idempotent-producer dedup gate decided for one batch.
@@ -121,12 +126,12 @@ const FIRST_ADD_PARTITION_PRODUCE_VERSION: i16 = 12;
 const LAST_DEFAULT_ERROR_PRODUCE_VERSION: i16 = 10;
 
 /// Kafka's `add.partitions.to.txn.retry.backoff.ms` default.
-const CONCURRENT_TRANSACTIONS_BACKOFF: std::time::Duration = std::time::Duration::from_millis(20);
+const CONCURRENT_TRANSACTIONS_BACKOFF: Duration = Duration::from_millis(20);
 
 /// Kafka's `add.partitions.to.txn.retry.backoff.max.ms` default, which bounds
 /// the retries of a transaction version 2 check that answers
 /// `CONCURRENT_TRANSACTIONS`.
-const CONCURRENT_TRANSACTIONS_RETRY: std::time::Duration = std::time::Duration::from_millis(100);
+const CONCURRENT_TRANSACTIONS_RETRY: Duration = Duration::from_millis(100);
 
 /// Where the KIP-890 check of one batch stands before the coordinator call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,7 +241,7 @@ pub(super) async fn verify_transactional_produce(
 /// `add.partitions.to.txn.retry.backoff.max.ms` has passed, as
 /// `maybeRetryOnConcurrentTransactions` does.
 pub(super) async fn verify_with_coordinator(
-    coordinator: &std::sync::Arc<TxnCoordinator>,
+    coordinator: &Arc<TxnCoordinator>,
     image: &krabka_metadata::MetadataImage,
     request: TransactionRequest<'_>,
     ProducerIdAndEpoch {
@@ -260,7 +265,7 @@ pub(super) async fn verify_with_coordinator(
         verify_only: !supports_epoch_bump,
     };
     let txnv = resolve_txn_version(image);
-    let retry_until = std::time::Instant::now() + CONCURRENT_TRANSACTIONS_RETRY;
+    let retry_until = Instant::now() + CONCURRENT_TRANSACTIONS_RETRY;
     loop {
         let answers = coordinator
             .add_or_verify_partitions(check.clone(), txnv, INTERNAL_REGISTRATION_VERSION)
@@ -269,9 +274,9 @@ pub(super) async fn verify_with_coordinator(
             && answers
                 .iter()
                 .any(|(_, code)| *code == codes::CONCURRENT_TRANSACTIONS)
-            && std::time::Instant::now() < retry_until
+            && Instant::now() < retry_until
         {
-            tokio::time::sleep(CONCURRENT_TRANSACTIONS_BACKOFF).await;
+            time::sleep(CONCURRENT_TRANSACTIONS_BACKOFF).await;
             continue;
         }
         return answers.into_iter().map(|(_, code)| code).collect();
@@ -454,13 +459,17 @@ mod tests {
         bytes::Bytes,
         krabka_ids::NodeId,
         krabka_metadata::MetadataImage,
-        krabka_protocol::records::{Record, RecordBatch},
-        std::{sync::Arc, time::Duration},
+        krabka_protocol::records::{Attributes, Record, RecordBatch},
+        std::{
+            future,
+            sync::{Arc, PoisonError},
+            time::{Duration, Instant},
+        },
     };
 
     fn transactional_batch(producer_id: i64, producer_epoch: i16) -> PreparedBatch {
         PreparedBatch {
-            attributes: krabka_protocol::records::Attributes::default().with_transactional(true),
+            attributes: Attributes::default().with_transactional(true),
             last_offset_delta: 0,
             max_timestamp: 0,
             producer_id,
@@ -553,8 +562,7 @@ mod tests {
                 .insert("orders".into(), krabka_ids::PartitionIndex(0), part);
 
             let payload = encode_batch(&RecordBatch {
-                attributes: krabka_protocol::records::Attributes::default()
-                    .with_transactional(true),
+                attributes: Attributes::default().with_transactional(true),
                 producer_id: 4242,
                 producer_epoch: 0,
                 base_sequence: 0,
@@ -690,7 +698,7 @@ mod tests {
             let mut batch = repeated_records_batch().count(3).call();
             part.log
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .append(&mut batch)
                 .expect("seed source records");
         }
@@ -725,43 +733,45 @@ mod tests {
             ..repeated_records_batch().count(3).call()
         });
 
-        let outcome = process_partition(
-            PartitionInput {
-                acks: -1,
-                ..pipeline_input("orders", PartitionPayload::Slice(payload))
-            },
-            leader.pipeline.services(&leader.image),
-        )
-        .await
-        .expect("process partition");
+        let resp: PartitionProduceResponse = {
+            let outcome = process_partition(
+                PartitionInput {
+                    acks: -1,
+                    ..pipeline_input("orders", PartitionPayload::Slice(payload))
+                },
+                leader.pipeline.services(&leader.image),
+            )
+            .await
+            .expect("process partition");
 
-        // The duplicate path joins the request's one overlapped `acks=-1`
-        // wait rather than blocking inside `process_partition`, so the row is
-        // decided here, the way `await_durability` decides it for a request.
-        let resp: PartitionProduceResponse = match outcome {
-            PartitionOutcome::AwaitingHighWatermark(ack) => {
-                ack.finish(
-                    std::time::Instant::now() + Duration::from_millis(50),
-                    |partition, admitted_topic_id| {
-                        current_effective_min_isr(
-                            &leader.image,
-                            (&partition.topic, partition.index.0),
-                            admitted_topic_id,
-                            (krabka_audit::NodeId(1), 1),
-                        )
-                    },
-                    std::future::pending(),
-                )
-                .await
-            }
-            PartitionOutcome::Done(response) => {
-                panic!("an acks=-1 duplicate must wait on the high watermark, got {response:?}")
+            // The duplicate path joins the request's one overlapped `acks=-1`
+            // wait rather than blocking inside `process_partition`, so the row is
+            // decided here, the way `await_durability` decides it for a request.
+            match outcome {
+                PartitionOutcome::AwaitingHighWatermark(ack) => {
+                    ack.finish(
+                        Instant::now() + Duration::from_millis(50),
+                        |partition, admitted_topic_id| {
+                            current_effective_min_isr(
+                                &leader.image,
+                                (&partition.topic, partition.index.0),
+                                admitted_topic_id,
+                                (krabka_audit::NodeId(1), 1),
+                            )
+                        },
+                        future::pending(),
+                    )
+                    .await
+                }
+                PartitionOutcome::Done(response) => {
+                    panic!("an acks=-1 duplicate must wait on the high watermark, got {response:?}")
+                }
             }
         };
 
         check!(resp.base_offset == 0);
         check!(
-            resp.error_code == crate::codes::REQUEST_TIMED_OUT,
+            resp.error_code == codes::REQUEST_TIMED_OUT,
             "HW 2 < target 3 must time out; a `-1` mutant would target offset 1 and return NONE"
         );
     }
@@ -864,7 +874,7 @@ mod tests {
         assert!(
             replays
                 == [
-                    refused(crate::codes::OUT_OF_ORDER_SEQUENCE_NUMBER),
+                    refused(codes::OUT_OF_ORDER_SEQUENCE_NUMBER),
                     duplicate(1, 4),
                     duplicate(5, 4),
                 ]
@@ -883,7 +893,7 @@ mod tests {
                 }
         );
         let fenced = produce_at(0, 6).await;
-        assert!(fenced == refused(crate::codes::INVALID_PRODUCER_EPOCH));
+        assert!(fenced == refused(codes::INVALID_PRODUCER_EPOCH));
     }
 
     /// How a partition got to the state the first batch meets.
@@ -975,7 +985,7 @@ mod tests {
                     part_handle
                         .log
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .unwrap_or_else(PoisonError::into_inner)
                         .append(&mut batch)
                         .expect("seed records");
                 }

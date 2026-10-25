@@ -13,13 +13,16 @@
 //! can drive the preopened model too.
 
 use {
-    std::{io, net::SocketAddr},
+    std::{
+        io,
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+    },
     tokio::net::{TcpListener, TcpStream},
 };
 
 /// How a platform gives the broker its sockets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Sockets {
+pub enum Sockets {
     /// The operating system binds, connects, and reports socket addresses.
     Native,
     /// The embedder supplies every listener, already bound, and no socket
@@ -62,8 +65,7 @@ impl Sockets {
     /// closed during the accept has none. Both give the unspecified address
     /// `0.0.0.0:0`, which no ACL host pattern matches.
     pub(crate) fn peer_address(self, stream: &TcpStream) -> SocketAddr {
-        const UNSPECIFIED: SocketAddr =
-            SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0);
+        const UNSPECIFIED: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
         match self {
             Self::Native => stream.peer_addr().unwrap_or_else(|error| {
                 tracing::debug!(%error, "peer_addr() failed, using 0.0.0.0:0");
@@ -80,7 +82,7 @@ impl Sockets {
 ///
 /// Returns the error of the bind.
 #[cfg(not(target_os = "wasi"))]
-pub(crate) async fn bind_listener(addr: SocketAddr) -> io::Result<TcpListener> {
+pub async fn bind_listener(addr: SocketAddr) -> io::Result<TcpListener> {
     TcpListener::bind(addr).await
 }
 

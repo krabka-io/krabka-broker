@@ -6,6 +6,7 @@ use crate::handlers::test_support::StartedBroker as HandlerStartedBroker;
 use {
     super::sentinels::UNKNOWN_EPOCH,
     crate::{
+        authorizer::AuthorizationResult,
         broker::BrokerHandle,
         codes,
         config::RemoteStorageBackend,
@@ -18,6 +19,8 @@ use {
         list_offsets_request::ListOffsetsRequest,
         list_offsets_response::{ListOffsetsPartitionResponse, ListOffsetsResponse},
     },
+    std::{collections::HashSet, time::Duration},
+    tokio::{task, time},
 };
 
 krabka_macros::wire_codec_helpers! {
@@ -43,7 +46,7 @@ pub(super) async fn create_topic(
     let response = client
         .send(CreateTopicsRequest {
             topics: vec![CreatableTopic {
-                name: name.to_string(),
+                name: name.to_owned(),
                 num_partitions: 1,
                 replication_factor: 1,
                 configs,
@@ -105,12 +108,12 @@ pub(super) async fn remote_topic(
     configs.extend(extra_configs);
     create_topic(&client, topic, configs).await;
     broker.wait_until_partition_present(topic, 0).await;
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    time::timeout(Duration::from_secs(5), async {
         while !broker
             .partition_log_config_for_test(topic, 0)
             .is_some_and(|config| config.remote_storage_enable)
         {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
@@ -157,12 +160,12 @@ pub(super) async fn list_one_at_epoch(
 }
 
 #[derive(Debug)]
-pub(super) struct DenyNamed(pub(super) std::collections::HashSet<&'static str>);
+pub(super) struct DenyNamed(pub(super) HashSet<&'static str>);
 
 krabka_macros::test_authorizer!(DenyNamed, req; {
     if self.0.contains(req.resource_name) {
-        crate::authorizer::AuthorizationResult::Deny
+        AuthorizationResult::Deny
     } else {
-        crate::authorizer::AuthorizationResult::Allow
+        AuthorizationResult::Allow
     }
 });

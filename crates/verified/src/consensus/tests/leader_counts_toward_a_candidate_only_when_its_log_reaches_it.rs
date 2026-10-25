@@ -1,4 +1,4 @@
-use super::*;
+use {super::*, proptest::collection};
 
 /// The leader's own log end counts toward a candidate's majority only when
 /// it actually reaches that candidate.
@@ -21,7 +21,7 @@ proptest! {
     #[test]
     fn hwm_matches_sort_oracle(
         log_end in 0i64..1_000,
-        followers in proptest::collection::vec(0i64..1_000, 1..7),
+        followers in collection::vec(0i64..1_000, 1..7),
         majority_seed in 0usize..8,
         epoch_start_offset in 0i64..1_000,
         current_hwm in 0i64..1_000,

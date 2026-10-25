@@ -23,15 +23,15 @@ use {
 
 /// One archived segment of a partition, by id, offset range and state.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ArchivedSegment {
-    pub(crate) id: u128,
-    pub(crate) offsets: RangeInclusive<i64>,
-    pub(crate) state: RemoteLogSegmentState,
+pub struct ArchivedSegment {
+    pub id: u128,
+    pub offsets: RangeInclusive<i64>,
+    pub state: RemoteLogSegmentState,
 }
 
 /// Add `segment` to `rlmm` under `tp` and walk it to its state, the way a
 /// copy, and then a delete, would.
-pub(crate) fn seed_segment(
+pub fn seed_segment(
     rlmm: &Arc<dyn RemoteLogMetadataManager>,
     tp: &TopicIdPartition,
     segment: &ArchivedSegment,
@@ -76,7 +76,7 @@ pub(crate) fn seed_segment(
 }
 
 /// Every segment `rlmm` lists for `tp`, in the shape [`seed_segment`] takes.
-pub(crate) fn archived_segments(
+pub fn archived_segments(
     rlmm: &Arc<dyn RemoteLogMetadataManager>,
     tp: &TopicIdPartition,
 ) -> Vec<ArchivedSegment> {

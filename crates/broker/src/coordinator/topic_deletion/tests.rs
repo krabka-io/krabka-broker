@@ -21,6 +21,7 @@ use {
     assert2::check,
     krabka_metadata::{DeleteTopicRecord, MetadataRecord},
     std::collections::HashMap,
+    tokio::time::{Instant, sleep},
     uuid::Uuid,
 };
 
@@ -46,7 +47,7 @@ fn deleted_topics_compares_topic_ids() {
     let base = [topic("orders", 10), topic("payments", 20)];
     let orders = || {
         vec![DeletedTopic {
-            name: "orders".to_string(),
+            name: "orders".to_owned(),
             topic_id: Uuid::from_u128(10),
         }]
     };
@@ -115,13 +116,13 @@ async fn a_loaded_partition_applies_the_remembered_deletions() {
     {
         let (coordinator, _log) = make_coord_with_log();
         super::remember_deletions(&coordinator, &[DeletedTopic {
-            name: "orders".to_string(),
+            name: "orders".to_owned(),
             topic_id: Uuid::from_u128(10),
         }]);
         let group = CoordinatorGroup::seeded(
             "g",
             GroupKind::Classic(ClassicGroup::new("g")),
-            HashMap::from([(("orders".to_string(), 0), entry(1))]),
+            HashMap::from([(("orders".to_owned(), 0), entry(1))]),
         );
         coordinator.seed_classic("g", Box::new(group));
 
@@ -139,8 +140,8 @@ async fn on_topics_deleted_tombstones_offsets_in_every_owned_group() {
             group_id,
             GroupKind::Classic(ClassicGroup::new(group_id)),
             HashMap::from([
-                (("orders".to_string(), 0), entry(1)),
-                (("payments".to_string(), 0), entry(2)),
+                (("orders".to_owned(), 0), entry(1)),
+                (("payments".to_owned(), 0), entry(2)),
             ]),
         );
         coordinator.seed_classic(group_id, Box::new(group));
@@ -148,7 +149,7 @@ async fn on_topics_deleted_tombstones_offsets_in_every_owned_group() {
 
     let changed = on_topics_deleted(&coordinator, |group_id| group_id != "not-owned", &[
         DeletedTopic {
-            name: "orders".to_string(),
+            name: "orders".to_owned(),
             topic_id: Uuid::from_u128(10),
         },
     ])
@@ -158,12 +159,12 @@ async fn on_topics_deleted_tombstones_offsets_in_every_owned_group() {
         changed
             == vec![
                 GroupDeletedOffsets {
-                    group_id: "a".to_string(),
-                    offsets: vec![("orders".to_string(), 0)],
+                    group_id: "a".to_owned(),
+                    offsets: vec![("orders".to_owned(), 0)],
                 },
                 GroupDeletedOffsets {
-                    group_id: "b".to_string(),
-                    offsets: vec![("orders".to_string(), 0)],
+                    group_id: "b".to_owned(),
+                    offsets: vec![("orders".to_owned(), 0)],
                 },
             ]
     );
@@ -257,36 +258,33 @@ async fn a_recreated_topic_does_not_inherit_the_old_committed_offsets() {
         .await
         .expect("DeleteTopics");
     check!(deleted.responses[0].error_code == codes::NONE);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while handle.controller_image_for_test().topic(TOPIC).is_some() {
-        assert2::assert!(
-            tokio::time::Instant::now() < deadline,
-            "topic never left the image"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert2::assert!(Instant::now() < deadline, "topic never left the image");
+        sleep(Duration::from_millis(20)).await;
     }
     let recreated = client.send(create()).await.expect("CreateTopics again");
     check!(recreated.topics[0].error_code == codes::NONE);
     handle.wait_until_partition_present(TOPIC, 0).await;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let offset = fetched_offset(&broker).await;
         if offset == -1 {
             break;
         }
         assert2::assert!(
-            tokio::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "the recreated topic still reports offset {offset}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(50)).await;
     }
 
     // An offset committed to the new topic survives a deletion of the old
     // topic that reaches the group late: it carries the new topic id.
     check!(commit_offset(7).await == codes::NONE);
     let changed = super::on_topics_deleted(&broker.group_coordinator, |_| true, &[DeletedTopic {
-        name: TOPIC.to_string(),
+        name: TOPIC.to_owned(),
         topic_id: old_id,
     }])
     .await;

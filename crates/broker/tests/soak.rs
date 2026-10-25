@@ -131,16 +131,18 @@
 //! ```text
 //! cargo test -p krabka-broker --test soak
 //! ```
+#![cfg(test)]
 
 use {
     std::{
-        collections::BTreeSet,
+        collections::{BTreeMap, BTreeSet},
+        env,
         sync::{
             Arc,
             atomic::{AtomicBool, AtomicU64, Ordering},
         },
     },
-    tokio::sync::Mutex,
+    tokio::{sync::Mutex, time},
 };
 
 // Cargo compiles this file as its own test binary, so the crate root's module
@@ -286,7 +288,7 @@ const COMPACTIONS: &str = "krabka_broker_log_compactions_total";
 
 /// How long the load runs, from the environment.
 fn soak_duration() -> Duration {
-    let seconds = std::env::var("KRABKA_SOAK_SECONDS")
+    let seconds = env::var("KRABKA_SOAK_SECONDS")
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())
         .unwrap_or(DEFAULT_SOAK_SECONDS);
@@ -467,10 +469,10 @@ async fn produce_loop(
     let producer = producer(&bootstrap).await;
     let mut sequence = 0u64;
     while load.running() {
-        let key = match key_space {
-            Some(space) => format!("{topic}-k{}", sequence % space),
-            None => format!("{topic}-{sequence}"),
-        };
+        let key = key_space.map_or_else(
+            || format!("{topic}-{sequence}"),
+            |space| format!("{topic}-k{}", sequence % space),
+        );
         let value = vec![b'x'; PAYLOAD_BYTES];
         if producer
             .send(record(topic, key.clone(), value))
@@ -483,8 +485,9 @@ async fn produce_loop(
             }
         }
         sequence += 1;
-        tokio::time::sleep(pace).await;
+        time::sleep(pace).await;
     }
+    drop(producer);
 }
 
 /// Consume everything the producers write, continuously, until the load stops.
@@ -513,7 +516,7 @@ async fn consume_loop(load: Arc<Load>, bootstrap: String) {
             }
             // A rebalance or a leader move surfaces here; the soak is about
             // what the cluster does over hours, not about one poll.
-            Err(_) => tokio::time::sleep(Duration::from_millis(200)).await,
+            Err(_) => time::sleep(Duration::from_millis(200)).await,
         }
     }
     let _ = consumer.close().await;
@@ -531,14 +534,11 @@ struct BrokerSamples {
     /// Files in the log directory less `soak-verify`.
     log_files: Series,
     /// Every top-level entry of the log directory, at every sample.
-    usage: Vec<(
-        Duration,
-        std::collections::BTreeMap<String, probe::DirectoryUsage>,
-    )>,
+    usage: Vec<(Duration, BTreeMap<String, probe::DirectoryUsage>)>,
     /// Every segment base offset seen in any partition directory, ever.
-    segments_seen: std::collections::BTreeMap<String, BTreeSet<u64>>,
+    segments_seen: BTreeMap<String, BTreeSet<u64>>,
     /// The lowest base offset still present per partition, at the last sample.
-    lowest_kept: std::collections::BTreeMap<String, u64>,
+    lowest_kept: BTreeMap<String, u64>,
     /// How many times a partition's lowest retained segment moved up.
     retention_cycles: u64,
     cleaner_runs: f64,
@@ -562,8 +562,8 @@ impl BrokerSamples {
                 "files",
             ),
             usage: Vec::new(),
-            segments_seen: std::collections::BTreeMap::new(),
-            lowest_kept: std::collections::BTreeMap::new(),
+            segments_seen: BTreeMap::new(),
+            lowest_kept: BTreeMap::new(),
             retention_cycles: 0,
             cleaner_runs: 0.0,
             cleaner_failures: 0.0,
@@ -601,7 +601,7 @@ impl BrokerSamples {
     }
 
     /// Fold one directory listing into the segment and retention tallies.
-    fn observe_segments(&mut self, listing: &std::collections::BTreeMap<String, BTreeSet<u64>>) {
+    fn observe_segments(&mut self, listing: &BTreeMap<String, BTreeSet<u64>>) {
         for (partition, offsets) in listing {
             self.segments_seen
                 .entry(partition.clone())
@@ -762,7 +762,7 @@ async fn a_three_broker_cluster_holds_its_resources_over_a_soak() {
     let started = Instant::now();
     let mut taken = 0u32;
     while started.elapsed() < duration {
-        tokio::time::sleep(interval).await;
+        time::sleep(interval).await;
         let elapsed = started.elapsed();
         let mut counters = Vec::new();
         for (broker, sample) in cluster.brokers.iter().zip(&mut samples) {

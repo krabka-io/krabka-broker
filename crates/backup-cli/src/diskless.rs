@@ -6,7 +6,8 @@ use {
         index::REPLAY_FENCE_KEY,
     },
     krabka_remote_storage_topic::{MetadataEventLog, MetadataLogError},
-    std::{collections::HashMap, sync::Arc, time::Duration},
+    std::{collections::HashMap, hash::BuildHasher, sync::Arc, time::Duration},
+    tokio::time,
     uuid::Uuid,
 };
 
@@ -30,7 +31,7 @@ const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Returns an error when the index watermarks cannot be read, when the read
 /// fails, when the watermark lookups and the read together take longer than
 /// 30 seconds, or when a record cannot be decoded or projected.
-pub async fn capture_projection<S: std::hash::BuildHasher>(
+pub async fn capture_projection<S: BuildHasher>(
     log: Arc<dyn MetadataEventLog>,
     topics: &HashMap<Uuid, (String, i32), S>,
     captured_at_ms: u64,
@@ -39,7 +40,7 @@ pub async fn capture_projection<S: std::hash::BuildHasher>(
 }
 
 /// [`capture_projection`] with the deadline as a parameter.
-async fn capture_projection_within<S: std::hash::BuildHasher>(
+async fn capture_projection_within<S: BuildHasher>(
     log: &dyn MetadataEventLog,
     topics: &HashMap<Uuid, (String, i32), S>,
     captured_at_ms: u64,
@@ -48,7 +49,7 @@ async fn capture_projection_within<S: std::hash::BuildHasher>(
     let CommittedIndex {
         projection,
         cutoffs,
-    } = tokio::time::timeout(timeout, project_committed_index(log))
+    } = time::timeout(timeout, project_committed_index(log))
         .await
         .map_err(|_| "diskless WAL index capture timed out".to_owned())??;
     projection.capture(topics, cutoffs, captured_at_ms)
@@ -136,7 +137,7 @@ mod tests {
         krabka_remote_storage_topic::{
             InProcessMetadataEventLog, MetadataEventRecord, RangeVisitor,
         },
-        std::sync::Mutex,
+        std::{future, sync::Mutex},
     };
 
     const TOPIC_ID: Uuid = Uuid::from_u128(9);
@@ -199,7 +200,7 @@ mod tests {
             let mut marks = self.inner.high_water_marks().await?;
             match self.fault {
                 Fault::None => {}
-                Fault::HangOnHighWatermarks => std::future::pending::<()>().await,
+                Fault::HangOnHighWatermarks => future::pending::<()>().await,
                 Fault::ShortHighWatermarks => {
                     marks.pop();
                 }

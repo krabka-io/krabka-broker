@@ -47,7 +47,10 @@ use {
         },
         snapshot_fetch::SnapshotId,
     },
-    std::path::{Path, PathBuf},
+    std::{
+        fs,
+        path::{Path, PathBuf},
+    },
     tracing::{debug, info, warn},
 };
 
@@ -192,7 +195,7 @@ impl ObserverStore {
     /// the next write supersedes it by offset anyway.
     fn discard(&mut self) {
         self.persisted = None;
-        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+        let Ok(entries) = fs::read_dir(&self.dir) else {
             return;
         };
         for entry in entries.flatten() {
@@ -201,7 +204,7 @@ impl ObserverStore {
                 .to_str()
                 .is_some_and(|name| name.ends_with(".checkpoint"))
             {
-                let _ = std::fs::remove_file(entry.path());
+                let _ = fs::remove_file(entry.path());
             }
         }
     }
@@ -321,7 +324,7 @@ mod tests {
         store.maybe_checkpoint(&image, 4);
         store.maybe_checkpoint(&image, 8);
 
-        let entries: Vec<_> = std::fs::read_dir(dir.path().join(OBSERVER_SUBDIR))
+        let entries: Vec<_> = fs::read_dir(dir.path().join(OBSERVER_SUBDIR))
             .expect("checkpoint dir")
             .flatten()
             .collect();
@@ -379,10 +382,10 @@ mod tests {
         store.save_fetched_snapshot((7, 2), b"fetched");
         store.maybe_checkpoint(&image_with(&["own"]), 12);
 
-        let controller_checkpoints = std::fs::read_dir(dir.path())
+        let controller_checkpoints = fs::read_dir(dir.path())
             .expect("partition dir")
             .flatten()
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_dir()))
             .count();
         assert!(
             controller_checkpoints == 0,
@@ -390,7 +393,7 @@ mod tests {
             dir.path().display()
         );
         assert!(
-            std::fs::read_dir(dir.path().join(OBSERVER_SUBDIR))
+            fs::read_dir(dir.path().join(OBSERVER_SUBDIR))
                 .expect("observer dir")
                 .flatten()
                 .count()

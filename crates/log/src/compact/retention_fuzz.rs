@@ -4,7 +4,11 @@
 //! marker safety, tombstone aging, and a single horizon stamp. A separate prop
 //! checks the delete-horizon wire round-trip of a real `RecordBatch`.
 
-use {super::*, proptest::prelude::*};
+use {
+    super::*,
+    proptest::{collection, prelude::*},
+    std::collections::{HashMap, HashSet},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum EntryKind {
@@ -32,8 +36,8 @@ enum Op {
 /// Key-to-newest-index dedup map over keyed data entries. Control entries
 /// are never indexed. This mirrors the production `build_offset_map`
 /// filter.
-fn offset_map(log: &[Entry]) -> std::collections::HashMap<u8, usize> {
-    let mut map = std::collections::HashMap::new();
+fn offset_map(log: &[Entry]) -> HashMap<u8, usize> {
+    let mut map = HashMap::new();
     for (idx, e) in log.iter().enumerate() {
         if !matches!(e.kind, EntryKind::Data { .. }) {
             continue;
@@ -50,9 +54,9 @@ fn offset_map(log: &[Entry]) -> std::collections::HashMap<u8, usize> {
 /// in front of them, after that producer's previous marker. This is Kafka's
 /// per-transaction rule for keeping a commit marker. The association is by
 /// key, where key equals pid.
-fn markers_behind_data(log: &[Entry]) -> std::collections::HashSet<usize> {
-    let mut with_data = std::collections::HashSet::new();
-    let mut held = std::collections::HashSet::new();
+fn markers_behind_data(log: &[Entry]) -> HashSet<usize> {
+    let mut with_data = HashSet::new();
+    let mut held = HashSet::new();
     for (idx, e) in log.iter().enumerate() {
         match &e.kind {
             EntryKind::Data { .. } => {
@@ -187,7 +191,7 @@ fn apply(log: &mut Vec<Entry>, clock: &mut i64, op: &Op, ret_ms: i64) {
                 }
             }
 
-            // --- Marker safety: a marker stays while data of its own
+            // --- Marker retention: a marker stays while data of its own
             // transaction is in front of it, and until its horizon has
             // elapsed. The pass never reorders or invents markers, so the
             // markers of one producer that had to stay are at most the
@@ -252,7 +256,7 @@ proptest! {
 
     #[test]
     fn retention_invariants_hold(
-        ops in proptest::collection::vec(op_strategy(), 0..200),
+        ops in collection::vec(op_strategy(), 0..200),
         ret_ms in 1i64..100,
     ) {
         let mut log: Vec<Entry> = Vec::new();

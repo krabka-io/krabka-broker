@@ -32,7 +32,7 @@ use {
 /// when the peer advertises a range that ends below it. A peer that
 /// advertises nothing for `key`, or a range above the engine's version, gets
 /// the engine's version.
-pub(crate) fn negotiated_version(key: i16, peer_range: Option<(i16, i16)>) -> i16 {
+pub fn negotiated_version(key: i16, peer_range: Option<(i16, i16)>) -> i16 {
     let ours = api_version_for(ApiKey(key)).get();
     match peer_range {
         Some((min, max)) if max < ours && min <= max => max,
@@ -42,7 +42,7 @@ pub(crate) fn negotiated_version(key: i16, peer_range: Option<(i16, i16)>) -> i1
 
 /// Re-encodes a request body for `key` from version `from` to version `to`.
 /// `None` when the body does not decode at `from` or does not encode at `to`.
-pub(crate) fn convert_request(key: i16, body: &[u8], from: i16, to: i16) -> Option<Bytes> {
+pub fn convert_request(key: i16, body: &[u8], from: i16, to: i16) -> Option<Bytes> {
     match PeerApi::from_api_key(key)? {
         PeerApi::Fetch => convert::<FetchRequest>(body, from, to),
         PeerApi::Vote => convert::<VoteRequest>(body, from, to),
@@ -79,7 +79,7 @@ fn convert_end_quorum_epoch(body: &[u8], from: i16, to: i16) -> Option<Bytes> {
 
 /// Re-encodes a response body for `key` from version `from` to version `to`.
 /// `None` when the body does not decode at `from` or does not encode at `to`.
-pub(crate) fn convert_response(key: i16, body: &[u8], from: i16, to: i16) -> Option<Bytes> {
+pub fn convert_response(key: i16, body: &[u8], from: i16, to: i16) -> Option<Bytes> {
     match PeerApi::from_api_key(key)? {
         PeerApi::Fetch => convert::<FetchResponse>(body, from, to),
         PeerApi::Vote => convert::<VoteResponse>(body, from, to),

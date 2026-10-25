@@ -69,10 +69,13 @@ pub fn exact_wal_batch_range(bases: &[i64], lasts: &[i64], start: i64, target: i
         0 <= a && a < b && b < i@ ==> lasts@[a]@ < bases@[b]@))]
     #[cfg_attr(creusot, variant(bases@.len() - i@))]
     while i < bases.len() {
-        if bases[i] != expected || bases[i] > lasts[i] {
+        let (Some(&base), Some(&last)) = (bases.get(i), lasts.get(i)) else {
+            return false;
+        };
+        if base != expected || base > last {
             return false;
         }
-        let Some(next) = lasts[i].checked_add(1) else {
+        let Some(next) = last.checked_add(1) else {
             return false;
         };
         expected = next;
@@ -131,19 +134,18 @@ pub fn wal_covering_batch_range(
         return None;
     }
     if start == target {
-        return if matches!(bases.len(), 0) {
-            Some(start)
-        } else {
-            None
-        };
+        return matches!(bases.len(), 0).then_some(start);
     }
-    if matches!(bases.len(), 0) || bases[0] < 0 || bases[0] > start || lasts[0] < start {
+    let (Some(&first_base), Some(&first_last)) = (bases.first(), lasts.first()) else {
+        return None;
+    };
+    if first_base < 0 || first_base > start || first_last < start {
         return None;
     }
-    if !exact_wal_batch_range(bases, lasts, bases[0], target) {
+    if !exact_wal_batch_range(bases, lasts, first_base, target) {
         return None;
     }
-    Some(bases[0])
+    Some(first_base)
 }
 
 /// A nonempty checkpoint must end at the observed whole batch's successor.
@@ -179,7 +181,10 @@ pub fn wal_batch_equal(left: (i64, i64, &[u8]), right: (i64, i64, &[u8])) -> boo
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==> left.2@[j] == right.2@[j])]
     #[variant(left.2@.len() - i@)]
     while i < left.2.len() {
-        if left.2[i] != right.2[i] {
+        let (Some(left_byte), Some(right_byte)) = (left.2.get(i), right.2.get(i)) else {
+            return false;
+        };
+        if left_byte != right_byte {
             return false;
         }
         i += 1;

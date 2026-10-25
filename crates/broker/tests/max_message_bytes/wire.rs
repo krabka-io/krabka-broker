@@ -22,24 +22,24 @@ use {
 
 /// Kafka's `max.message.bytes`, and its broker-wide default
 /// `message.max.bytes`, which a topic that sets neither inherits.
-pub(super) const MAX_MESSAGE_BYTES: &str = "max.message.bytes";
+pub const MAX_MESSAGE_BYTES: &str = "max.message.bytes";
 
 /// Kafka's `segment.bytes`, which `UnifiedLog.append` holds a whole record set
 /// to no matter how large `max.message.bytes` is.
-pub(super) const SEGMENT_BYTES: &str = "segment.bytes";
+pub const SEGMENT_BYTES: &str = "segment.bytes";
 
 /// Kafka's `compression.type`, whose non-`producer` values make the broker
 /// re-encode a batch whose codec differs before it stores it.
-pub(super) const COMPRESSION_TYPE: &str = "compression.type";
+pub const COMPRESSION_TYPE: &str = "compression.type";
 
 /// Kafka's `compression.lz4.level`, the level a broker-side lz4 re-encode
 /// runs at.
-pub(super) const COMPRESSION_LZ4_LEVEL: &str = "compression.lz4.level";
+pub const COMPRESSION_LZ4_LEVEL: &str = "compression.lz4.level";
 
 /// Kafka's default for both keys: 1 MiB of records plus the 12-byte
 /// `Records.LOG_OVERHEAD`. Read out of `apache/kafka:4.1.0` as the
 /// `DEFAULT_CONFIG` synonym of an unset `max.message.bytes`.
-pub(super) const KAFKA_DEFAULT: usize = 1_048_588;
+pub const KAFKA_DEFAULT: usize = 1_048_588;
 
 /// Create a one-partition topic with `configs` and wait for its partition to
 /// exist locally.
@@ -47,7 +47,7 @@ pub(super) const KAFKA_DEFAULT: usize = 1_048_588;
 /// The `CreateTopics` row is asserted rather than ignored: an unrecognized
 /// config key comes back as `INVALID_CONFIG` (40) there, which is the failure
 /// this whole feature exists to remove.
-pub(super) async fn create_topic(
+pub async fn create_topic(
     broker: &BrokerHandle,
     client: &Client,
     name: &str,
@@ -72,7 +72,7 @@ pub(super) async fn create_topic(
 }
 
 /// Start the boundary-test topic while keeping the broker's directory alive.
-pub(super) async fn orders_fixture(configs: &[(&str, &str)]) -> (InProcess, WireUuid) {
+pub async fn orders_fixture(configs: &[(&str, &str)]) -> (InProcess, WireUuid) {
     let process = Box::pin(start()).await;
     let topic = create_topic(&process.broker, &process.client, "orders", configs).await;
     (process, topic)
@@ -86,7 +86,7 @@ pub(super) async fn orders_fixture(configs: &[(&str, &str)]) -> (InProcess, Wire
 /// and converges rather than assuming a fixed overhead. `target` must leave
 /// room for the 61-byte batch header and the record framing around an empty
 /// value, which every caller's cap does.
-pub(super) fn batch_of_wire_len(target: usize) -> RecordBatch {
+pub fn batch_of_wire_len(target: usize) -> RecordBatch {
     let mut value_len = target.saturating_sub(70);
     for _ in 0..8 {
         let batch = one_record(value_len);
@@ -119,14 +119,14 @@ fn one_record(value_len: usize) -> RecordBatch {
 /// Repeated bytes are the point: gzip shrinks them by three orders of
 /// magnitude, so the batch that arrives on the wire is tiny and the batch a
 /// topic with `compression.type=uncompressed` stores is not.
-pub(super) fn gzip_batch(value_len: usize) -> RecordBatch {
+pub fn gzip_batch(value_len: usize) -> RecordBatch {
     let mut batch = one_record(value_len);
     batch.attributes = batch.attributes.with_compression(CompressionType::Gzip);
     batch
 }
 
 /// Bytes `batch` occupies on the wire, with its own compression applied.
-pub(super) fn wire_len(batch: &RecordBatch) -> usize {
+pub fn wire_len(batch: &RecordBatch) -> usize {
     let mut buf = bytes::BytesMut::new();
     batch.encode(&mut buf).expect("encode batch");
     buf.len()
@@ -134,7 +134,7 @@ pub(super) fn wire_len(batch: &RecordBatch) -> usize {
 
 /// Produce one batch of exactly `wire_len` bytes and hand back the whole
 /// partition row.
-pub(super) async fn produce_batch_of_wire_len(
+pub async fn produce_batch_of_wire_len(
     client: &Client,
     topic: &str,
     topic_id: WireUuid,
@@ -144,7 +144,7 @@ pub(super) async fn produce_batch_of_wire_len(
 }
 
 /// Produce `batch` and hand back the whole partition row.
-pub(super) async fn produce_batch(
+pub async fn produce_batch(
     client: &Client,
     topic: &str,
     topic_id: WireUuid,
@@ -168,7 +168,7 @@ pub(super) async fn produce_batch(
 /// has trimmed, so they all pass 0. The value a trimmed log answers with is
 /// pinned in `crates/broker/tests/produce_log_start_offset.rs`, where a
 /// `DeleteRecords` moves it off 0 first.
-pub(super) use crate::support::produce::expected_partition_success as accepted;
+pub use crate::support::produce::expected_partition_success as accepted;
 
 /// The partition row an oversized batch answers with.
 ///
@@ -187,14 +187,14 @@ pub(super) use crate::support::produce::expected_partition_success as accepted;
 /// answers a 2049-byte batch with exactly this row: error code 10,
 /// `base_offset=-1`, `log_append_time_ms=-1`, `log_start_offset=-1`, no record
 /// errors and no error message.
-pub(super) fn too_large() -> PartitionProduceResponse {
+pub fn too_large() -> PartitionProduceResponse {
     refused_before_append(codes::MESSAGE_TOO_LARGE)
 }
 
 /// The partition row a record set larger than `segment.bytes` answers with:
 /// `RECORD_LIST_TOO_LARGE` (18), Kafka's `RecordBatchTooLargeException`, with
 /// the same no-append offsets and no message as [`too_large`].
-pub(super) fn record_list_too_large() -> PartitionProduceResponse {
+pub fn record_list_too_large() -> PartitionProduceResponse {
     refused_before_append(codes::RECORD_LIST_TOO_LARGE)
 }
 

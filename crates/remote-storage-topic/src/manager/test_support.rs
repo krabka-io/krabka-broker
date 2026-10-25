@@ -16,8 +16,21 @@ use {
     bytes::Bytes,
     krabka_ids::LeaderEpoch,
     krabka_remote_storage::{RemoteLogMetadataManager, RemoteStorageError, TopicIdPartition},
-    std::sync::Arc,
-    tokio::runtime::Handle,
+    std::{
+        env,
+        path::PathBuf,
+        process,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicU64, Ordering},
+        },
+        time::{Duration, Instant},
+    },
+    tokio::{
+        runtime::Handle,
+        sync::{Notify, Semaphore},
+        task, time,
+    },
     uuid::Uuid,
 };
 
@@ -27,28 +40,25 @@ use {
 /// exercise the C1 fail-closed path.
 pub struct HwmFlakyLog {
     inner: Arc<InProcessMetadataEventLog>,
-    fail_hwm: std::sync::atomic::AtomicBool,
+    fail_hwm: AtomicBool,
 }
 
 impl HwmFlakyLog {
     pub fn new(partition_count: i32) -> Arc<Self> {
         Arc::new(Self {
             inner: InProcessMetadataEventLog::new(partition_count),
-            fail_hwm: std::sync::atomic::AtomicBool::new(false),
+            fail_hwm: AtomicBool::new(false),
         })
     }
 
-    pub fn set_fail_hwm(&self, fail: bool) {
-        self.fail_hwm
-            .store(fail, std::sync::atomic::Ordering::SeqCst);
-    }
+    pub fn set_fail_hwm(&self, fail: bool) { self.fail_hwm.store(fail, Ordering::SeqCst); }
 }
 
 #[krabka_macros::metadata_log_delegate(crate)]
 #[async_trait::async_trait]
 impl MetadataEventLog for HwmFlakyLog {
     async fn high_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
-        if self.fail_hwm.load(std::sync::atomic::Ordering::SeqCst) {
+        if self.fail_hwm.load(Ordering::SeqCst) {
             return Err(MetadataLogError::Other("injected HWM failure".into()));
         }
         self.inner.high_water_marks().await
@@ -71,18 +81,18 @@ pub enum Hold {
 /// regression fails the test instead of hanging it.
 pub struct HeldPublishLog {
     pub inner: Arc<InProcessMetadataEventLog>,
-    hold: std::sync::Mutex<Option<Hold>>,
-    parked: tokio::sync::Notify,
-    released: tokio::sync::Semaphore,
+    hold: Mutex<Option<Hold>>,
+    parked: Notify,
+    released: Semaphore,
 }
 
 impl HeldPublishLog {
     pub fn new(partition_count: i32) -> Arc<Self> {
         Arc::new(Self {
             inner: InProcessMetadataEventLog::new(partition_count),
-            hold: std::sync::Mutex::new(None),
-            parked: tokio::sync::Notify::new(),
-            released: tokio::sync::Semaphore::new(0),
+            hold: Mutex::new(None),
+            parked: Notify::new(),
+            released: Semaphore::new(0),
         })
     }
 
@@ -98,9 +108,7 @@ impl HeldPublishLog {
     async fn park(&self, at: Hold) {
         if *self.hold.lock().unwrap() == Some(at) {
             self.parked.notify_one();
-            let released =
-                tokio::time::timeout(std::time::Duration::from_secs(5), self.released.acquire())
-                    .await;
+            let released = time::timeout(Duration::from_secs(5), self.released.acquire()).await;
             if let Ok(permit) = released {
                 permit.unwrap().forget();
             }
@@ -119,13 +127,13 @@ impl MetadataEventLog for HeldPublishLog {
     }
 }
 
-static SNAP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SNAP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-pub fn snapshot_test_dir(label: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
+pub fn snapshot_test_dir(label: &str) -> PathBuf {
+    env::temp_dir().join(format!(
         "krabka-rlmm-{label}-{}-{}",
-        std::process::id(),
-        SNAP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        process::id(),
+        SNAP_COUNTER.fetch_add(1, Ordering::Relaxed)
     ))
 }
 
@@ -140,13 +148,13 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(f).await.unwrap()
+    task::spawn_blocking(f).await.unwrap()
 }
 
 /// Poll until `tp` reads `Ok(Some)`, which means assigned and caught up,
 /// or panic.
 pub async fn wait_ready(m: &Arc<TopicBasedRemoteLogMetadataManager>, tp: &TopicIdPartition) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if matches!(
             m.remote_log_segment_metadata(tp, LeaderEpoch(0), 42),
@@ -154,13 +162,10 @@ pub async fn wait_ready(m: &Arc<TopicBasedRemoteLogMetadataManager>, tp: &TopicI
         ) {
             return;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "partition never became ready"
-        );
+        assert!(Instant::now() < deadline, "partition never became ready");
         // Yield-poll the pump's progress rather than sleeping a fixed
         // cadence; the deadline above stays as the hang-guard.
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 }
 
@@ -171,7 +176,7 @@ pub struct SeededManager {
 }
 
 pub async fn seeded_manager(log: Arc<dyn MetadataEventLog>) -> SeededManager {
-    seed_log(log.clone()).await;
+    seed_log(Arc::clone(&log)).await;
     let partition = metadata_partition_for(&tp(), log.partition_count());
     SeededManager {
         manager: start_manager(log),
@@ -186,7 +191,7 @@ pub async fn wait_finished_metadata(
     unexpected_note: &str,
     gate_note: Option<&str>,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         match manager.remote_log_segment_metadata(&tp(), LeaderEpoch(0), 42) {
             Ok(Some(metadata)) => {
@@ -199,8 +204,8 @@ pub async fn wait_finished_metadata(
                 } else {
                     assert!(partition == metadata_partition);
                 }
-                assert!(std::time::Instant::now() < deadline, "{timeout_note}");
-                tokio::task::yield_now().await;
+                assert!(Instant::now() < deadline, "{timeout_note}");
+                task::yield_now().await;
             }
             other => panic!("{unexpected_note}: {other:?}"),
         }
@@ -210,14 +215,9 @@ pub async fn wait_finished_metadata(
 /// The periodic snapshot is an hour away, so tests can drive explicit flushes.
 pub fn start_manager_in(
     log: Arc<dyn MetadataEventLog>,
-    dir: std::path::PathBuf,
+    dir: PathBuf,
 ) -> Result<Arc<TopicBasedRemoteLogMetadataManager>, RemoteStorageError> {
-    TopicBasedRemoteLogMetadataManager::start(
-        log,
-        Handle::current(),
-        dir,
-        std::time::Duration::from_hours(1),
-    )
+    TopicBasedRemoteLogMetadataManager::start(log, Handle::current(), dir, Duration::from_hours(1))
 }
 
 /// A completed segment to publish: its id and the offsets it covers.
@@ -233,10 +233,10 @@ pub const fn seed(id: u128, start: i64, end: i64) -> SegmentSeed { SegmentSeed {
 /// Assign every partition and publish the caller's completed-segment fixture in this directory.
 pub async fn start_seeded_manager_in(
     log: Arc<dyn MetadataEventLog>,
-    dir: std::path::PathBuf,
+    dir: PathBuf,
     segments: &[SegmentSeed],
 ) -> Arc<TopicBasedRemoteLogMetadataManager> {
-    let manager = start_manager_in(log.clone(), dir).unwrap();
+    let manager = start_manager_in(Arc::clone(&log), dir).unwrap();
     manager
         .reconcile_assignment(&(0..log.partition_count()).collect::<Vec<_>>())
         .await;
@@ -266,13 +266,13 @@ pub async fn start_manager_all(
     // Wait for the pump to catch up to every assigned partition's HWM so
     // the manager is "ready" for all partitions, mirroring the old
     // bootstrap contract.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !all.iter().all(|&mp| m.metadata_partition_ready(mp)) {
         assert!(
-            std::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "manager did not catch up on all partitions within 5s"
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
     m
 }
@@ -282,13 +282,13 @@ pub async fn seed_finished(
     segments: &[SegmentSeed],
 ) {
     for &SegmentSeed { id, start, end } in segments {
-        let m = manager.clone();
+        let m = Arc::clone(manager);
         on_blocking(move || {
             m.add_remote_log_segment_metadata(started(id, start, end))
                 .unwrap();
         })
         .await;
-        let m = manager.clone();
+        let m = Arc::clone(manager);
         on_blocking(move || m.update_remote_log_segment_metadata(finish(id)).unwrap()).await;
     }
 }

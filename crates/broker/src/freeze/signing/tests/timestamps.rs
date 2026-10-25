@@ -7,7 +7,7 @@
 
 use {
     super::{ALICE, CLUSTER_ID, NOW_MS, check_against, record, signed, trust},
-    crate::freeze::signing::{FreezeSignatureCheck, verify_freeze_signature},
+    crate::freeze::signing::{FreezeSignatureCheck, SignatureRefusal, verify_freeze_signature},
     assert2::check,
     krabka_metadata::TopicFreezeRecord,
     krabka_units::{Time, convert::TimeExt as _, minutes, secs},
@@ -87,7 +87,7 @@ fn opposite_machine_extremes_never_wrap_into_the_skew_window() {
         };
         check!(
             verify_freeze_signature(&check, &record)
-                == Err(crate::freeze::signing::SignatureRefusal::TimestampOutsideSkewWindow),
+                == Err(SignatureRefusal::TimestampOutsideSkewWindow),
             "{label}"
         );
     }

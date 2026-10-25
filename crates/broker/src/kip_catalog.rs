@@ -41,10 +41,12 @@ pub struct KipAnnotation {
 /// `crates/`.
 pub const MIXED_QUORUM_KEY: &str = "mixed-quorum";
 
-/// The KIP-590 forwarding row. Broker admin handlers build an `Envelope`
-/// carrying the client's identity before the active Krabka controller plans
-/// metadata-dependent operations. Interoperation with JVM controllers remains
-/// outside the mixed-quorum scope decision.
+/// The KIP-590 forwarding row.
+///
+/// Broker admin handlers build an `Envelope` carrying the client's identity
+/// before the active Krabka controller plans metadata-dependent operations.
+/// Interoperation with JVM controllers remains outside the mixed-quorum scope
+/// decision.
 pub const FORWARDING_KEY: &str = "KIP-590";
 
 /// Where the out-of-scope decision for mixed quorums and JVM-side forwarding
@@ -1255,7 +1257,11 @@ pub const KIP_ANNOTATIONS: &[KipAnnotation] = &[
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert, std::collections::BTreeSet};
+    use {
+        super::*,
+        assert2::assert,
+        std::{collections::BTreeSet, env, ffi::OsStr, path::Path},
+    };
 
     /// The KIP number of a `KIP-<n>` key, or `None` for a scope-only key.
     fn kip_number(key: &str) -> Option<u32> { key.strip_prefix("KIP-")?.parse().ok() }
@@ -1283,8 +1289,7 @@ mod tests {
 
     /// Whether `path` is a Rust source file named from the repository root.
     fn is_rust_source_path(path: &str) -> bool {
-        path.starts_with("crates/")
-            && std::path::Path::new(path).extension() == Some(std::ffi::OsStr::new("rs"))
+        path.starts_with("crates/") && Path::new(path).extension() == Some(OsStr::new("rs"))
     }
 
     struct AnnotationTest {
@@ -1394,13 +1399,13 @@ mod tests {
         // rows cite in other crates are absent there even though the
         // directory exists; `TEST_SRCDIR` is how Bazel announces itself. The
         // generator in the docs CI job is the hermetic gate for these paths.
-        if std::env::var_os("TEST_SRCDIR").is_some() {
+        if env::var_os("TEST_SRCDIR").is_some() {
             return;
         }
-        let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") else {
+        let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") else {
             return;
         };
-        let root = std::path::Path::new(&manifest_dir).join("../..");
+        let root = Path::new(&manifest_dir).join("../..");
         if !root.join("crates").is_dir() {
             return;
         }

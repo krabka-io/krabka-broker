@@ -30,6 +30,7 @@
 //! success carries the generated empty-string `ErrorMessage`.
 
 use {
+    super::audit_resource,
     crate::{
         broker::Broker,
         codes,
@@ -116,10 +117,7 @@ crate::handlers::raw_request_handler!(
                 broker.audit_log.as_ref(),
                 ctx,
                 "UnregisterController",
-                vec![crate::handlers::audit_resource(
-                    "Controller",
-                    req.controller_id.to_string(),
-                )],
+                vec![audit_resource("Controller", req.controller_id.to_string())],
             );
         }
         encode(version, error_code, message.as_deref())

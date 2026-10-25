@@ -5,8 +5,6 @@
 //! gzip step that produces the pprof file format, and the router builders that
 //! bind a `ProfilingConfig` to those handlers as axum state.
 
-#[cfg(unix)]
-use krabka_units::convert::TimeExt as _;
 #[cfg(any(unix, test))]
 use krabka_units::{Time, secs};
 use {
@@ -15,11 +13,15 @@ use {
         Router,
         extract::{Query, State},
         http::StatusCode,
-        response::IntoResponse,
+        response::{IntoResponse, Response},
         routing::get,
     },
+    flate2::write::GzEncoder,
     serde::Deserialize,
+    tokio::{task, time},
 };
+#[cfg(unix)]
+use {krabka_units::convert::TimeExt as _, std::io};
 
 #[derive(Debug, Deserialize)]
 struct CpuQuery {
@@ -38,10 +40,7 @@ struct HeapQuery {
 /// The default is 30 seconds, and the default configuration clamps the value
 /// to `1..=60` seconds.
 #[cfg(unix)]
-async fn cpu_profile(
-    State(config): State<ProfilingConfig>,
-    Query(q): Query<CpuQuery>,
-) -> axum::response::Response {
+async fn cpu_profile(State(config): State<ProfilingConfig>, Query(q): Query<CpuQuery>) -> Response {
     let duration = requested_duration(
         q.seconds,
         config.profiling_cpu_default_duration,
@@ -51,7 +50,7 @@ async fn cpu_profile(
         Ok(guard) => guard,
         Err(error) => return (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
     };
-    tokio::time::sleep(duration.to_std()).await;
+    time::sleep(duration.to_std()).await;
     match profile_work(move || finish_cpu_profile(guard)).await {
         Ok(body) => (
             StatusCode::OK,
@@ -68,7 +67,7 @@ async fn cpu_profile(
 async fn profile_work<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
-    tokio::task::spawn_blocking(work)
+    task::spawn_blocking(work)
         .await
         .map_err(|error| format!("profiling worker: {error}"))?
 }
@@ -98,26 +97,22 @@ fn finish_cpu_profile(guard: pprof::ProfilerGuard<'static>) -> Result<Vec<u8>, S
         .map_err(|error| format!("report: {error}"))?;
     drop(guard);
     let profile = report.pprof().map_err(|error| format!("pprof: {error}"))?;
-    Ok(gzip(&profile.encode_to_vec()))
+    gzip(&profile.encode_to_vec()).map_err(|error| format!("gzip: {error}"))
 }
 
 /// Gzip a buffer.
 ///
 /// The pprof file format is a gzipped `Profile` protobuf.
 #[cfg(unix)]
-fn gzip(raw: &[u8]) -> Vec<u8> {
+fn gzip(raw: &[u8]) -> io::Result<Vec<u8>> {
     use std::io::Write as _;
 
-    let mut encoder = flate2::write::GzEncoder::new(
+    let mut encoder = GzEncoder::new(
         Vec::with_capacity(raw.len() / 2),
         flate2::Compression::fast(),
     );
-    encoder
-        .write_all(raw)
-        .expect("gzip of in-memory buffer is infallible");
-    encoder
-        .finish()
-        .expect("gzip finish of in-memory buffer is infallible")
+    encoder.write_all(raw)?;
+    encoder.finish()
 }
 
 /// Stub for non-Unix targets: CPU profiling is unavailable.
@@ -219,18 +214,20 @@ mod tests {
         super::*,
         assert2::assert,
         krabka_units::{millis, minutes},
+        std::{sync::mpsc, time::Duration},
+        tokio::sync::oneshot,
     };
 
     /// A blocked profiler worker must leave this single runtime thread free to run the task that releases it.
     #[cfg(unix)]
     #[tokio::test]
     async fn profiling_work_does_not_block_runtime_progress() {
-        let (started, waiting) = tokio::sync::oneshot::channel();
-        let (release, released) = std::sync::mpsc::channel();
+        let (started, waiting) = oneshot::channel();
+        let (release, released) = mpsc::channel();
         let work = profile_work(move || {
             started.send(()).unwrap();
             released
-                .recv_timeout(std::time::Duration::from_secs(5))
+                .recv_timeout(Duration::from_secs(5))
                 .map_err(|error| error.to_string())?;
             Ok(42)
         });

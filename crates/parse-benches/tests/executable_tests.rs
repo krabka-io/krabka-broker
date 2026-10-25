@@ -1,5 +1,6 @@
 //! Executable identity: manifests, per-pass verification, and the verdict's
 //! refusal of shared or drifting executables.
+#![cfg(test)]
 
 use {
     assert2::assert,
@@ -59,7 +60,7 @@ fn a_manifest_records_every_bench_executable_and_nothing_else() {
         artifact_message("bench", "produce", Some(&produce)),
         artifact_message("bin", "tool", Some(&executable_path(target.path(), "tool"))),
         artifact_message("bench", "log", Some(&log)),
-        r#"{"reason":"build-finished","success":true}"#.to_string(),
+        r#"{"reason":"build-finished","success":true}"#.to_owned(),
     ]
     .join("\n");
 
@@ -68,15 +69,15 @@ fn a_manifest_records_every_bench_executable_and_nothing_else() {
     assert!(
         manifest
             == ExecutableManifest {
-                commit: "abc123".to_string(),
+                commit: "abc123".to_owned(),
                 executables: vec![
                     BenchExecutable {
-                        target: "log".to_string(),
+                        target: "log".to_owned(),
                         sha256: file_digest(&log).unwrap(),
                         path: log,
                     },
                     BenchExecutable {
-                        target: "produce".to_string(),
+                        target: "produce".to_owned(),
                         sha256: file_digest(&produce).unwrap(),
                         path: produce,
                     },
@@ -162,7 +163,7 @@ fn pass() -> Pass {
     Pass {
         source,
         manifest,
-        cargo_log: "     Running benches/log.rs (target/release/deps/log-0123)\n".to_string(),
+        cargo_log: "     Running benches/log.rs (target/release/deps/log-0123)\n".to_owned(),
     }
 }
 
@@ -274,7 +275,7 @@ fn the_executables_command_and_a_summary_carry_the_identity_through() {
     let manifest_path = work.path().join("executables.json");
     let (recorded, _) = run_command(&Command::Executables {
         cargo_messages: messages,
-        commit: "abc123".to_string(),
+        commit: "abc123".to_owned(),
         output: manifest_path.clone(),
     })
     .unwrap();
@@ -292,8 +293,8 @@ fn the_executables_command_and_a_summary_carry_the_identity_through() {
     let summary = run_from_args(&Args {
         results_dir: run_dir,
         output: Some(work.path().join("summary.json")),
-        suite: "krabka-broker".to_string(),
-        commit: Some("abc123".to_string()),
+        suite: "krabka-broker".to_owned(),
+        commit: Some("abc123".to_owned()),
         reference_dir: None,
         candidate_dir: None,
         executables: Some(manifest_path),
@@ -311,10 +312,10 @@ fn summaries(commit: &str, executables: &[Vec<BenchExecutable>]) -> Vec<Benchmar
     executables
         .iter()
         .map(|executables| BenchmarkSummary {
-            suite: "test".to_string(),
-            commit: commit.to_string(),
-            timestamp: "2026-10-22T00:00:00Z".to_string(),
-            benchmarks: BTreeMap::from([("hot/path".to_string(), BenchmarkMetric {
+            suite: "test".to_owned(),
+            commit: commit.to_owned(),
+            timestamp: "2026-10-22T00:00:00Z".to_owned(),
+            benchmarks: BTreeMap::from([("hot/path".to_owned(), BenchmarkMetric {
                 ns_per_iter: 100.0,
                 variance_ns: 1.0,
             })]),
@@ -325,9 +326,9 @@ fn summaries(commit: &str, executables: &[Vec<BenchExecutable>]) -> Vec<Benchmar
 
 fn recorded(path: &str, sha256: &str) -> Vec<BenchExecutable> {
     vec![BenchExecutable {
-        target: "hot".to_string(),
+        target: "hot".to_owned(),
         path: PathBuf::from(path),
-        sha256: sha256.to_string(),
+        sha256: sha256.to_owned(),
     }]
 }
 

@@ -10,7 +10,7 @@ use {
 /// Returns the log-open config for a partition. It forces tail validation for
 /// a diskless log.
 #[must_use]
-pub(crate) fn open_config(base: &LogConfig, diskless: bool) -> LogConfig {
+pub fn open_config(base: &LogConfig, diskless: bool) -> LogConfig {
     let mut config = base.clone();
     if diskless {
         config.validate_on_open = true;
@@ -24,7 +24,7 @@ pub(crate) fn open_config(base: &LogConfig, diskless: bool) -> LogConfig {
 /// `committed_next_offset` re-anchors the append-at offset assignment after a
 /// crash in the `[KRaft commit, fsync)` window. The recovered WAL tail then
 /// rebuilds the idempotent producer sequence map.
-pub(crate) async fn recover_open_log(
+pub async fn recover_open_log(
     topic: &str,
     partition: PartitionIndex,
     log: &mut Log,
@@ -39,7 +39,7 @@ pub(crate) async fn recover_open_log(
 
 /// Rebuilds the idempotent-producer dedup state from the raw batches of a
 /// recovered log.
-pub(crate) async fn rebuild_producer_state(
+pub async fn rebuild_producer_state(
     topic: &str,
     partition: PartitionIndex,
     log: &Log,

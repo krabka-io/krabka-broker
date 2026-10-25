@@ -51,7 +51,10 @@ fn kafka_errors(run: &CliRun) -> BTreeSet<String> {
         .lines()
         .map(str::trim)
         .filter(|line| !line.starts_with("at "))
-        .filter_map(|line| line.find(ERRORS_PACKAGE).map(|at| line[at..].to_owned()))
+        .filter_map(|line| {
+            line.split_once(ERRORS_PACKAGE)
+                .map(|(_, rest)| format!("{ERRORS_PACKAGE}{rest}"))
+        })
         .collect()
 }
 

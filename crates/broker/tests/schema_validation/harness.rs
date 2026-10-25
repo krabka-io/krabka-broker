@@ -133,9 +133,7 @@ pub async fn registry() -> MockServer {
 /// The configuration goes in through `FileConfig`, the same path a real
 /// `broker.toml` takes, so this covers the config wiring as well as the
 /// produce path.
-pub fn boot(
-    registry_url: &str,
-) -> impl std::future::Future<Output = (BrokerHandle, Client, tempfile::TempDir)> {
+pub fn boot(registry_url: &str) -> impl Future<Output = (BrokerHandle, Client, tempfile::TempDir)> {
     Box::pin(async move {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
@@ -159,7 +157,7 @@ pub fn boot(
 pub fn mock_topic_fixture(
     topic: &str,
     configs: &[(&str, &str)],
-) -> impl std::future::Future<
+) -> impl Future<
     Output = (
         MockServer,
         BrokerHandle,
@@ -199,7 +197,7 @@ pub struct SchemaTopicSetup<'a> {
     pub name: &'a str,
     #[default(VALIDATED)]
     pub configs: &'a [(&'a str, &'a str)],
-    #[default(crate::support::topics::TopicReplicationFactor(1))]
+    #[default(TopicReplicationFactor(1))]
     pub replicas: TopicReplicationFactor,
 }
 
@@ -211,8 +209,7 @@ pub async fn create_topic(
     client: &Client,
     #[builder(default = "validated")] name: &'_ str,
     #[builder(default = VALIDATED)] configs: &'_ [(&'_ str, &'_ str)],
-    #[builder(default = crate :: support :: topics :: TopicReplicationFactor (1))]
-    replicas: TopicReplicationFactor,
+    #[builder(default = TopicReplicationFactor(1))] replicas: TopicReplicationFactor,
 ) -> WireUuid {
     let setup = SchemaTopicSetup {
         name,
@@ -268,9 +265,7 @@ pub async fn produce(
 /// The topic configs that turn `id`-mode value validation on.
 pub const VALIDATED: &[(&str, &str)] = &[("schema.validation.value", "true")];
 
-pub fn boot_config(
-    config: BrokerConfig,
-) -> impl std::future::Future<Output = (BrokerHandle, Client)> {
+pub fn boot_config(config: BrokerConfig) -> impl Future<Output = (BrokerHandle, Client)> {
     Box::pin(async move {
         let started = start_broker_client()
             .config(config)

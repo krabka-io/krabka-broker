@@ -29,12 +29,18 @@ use {
         timestamp::resolve_timestamp_offset,
     },
     crate::{broker::Broker, codes, partition::Partition},
-    krabka_protocol::owned::list_offsets_response::ListOffsetsPartitionResponse,
+    krabka_protocol::owned::{
+        list_offsets_request::ListOffsetsPartition,
+        list_offsets_response::ListOffsetsPartitionResponse,
+    },
     krabka_verified::{
         ListOffsetsEarliestFacts, ListOffsetsKind, ListOffsetsSelectionDecision,
         ListOffsetsSelectionFacts, list_offsets_earliest, list_offsets_selection_decision,
     },
-    std::{sync::atomic::Ordering, time::Duration},
+    std::{
+        sync::{PoisonError, atomic::Ordering},
+        time::Duration,
+    },
 };
 
 fn earliest_pending_upload_offset(tiered_offset: i64) -> Option<i64> {
@@ -89,10 +95,11 @@ fn remote_earliest_candidate(
 ) -> Result<Option<i64>, i16> {
     match answer {
         None => Err(codes::REQUEST_TIMED_OUT),
-        Some(Ok(Some(remote_start))) => Ok(Some(match deleted_below {
-            Some(floor) => (*remote_start).max(floor.0),
-            None => *remote_start,
-        })),
+        Some(Ok(Some(remote_start))) => {
+            Ok(Some(deleted_below.map_or(*remote_start, |floor| {
+                (*remote_start).max(floor.0)
+            })))
+        }
         Some(Ok(None)) => Ok(None),
         Some(Err(_)) => Ok(Some(reported_start)),
     }
@@ -108,7 +115,7 @@ async fn resolve_earliest(ctx: EarliestContext<'_>) -> Result<ResolvedOffset, i1
         (ctx.broker.remote_reader.as_ref(), ctx.remote_topic_id)
     {
         let topic_partition =
-            krabka_remote_storage::TopicIdPartition::new(id, ctx.topic_name.to_string(), ctx.index);
+            krabka_remote_storage::TopicIdPartition::new(id, ctx.topic_name.to_owned(), ctx.index);
         let answer =
             await_remote(ctx.remote_timeout, reader.earliest_offset(&topic_partition)).await;
         if let Some(Err(error)) = &answer {
@@ -119,7 +126,7 @@ async fn resolve_earliest(ctx: EarliestContext<'_>) -> Result<ResolvedOffset, i1
             .partition
             .log
             .lock()
-            .expect("log mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .reported_log_start()
             .0;
         remote_earliest_candidate(answer.as_ref(), ctx.deleted_below, reported_start)?
@@ -162,7 +169,7 @@ async fn resolve_earliest_pending_upload(
         return Ok(None);
     };
     let topic_partition =
-        krabka_remote_storage::TopicIdPartition::new(id, ctx.topic_name.to_string(), ctx.index);
+        krabka_remote_storage::TopicIdPartition::new(id, ctx.topic_name.to_owned(), ctx.index);
     match await_remote(
         ctx.remote_timeout,
         reader.latest_tiered_offset(&topic_partition),
@@ -448,7 +455,7 @@ struct PartitionLogSnapshot {
 }
 
 fn partition_log_snapshot(partition: &Partition) -> PartitionLogSnapshot {
-    let log = partition.log.lock().expect("log mutex poisoned");
+    let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
     PartitionLogSnapshot {
         local_start: log.log_start_offset().0,
         deleted_below: log.established_log_start(),
@@ -461,7 +468,7 @@ fn partition_log_snapshot(partition: &Partition) -> PartitionLogSnapshot {
 pub(super) async fn resolve_partition(
     broker: &Broker,
     topic_name: &str,
-    request: krabka_protocol::owned::list_offsets_request::ListOffsetsPartition,
+    request: ListOffsetsPartition,
     version: i16,
     remote_timeout: Duration,
     bound: FetchBound,
@@ -592,7 +599,7 @@ pub(super) async fn resolve_partition(
         ListOffsetsKind::LatestTiered => {
             if let Some((reader, id)) = broker.remote_reader.as_ref().zip(remote_topic_id) {
                 let topic_partition =
-                    krabka_remote_storage::TopicIdPartition::new(id, topic_name.to_string(), index);
+                    krabka_remote_storage::TopicIdPartition::new(id, topic_name.to_owned(), index);
                 match await_remote(
                     remote_timeout,
                     reader.latest_tiered_offset(&topic_partition),
@@ -636,7 +643,7 @@ pub(super) async fn resolve_partition(
             let found = partition
                 .log
                 .lock()
-                .expect("log mutex poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .max_timestamp_offset_and_ts();
             // A compressed record above the topic's trunk
             // `max.decompressed.message.bytes` in the batch Kafka reads to
@@ -724,7 +731,14 @@ mod tests {
             test_support::{decode_response, encode_request, list_one, list_one_at_epoch},
         },
         assert2::assert,
-        krabka_protocol::owned::create_topics_request::CreatableTopicConfig,
+        krabka_protocol::{
+            owned::{
+                create_topics_request::CreatableTopicConfig,
+                list_offsets_request::{ListOffsetsRequest, ListOffsetsTopic},
+            },
+            records::{Record, RecordBatch},
+        },
+        std::io,
     };
 
     /// What the remote tier's answer makes of EARLIEST. A tier that cannot
@@ -754,7 +768,7 @@ mod tests {
             ),
             (
                 "the tier fails",
-                Some(Err(RemoteStorageError::Io(std::io::Error::other("boom")))),
+                Some(Err(RemoteStorageError::Io(io::Error::other("boom")))),
                 None,
                 Ok(Some(0)),
             ),
@@ -1091,10 +1105,11 @@ mod tests {
             .get(TOPIC, krabka_ids::PartitionIndex(0))
             .expect("partition");
         {
-            let mut log = partition.log.lock().expect("log mutex poisoned");
+            let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
             let removed = log
                 .delete_local_segments_through(krabka_log::Offset(3))
                 .expect("evict sealed segments");
+            drop(log);
             assert!(removed > 0, "the tiny segment size must have sealed some");
         }
 
@@ -1131,22 +1146,20 @@ mod tests {
             user ["admin"];
         };
         let req = encode_request(
-            &krabka_protocol::owned::list_offsets_request::ListOffsetsRequest {
+            &ListOffsetsRequest {
                 replica_id: -1,
-                topics: vec![
-                    krabka_protocol::owned::list_offsets_request::ListOffsetsTopic {
-                        name: topic.to_string(),
-                        partitions: vec![
-                            krabka_protocol::owned::list_offsets_request::ListOffsetsPartition {
-                                partition_index: 0,
-                                current_leader_epoch: -1,
-                                timestamp,
-                                ..Default::default()
-                            },
-                        ],
-                        ..Default::default()
-                    },
-                ],
+                topics: vec![ListOffsetsTopic {
+                    name: topic.to_owned(),
+                    partitions: vec![
+                        krabka_protocol::owned::list_offsets_request::ListOffsetsPartition {
+                            partition_index: 0,
+                            current_leader_epoch: -1,
+                            timestamp,
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }],
                 isolation_level,
                 timeout_ms: 5_000,
                 ..Default::default()
@@ -1172,11 +1185,11 @@ mod tests {
         timestamp: i64,
         transactional_producer: Option<i64>,
     ) -> i64 {
-        let mut batch = krabka_protocol::records::RecordBatch {
+        let mut batch = RecordBatch {
             partition_leader_epoch: leader_epoch,
             base_timestamp: timestamp,
             max_timestamp: timestamp,
-            records: vec![krabka_protocol::records::Record {
+            records: vec![Record {
                 offset_delta: 0,
                 value: Some(bytes::Bytes::from_static(b"v")),
                 ..Default::default()
@@ -1317,7 +1330,8 @@ mod tests {
         // metadata. Stop reconciliation before it can restore metadata's epoch
         // checkpoint or recompute the deliberately lagging watermark.
         broker_arc.supervisor_shutdown.cancel();
-        if let Some(supervisor) = broker_arc.supervisor_handle.lock().await.take() {
+        let supervisor = broker_arc.supervisor_handle.lock().await.take();
+        if let Some(supervisor) = supervisor {
             supervisor.await.expect("supervisor stopped");
         }
         let partition = broker_arc

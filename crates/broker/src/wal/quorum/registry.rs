@@ -1,5 +1,7 @@
 //! WAL shard registry.
 
+#[cfg(any(test, feature = "test-helpers"))]
+use std::collections::BTreeSet;
 use {
     super::{engine::WalShardEngine, wire::QuorumGroup},
     crate::metrics::BrokerMetrics,
@@ -7,13 +9,13 @@ use {
     krabka_ids::PartitionIndex,
     std::{
         collections::HashMap,
-        sync::{Arc, RwLock},
+        sync::{Arc, PoisonError, RwLock},
     },
 };
 
 /// Per-partition WAL shard identity for distributed WAL registry work stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct ShardId {
+pub struct ShardId {
     pub(crate) topic_id: uuid::Uuid,
     pub(crate) partition: PartitionIndex,
 }
@@ -34,20 +36,20 @@ impl ShardId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct WalPlacement {
+pub struct WalPlacement {
     pub(crate) voters: Vec<krabka_raft::NodeId>,
     pub(crate) leader_epoch: i32,
 }
 
 /// Registry from shard identity to its in-process WAL engine.
 #[derive(Debug)]
-pub(crate) struct WalShardRegistry {
+pub struct WalShardRegistry {
     local_node_id: krabka_raft::NodeId,
     engines: DashMap<ShardId, Arc<WalShardEngine>>,
     placements: RwLock<HashMap<ShardId, WalPlacement>>,
     metrics: BrokerMetrics,
     #[cfg(any(test, feature = "test-helpers"))]
-    follower_fetchers: DashMap<ShardId, std::collections::BTreeSet<krabka_raft::NodeId>>,
+    follower_fetchers: DashMap<ShardId, BTreeSet<krabka_raft::NodeId>>,
 }
 
 impl WalShardRegistry {
@@ -73,7 +75,18 @@ impl WalShardRegistry {
         let placements = self
             .placements
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
+        self.insert_under_placements(&placements, shard_id, engine);
+    }
+
+    /// Register `engine` while the caller holds the placement lock, so a
+    /// concurrent placement change sees either none or both of its effects.
+    fn insert_under_placements(
+        &self,
+        placements: &HashMap<ShardId, WalPlacement>,
+        shard_id: ShardId,
+        engine: Arc<WalShardEngine>,
+    ) {
         let voters = placements
             .get(&shard_id)
             .map_or(&[][..], |placement| placement.voters.as_slice());
@@ -88,7 +101,16 @@ impl WalShardRegistry {
         let mut current = self
             .placements
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
+        self.replace_under_placements(&mut current, placements);
+    }
+
+    /// Install `placements` while the caller holds the placement lock.
+    fn replace_under_placements(
+        &self,
+        current: &mut HashMap<ShardId, WalPlacement>,
+        placements: &HashMap<ShardId, WalPlacement>,
+    ) {
         for entry in &self.engines {
             if current.get(entry.key()) != placements.get(entry.key()) {
                 entry.value().wake_fetches();
@@ -110,7 +132,7 @@ impl WalShardRegistry {
     pub(crate) fn placement(&self, shard_id: ShardId) -> Option<Vec<krabka_raft::NodeId>> {
         self.placements
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .get(&shard_id)
             .map(|placement| placement.voters.clone())
     }
@@ -125,7 +147,7 @@ impl WalShardRegistry {
     pub(crate) fn get(&self, shard_id: ShardId) -> Option<Arc<WalShardEngine>> {
         self.engines
             .get(&shard_id)
-            .map(|entry| entry.value().clone())
+            .map(|entry| Arc::clone(entry.value()))
     }
 
     #[must_use]
@@ -135,7 +157,7 @@ impl WalShardRegistry {
     pub(crate) fn local_is_leader(&self, shard_id: ShardId) -> bool {
         self.placements
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .get(&shard_id)
             .and_then(|placement| placement.voters.first())
             == Some(&self.local_node_id)
@@ -145,7 +167,7 @@ impl WalShardRegistry {
     pub(crate) fn local_is_voter(&self, shard_id: ShardId) -> bool {
         self.placements
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .get(&shard_id)
             .is_some_and(|placement| placement.voters.contains(&self.local_node_id))
     }
@@ -154,7 +176,16 @@ impl WalShardRegistry {
         let mut placements = self
             .placements
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
+        self.remove_under_placements(&mut placements, shard_id)
+    }
+
+    /// Unregister a shard while the caller holds the placement lock.
+    fn remove_under_placements(
+        &self,
+        placements: &mut HashMap<ShardId, WalPlacement>,
+        shard_id: ShardId,
+    ) -> Option<Arc<WalShardEngine>> {
         placements.remove(&shard_id);
         self.engines.remove(&shard_id).map(|(_, engine)| {
             engine.clear_observability();
@@ -170,7 +201,7 @@ impl WalShardRegistry {
         let placements = self
             .placements
             .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         (placements.get(&shard).cloned(), self.get(shard))
     }
 
@@ -194,6 +225,7 @@ mod tests {
             *,
         },
         crate::{
+            codes::INVALID_REQUEST,
             test_support::sasl_principal,
             wal::quorum::{
                 engine::WalShardEngine,
@@ -208,9 +240,10 @@ mod tests {
             owned::fetch_response::FetchResponse,
             records::{Record, RecordBatch},
         },
-        krabka_raft::RaftShardRouter,
+        krabka_raft::{RaftShardRouter, kraft::transport::api_key::FETCH},
         std::{future::Future, pin::Pin},
         tempfile::tempdir,
+        tokio::time,
     };
 
     async fn assert_pending<F: Future>(future: F) -> Pin<Box<F>> {
@@ -242,11 +275,7 @@ mod tests {
         principal: &krabka_security::Principal,
     ) -> FetchResponse {
         let response = router
-            .route(
-                krabka_raft::kraft::transport::api_key::FETCH,
-                body,
-                Some(principal),
-            )
+            .route(FETCH, body, Some(principal))
             .await
             .unwrap()
             .expect("diskless WAL fetch response");
@@ -269,7 +298,7 @@ mod tests {
             .unwrap();
         source.lock().unwrap().sync().unwrap();
         let engine = Arc::new(WalShardEngine::for_logs(
-            maplit::btreemap! {krabka_raft::NodeId(1) => source.clone()},
+            maplit::btreemap! {krabka_raft::NodeId(1) => Arc::clone(&source)},
         ));
         engine.replicate_and_sync(&source, Offset(1)).await.unwrap();
 
@@ -288,7 +317,7 @@ mod tests {
             partition,
         } => placement(vec![krabka_raft::NodeId(9)], 0)});
         let router = WalShardRouter::new(registry).with_principal_node_ids(
-            maplit::hashmap! {"admin".to_string() => krabka_raft::NodeId(9)},
+            maplit::hashmap! {"admin".to_owned() => krabka_raft::NodeId(9)},
         );
         let body = encode_fetch_for_group(
             QuorumGroup::diskless_wal(topic_id, partition),
@@ -347,11 +376,7 @@ mod tests {
                 fetch_offset,
             );
             let response = router
-                .route(
-                    krabka_raft::kraft::transport::api_key::FETCH,
-                    body,
-                    Some(&principal),
-                )
+                .route(FETCH, body, Some(&principal))
                 .await
                 .unwrap()
                 .unwrap();
@@ -557,7 +582,7 @@ mod tests {
             larger_minimum.min_bytes = i32::MAX;
             let waiting =
                 assert_pending(router.route_fetch_request_wait(&larger_minimum, NodeId(2))).await;
-            tokio::time::advance(Duration::from_millis(500)).await;
+            time::advance(Duration::from_millis(500)).await;
             assert2::assert!(
                 waiting.await.unwrap().unwrap().responses[0].partitions[0]
                     .records
@@ -572,10 +597,10 @@ mod tests {
         {
             let mut waiting =
                 assert_pending(router.route_fetch_request_wait(&request, NodeId(2))).await;
-            tokio::time::advance(Duration::from_millis(400)).await;
+            time::advance(Duration::from_millis(400)).await;
             engine.wake_fetches();
             assert2::assert!(futures_util::poll!(waiting.as_mut()).is_pending());
-            tokio::time::advance(Duration::from_millis(100)).await;
+            time::advance(Duration::from_millis(100)).await;
             let response = waiting.await.unwrap().unwrap();
             assert2::assert!(
                 response.responses[0].partitions[0]
@@ -610,9 +635,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert2::assert!(
-                response.responses[0].partitions[0].error_code == crate::codes::INVALID_REQUEST
-            );
+            assert2::assert!(response.responses[0].partitions[0].error_code == INVALID_REQUEST);
         }
     }
 
@@ -644,7 +667,7 @@ mod tests {
         use krabka_security::{AuthMethod, Principal};
 
         let node3 = krabka_raft::NodeId(3);
-        let mapped = maplit::hashmap! {"wal-fetcher".to_string() => node3};
+        let mapped = maplit::hashmap! {"wal-fetcher".to_owned() => node3};
         let scram = AuthMethod::SaslScramSha256;
         // (configured map, principal name, auth method, inter-broker listener, expected node)
         let cases = vec![
@@ -675,7 +698,7 @@ mod tests {
                 WalShardRouter::new(Arc::new(WalShardRegistry::new(krabka_raft::NodeId(1))))
                     .with_principal_node_ids(principal_node_ids);
             let principal = Principal {
-                name: name.to_string(),
+                name: name.to_owned(),
                 auth_method,
                 groups: Vec::new(),
             };

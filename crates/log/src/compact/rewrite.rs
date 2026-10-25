@@ -19,15 +19,16 @@ use {
     bytes::{Bytes, BytesMut},
     krabka_compression::CompressionType,
     krabka_ids::{Offset, ProducerId},
-    krabka_protocol::records::{RecordBatch, TimestampType},
+    krabka_protocol::records::{Record, RecordBatch, TimestampType},
     krabka_units::prelude::{ByteSize, Time, TimeExt},
     std::{
         collections::HashMap,
         fs::{File, OpenOptions},
+        io,
         path::{Path, PathBuf},
         sync::Arc,
     },
-    tracing::instrument,
+    tracing::{field, instrument},
 };
 
 #[cfg(test)]
@@ -49,7 +50,8 @@ fn write_rewritten_batch(
     let mut bytes = BytesMut::with_capacity(batch.encoded_len());
     batch.encode(&mut bytes)?;
     write_all(io, IoTarget::CompactionSwap, file, &bytes)?;
-    let encoded_len = u64::try_from(bytes.len()).expect("a batch length fits in u64");
+    // No supported target has a `usize` wider than a `u64`.
+    let encoded_len = bytes.len() as u64;
     if !frontier.push(batch, encoded_len)? {
         return Err(LogError::Corrupt(format!(
             "rewritten batch at offset {} does not follow the batches written before it",
@@ -140,12 +142,10 @@ impl CleaningRound<'_> {
         let Some(last) = self.active_producers.get(&ProducerId(batch.producer_id)) else {
             return false;
         };
-        match last.last_data_offset {
-            Some(last_data_offset) => last_offset_of(batch) == last_data_offset.0,
-            None => {
-                batch.attributes.is_control_batch() && batch.producer_epoch == last.producer_epoch
-            }
-        }
+        last.last_data_offset.map_or_else(
+            || batch.attributes.is_control_batch() && batch.producer_epoch == last.producer_epoch,
+            |last_data_offset| last_offset_of(batch) == last_data_offset.0,
+        )
     }
 
     /// Kafka's `batch.nextOffset() == upperBoundOffsetOfCleaningRound`: the
@@ -195,8 +195,8 @@ impl CleaningRound<'_> {
     fields(
         dir = %dir.display(),
         segments = segments.len(),
-        new_base = tracing::field::Empty,
-        new_last_offset = tracing::field::Empty,
+        new_base = field::Empty,
+        new_last_offset = field::Empty,
     ),
     err,
 )]
@@ -217,7 +217,7 @@ pub fn rewrite_segments(
 
     let first = segments
         .first()
-        .ok_or_else(|| LogError::Io(std::io::Error::other("rewrite_segments: empty input")))?;
+        .ok_or_else(|| LogError::Io(io::Error::other("rewrite_segments: empty input")))?;
     let new_base = first.base_offset();
     tracing::Span::current().record("new_base", new_base.0);
 
@@ -289,8 +289,7 @@ pub fn rewrite_segments(
             existing_horizon: batch.delete_horizon_ms(),
         };
 
-        let mut kept: Vec<krabka_protocol::records::Record> =
-            Vec::with_capacity(batch.records.len());
+        let mut kept: Vec<Record> = Vec::with_capacity(batch.records.len());
         // Stamp the output batch with a delete horizon if any record's
         // decision asks for it (stamp once per batch).
         let mut stamp_horizon: Option<i64> = None;
@@ -328,7 +327,11 @@ pub fn rewrite_segments(
             }
         }
 
-        if kept.is_empty() {
+        let Some(kept_max_timestamp) = kept
+            .iter()
+            .map(|r| batch.base_timestamp.saturating_add(r.timestamp_delta))
+            .max()
+        else {
             // RETAIN_EMPTY: re-emit a bare header for an emptied batch that
             // keeps a producer's state alive, or that is the last batch of
             // the round, so the producer sequence and epoch and the log-end
@@ -347,7 +350,7 @@ pub fn rewrite_segments(
                 &mut frontier,
             )?;
             continue;
-        }
+        };
 
         // Kafka's `MemoryRecords.buildRetainedRecordsInto` keeps the original
         // batch's base offset and last offset (`overrideLastOffset`), so the
@@ -360,11 +363,7 @@ pub fn rewrite_segments(
         // already re-based the batch.
         let max_timestamp = match batch.attributes.timestamp_type() {
             TimestampType::LogAppendTime => batch.max_timestamp,
-            TimestampType::CreateTime => kept
-                .iter()
-                .map(|r| batch.base_timestamp.saturating_add(r.timestamp_delta))
-                .max()
-                .expect("kept non-empty"),
+            TimestampType::CreateTime => kept_max_timestamp,
         };
         let mut out_batch = RecordBatch {
             max_timestamp,

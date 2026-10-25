@@ -30,23 +30,26 @@ use {
 /// transitions within one broker lifetime. Unit tests in `txn::log_record`
 /// cover decode and recovery from disk.
 async fn full_cycle_commit_and_read(bootstrap: &str, topic: &str, tid: &str, group: &str) {
-    let producer = transactional_producer(bootstrap.to_string(), tid).await;
-    let txn = producer.begin_transaction().await.unwrap();
-    for v in ["a", "b", "c"] {
-        producer
-            .send(rec(topic, v))
-            .await
-            .expect("produce acknowledged");
+    let consumer = {
+        let producer = transactional_producer(bootstrap.to_owned(), tid).await;
+        let txn = producer.begin_transaction().await.unwrap();
+        for v in ["a", "b", "c"] {
+            producer
+                .send(rec(topic, v))
+                .await
+                .expect("produce acknowledged");
+        }
+        txn.commit().await.unwrap();
+
+        let (consumer, seen) = committed_values(bootstrap.to_owned(), group, topic, None).await;
+        assert!(
+            seen == vec!["a", "b", "c"],
+            "tid={tid} level cycle: {seen:?}"
+        );
+
+        producer.close().await.map(|()| consumer)
     }
-    txn.commit().await.unwrap();
-
-    let (consumer, seen) = committed_values(bootstrap.to_string(), group, topic, None).await;
-    assert!(
-        seen == vec!["a", "b", "c"],
-        "tid={tid} level cycle: {seen:?}"
-    );
-
-    producer.close().await.unwrap();
+    .unwrap();
     consumer.close().await.unwrap();
 }
 

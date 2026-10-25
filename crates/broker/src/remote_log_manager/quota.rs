@@ -16,12 +16,15 @@
 
 use {
     num_traits::NumCast,
-    std::sync::{Arc, Mutex},
+    std::{
+        sync::{Arc, Mutex, MutexGuard, PoisonError},
+        time::Instant,
+    },
 };
 
 /// Kafka's default for both quotas: `Long.MAX_VALUE`, which no measured rate
 /// reaches.
-pub(crate) const UNLIMITED_BYTES_PER_SECOND: i64 = i64::MAX;
+pub const UNLIMITED_BYTES_PER_SECOND: i64 = i64::MAX;
 
 /// The sample windows one quota measures over: Kafka's
 /// `remote.log.manager.{copy,fetch}.quota.window.num` and
@@ -30,7 +33,7 @@ pub(crate) const UNLIMITED_BYTES_PER_SECOND: i64 = i64::MAX;
 /// Both keys are read-only in Kafka, and krabka has no static setting for
 /// them, so every broker measures over Kafka's defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct QuotaWindow {
+pub struct QuotaWindow {
     /// How many samples the rate keeps (`window.num`, 11 by default).
     pub(crate) samples: usize,
     /// How long one sample spans, in milliseconds (`window.size.seconds`,
@@ -91,15 +94,20 @@ impl SampledRate {
         if self.samples.is_empty() {
             self.samples.push(Sample::new(now_ms));
         }
-        if now_ms - self.samples[self.current].last_window_ms >= self.window.size_ms {
+        let window_passed = self
+            .samples
+            .get(self.current)
+            .is_some_and(|sample| now_ms - sample.last_window_ms >= self.window.size_ms);
+        if window_passed {
             self.current = (self.current + 1) % self.window.samples.max(1);
-            if self.current >= self.samples.len() {
-                self.samples.push(Sample::new(now_ms));
-            } else {
-                self.samples[self.current] = Sample::new(now_ms);
+            match self.samples.get_mut(self.current) {
+                Some(sample) => *sample = Sample::new(now_ms),
+                None => self.samples.push(Sample::new(now_ms)),
             }
         }
-        self.samples[self.current].value += value;
+        if let Some(sample) = self.samples.get_mut(self.current) {
+            sample.value += value;
+        }
     }
 
     /// `SampledStat.purgeObsoleteSamples`: reset every sample older than the
@@ -141,10 +149,12 @@ fn as_f64(value: i64) -> f64 { NumCast::from(value).unwrap_or(f64::MAX) }
 
 /// Narrows a `double` to a `long`, saturating where Java's cast saturates.
 fn as_i64(value: f64) -> i64 {
-    NumCast::from(value).unwrap_or(if value.is_sign_negative() {
-        0
-    } else {
-        i64::MAX
+    NumCast::from(value).unwrap_or_else(|| {
+        if value.is_sign_negative() {
+            0
+        } else {
+            i64::MAX
+        }
     })
 }
 
@@ -172,9 +182,9 @@ impl QuotaState {
 
 /// Kafka's `RLMQuotaManager`: one byte-rate quota on the remote tier.
 #[derive(Debug)]
-pub(crate) struct RlmQuotaManager {
+pub struct RlmQuotaManager {
     state: Mutex<QuotaState>,
-    origin: std::time::Instant,
+    origin: Instant,
 }
 
 impl RlmQuotaManager {
@@ -185,7 +195,7 @@ impl RlmQuotaManager {
                 rate: SampledRate::new(window),
                 bound: as_f64(bytes_per_second),
             }),
-            origin: std::time::Instant::now(),
+            origin: Instant::now(),
         }
     }
 
@@ -196,8 +206,8 @@ impl RlmQuotaManager {
 
     fn now_ms(&self) -> i64 { i64::try_from(self.origin.elapsed().as_millis()).unwrap_or(i64::MAX) }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, QuotaState> {
-        self.state.lock().expect("remote-log quota lock poisoned")
+    fn lock(&self) -> MutexGuard<'_, QuotaState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The bound, in bytes per second.
@@ -236,7 +246,7 @@ impl RlmQuotaManager {
 
     fn try_acquire_at(&self, bytes: u64, now_ms: i64) -> Result<(), i64> {
         let mut state = self.lock();
-        match state.throttle_time_ms(now_ms) {
+        let acquired = match state.throttle_time_ms(now_ms) {
             0 => {
                 state
                     .rate
@@ -244,13 +254,16 @@ impl RlmQuotaManager {
                 Ok(())
             }
             throttle => Err(throttle),
-        }
+        };
+        // The check and the record are one step under the lock.
+        drop(state);
+        acquired
     }
 }
 
 /// The two quotas a broker's `RemoteLogManager` holds.
 #[derive(Debug)]
-pub(crate) struct RemoteLogQuotas {
+pub struct RemoteLogQuotas {
     /// `remote.log.manager.copy.max.bytes.per.second`.
     pub(crate) copy: Arc<RlmQuotaManager>,
     /// `remote.log.manager.fetch.max.bytes.per.second`.

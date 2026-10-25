@@ -9,7 +9,8 @@ use {
         IntrospectionClient, IntrospectionError, JwksTrustError, build_client_config_from_pem,
     },
     krabka_units::{Time, convert::TimeExt as _},
-    std::{path::Path, sync::Arc},
+    rustls::crypto::aws_lc_rs,
+    std::{fmt, fmt::Formatter, path::Path, sync::Arc},
 };
 
 /// reqwest-backed RFC 7662 introspection client.
@@ -25,8 +26,8 @@ pub struct ReqwestIntrospectionClient {
     client_secret: String,
 }
 
-impl std::fmt::Debug for ReqwestIntrospectionClient {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for ReqwestIntrospectionClient {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReqwestIntrospectionClient")
             .field("introspection_endpoint", &self.introspection_endpoint)
             .field("userinfo_endpoint", &self.userinfo_endpoint)
@@ -78,7 +79,7 @@ impl ReqwestIntrospectionClient {
         // works from any entry point — the `let _ =` swallows
         // `AlreadySet` when a sibling caller (notably `Broker::start`)
         // won the race.
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = aws_lc_rs::default_provider().install_default();
 
         let mut builder = reqwest::Client::builder().timeout(timeout.to_std());
         if let Some(path) = tls_trust {
@@ -143,8 +144,16 @@ mod tests {
         },
         assert2::assert,
         krabka_units::{millis, secs},
-        std::{net::SocketAddr, sync::Mutex},
-        tokio::io::{AsyncReadExt as _, AsyncWriteExt as _},
+        std::{
+            fs,
+            net::SocketAddr,
+            path::PathBuf,
+            sync::{self, Mutex},
+        },
+        tokio::{
+            io::{AsyncReadExt as _, AsyncWriteExt as _},
+            net::TcpListener,
+        },
         tokio_util::sync::CancellationToken,
     };
 
@@ -202,7 +211,7 @@ mod tests {
     struct HttpsServer {
         addr: SocketAddr,
         shutdown: CancellationToken,
-        ca_path: std::path::PathBuf,
+        ca_path: PathBuf,
         observed: Arc<ObservedRequests>,
     }
 
@@ -224,13 +233,13 @@ mod tests {
         } = setup;
         let introspect_status = introspect_status.0;
         let observed = Arc::new(ObservedRequests::default());
-        let observed_in_task = observed.clone();
+        let observed_in_task = sync::Arc::clone(&observed);
         let LoopbackTlsServer {
             addr,
             shutdown,
             cert_path,
         } = serve_loopback_tls(move |mut tls| {
-            let observed = observed_in_task.clone();
+            let observed = sync::Arc::clone(&observed_in_task);
             async move {
                             let mut buf = vec![0u8; 8192];
                             let n = tls.read(&mut buf).await.unwrap_or(0);
@@ -238,16 +247,14 @@ mod tests {
                             let body = req
                                 .split("\r\n\r\n")
                                 .nth(1)
-                                .unwrap_or("")
-                                .to_string();
+                                .unwrap_or("").to_owned();
                             let auth_header = req
                                 .lines()
                                 .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
                                 .map_or_default(|l| {
                                     l.trim_start_matches(|c: char| c != ':')
                                         .trim_start_matches(':')
-                                        .trim()
-                                        .to_string()
+                                        .trim().to_owned()
                                 });
                             let (status, body_out) = if req.starts_with("POST /introspect") {
                                 observed
@@ -267,10 +274,7 @@ mod tests {
                                     .lock()
                                     .unwrap()
                                     .push(auth_header.clone());
-                                match userinfo_body {
-                                    Some(b) => (200u16, b),
-                                    None => (404, "{}"),
-                                }
+                                userinfo_body.map_or((404, "{}"), |b| (200u16, b))
                             } else {
                                 (404, "{}")
                             };
@@ -313,7 +317,7 @@ mod tests {
     #[bon::builder]
     fn https_client(
         addr: SocketAddr,
-        ca: &std::path::Path,
+        ca: &Path,
         #[builder(default = "id")] client_id: &'_ str,
         #[builder(default = "s")] secret: &'_ str,
         #[builder(default = secs (5))] timeout: krabka_units::Time,
@@ -520,7 +524,7 @@ mod tests {
             .call()
             .await;
         client.introspect("tok").await.unwrap();
-        let auths = observed.introspect_auths.lock().unwrap();
+        let auths = observed.introspect_auths.lock().unwrap().clone();
         assert!(auths.len() == 1);
         // base64("kafka-broker:shh") = "a2Fma2EtYnJva2VyOnNoaA=="
         assert!(auths[0] == "Basic a2Fma2EtYnJva2VyOnNoaA==");
@@ -539,7 +543,7 @@ mod tests {
             .call()
             .await;
         client.introspect("opaque-abc").await.unwrap();
-        let bodies = observed.introspect_bodies.lock().unwrap();
+        let bodies = observed.introspect_bodies.lock().unwrap().clone();
         assert!(bodies.len() == 1);
         assert!(bodies[0] == "token=opaque-abc");
         srv_shutdown.cancel();
@@ -549,13 +553,13 @@ mod tests {
     async fn introspection_respects_http_timeout() {
         // Bind a port, immediately drop the listener — connect attempts
         // hit a closed port and reqwest's transport layer fails fast.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = aws_lc_rs::default_provider().install_default();
         let EcdsaPair { cert, .. } = ecdsa_pair_for_host("127.0.0.1");
         let ca_path = dir.path().join("ca.pem");
-        std::fs::write(&ca_path, cert.pem()).unwrap();
+        fs::write(&ca_path, cert.pem()).unwrap();
         drop(listener);
         let client = https_client()
             .addr(addr)

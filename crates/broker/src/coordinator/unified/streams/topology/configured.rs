@@ -33,6 +33,7 @@ use {
             state::TopologyStatus,
         },
     },
+    krabka_log::topic_name::validate_topic_name,
     krabka_metadata::MetadataImage,
     std::collections::{BTreeMap, BTreeSet},
 };
@@ -565,7 +566,7 @@ fn from_persisted_topic_info(
             )));
         }
     }
-    krabka_log::topic_name::validate_topic_name(&topic.name)
+    validate_topic_name(&topic.name)
         .map_err(|invalid| ConfigureTopicsError::InvalidTopic(invalid.to_string()))?;
     if partitions < 1 {
         return Err(ConfigureTopicsError::Internal(
@@ -687,6 +688,7 @@ mod tests {
             topology::test_support::{image_with, sub},
         },
         assert2::check,
+        krabka_log::topic_name::validate_topic_name,
     };
 
     /// A row: its label, the topology and image to configure, and the whole
@@ -727,7 +729,7 @@ mod tests {
     }
 
     fn names(topics: &[&str]) -> BTreeSet<String> {
-        topics.iter().map(|topic| (*topic).to_string()).collect()
+        topics.iter().map(|topic| (*topic).to_owned()).collect()
     }
 
     #[bon::builder]
@@ -790,7 +792,7 @@ mod tests {
             topology_epoch: 1,
             subtopologies: Some(BTreeMap::from([
                 (
-                    "0".to_string(),
+                    "0".to_owned(),
                     configured_subtopology()
                         .number_of_tasks(6)
                         .source_topics(names(&["orders"]))
@@ -798,7 +800,7 @@ mod tests {
                         .call(),
                 ),
                 (
-                    "1".to_string(),
+                    "1".to_owned(),
                     configured_subtopology()
                         .number_of_tasks(3)
                         .source_topics(names(&["customers"]))
@@ -834,7 +836,7 @@ mod tests {
             topology_epoch: 1,
             subtopologies: Some(BTreeMap::from([
                 (
-                    "0".to_string(),
+                    "0".to_owned(),
                     configured_subtopology()
                         .number_of_tasks(4)
                         .source_topics(names(&["in"]))
@@ -842,7 +844,7 @@ mod tests {
                         .call(),
                 ),
                 (
-                    "1".to_string(),
+                    "1".to_owned(),
                     configured_subtopology()
                         .number_of_tasks(8)
                         .source_topics(names(&["other"]))
@@ -972,9 +974,7 @@ mod tests {
                 topology: topology(vec![invalid_name]),
                 image: image_with(&[("in", 1, 1)]),
                 expected: Err(ConfigureTopicsError::InvalidTopic(
-                    krabka_log::topic_name::validate_topic_name("bad/name")
-                        .unwrap_err()
-                        .to_string(),
+                    validate_topic_name("bad/name").unwrap_err().to_string(),
                 )),
             },
         ]
@@ -1005,12 +1005,12 @@ mod tests {
             (
                 ConfigureTopicsError::InvalidTopology("t".into()),
                 codes::STREAMS_INVALID_TOPOLOGY,
-                Some("t".to_string()),
+                Some("t".to_owned()),
             ),
             (
                 ConfigureTopicsError::InvalidTopic("n".into()),
                 codes::INVALID_TOPIC_EXCEPTION,
-                Some("n".to_string()),
+                Some("n".to_owned()),
             ),
             (
                 ConfigureTopicsError::Internal("i".into()),

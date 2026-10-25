@@ -39,7 +39,13 @@
 //! sendfile-over-vectored ratio, and the smallest swept size at which sendfile
 //! wins — the number `sendfile_min`'s default has to match.
 
-use criterion::{criterion_group, criterion_main};
+use {
+    criterion::{Criterion, abs_file, criterion_main},
+    std::{env, error::Error, process},
+};
+
+/// Any failure while building or measuring a case; it stops the run.
+type BenchError = Box<dyn Error + Send + Sync>;
 
 /// The sweep, on the platforms that have a file-to-socket `sendfile(2)`:
 /// Linux, the Apple targets, and FreeBSD/DragonFly.
@@ -54,6 +60,7 @@ use criterion::{criterion_group, criterion_main};
 ))]
 mod sweep {
     use {
+        super::BenchError,
         assert2::assert,
         bytes::{BufMut, Bytes, BytesMut},
         criterion::{Criterion, Throughput},
@@ -65,7 +72,7 @@ mod sweep {
         },
         krabka_protocol::records::{FileRegion, RecordsPayload},
         std::{
-            io::Write as _,
+            io::{self, Write as _},
             sync::Arc,
             time::{Duration, Instant},
         },
@@ -124,7 +131,7 @@ mod sweep {
 
     /// The two ways a records region reaches the socket.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) enum Case {
+    pub enum Case {
         /// `pread` the region into a buffer, then write the buffer.
         Vectored,
         /// Hand the region's descriptor to the kernel.
@@ -162,23 +169,23 @@ mod sweep {
 
     impl Response {
         /// A response whose records region is `records_bytes` of segment file.
-        fn new(records_bytes: usize) -> Self {
+        fn new(records_bytes: usize) -> Result<Self, BenchError> {
             // A repeating non-uniform pattern rather than zeros: an all-zero
             // file is not what a segment looks like, and a filesystem is free
             // to store it as a hole.
-            let records: Vec<u8> = (0..records_bytes)
-                .map(|i| u8::try_from(i % 251).expect("i % 251 fits in a byte"))
-                .collect();
-            let mut file = tempfile::NamedTempFile::new().expect("temp file");
-            file.write_all(&records).expect("write the segment bytes");
-            file.flush().expect("flush the segment bytes");
-            let handle = Arc::new(file.reopen().expect("reopen the segment file"));
+            let records = (0..records_bytes)
+                .map(|i| u8::try_from(i % 251))
+                .collect::<Result<Vec<u8>, _>>()?;
+            let mut file = tempfile::NamedTempFile::new()?;
+            file.write_all(&records)?;
+            file.flush()?;
+            let handle = Arc::new(file.reopen()?);
 
             let mut header = BytesMut::with_capacity(4 + ENVELOPE);
-            header.put_u32(u32::try_from(ENVELOPE + records_bytes).expect("frame length fits"));
+            header.put_u32(u32::try_from(ENVELOPE + records_bytes)?);
             header.put_bytes(0, ENVELOPE);
 
-            Self {
+            Ok(Self {
                 _file: file,
                 payload: RecordsPayload::FileRegions(vec![FileRegion {
                     file: handle,
@@ -187,7 +194,7 @@ mod sweep {
                 }]),
                 header: header.freeze(),
                 records_bytes,
-            }
+            })
         }
 
         /// The write plan for one drain of this response, in `case`.
@@ -195,15 +202,14 @@ mod sweep {
         /// Building it is inside the timed region because that is where the
         /// paths differ: the vectored resolver reads every records byte into a
         /// fresh buffer, and the sendfile resolver clones a descriptor.
-        fn plan(&self, case: Case) -> Vec<WriteOp> {
+        fn plan(&self, case: Case) -> Result<Vec<WriteOp>, BenchError> {
             let mut ops = vec![WriteOp::Inline(self.header.clone())];
             let records = match case {
                 Case::Vectored => resolve_records_inline(&self.payload),
                 Case::Sendfile => resolve_records_sendfile(&self.payload),
-            }
-            .expect("the sweep's payloads all resolve");
+            }?;
             ops.extend(records);
-            ops
+            Ok(ops)
         }
     }
 
@@ -232,72 +238,109 @@ mod sweep {
     /// case onto the copy path, the two columns would converge and the table
     /// would report `sendfile(2)` as costing nothing. This fails the run
     /// instead.
-    fn timed_drains(response: &Response, case: Case, iters: u64) -> Duration {
-        let runtime = Runtime::new().expect("build a bench runtime");
+    fn timed_drains(response: &Response, case: Case, iters: u64) -> Result<Duration, BenchError> {
+        let runtime = Runtime::new()?;
         runtime.block_on(async {
-            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-            let addr = listener.local_addr().expect("local addr");
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let addr = listener.local_addr()?;
             let reader = tokio::spawn(async move {
-                let mut client = TcpStream::connect(addr).await.expect("connect");
+                let mut client = TcpStream::connect(addr).await?;
                 size_buffers(&client);
                 let mut sink = vec![0u8; SOCKET_BUFFER];
                 while client.read(&mut sink).await.unwrap_or(0) > 0 {}
+                Ok::<(), io::Error>(())
             });
-            let (mut server, _) = listener.accept().await.expect("accept");
+            let (mut server, _) = listener.accept().await?;
             size_buffers(&server);
             let metrics = BrokerMetrics::new();
 
             for _ in 0..WARMUP {
-                write_fetch_plan(&mut server, response.plan(case), &metrics)
-                    .await
-                    .expect("drain the warmup response");
+                write_fetch_plan(&mut server, response.plan(case)?, &metrics).await?;
             }
             let start = Instant::now();
             for _ in 0..iters {
-                write_fetch_plan(&mut server, response.plan(case), &metrics)
-                    .await
-                    .expect("drain the response");
+                write_fetch_plan(&mut server, response.plan(case)?, &metrics).await?;
             }
             let elapsed = start.elapsed();
 
             drop(server); // EOF for the reader
-            reader.await.expect("the reader task drains to EOF");
+            reader.await??;
 
             let counts = FetchDrainPath::ALL.map(|p| drained(&metrics, p));
-            let mut expected = [0u64; 3];
-            let index = FetchDrainPath::ALL
-                .iter()
-                .position(|p| *p == case.expected())
-                .expect("every case's path is one of the three");
-            expected[index] = iters + WARMUP;
+            let expected = FetchDrainPath::ALL.map(|p| {
+                if p == case.expected() {
+                    iters + WARMUP
+                } else {
+                    0
+                }
+            });
             assert!(
                 counts == expected,
                 "the {} case must drain every response on its own path",
                 case.name()
             );
-            elapsed
+            Ok(elapsed)
         })
     }
 
-    /// The criterion sweep: every size, on both paths.
-    pub(crate) fn bench_fetch_drain(c: &mut Criterion) {
-        let mut group = c.benchmark_group("broker/fetch_drain");
+    /// The first error a timed closure met. Criterion's `iter_custom` closure
+    /// must return a [`Duration`], so the error waits here until criterion
+    /// returns.
+    #[derive(Default)]
+    struct FirstError(Option<BenchError>);
 
-        for ResponseSize {
-            label,
-            records_bytes,
-        } in SIZES
-        {
-            let response = Response::new(records_bytes);
-            group.throughput(Throughput::Bytes(response.records_bytes as u64));
-            for case in [Case::Vectored, Case::Sendfile] {
-                group.bench_function(format!("{label}/{}", case.name()), |b| {
-                    b.iter_custom(|iters| timed_drains(&response, case, iters));
-                });
-            }
+    impl FirstError {
+        /// The measured time, or zero after keeping the error.
+        fn time(&mut self, timed: Result<Duration, BenchError>) -> Duration {
+            timed.unwrap_or_else(|error| {
+                self.0.get_or_insert(error);
+                Duration::ZERO
+            })
         }
 
-        group.finish();
+        /// The kept error, if any.
+        fn into_result(self) -> Result<(), BenchError> { self.0.map_or(Ok(()), Err) }
+    }
+
+    /// Nanoseconds per response for `case`: the fastest of `runs` measurement
+    /// runs of `samples` drains each.
+    fn fastest_nanos(
+        response: &Response,
+        case: Case,
+        samples: u32,
+        runs: u32,
+    ) -> Result<f64, BenchError> {
+        let mut fastest = f64::INFINITY;
+        for _ in 0..runs {
+            let elapsed = timed_drains(response, case, u64::from(samples))?;
+            fastest = fastest.min(elapsed.as_secs_f64() * 1.0e9 / f64::from(samples));
+        }
+        Ok(fastest)
+    }
+
+    /// The criterion sweep: every size, on both paths.
+    pub fn bench_fetch_drain(c: &mut Criterion) -> Result<(), BenchError> {
+        let mut failure = FirstError::default();
+        {
+            let mut group = c.benchmark_group("broker/fetch_drain");
+
+            for ResponseSize {
+                label,
+                records_bytes,
+            } in SIZES
+            {
+                let response = Response::new(records_bytes)?;
+                group.throughput(Throughput::Bytes(response.records_bytes as u64));
+                for case in [Case::Vectored, Case::Sendfile] {
+                    group.bench_function(format!("{label}/{}", case.name()), |b| {
+                        b.iter_custom(|iters| failure.time(timed_drains(&response, case, iters)));
+                    });
+                }
+            }
+
+            group.finish();
+        }
+        failure.into_result()
     }
 
     /// Print both paths' cost at every size, and the crossover between them.
@@ -306,7 +349,7 @@ mod sweep {
     /// against a sibling, so the number this suite exists for — the response
     /// size at which `sendfile(2)` starts beating the copy, which is what
     /// `sendfile_min` has to be set to — has to be computed here.
-    pub(crate) fn bench_crossover(_c: &mut Criterion) {
+    pub fn bench_crossover(_c: &mut Criterion) -> Result<(), BenchError> {
         /// Drains per measurement run.
         const SAMPLES: u32 = 200;
         /// Measurement runs per case, of which the fastest is reported.
@@ -329,17 +372,9 @@ mod sweep {
             records_bytes,
         } in SIZES
         {
-            let response = Response::new(records_bytes);
-            let cost = |case| {
-                (0..RUNS)
-                    .map(|_| {
-                        timed_drains(&response, case, u64::from(SAMPLES)).as_secs_f64() * 1.0e9
-                            / f64::from(SAMPLES)
-                    })
-                    .fold(f64::INFINITY, f64::min)
-            };
-            let vectored = cost(Case::Vectored);
-            let sendfile = cost(Case::Sendfile);
+            let response = Response::new(records_bytes)?;
+            let vectored = fastest_nanos(&response, Case::Vectored, SAMPLES, RUNS)?;
+            let sendfile = fastest_nanos(&response, Case::Sendfile, SAMPLES, RUNS)?;
             if sendfile < vectored && crossover.is_none() {
                 crossover = Some(label);
             }
@@ -357,6 +392,7 @@ mod sweep {
             ),
         }
         println!();
+        Ok(())
     }
 }
 
@@ -373,17 +409,48 @@ mod sweep {
     target_os = "dragonfly",
 )))]
 mod sweep {
-    use criterion::Criterion;
+    use {super::BenchError, criterion::Criterion};
 
-    pub(crate) fn bench_fetch_drain(_c: &mut Criterion) {
+    pub fn bench_fetch_drain(_c: &mut Criterion) -> Result<(), BenchError> {
         println!(
             "broker/fetch_drain: this target has no file→socket sendfile, so every fetch drains \
              through the vectored path and there is no crossover to sweep"
         );
+        Ok(())
     }
 
-    pub(crate) fn bench_crossover(_c: &mut Criterion) {}
+    pub fn bench_crossover(_c: &mut Criterion) -> Result<(), BenchError> { Ok(()) }
 }
 
-criterion_group!(benches, sweep::bench_fetch_drain, sweep::bench_crossover);
+/// A benchmark target, under the name `criterion_group!` would give it.
+type Target = (&'static str, fn(&mut Criterion) -> Result<(), BenchError>);
+
+/// Every benchmark target, in run order.
+const TARGETS: [Target; 2] = [
+    ("sweep::bench_fetch_drain", sweep::bench_fetch_drain),
+    ("sweep::bench_crossover", sweep::bench_crossover),
+];
+
+/// Runs every target in [`TARGETS`], stopping at the first one that fails.
+fn run_targets(criterion: &mut Criterion) -> Result<(), (&'static str, BenchError)> {
+    for (name, target) in TARGETS {
+        if env::var("CODSPEED_ENV").is_ok() {
+            criterion.set_current_file(abs_file!());
+            criterion.set_macro_group(format!("benches::{name}"));
+        }
+        target(criterion).map_err(|error| (name, error))?;
+    }
+    Ok(())
+}
+
+/// The benchmark group, written out by hand where `criterion_group!` would
+/// generate it, so that a failing target reports its error and stops the run.
+fn benches() {
+    let result = run_targets(&mut Criterion::default().configure_from_args());
+    if let Err((name, error)) = result {
+        eprintln!("{name}: {error}");
+        process::exit(1);
+    }
+}
+
 criterion_main!(benches);

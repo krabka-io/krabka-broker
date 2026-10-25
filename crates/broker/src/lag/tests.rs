@@ -36,7 +36,12 @@ use {
         },
         records::RecordBatch,
     },
-    std::{path::Path, sync::Arc, time::Instant},
+    std::{
+        path::Path,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::{sync::mpsc, time::sleep},
 };
 
 const TOPIC: &str = "orders";
@@ -438,7 +443,7 @@ async fn commit_offset(handle: &GroupActorHandle, offset: i64) {
     handle
         .tx
         .send(GroupActorMessage::UpdateCommitted {
-            entries: vec![((TOPIC.to_string(), 0), OffsetEntry {
+            entries: vec![((TOPIC.to_owned(), 0), OffsetEntry {
                 offset: Offset(offset),
                 leader_epoch: 1,
                 metadata: String::new(),
@@ -596,7 +601,7 @@ fn a_probe_reply_is_read_by_topic_id_and_drops_only_the_failed_rows() {
         watermarks
             == HashMap::from([(
                 TopicPartition {
-                    topic: TOPIC.to_string(),
+                    topic: TOPIC.to_owned(),
                     partition: 0,
                 },
                 40
@@ -623,7 +628,7 @@ async fn an_uncommitted_partition_gets_no_series() {
 fn the_probe_asks_for_watermarks_and_no_records() {
     let topic_id = WireUuid(*uuid::Uuid::from_u128(1).as_bytes());
     let wanted = [TopicPartition {
-        topic: TOPIC.to_string(),
+        topic: TOPIC.to_owned(),
         partition: 0,
     }];
     let expected = FetchRequest {
@@ -681,11 +686,11 @@ fn probe_offset_rows(partitions: Vec<ListOffsetsPartitionResponse>) -> ListOffse
 fn the_probe_batches_read_committed_latest_offsets_before_fetching() {
     let wanted = [
         TopicPartition {
-            topic: TOPIC.to_string(),
+            topic: TOPIC.to_owned(),
             partition: 0,
         },
         TopicPartition {
-            topic: "ghost".to_string(),
+            topic: "ghost".to_owned(),
             partition: 0,
         },
     ];
@@ -810,7 +815,7 @@ async fn remote_watermark_probe_resolves_a_valid_fetch_boundary() {
         watermarks
             == HashMap::from([(
                 TopicPartition {
-                    topic: TOPIC.to_string(),
+                    topic: TOPIC.to_owned(),
                     partition: 0,
                 },
                 5
@@ -824,7 +829,7 @@ async fn remote_watermark_probe_resolves_a_valid_fetch_boundary() {
 #[test]
 fn a_probe_for_a_partition_the_image_dropped_has_nothing_to_ask() {
     let wanted = [TopicPartition {
-        topic: "ghost".to_string(),
+        topic: "ghost".to_owned(),
         partition: 0,
     }];
 
@@ -861,7 +866,7 @@ async fn a_watermark_this_broker_cannot_read_yields_no_series() {
 /// bounded, and the group reads as having committed nothing this pass.
 #[tokio::test(start_paused = true)]
 async fn a_group_actor_that_never_answers_yields_no_offsets() {
-    let (actor, _mailbox) = tokio::sync::mpsc::channel(1);
+    let (actor, _mailbox) = mpsc::channel(1);
 
     let offsets = committed_offsets(&actor).await;
 
@@ -884,11 +889,11 @@ async fn the_poller_publishes_on_a_tick_and_releases_everything_on_shutdown() {
     poller.spawn();
     // A `tokio::time::interval` fires its first tick immediately, so one pass
     // runs before the clock has to move at all.
-    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    sleep(Duration::from_millis(1)).await;
     assert!(published_group_lag(&metrics, "billing") == Some(33));
 
     shutdown.cancel();
-    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    sleep(Duration::from_millis(1)).await;
 
     check!(published_group_lag(&metrics, "billing") == None);
 }

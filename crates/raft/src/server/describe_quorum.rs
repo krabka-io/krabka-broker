@@ -26,6 +26,7 @@ use {
         },
         primitives::uuid::Uuid as WireUuid,
     },
+    std::collections::BTreeMap,
 };
 
 const METADATA_TOPIC: &str = "__cluster_metadata";
@@ -89,8 +90,7 @@ fn replica_state(
     id: NodeId,
     directory_id: uuid::Uuid,
 ) -> ReplicaState {
-    let tracked =
-        |map: &std::collections::BTreeMap<NodeId, i64>| map.get(&id).copied().unwrap_or(-1);
+    let tracked = |map: &BTreeMap<NodeId, i64>| map.get(&id).copied().unwrap_or(-1);
     ReplicaState {
         replica_id: node_to_wire(id),
         replica_directory_id: WireUuid(*directory_id.as_bytes()),

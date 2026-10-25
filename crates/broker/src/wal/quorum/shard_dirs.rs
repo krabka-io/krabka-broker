@@ -7,7 +7,16 @@
 //! follower-only roots that the current metadata image no longer assigns to
 //! this broker.
 
-use {super::registry, krabka_ids::PartitionIndex, std::fs, uuid::Uuid};
+use {
+    super::registry,
+    krabka_ids::PartitionIndex,
+    std::{
+        collections::HashSet,
+        fs, io,
+        path::{Path, PathBuf},
+    },
+    uuid::Uuid,
+};
 
 fn sanitize_topic(topic: &str) -> String {
     topic
@@ -23,12 +32,12 @@ fn sanitize_topic(topic: &str) -> String {
 }
 
 #[must_use]
-pub(crate) fn shard_dir(
-    log_dir: &std::path::Path,
+pub fn shard_dir(
+    log_dir: &Path,
     topic: &str,
     topic_id: Option<Uuid>,
     partition: PartitionIndex,
-) -> std::path::PathBuf {
+) -> PathBuf {
     let identity = topic_id.map_or_else(
         || sanitize_topic(topic),
         |topic_id| format!("{}-{topic_id}", sanitize_topic(topic)),
@@ -40,11 +49,11 @@ pub(crate) fn shard_dir(
 
 fn unregister_shard(
     registry: &registry::WalShardRegistry,
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     topic: &str,
     topic_id: Uuid,
     partition: PartitionIndex,
-) -> std::path::PathBuf {
+) -> PathBuf {
     registry.remove(registry::ShardId {
         topic_id,
         partition,
@@ -53,29 +62,29 @@ fn unregister_shard(
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum ShardRemoval {
+pub enum ShardRemoval {
     All,
     Leader,
 }
 
-pub(crate) fn remove_shard(
+pub fn remove_shard(
     registry: &registry::WalShardRegistry,
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     topic: &str,
     topic_id: Uuid,
     partition: PartitionIndex,
     scope: ShardRemoval,
-) -> std::io::Result<()> {
+) -> io::Result<()> {
     let root = unregister_shard(registry, log_dir, topic, topic_id, partition);
     if matches!(scope, ShardRemoval::All) {
         return match fs::remove_dir_all(root) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             result => result,
         };
     }
     let entries = match fs::read_dir(&root) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     };
     for entry in entries {
@@ -102,15 +111,12 @@ pub(crate) fn remove_shard(
 /// roots carrying any leader/runtime state are left to the owner-aware
 /// partition prune path. This closes the offline-delete/reassignment case that
 /// an in-memory task reconciliation cannot observe after a process restart.
-pub(crate) fn prune_orphaned_shard_dirs(
-    log_dirs: &[std::path::PathBuf],
-    keep: &std::collections::HashSet<std::path::PathBuf>,
-) -> std::io::Result<()> {
+pub fn prune_orphaned_shard_dirs(log_dirs: &[PathBuf], keep: &HashSet<PathBuf>) -> io::Result<()> {
     for log_dir in log_dirs {
         let root = log_dir.join("__diskless_wal_quorum");
         let entries = match fs::read_dir(&root) {
             Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error),
         };
         for entry in entries {
@@ -140,12 +146,12 @@ pub(crate) fn prune_orphaned_shard_dirs(
 mod tests {
     use {
         super::*, crate::wal::quorum::membership::QUORUM_STATE_FILE, assert2::assert,
-        krabka_kraft_core::NodeId,
+        krabka_kraft_core::NodeId, std::path::Path,
     };
 
     #[test]
     fn shard_directory_distinguishes_same_name_topic_recreations() {
-        let root = std::path::Path::new("data");
+        let root = Path::new("data");
         let first_id = Uuid::from_u128(1);
         let second_id = Uuid::from_u128(2);
 

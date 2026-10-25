@@ -41,13 +41,14 @@
 
 use {
     assert2::assert,
-    criterion::{Criterion, Throughput, criterion_group, criterion_main},
-    krabka_broker::metrics::BrokerMetrics,
+    criterion::{Criterion, Throughput, abs_file, criterion_main},
+    krabka_broker::metrics::{BrokerMetrics, PartitionLabel},
     prometheus_client::{
         encoding::EncodeLabelSet,
         metrics::{counter::Counter, family::Family},
     },
     std::{
+        env,
         sync::Arc,
         time::{Duration, Instant},
     },
@@ -89,7 +90,7 @@ fn record_replication_in_owned(
         return;
     }
     let lbl = OwnedPartitionLabel {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         partition,
     };
     family.get_or_create(&lbl).inc_by(bytes);
@@ -109,7 +110,7 @@ fn timed_owned(calls: u64) -> Duration {
     let elapsed = start.elapsed();
     let total = family
         .get_or_create(&OwnedPartitionLabel {
-            topic: TOPIC.to_string(),
+            topic: TOPIC.to_owned(),
             partition: PARTITION,
         })
         .get();
@@ -136,7 +137,7 @@ fn timed_shared(calls: u64) -> Duration {
     let elapsed = start.elapsed();
     let total = metrics
         .replication_bytes_in
-        .get_or_create(&krabka_broker::metrics::PartitionLabel {
+        .get_or_create(&PartitionLabel {
             topic: Arc::clone(&topic),
             partition: PARTITION,
         })
@@ -183,7 +184,13 @@ fn bench_replication_in(c: &mut Criterion) {
 
     for Case { name, run } in CASES {
         group.bench_function(format!("record_replication_in/{name}"), |b| {
-            b.iter_custom(|iters| (0..iters).map(|_| run(u64::from(CALLS))).sum());
+            b.iter_custom(|iters| {
+                let mut total = Duration::ZERO;
+                for _ in 0..iters {
+                    total += run(u64::from(CALLS));
+                }
+                total
+            });
         });
     }
 
@@ -208,18 +215,39 @@ fn bench_ratio(_c: &mut Criterion) {
         "{:>14} {:>14} {:>18}",
         "owned_string", "shared_arc", "owned/shared"
     );
-    let nanos: Vec<f64> = CASES
-        .into_iter()
-        .map(|Case { run, .. }| {
-            (0..RUNS)
-                .map(|_| run(u64::from(CALLS)).as_secs_f64() * 1.0e9 / f64::from(CALLS))
-                .fold(f64::INFINITY, f64::min)
-        })
-        .collect();
-    let (owned, shared) = (nanos[0], nanos[1]);
+    let [owned, shared] = CASES.map(|Case { run, .. }| {
+        let mut fastest = f64::INFINITY;
+        for _ in 0..RUNS {
+            fastest = fastest.min(run(u64::from(CALLS)).as_secs_f64() * 1.0e9 / f64::from(CALLS));
+        }
+        fastest
+    });
     println!("{owned:>14.1} {shared:>14.1} {:>17.2}x", owned / shared);
     println!();
 }
 
-criterion_group!(benches, bench_replication_in, bench_ratio);
+/// A benchmark target, under the name `criterion_group!` would give it.
+type Target = (&'static str, fn(&mut Criterion));
+
+/// Every benchmark target, in run order.
+const TARGETS: [Target; 2] = [
+    ("bench_replication_in", bench_replication_in),
+    ("bench_ratio", bench_ratio),
+];
+
+/// Runs every target in [`TARGETS`] against `criterion`.
+fn run_targets(criterion: &mut Criterion) {
+    for (name, target) in TARGETS {
+        if env::var("CODSPEED_ENV").is_ok() {
+            criterion.set_current_file(abs_file!());
+            criterion.set_macro_group(format!("benches::{name}"));
+        }
+        target(criterion);
+    }
+}
+
+/// The benchmark group, written out by hand where `criterion_group!` would
+/// generate it.
+fn benches() { run_targets(&mut Criterion::default().configure_from_args()); }
+
 criterion_main!(benches);

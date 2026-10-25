@@ -33,8 +33,10 @@ use {
         collections::{BTreeMap, BTreeSet, HashMap},
         fs,
         path::Path,
+        sync::{Arc, PoisonError, RwLock},
+        time::Instant,
     },
-    tracing::instrument,
+    tracing::{field, instrument},
 };
 
 /// The last offset of a replayed batch and the offset the replay cursor
@@ -57,13 +59,14 @@ pub(super) struct PendingStampRecoveryStats {
 
 impl PendingStampRecoveryStats {
     fn record(&mut self, batch: &RecordBatch) {
-        #[cfg(not(test))]
-        let _ = (self, batch);
         #[cfg(test)]
         {
             self.batches = self.batches.saturating_add(1);
             self.bytes = self.bytes.saturating_add(batch.encoded_len());
         }
+        // Only a test build counts; the others take the arguments and drop
+        // them.
+        let _ = (self, batch);
     }
 }
 
@@ -97,8 +100,8 @@ impl Log {
         skip_all,
         fields(
             dir = %dir.as_ref().display(),
-            segments = tracing::field::Empty,
-            log_end = tracing::field::Empty,
+            segments = field::Empty,
+            log_end = field::Empty,
         ),
         err,
     )]
@@ -142,7 +145,7 @@ impl Log {
         let mut segments: Vec<Segment> = Vec::with_capacity(base_offsets.len());
         let mut active: Option<Segment> = None;
         for (i, base) in base_offsets.iter().enumerate() {
-            if i + 1 < base_offsets.len() {
+            if let Some(&next_base) = base_offsets.get(i + 1) {
                 let mut seg = Segment::open_unscanned(&dir, Offset(*base))?;
                 // The no-scan loader leaves
                 // `last_offset = base - 1`. A sealed segment's true last offset
@@ -151,7 +154,7 @@ impl Log {
                 // doesn't skip this recovered segment and serve a later base
                 // offset — which after a restart manufactures an offset gap that
                 // strands a follower fetching from a low offset.
-                let last = krabka_verified::local_recovery_sealed_last(*base, base_offsets[i + 1])
+                let last = krabka_verified::local_recovery_sealed_last(*base, next_base)
                     .ok_or_else(|| LogError::Corrupt("invalid sealed segment boundary".into()))?;
                 seg.seal_at(Offset(last));
                 // The no-scan loader also leaves `max_timestamp` unknown. Without
@@ -197,7 +200,7 @@ impl Log {
         epoch_checkpoint.truncate_from_end(lso)?;
 
         let remote_storage_enable = config.remote_storage_enable;
-        let config = std::sync::Arc::new(std::sync::RwLock::new(config));
+        let config = Arc::new(RwLock::new(config));
 
         let span = tracing::Span::current();
         span.record("segments", segments.len() + 1);
@@ -213,16 +216,16 @@ impl Log {
         let mut log = Self {
             dir,
             config,
-            io: std::sync::Arc::new(FileIo),
+            io: Arc::new(FileIo),
             segments,
             active: Some(active),
             dir_sync_needed,
             rollover_flusher: super::rollover_flush::Flusher::default(),
-            compaction_gate: std::sync::Arc::default(),
+            compaction_gate: Arc::default(),
             fenced: false,
             opened_end: Offset(0),
             unflushed_messages: 0,
-            last_flush: std::time::Instant::now(),
+            last_flush: Instant::now(),
             roll_jitter: None,
             pending_deletes: Vec::new(),
             start_offset,
@@ -294,7 +297,7 @@ impl Log {
                 // A start raised to the first segment goes out on the timer
                 // instead: the segment names record it, and every open of this
                 // log raises it again until then.
-                log.defer_start_checkpoint(effective, std::time::Instant::now());
+                log.defer_start_checkpoint(effective, Instant::now());
             }
             // Kafka's `LogLoader.load` → `truncateFromStart(logStartOffsetCheckpoint)`:
             // a crash can land between a start increment and the epoch-cache
@@ -329,7 +332,10 @@ impl Log {
         let local_start = self.local_log_start_offset();
         ProducerReloadRange {
             log_start: krabka_verified::producer_snapshot_reload_log_start(
-                self.config.read().unwrap().remote_storage_enable,
+                self.config
+                    .read()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remote_storage_enable,
                 self.established_log_start().map(|start| start.0),
                 local_start.0,
             ),

@@ -22,7 +22,7 @@ use {
         convert::{ByteSizeExt as _, TimeExt as _},
     },
     std::sync::Arc,
-    tokio::task::JoinHandle,
+    tokio::{task::JoinHandle, time},
     tokio_util::sync::CancellationToken,
 };
 
@@ -65,7 +65,7 @@ fn spawn_audit_metrics(
 ) {
     tokio::spawn(async move {
         let mut previous = (0, 0, 0);
-        let mut tick = tokio::time::interval(poll_interval.to_std());
+        let mut tick = time::interval(poll_interval.to_std());
         loop {
             if !super::tick_or_shutdown(&mut tick, &shutdown).await {
                 return;
@@ -194,15 +194,12 @@ pub(super) fn start_audit_pipeline(
             metrics.clone(),
         ));
         let resume = spool_resume.or_else(|| {
-            partitions
-                .get(&config.audit_topic, partition_index)
-                .and_then(|partition| {
-                    recover_from_partition_tail(
-                        &partition,
-                        config.audit_tail_window_offsets,
-                        config.audit_tail_read_max,
-                    )
-                })
+            let partition = partitions.get(&config.audit_topic, partition_index)?;
+            recover_from_partition_tail(
+                &partition,
+                config.audit_tail_window_offsets,
+                config.audit_tail_read_max,
+            )
         });
         let chain = resume.map_or_else(
             krabka_audit::ChainState::new,
@@ -224,7 +221,7 @@ pub(super) fn start_audit_pipeline(
         let writer_handle = tokio::spawn(writer.run());
         spawn_audit_metrics(
             stats,
-            log.clone(),
+            Arc::clone(&log),
             metrics.clone(),
             config.audit_stats_poll_interval,
             supervisor_shutdown.child_token(),
@@ -244,7 +241,13 @@ pub(super) fn start_audit_pipeline(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert, krabka_units::minutes};
+    use {
+        super::*,
+        assert2::assert,
+        krabka_units::minutes,
+        std::time::Duration,
+        tokio::{task, time},
+    };
 
     #[tokio::test]
     async fn audit_metrics_cancellation_releases_log_before_next_poll() {
@@ -254,7 +257,7 @@ mod tests {
         let shutdown = CancellationToken::new();
         spawn_audit_metrics(
             stats,
-            log.clone(),
+            Arc::clone(&log),
             BrokerMetrics::new(),
             minutes(1),
             shutdown.child_token(),
@@ -262,9 +265,9 @@ mod tests {
         drop(log);
 
         shutdown.cancel();
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        time::timeout(Duration::from_secs(1), async {
             while weak_log.upgrade().is_some() {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await

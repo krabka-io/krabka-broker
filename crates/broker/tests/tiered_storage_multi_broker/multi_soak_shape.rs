@@ -16,7 +16,12 @@ use {
     assert2::assert,
     krabka_broker::{KafkaRlmmConfig, RlmmKind},
     krabka_client_producer::{Compression, Producer},
-    std::time::{Duration, Instant},
+    krabka_protocol::owned::create_topics_request::CreatableTopic,
+    std::{
+        path::PathBuf,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
 const TOPIC: &str = "tiered-soak-shape";
@@ -37,7 +42,7 @@ async fn every_rlmm_catches_up_on_the_soak_contracts_cluster() {
             replication: 3,
             min_isr: 2,
             snapshot_interval: krabka_units::hours(1),
-            snapshot_dir: std::path::PathBuf::new(),
+            snapshot_dir: PathBuf::new(),
             security: None,
             ..KafkaRlmmConfig::default()
         });
@@ -46,16 +51,14 @@ async fn every_rlmm_catches_up_on_the_soak_contracts_cluster() {
     let [b1, b2, b3] = &brokers;
     let admin = ready_admin([b1, b2, b3], "soak-shape-admin").await;
     let response = admin
-        .send(create_topic_request(
-            krabka_protocol::owned::create_topics_request::CreatableTopic {
-                configs: tiered_configs(Some("1024")),
-                ..creatable_topic()
-                    .name(TOPIC.into())
-                    .partitions(PARTITIONS)
-                    .replicas(3)
-                    .call()
-            },
-        ))
+        .send(create_topic_request(CreatableTopic {
+            configs: tiered_configs(Some("1024")),
+            ..creatable_topic()
+                .name(TOPIC.into())
+                .partitions(PARTITIONS)
+                .replicas(3)
+                .call()
+        }))
         .await
         .expect("CreateTopics");
     assert!(response.topics[0].error_code == 0, "{response:?}");
@@ -68,28 +71,31 @@ async fn every_rlmm_catches_up_on_the_soak_contracts_cluster() {
     .await;
 
     let bootstrap = format!("127.0.0.1:{}", b1.listen_addr().port());
-    let producer = Producer::builder()
-        .bootstrap(bootstrap)
-        .compression(Compression::Lz4)
-        .build()
-        .await
-        .expect("producer");
-    for index in 0..RECORDS_PER_PARTITION {
-        for partition in 0..PARTITIONS {
-            let mut value = format!("record-{partition}-{index}-").into_bytes();
-            value.resize(200, b'x');
-            producer
-                .send(krabka_client_producer::ProducerRecord {
-                    topic: TOPIC.to_owned(),
-                    partition: Some(partition),
-                    value: Some(bytes::Bytes::from(value)),
-                    ..Default::default()
-                })
-                .await
-                .expect("acknowledged");
+    {
+        let producer = Producer::builder()
+            .bootstrap(bootstrap)
+            .compression(Compression::Lz4)
+            .build()
+            .await
+            .expect("producer");
+        for index in 0..RECORDS_PER_PARTITION {
+            for partition in 0..PARTITIONS {
+                let mut value = format!("record-{partition}-{index}-").into_bytes();
+                value.resize(200, b'x');
+                producer
+                    .send(krabka_client_producer::ProducerRecord {
+                        topic: TOPIC.to_owned(),
+                        partition: Some(partition),
+                        value: Some(bytes::Bytes::from(value)),
+                        ..Default::default()
+                    })
+                    .await
+                    .expect("acknowledged");
+            }
         }
+        producer.close().await
     }
-    producer.close().await.expect("producer close");
+    .expect("producer close");
 
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {
@@ -123,7 +129,7 @@ async fn every_rlmm_catches_up_on_the_soak_contracts_cluster() {
                 ))
                 .collect::<Vec<_>>()
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
 
     drop(admin);

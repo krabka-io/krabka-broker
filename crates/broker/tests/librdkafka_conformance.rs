@@ -9,6 +9,7 @@
 //! assembles the same `kcat` 1.7.1 CLI against Wolfi's librdkafka 2.15.0, so
 //! its banner still says `Version 1.7.1` and the librdkafka it names is what
 //! the row is about. The table stays a table so that adding a client is a row.
+#![cfg(test)]
 
 mod jvm_acceptance;
 mod support;
@@ -138,9 +139,9 @@ fn run_client(image: &str, program: &str, args: &[&str], input: Option<&str>) ->
 fn max_sent_version(trace: &str, request: &str) -> Option<u32> {
     let needle = format!("Sent {request}Request (v");
     trace
-        .match_indices(&needle)
-        .filter_map(|(at, _)| {
-            let rest = &trace[at + needle.len()..];
+        .split(needle.as_str())
+        .skip(1)
+        .filter_map(|rest| {
             let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
             digits.parse().ok()
         })
@@ -291,7 +292,7 @@ async fn next_gen_group_topic_ids_and_telemetry_with_librdkafka_2x() {
     let topic = "librdkafka-2x-next-gen";
     admin
         .create_topics(
-            &[topic_spec(topic.to_string(), 1, 1)],
+            &[topic_spec(topic.to_owned(), 1, 1)],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await

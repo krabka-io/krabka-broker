@@ -4,6 +4,7 @@
 //! They prove that the inbound and the outbound path work together. On
 //! the inbound path, broker A accepts auth'd raft frames from broker B.
 //! On the outbound path, `InterBrokerDialer` dials with SASL credentials.
+#![cfg(test)]
 
 mod support;
 
@@ -11,12 +12,14 @@ use {
     assert2::assert,
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
     krabka_broker::{
-        BootstrapMode, Broker, BrokerConfig, BrokerHandle, config::InterBrokerCredentials,
+        BootstrapMode, Broker, BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer,
+        config::InterBrokerCredentials,
     },
     krabka_raft::NodeId,
     krabka_security::{ListenerProtocol, SaslMechanism},
-    std::{net::SocketAddr, time::Duration},
+    std::{collections::HashSet, fs, net::SocketAddr, path::Path, sync::Arc, time::Duration},
     tempfile::TempDir,
+    tokio::{net::TcpListener, time},
 };
 
 fn oauth_token() -> String {
@@ -85,7 +88,7 @@ struct SaslBrokerSetup<'a> {
 
 #[bon::builder]
 fn sasl_broker_config(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     #[builder(into, default)] slot: BrokerSlot,
     #[builder(default = data_listen_addr ())] data_addr: SocketAddr,
     #[builder(default = ControllerListener { protocol : ListenerProtocol :: SaslPlaintext , addr : data_listen_addr () })]
@@ -131,10 +134,10 @@ fn sasl_broker_config(
     configure_sasl_plaintext(&mut cfg, data_addr, ctrl);
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
-        .insert(plain_user.to_string(), plain_pass.to_string());
+        .insert(plain_user.to_owned(), plain_pass.to_owned());
     cfg.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
-        username: plain_user.to_string(),
-        password: plain_pass.to_string(),
+        username: plain_user.to_owned(),
+        password: plain_pass.to_owned(),
     });
     cfg
 }
@@ -142,7 +145,7 @@ fn sasl_broker_config(
 /// Two bound controller listeners and the addresses they are bound to.
 struct ReservedControllers {
     addrs: [SocketAddr; 2],
-    listeners: [tokio::net::TcpListener; 2],
+    listeners: [TcpListener; 2],
 }
 
 /// Bind two ephemeral loopback controller listeners and return them
@@ -157,8 +160,8 @@ struct ReservedControllers {
 /// `AddrInUse`. This helper keeps the socket bound and hands it over,
 /// which removes that window.
 async fn reserve_ctrl_listeners() -> ReservedControllers {
-    let l0 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let l1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let l0 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let l1 = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let a0 = l0.local_addr().unwrap();
     let a1 = l1.local_addr().unwrap();
     ReservedControllers {
@@ -289,10 +292,7 @@ async fn assert_disconnected_controllers(
         if authorization == ControllerAuthorization::Denied {
             // Valid SASL credentials are still denied CLUSTER_ACTION without
             // super users or ACLs. Construct each authorizer independently.
-            config.authorizer =
-                std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-                    std::collections::HashSet::new(),
-                ));
+            config.authorizer = Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
         }
         config
     };
@@ -305,7 +305,7 @@ async fn assert_disconnected_controllers(
         .await
         .expect("start b2");
     // Intentional negative observation: no awaiter can assert that state stays put.
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    time::sleep(Duration::from_secs(3)).await;
     assert!(b1.broker_count() < 2, "{failure}");
     let _ = &b2;
     b2.shutdown().await;
@@ -364,7 +364,7 @@ async fn controller_listener_oauthbearer_two_broker_quorum() {
     let dir1 = TempDir::new().unwrap();
     let token_dir = TempDir::new().unwrap();
     let token_path = token_dir.path().join("oauth-token");
-    std::fs::write(&token_path, oauth_token()).unwrap();
+    fs::write(&token_path, oauth_token()).unwrap();
 
     let mut cfg0 = sasl_broker_config()
         .log_dir(dir0.path())

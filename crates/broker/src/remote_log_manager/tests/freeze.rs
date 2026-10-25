@@ -11,6 +11,7 @@ use {
     assert2::check,
     fixtures::{SweepCounts, TempDirs, local_backends, sweep_counts},
     krabka_metadata::PatternType,
+    std::sync::PoisonError,
 };
 
 /// A freeze entry's scope and how the scope is matched against topic names.
@@ -100,7 +101,7 @@ async fn tick_once(image: MetadataImage, config: LogConfig) -> TickOutcome {
     let sealed_before = partition
         .log
         .lock()
-        .expect("partition log mutex poisoned")
+        .unwrap_or_else(PoisonError::into_inner)
         .tierable_segments()
         .len();
     partitions.insert("orders".into(), PartitionIndex(0), Arc::clone(&partition));

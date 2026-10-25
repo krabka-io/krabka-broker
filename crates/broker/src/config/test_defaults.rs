@@ -13,21 +13,20 @@ use {
     },
     krabka_raft::NodeId,
     krabka_units::{Time, convert::TimeExt, millis, secs},
-    std::{net::SocketAddr, path::PathBuf},
+    std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        path::PathBuf,
+        time::Duration,
+    },
 };
 
 impl BrokerConfig {
     /// Builds a test config that listens on an OS-assigned port under a
     /// tempdir.
     #[must_use]
-    /// # Panics
-    /// Panics if the synchronized log state is poisoned.
-    ///
-    /// Panics if a segment that validated as nonempty is unexpectedly missing
-    /// its required batch or index entry.
     pub fn for_tests(log_dir: PathBuf) -> Self {
-        let listen_addr: SocketAddr = "127.0.0.1:0".parse().expect("static");
-        let controller_addr: SocketAddr = "127.0.0.1:0".parse().expect("static");
+        let listen_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let controller_addr = listen_addr;
         Self {
             quota_window: secs(1),
             controller_mutation_quota_window: secs(1),
@@ -82,12 +81,12 @@ impl BrokerConfig {
             // expressions again as soon as the metadata changed, without
             // Kafka's ten seconds between two resolutions.
             next_gen_consumer_group: Box::new(NextGenConfig {
-                assignment_interval: std::time::Duration::ZERO,
-                regex_refresh_min_interval: std::time::Duration::ZERO,
+                assignment_interval: Duration::ZERO,
+                regex_refresh_min_interval: Duration::ZERO,
                 ..NextGenConfig::default()
             }),
             share_group: Box::new(ShareGroupConfig {
-                assignment_interval: std::time::Duration::ZERO,
+                assignment_interval: Duration::ZERO,
                 ..ShareGroupConfig::default()
             }),
             // Tests drive streams heartbeats directly and expect each change to
@@ -96,8 +95,8 @@ impl BrokerConfig {
             // integration tests set `group.streams.initial.rebalance.delay.ms`
             // to 0.
             streams_group: Box::new(StreamsGroupConfig {
-                initial_rebalance_delay: std::time::Duration::ZERO,
-                assignment_interval: std::time::Duration::ZERO,
+                initial_rebalance_delay: Duration::ZERO,
+                assignment_interval: Duration::ZERO,
                 ..StreamsGroupConfig::default()
             }),
             share_coordinator: Box::new(ShareCoordinatorConfig {
@@ -159,6 +158,7 @@ mod tests {
         assert2::assert,
         krabka_raft::BootstrapMode,
         krabka_units::{convert::ByteSizeExt, mebibytes},
+        std::path::PathBuf,
     };
 
     fn additional_policy_snapshot(config: BrokerConfig) -> [String; 24] {
@@ -242,14 +242,14 @@ mod tests {
 
     #[test]
     fn for_tests_uses_20_mib_metadata_snapshot_threshold() {
-        let cfg = BrokerConfig::for_tests(std::path::PathBuf::from("/tmp"));
+        let cfg = BrokerConfig::for_tests(PathBuf::from("/tmp"));
         assert!(cfg.metadata_max_bytes_between_snapshots == mebibytes(20));
         assert!(cfg.metadata_max_bytes_between_snapshots.bytes_u64() == 20 * 1024 * 1024);
     }
 
     #[test]
     fn for_tests_uses_short_raft_timings_for_fast_failover() {
-        let c = BrokerConfig::for_tests(std::path::PathBuf::from("/tmp"));
+        let c = BrokerConfig::for_tests(PathBuf::from("/tmp"));
         // Short enough that a 3-broker test detects a dead leader and
         // re-elects within a few seconds -- the failover tests need failover
         // well under their 10s producer timeout -- and long enough that a
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn for_tests_uses_bootstrap_mode() {
-        let c = BrokerConfig::for_tests(std::path::PathBuf::from("/tmp"));
+        let c = BrokerConfig::for_tests(PathBuf::from("/tmp"));
         assert!(c.bootstrap_mode == BootstrapMode::Bootstrap);
     }
 }

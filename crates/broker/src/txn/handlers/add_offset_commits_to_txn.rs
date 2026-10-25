@@ -30,9 +30,10 @@ use {
         add_offsets_to_txn_request::AddOffsetsToTxnRequest,
         add_offsets_to_txn_response::AddOffsetsToTxnResponse,
     },
+    std::sync::Arc,
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: AddOffsetsToTxnRequest,
     version: i16,
@@ -76,8 +77,8 @@ fn serve(
     version: i16,
     req: AddOffsetsToTxnRequest,
 ) -> BoxFuture<'static, AddOffsetsToTxnResponse> {
-    let coord = broker.txn_coordinator.clone();
-    let controller = broker.controller.clone();
+    let coord = Arc::clone(&broker.txn_coordinator);
+    let controller = Arc::clone(&broker.controller);
     Box::pin(async move {
         // Refresh leader-partition view from the current metadata image
         // before checking coordinator-ness, to avoid a race. Resolve the
@@ -91,7 +92,7 @@ fn serve(
         // (Kafka's TransactionLogValue has no group-name field). EndTxn fans a
         // marker to every partition in the set, including this one.
         let offsets_partition = TopicPartition {
-            topic: OFFSETS_TOPIC.to_string(),
+            topic: OFFSETS_TOPIC.to_owned(),
             partition: PartitionIndex(partition_for_group(&image, &req.group_id)),
         };
         let code = add_offsets_partition(
@@ -197,14 +198,16 @@ async fn add_offsets_partition(
     // cluster's level: the request always comes from a client that does not
     // use `TV_2`.
     staged.client_transaction_version = TxnVersion::Classic.level();
-    match coord.put_under_state_partition_lock(staged, txnv).await {
-        Ok(persisted) => {
-            // The append published a new handle. A caller that already waits
-            // on this one, such as AddPartitionsToTxn's register_partitions,
-            // sees the durable state too, not the pre-append snapshot.
-            *entry = persisted;
-            codes::NONE
-        }
+    // The append publishes a new handle. A caller that already waits on this
+    // one, such as AddPartitionsToTxn's register_partitions, sees the durable
+    // state too, not the pre-append snapshot.
+    let published = coord
+        .put_under_state_partition_lock(staged, txnv)
+        .await
+        .map(|persisted| *entry = persisted);
+    drop(entry);
+    match published {
+        Ok(()) => codes::NONE,
         Err(error) => {
             tracing::error!(
                 tid = transactional_id,

@@ -32,16 +32,12 @@ fn check_frontier(
         && (producer_id_epoch.0 < 0 || producer_id_epoch.1 >= 0);
     let (rows, decision) = schema_walk::oracle(fields, enabled, policy.0, policy.1);
     let target = i128::from(base_offset) + i128::try_from(count).unwrap();
-    let expected = if coherent
+    let expected = (coherent
         && header
         && decision == SchemaBatchAdmission::Admit
         && base_offset >= 0
-        && target <= i128::from(i64::MAX)
-    {
-        Some((rows, i64::try_from(target).unwrap()))
-    } else {
-        None
-    };
+        && target <= i128::from(i64::MAX))
+    .then(|| (rows, i64::try_from(target).unwrap()));
     assert!(
         schema_checked_produce_frontier(
             fields,

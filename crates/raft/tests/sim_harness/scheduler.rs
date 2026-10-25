@@ -9,6 +9,7 @@ use {
         node_log::SimNodeLog,
         timers::{HEARTBEAT_MS, SimTimer, election_timeout_ms_of},
     },
+    krabka_kraft_core::simulation_support,
     krabka_raft::kraft::{action::Action, event::Event, types::NodeId},
 };
 
@@ -30,16 +31,14 @@ impl<L: SimNodeLog> Sim<L> {
     pub(super) fn fire_next_timer(&mut self) -> bool {
         // Pick the node with the earliest deadline; ties break by node id
         // (BTreeMap iteration is ascending by id, so the first minimum wins).
-        let best = krabka_kraft_core::simulation_support::earliest_timer(self.nodes.values().map(
-            |node| {
-                (node.id, [
-                    node.election_deadline,
-                    node.fetch_deadline,
-                    node.heartbeat_deadline,
-                    node.check_quorum_deadline,
-                ])
-            },
-        ));
+        let best = simulation_support::earliest_timer(self.nodes.values().map(|node| {
+            (node.id, [
+                node.election_deadline,
+                node.fetch_deadline,
+                node.heartbeat_deadline,
+                node.check_quorum_deadline,
+            ])
+        }));
         let Some((deadline, id, kind)) = best else {
             return false;
         };
@@ -49,7 +48,7 @@ impl<L: SimNodeLog> Sim<L> {
         // Clear the fired timer; the handler re-arms below / via ResetTimer.
         {
             let node = self.nodes.get_mut(&id).unwrap();
-            krabka_kraft_core::simulation_support::clear_timer(
+            simulation_support::clear_timer(
                 kind,
                 &mut node.election_deadline,
                 &mut node.fetch_deadline,
@@ -58,14 +57,8 @@ impl<L: SimNodeLog> Sim<L> {
             );
         }
         match kind {
-            SimTimer::Heartbeat => {
-                self.fire_leader_heartbeat(id);
-                true
-            }
-            SimTimer::CheckQuorum => {
-                self.step(id, Event::CheckQuorumTimeout);
-                true
-            }
+            SimTimer::Heartbeat => self.fire_leader_heartbeat(id),
+            SimTimer::CheckQuorum => self.step(id, Event::CheckQuorumTimeout),
             SimTimer::Fetch => {
                 // A fetch watchdog firing while the follower's leader is still
                 // reachable is a routine long-poll expiry: re-poll the leader
@@ -80,13 +73,10 @@ impl<L: SimNodeLog> Sim<L> {
                     return true;
                 }
                 self.step(id, Event::FetchTimeout);
-                true
             }
-            SimTimer::Election => {
-                self.step(id, Event::ElectionTimeout);
-                true
-            }
+            SimTimer::Election => self.step(id, Event::ElectionTimeout),
         }
+        true
     }
 
     /// Delivers a queued message, and drops it if either endpoint is
@@ -120,7 +110,7 @@ impl<L: SimNodeLog> Sim<L> {
     /// per-role timer model of `KRaft`.
     fn reconcile_timers_for_role(&mut self, id: NodeId) {
         let node = self.nodes.get_mut(&id).unwrap();
-        krabka_kraft_core::simulation_support::reconcile_timers(
+        simulation_support::reconcile_timers(
             node.machine.role(),
             &mut node.election_deadline,
             &mut node.fetch_deadline,

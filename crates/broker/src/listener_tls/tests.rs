@@ -3,9 +3,11 @@ use {
     assert2::{assert, check},
     krabka_security::ListenerProtocol,
     rcgen::{CertificateParams, DnType, KeyPair},
+    rustls::crypto::aws_lc_rs,
+    std::{fs, fs::File, time::Duration},
 };
 
-fn install_provider() { drop(rustls::crypto::aws_lc_rs::default_provider().install_default()); }
+fn install_provider() { drop(aws_lc_rs::default_provider().install_default()); }
 
 /// A certificate and its PKCS#8 key, both PEM.
 struct Identity {
@@ -49,8 +51,8 @@ impl Fixture {
         let static_identity = identity("localhost", &["localhost"]);
         let cert_chain_path = dir.path().join("static-cert.pem");
         let private_key_path = dir.path().join("static-key.pem");
-        std::fs::write(&cert_chain_path, &static_identity.cert).unwrap();
-        std::fs::write(&private_key_path, &static_identity.key).unwrap();
+        fs::write(&cert_chain_path, &static_identity.cert).unwrap();
+        fs::write(&private_key_path, &static_identity.key).unwrap();
         let tls = TlsConfig {
             cert_chain_path,
             private_key_path,
@@ -88,7 +90,7 @@ impl Fixture {
     /// it, and return its path.
     fn keystore_file(&self, name: &str, identity: &Identity) -> String {
         let path = self.dir.path().join(name);
-        std::fs::write(&path, format!("{}{}", identity.key, identity.cert)).unwrap();
+        fs::write(&path, format!("{}{}", identity.key, identity.cert)).unwrap();
         path.to_string_lossy().into_owned()
     }
 }
@@ -356,9 +358,9 @@ fn the_cache_serves_the_dynamic_keystore_and_reloads_a_changed_file() {
 
     // The same path with new contents is read again once its mtime moves.
     let second = identity("localhost", &["localhost"]);
-    let later = SystemTime::now() + std::time::Duration::from_secs(5);
-    std::fs::write(&location, format!("{}{}", second.key, second.cert)).unwrap();
-    std::fs::File::options()
+    let later = SystemTime::now() + Duration::from_secs(5);
+    fs::write(&location, format!("{}{}", second.key, second.cert)).unwrap();
+    File::options()
         .write(true)
         .open(&location)
         .unwrap()
@@ -371,12 +373,12 @@ fn the_cache_serves_the_dynamic_keystore_and_reloads_a_changed_file() {
     assert!(cache.leaf("SSL") == Some(pem_certificates(&second.cert).unwrap().remove(0)));
 
     // A file that no longer loads leaves the last good config in force.
-    std::fs::write(&location, "not a keystore").unwrap();
-    std::fs::File::options()
+    fs::write(&location, "not a keystore").unwrap();
+    File::options()
         .write(true)
         .open(&location)
         .unwrap()
-        .set_modified(later + std::time::Duration::from_secs(5))
+        .set_modified(later + Duration::from_secs(5))
         .unwrap();
     let kept = cache
         .server_config(&image, NodeId(1), "SSL", &fixture.tls)

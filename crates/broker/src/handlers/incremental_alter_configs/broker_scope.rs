@@ -239,6 +239,7 @@ mod tests {
         assert2::check,
         krabka_metadata::{MetadataImage, NodeId},
         krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
+        std::path::PathBuf,
     };
 
     const SERVING: NodeId = NodeId(1);
@@ -585,10 +586,7 @@ mod tests {
     #[test]
     fn cordoned_log_dirs_follows_kafkas_dynamic_config_rules() {
         const KEY: &str = CORDONED_LOG_DIRS;
-        let log_dirs = [
-            std::path::PathBuf::from("/tmp/d1"),
-            std::path::PathBuf::from("/tmp/d2"),
-        ];
+        let log_dirs = [PathBuf::from("/tmp/d1"), PathBuf::from("/tmp/d2")];
         let at_level = |level: i16, configs: &[StoredConfig<'_>]| {
             let mut image = image_with(configs, false);
             image.apply(&MetadataRecord::V1FeatureLevel(

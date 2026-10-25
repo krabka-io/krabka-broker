@@ -17,7 +17,7 @@ use {crate::break_glass::action_name, krabka_metadata::BreakGlassAction, uuid::U
 /// event carries as its reason.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("break-glass refused {} on {}: {}", action_name(*.action), .target, .reason)]
-pub(crate) struct BreakGlassDenial {
+pub struct BreakGlassDenial {
     /// The transition the caller asked for.
     pub action: BreakGlassAction,
     /// The target the caller asked for, in the form the caller uses.
@@ -37,7 +37,7 @@ impl BreakGlassDenial {
 
 /// Why the gate refused a transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum DenialReason {
+pub enum DenialReason {
     /// No proposal names the action and covers the target.
     #[error("no approved proposal covers the request")]
     NoProposal,
@@ -86,12 +86,12 @@ impl DenialReason {
     /// The covering proposal, absent when none covers the request.
     fn proposal_id(self) -> Option<Uuid> {
         match self {
-            DenialReason::NoProposal => None,
-            DenialReason::NotEnoughApprovals { proposal_id, .. }
-            | DenialReason::Unsigned { proposal_id }
-            | DenialReason::Expired { proposal_id, .. }
-            | DenialReason::Withdrawn { proposal_id }
-            | DenialReason::Consumed { proposal_id, .. } => Some(proposal_id),
+            Self::NoProposal => None,
+            Self::NotEnoughApprovals { proposal_id, .. }
+            | Self::Unsigned { proposal_id }
+            | Self::Expired { proposal_id, .. }
+            | Self::Withdrawn { proposal_id }
+            | Self::Consumed { proposal_id, .. } => Some(proposal_id),
         }
     }
 
@@ -103,12 +103,12 @@ impl DenialReason {
     /// than a proposal somebody withdrew last week.
     fn rank(self) -> u8 {
         match self {
-            DenialReason::NotEnoughApprovals { .. } => 0,
-            DenialReason::Unsigned { .. } => 1,
-            DenialReason::Expired { .. } => 2,
-            DenialReason::Withdrawn { .. } => 3,
-            DenialReason::Consumed { .. } => 4,
-            DenialReason::NoProposal => 5,
+            Self::NotEnoughApprovals { .. } => 0,
+            Self::Unsigned { .. } => 1,
+            Self::Expired { .. } => 2,
+            Self::Withdrawn { .. } => 3,
+            Self::Consumed { .. } => 4,
+            Self::NoProposal => 5,
         }
     }
 
@@ -123,14 +123,11 @@ pub(super) fn nearer_reason(
     current: Option<DenialReason>,
     candidate: DenialReason,
 ) -> DenialReason {
-    match current {
-        None => candidate,
-        Some(current) => {
-            if (candidate.rank(), candidate.tie_break()) < (current.rank(), current.tie_break()) {
-                candidate
-            } else {
-                current
-            }
+    current.map_or(candidate, |current| {
+        if (candidate.rank(), candidate.tie_break()) < (current.rank(), current.tie_break()) {
+            candidate
+        } else {
+            current
         }
-    }
+    })
 }

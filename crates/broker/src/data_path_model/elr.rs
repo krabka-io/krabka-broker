@@ -74,7 +74,7 @@ pub(super) fn min_insync_replicas(image: &MetadataImage) -> usize {
 /// change moves.
 pub(super) fn partition_record(leader: u8, isr: u8, leader_epoch: u8) -> PartitionRecord {
     PartitionRecord {
-        topic: TOPIC.to_string(),
+        topic: TOPIC.to_owned(),
         partition: PARTITION,
         leader: krabka_metadata::NodeId(node(leader)),
         replicas: (0..NB_U8)

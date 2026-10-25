@@ -13,7 +13,11 @@ use {
         oracle::OracleComparison,
     },
     assert2::assert,
-    std::io::Write as _,
+    std::{
+        io::Write as _,
+        thread,
+        time::{Duration, Instant},
+    },
 };
 
 /// `kafka-consumer-groups --list` and `--describe` round-trip after a
@@ -656,19 +660,19 @@ async fn group_delete_and_reset_refusals_match_apache_kafka() {
 /// names the group and no state at all -- which a negative test would read as
 /// success.
 fn wait_until_group_is_live(side: &Side<'_>, group: &str) {
-    const BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
-    let deadline = std::time::Instant::now() + BUDGET;
+    const BUDGET: Duration = Duration::from_secs(120);
+    let deadline = Instant::now() + BUDGET;
     loop {
         let state = consumer_groups(side, &["--describe", "--state", "--group", group]);
         if state.succeeded() && state.stdout.contains(group) && state.stdout.contains("Stable") {
             return;
         }
         assert!(
-            std::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "{}: {group} never reached Stable within {BUDGET:?}:\n{}",
             side.label(),
             state.text(),
         );
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        thread::sleep(Duration::from_secs(2));
     }
 }

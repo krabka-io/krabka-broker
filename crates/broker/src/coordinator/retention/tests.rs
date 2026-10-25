@@ -34,14 +34,16 @@ use {
     },
     assert2::{assert, check},
     krabka_ids::PartitionIndex,
+    krabka_log::Log,
     krabka_protocol::owned::{
         create_topics_request::{self},
         leave_group_request::LeaveGroupRequest,
         offset_commit_request::OffsetCommitRequest,
+        offset_commit_response::OffsetCommitResponse,
     },
     krabka_units::mebibytes,
-    std::sync::Arc,
-    tokio::sync::oneshot,
+    std::{collections::HashMap, sync::Arc},
+    tokio::{sync::oneshot, task::yield_now},
 };
 
 const GROUP: &str = "retention-group";
@@ -80,7 +82,7 @@ async fn assert_offset_retained_after_sweep(broker: &Broker, swept: Vec<ReapedGr
 /// Independent expected result for a pass that deletes the group.
 fn deleted_group(reaped: Vec<(String, i32)>) -> Vec<ReapedGroup> {
     vec![ReapedGroup {
-        group_id: GROUP.to_string(),
+        group_id: GROUP.to_owned(),
         outcome: super::ReapOutcome {
             reaped,
             group_deleted: true,
@@ -98,7 +100,7 @@ struct StartedBroker {
 struct MemberlessGroup {
     handle: BrokerHandle,
     dir: tempfile::TempDir,
-    broker: std::sync::Arc<Broker>,
+    broker: Arc<Broker>,
 }
 
 /// Start a broker that holds `TOPIC`, since `OffsetCommit` answers
@@ -148,11 +150,7 @@ fn seed_group_with_member(broker: &Broker) {
     state.add_member(classic_member(MEMBER));
     state.state = GroupState::Stable;
     state.generation_id = GENERATION;
-    let group = CoordinatorGroup::seeded(
-        GROUP,
-        GroupKind::Classic(state),
-        std::collections::HashMap::new(),
-    );
+    let group = CoordinatorGroup::seeded(GROUP, GroupKind::Classic(state), HashMap::new());
     broker
         .group_coordinator
         .seed_classic(GROUP, Box::new(group));
@@ -183,11 +181,11 @@ fn seed_replayed_group(
         commit_timestamp_ms,
     };
     let mut state = ClassicGroup::new(GROUP);
-    state.protocol_type = setup.protocol_type.map(str::to_string);
+    state.protocol_type = setup.protocol_type.map(str::to_owned);
     let mut group = CoordinatorGroup::seeded(
         GROUP,
         GroupKind::Classic(state),
-        [((TOPIC.to_string(), 0), OffsetEntry {
+        [((TOPIC.to_owned(), 0), OffsetEntry {
             offset: krabka_log::Offset(42),
             leader_epoch: -1,
             metadata: String::new(),
@@ -272,7 +270,11 @@ fn offsets_log_records(broker: &Broker) -> Vec<OffsetsRecord> {
         .partitions
         .get(OFFSETS_TOPIC, PartitionIndex(partition_id))
         .expect("offsets partition is materialized");
-    let log = partition.log.lock().expect("log lock");
+    read_offsets_log(&*partition.log.lock().expect("log lock"))
+}
+
+/// Every record of the offsets log `log`.
+fn read_offsets_log(log: &Log) -> Vec<OffsetsRecord> {
     let mut next = log.log_start_offset();
     let end = log.log_end_offset();
     let mut out = Vec::new();
@@ -326,7 +328,7 @@ async fn empty_group_loses_its_offsets_after_the_retention() {
     let now_ms = empty_since_ms(&broker).await + RETENTION_MS + 1;
     let swept = sweep_at(&broker, now_ms).await;
 
-    assert!(swept == deleted_group(vec![(TOPIC.to_string(), 0)]));
+    assert!(swept == deleted_group(vec![(TOPIC.to_owned(), 0)]));
     check_group_deleted(&broker).await;
     let records = offsets_log_records(&broker);
     check!(has_tombstone(&records, &committed_offset_key()));
@@ -526,7 +528,7 @@ async fn a_group_whose_last_offset_was_deleted_is_reaped_next_pass() {
     handle
         .tx
         .send(GroupActorMessage::RemoveCommitted {
-            keys: vec![(TOPIC.to_string(), 0)],
+            keys: vec![(TOPIC.to_owned(), 0)],
             reply,
         })
         .await
@@ -563,7 +565,7 @@ async fn a_replacement_actor_keeps_its_type_and_seed_when_the_reaped_one_is_forg
     coordinator.mark_next_gen(GROUP);
     coordinator
         .seeds
-        .insert(GROUP.to_string(), GroupSeed::default());
+        .insert(GROUP.to_owned(), GroupSeed::default());
 
     super::forget_group(coordinator, GROUP, &reaped);
 
@@ -593,7 +595,7 @@ async fn a_simple_group_expires_from_its_commit_not_from_the_restart() {
 
     let swept = sweep_at(&broker, restarted_at).await;
 
-    assert!(swept == deleted_group(vec![(TOPIC.to_string(), 0)]));
+    assert!(swept == deleted_group(vec![(TOPIC.to_owned(), 0)]));
     check_group_deleted(&broker).await;
 }
 
@@ -619,7 +621,7 @@ async fn a_joined_group_expires_from_the_moment_it_emptied() {
     check!(fetched_offset(&broker).await == 42);
 
     let late = sweep_at(&broker, emptied_at + RETENTION_MS).await;
-    assert!(late == deleted_group(vec![(TOPIC.to_string(), 0)]));
+    assert!(late == deleted_group(vec![(TOPIC.to_owned(), 0)]));
     check!(fetched_offset(&broker).await == -1);
 }
 
@@ -656,7 +658,7 @@ async fn an_acknowledged_commit_is_never_reaped_by_a_concurrent_sweep() {
             Box::new(CoordinatorGroup::seeded(
                 group.clone(),
                 GroupKind::Classic(ClassicGroup::new(&group)),
-                [((TOPIC.to_string(), 0), OffsetEntry {
+                [((TOPIC.to_owned(), 0), OffsetEntry {
                     offset: krabka_log::Offset(1),
                     leader_epoch: -1,
                     metadata: String::new(),
@@ -685,7 +687,7 @@ async fn an_acknowledged_commit_is_never_reaped_by_a_concurrent_sweep() {
                 CHECK_INTERVAL_MS,
             )
             .await;
-            tokio::task::yield_now().await;
+            yield_now().await;
         }
 
         let code = committing.await.expect("commit task");
@@ -711,10 +713,7 @@ async fn simple_fetch(broker: &Broker, group: &str) -> i64 {
     fetch_offset(broker, group, TOPIC, FETCH_VERSION).await
 }
 
-async fn commit_request(
-    broker: &Broker,
-    request: krabka_protocol::owned::offset_commit_request::OffsetCommitRequest,
-) -> krabka_protocol::owned::offset_commit_response::OffsetCommitResponse {
+async fn commit_request(broker: &Broker, request: OffsetCommitRequest) -> OffsetCommitResponse {
     let principal = principal("admin");
     let peer = peer();
     let ctx = request_context(&principal, &peer, "consumer");

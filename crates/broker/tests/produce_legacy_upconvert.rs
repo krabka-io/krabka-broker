@@ -9,6 +9,7 @@
 //! negotiation. They build a Legacy payload directly, assert that the broker
 //! stores the up-converted records, and then fetch those records back in the
 //! modern v2 form.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -18,6 +19,8 @@ use {
         produce::{SinglePartitionProduceSetup, single_partition_produce},
     },
     assert2::assert,
+    std::time::Duration,
+    tokio::{task, time::Instant},
 };
 mod support;
 
@@ -91,7 +94,7 @@ async fn produce_v1_message_set_is_upconverted_and_round_trips() {
     // Fetch the stored records back and verify they survived the
     // up-conversion. The wire response is v2, so the fetched batch
     // carries the same values.
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(5);
     let batch = loop {
         let fr = p
             .client
@@ -115,10 +118,10 @@ async fn produce_v1_message_set_is_upconverted_and_round_trips() {
             break batch.clone();
         }
         assert!(
-            tokio::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "Fetch did not return the committed v2 batch within 5s"
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     };
     assert!(batch.records.len() == 3);
     let values: Vec<&[u8]> = batch

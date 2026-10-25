@@ -20,7 +20,7 @@ use {
 /// A marker append rejected by the leadership fence or by the partition
 /// writer.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum MarkerAppendError {
+pub enum MarkerAppendError {
     #[error("barrier marker append was fenced: {0:?}")]
     Fence(BarrierMarkerFenceDecision),
     #[error(transparent)]
@@ -42,7 +42,7 @@ pub(crate) enum MarkerAppendError {
 /// differs from the expected one, when the group name is longer than 32767
 /// bytes and so cannot go into a marker, when the partition writer is gone, or
 /// when the log rejects the batch.
-pub(crate) async fn append_marker(
+pub async fn append_marker(
     partition: &Partition,
     marker: &BarrierMarker,
     expected_leader: NodeId,
@@ -65,7 +65,10 @@ pub(crate) async fn append_marker(
         return Err(MarkerAppendError::Fence(decision));
     }
     let batch = build_barrier_batch(marker, partition.log_end_offset(), expected_epoch)?;
-    Ok(partition.produce_control_batch(batch).await?)
+    let appended = partition.produce_control_batch(batch).await;
+    // Held through the append, so no other generation installs in between.
+    drop(installed);
+    Ok(appended?)
 }
 
 #[cfg(test)]
@@ -78,9 +81,10 @@ mod tests {
             partition_registry::PartitionRegistry, test_support::StandalonePartitionSetup,
         },
         krabka_ids::PartitionIndex,
+        std::{path::Path, sync::Arc},
     };
 
-    async fn leader_partition(dir: &std::path::Path) -> std::sync::Arc<Partition> {
+    async fn leader_partition(dir: &Path) -> Arc<Partition> {
         let registry = PartitionRegistry::new();
         open_partition(&registry, dir, StandalonePartitionSetup {
             topic: "test-barrier",

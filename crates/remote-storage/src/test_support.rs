@@ -10,7 +10,10 @@ use {
     },
     bytes::Bytes,
     krabka_ids::LeaderEpoch,
-    std::path::{Path, PathBuf},
+    std::{
+        fs,
+        path::{Path, PathBuf},
+    },
     uuid::Uuid,
 };
 
@@ -40,7 +43,7 @@ pub fn sample_metadata(id: Uuid) -> RemoteLogSegmentMetadata {
 
 pub fn write_file(dir: &Path, name: &str, contents: &[u8]) -> PathBuf {
     let p = dir.join(name);
-    std::fs::write(&p, contents).unwrap();
+    fs::write(&p, contents).unwrap();
     p
 }
 

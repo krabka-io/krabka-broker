@@ -32,8 +32,9 @@
 use {
     super::wire::CONFIG_SOURCE_DEFAULT,
     crate::config_keys::registry::ConfigKey,
-    krabka_protocol::owned::describe_configs_response::{
-        DescribeConfigsResourceResult, DescribeConfigsSynonym,
+    krabka_protocol::owned::{
+        describe_configs_request::DescribeConfigsRequest,
+        describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsSynonym},
     },
 };
 
@@ -72,9 +73,7 @@ pub(super) struct EntryOptions {
 
 impl EntryOptions {
     /// The flags a `DescribeConfigs` request carries.
-    pub(super) const fn from_request(
-        req: &krabka_protocol::owned::describe_configs_request::DescribeConfigsRequest,
-    ) -> Self {
+    pub(super) const fn from_request(req: &DescribeConfigsRequest) -> Self {
         Self {
             include_synonyms: req.include_synonyms,
             include_documentation: req.include_documentation,

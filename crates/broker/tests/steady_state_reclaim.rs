@@ -23,6 +23,7 @@
 //! soak's settings scaled down from a minute to [`ROLL`]. At the defaults each
 //! directory's second-half rise is everything the second half wrote. At the
 //! soak's settings it is a fraction of that.
+#![cfg(test)]
 
 mod support;
 
@@ -30,8 +31,13 @@ use {
     assert2::check,
     krabka_broker::{Broker, BrokerConfig},
     krabka_units::prelude::{Time, millis},
-    std::{path::Path, time::Duration},
+    std::{
+        fs::{self, Metadata},
+        path::Path,
+        time::Duration,
+    },
     support::{client::connect_owned, commit_partition_zero, create_topic_for_commits},
+    tokio::time,
 };
 
 /// The soak's one-minute roll, snapshot and retention intervals, scaled down.
@@ -95,17 +101,17 @@ impl Settings {
 /// Kafka, and so outlasts this run. `krabka-log` and `KraftLog` test that it
 /// is then deleted, and the soak, at four hours, counts it.
 fn prefixed_bytes(log_dir: &Path, prefix: &str) -> u64 {
-    let Ok(entries) = std::fs::read_dir(log_dir) else {
+    let Ok(entries) = fs::read_dir(log_dir) else {
         return 0;
     };
     entries
         .flatten()
         .filter(|entry| entry.file_name().to_string_lossy().starts_with(prefix))
-        .filter_map(|entry| std::fs::read_dir(entry.path()).ok())
+        .filter_map(|entry| fs::read_dir(entry.path()).ok())
         .flat_map(Iterator::flatten)
         .filter(|file| !file.file_name().to_string_lossy().ends_with(".deleted"))
         .filter_map(|file| file.metadata().ok())
-        .filter(std::fs::Metadata::is_file)
+        .filter(Metadata::is_file)
         .map(|metadata| metadata.len())
         .sum()
 }
@@ -165,7 +171,7 @@ async fn second_half_rise(settings: Settings) -> Rise {
         for commit in 0..COMMITS_PER_HALF {
             let offset = half * COMMITS_PER_HALF + commit;
             commit_partition_zero(&client, GROUP, (TOPIC, topic_id), offset).await;
-            tokio::time::sleep(COMMIT_PACE).await;
+            time::sleep(COMMIT_PACE).await;
             if (commit + 1) % COMMITS_PER_SAMPLE == 0 {
                 samples.push(Sizes::of(&log_dir));
             }

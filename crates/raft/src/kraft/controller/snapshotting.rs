@@ -24,7 +24,9 @@ use {
     krabka_ids::Offset,
     krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord},
     krabka_units::prelude::{ByteSizeExt as _, TimeExt as _},
-    std::{path::Path, sync::Arc, time::Duration},
+    std::{path::Path, sync::Arc, thread, time::Duration},
+    tokio::{task, task::JoinError},
+    tracing::field::Empty,
 };
 
 /// Everything a regular checkpoint completion needs. In particular, none of
@@ -46,7 +48,7 @@ fn write_regular_snapshot(
     bytes_at_start: u64,
 ) -> SnapshotJobCompletion {
     if !delay.is_zero() {
-        std::thread::sleep(delay);
+        thread::sleep(delay);
     }
     let result = SnapshotWriter::serialize(image, last_contained_ts)
         .and_then(|bytes| write_checkpoint(data_dir, end_offset.0, epoch, &bytes));
@@ -72,7 +74,7 @@ impl Engine {
     #[tracing::instrument(
         level = "info",
         skip_all,
-        fields(node = self.me.0, epoch = self.core.quorum_state().leader_epoch, hwm = tracing::field::Empty)
+        fields(node = self.me.0, epoch = self.core.quorum_state().leader_epoch, hwm = Empty)
     )]
     pub fn maybe_snapshot(&mut self) {
         if self.downgrade_snapshot_pending.is_some() || self.snapshot_job.is_some() {
@@ -101,11 +103,8 @@ impl Engine {
         let image = Arc::clone(&self.image.published());
         let data_dir = self.data_dir.clone();
         let bytes_at_start = self.bytes_since_snapshot;
-        #[cfg(test)]
         let delay = self.snapshot_write_delay;
-        #[cfg(not(test))]
-        let delay = Duration::ZERO;
-        self.snapshot_job = Some(tokio::task::spawn_blocking(move || {
+        self.snapshot_job = Some(task::spawn_blocking(move || {
             write_regular_snapshot(
                 &data_dir,
                 &image,
@@ -118,10 +117,7 @@ impl Engine {
         }));
     }
 
-    pub(super) fn finish_snapshot_job(
-        &mut self,
-        joined: Result<SnapshotJobCompletion, tokio::task::JoinError>,
-    ) {
+    pub(super) fn finish_snapshot_job(&mut self, joined: Result<SnapshotJobCompletion, JoinError>) {
         self.snapshot_job = None;
         let completion = match joined {
             Ok(completion) => completion,

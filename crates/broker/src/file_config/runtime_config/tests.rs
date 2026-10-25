@@ -16,6 +16,7 @@ use {
         convert::{ByteSizeExt as _, TimeExt as _},
         days, hours, mebibytes, millis, minutes, secs,
     },
+    std::time::Duration,
 };
 
 #[test]
@@ -83,7 +84,7 @@ streams_group_max_size = 19
     assert!(cfg.diskless_wal_trim_safety_lag == 0);
     assert!(cfg.diskless_wal_index_projection_timeout == secs(3));
     assert!(cfg.share_group.max_size == 17);
-    assert!(cfg.share_group.backlog_poll_interval == std::time::Duration::from_millis(250));
+    assert!(cfg.share_group.backlog_poll_interval == Duration::from_millis(250));
     assert!(!cfg.streams_group.enable);
     assert!(cfg.streams_group.max_size == 19);
 }
@@ -311,12 +312,12 @@ fn the_sasl_receive_limit_and_failed_authentication_delay_follow_kafka() {
         (
             "[runtime]\nsasl_server_max_receive = \"64KiB\"\nconnection_failed_authentication_delay = \"0ms\"\n",
             bytes(65_536),
-            std::time::Duration::ZERO,
+            Duration::ZERO,
         ),
         (
             "[runtime]\nconnection_failed_authentication_delay = \"250ms\"\n",
             bytes(524_288),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         ),
     ];
     for (source, want_limit, want_delay) in cases {

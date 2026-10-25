@@ -7,16 +7,23 @@
 //! the raw response and that has to be captured before decoding.
 
 use {
-    super::test_support::*,
-    crate::support::{
-        fetch::{FetchLimits, RequestWaitMillis, named_topic_fetch},
-        produce::{SinglePartitionProduceSetup, single_partition_produce},
-        records::{batch_from_records, value_record},
-        wire::{read_frame, request_body_capacity, request_frame, write_frame},
+    crate::{
+        CLIENT_ID, kafka_wire,
+        support::{
+            fetch::{FetchLimits, RequestWaitMillis, named_topic_fetch},
+            produce::{SinglePartitionProduceSetup, single_partition_produce},
+            records::{batch_from_records, value_record},
+            wire::{
+                HeaderEncoding as RequestHeaderEncoding, read_frame, request_body_capacity,
+                request_frame, write_frame,
+            },
+        },
     },
     assert2::assert,
-    bytes::Buf,
-    std::net::SocketAddr,
+    bytes::{Buf, BytesMut},
+    krabka_protocol::{Decode, Encode},
+    std::{net::SocketAddr, time::Duration},
+    tokio::{net::TcpStream, time},
 };
 
 /// Produce `count` records of `record_bytes` bytes each to `(topic, 0)` over
@@ -42,7 +49,7 @@ pub async fn produce_plaintext(addr: SocketAddr, topic: &str, record_bytes: usiz
     let req = single_partition_produce(
         // leader ack only (rf=1 topic)
         SinglePartitionProduceSetup {
-            topic: topic.to_string(),
+            topic: topic.to_owned(),
             records: Some(
                 RecordBatch {
                     last_offset_delta: i32::try_from(count - 1).unwrap(),
@@ -80,7 +87,7 @@ pub async fn produce_plaintext(addr: SocketAddr, topic: &str, record_bytes: usiz
         if !matches!(error_code, 5 | 6) || attempts == 100 {
             break error_code;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     };
     assert!(
         error_code == 0,

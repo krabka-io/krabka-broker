@@ -11,14 +11,14 @@ use {
 };
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum DeadLetterQueue {
+pub enum DeadLetterQueue {
     #[default]
     Disabled,
     Enabled,
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct AcquiredWindowSetup {
+pub struct AcquiredWindowSetup {
     #[default(Offset(3))]
     pub end: Offset,
     #[default(RecordCount(10))]
@@ -27,10 +27,10 @@ pub(crate) struct AcquiredWindowSetup {
 }
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
-pub(crate) struct DeliveryCount(pub i16);
+pub struct DeliveryCount(pub i16);
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct DlqRangeSetup {
+pub struct DlqRangeSetup {
     #[default(Offset(0))]
     pub first: Offset,
     #[default(Offset(0))]
@@ -45,7 +45,7 @@ pub(super) fn t0() -> Instant { Instant::now() }
 pub(super) const LOCK: Duration = Duration::from_secs(30);
 
 /// A materialized zero-based window already held by m1 with the ordinary test lock.
-pub(crate) fn acquired_state(end: Offset) -> super::AcquisitionState {
+pub fn acquired_state(end: Offset) -> super::AcquisitionState {
     let mut state = super::AcquisitionState::new(krabka_log::Offset(0));
     acquire_window().state(&mut state).end(end).call();
     state
@@ -53,7 +53,7 @@ pub(crate) fn acquired_state(end: Offset) -> super::AcquisitionState {
 
 /// Populate an existing fixture under the caller's lock, using its original record limit.
 #[bon::builder]
-pub(crate) fn acquire_window(
+pub fn acquire_window(
     state: &mut super::AcquisitionState,
     #[builder(into, default = Offset (3))] end: Offset,
     #[builder(into, default = RecordCount (10))] record_limit: RecordCount,
@@ -84,7 +84,7 @@ pub(crate) fn acquire_window(
 }
 
 #[bon::builder]
-pub(crate) fn dlq_range(
+pub fn dlq_range(
     #[builder(into, default = Offset (0))] first: Offset,
     #[builder(into, default = Offset (0))] last: Offset,
     #[builder(into, default = DeliveryCount (1))] delivery_count: DeliveryCount,
@@ -107,7 +107,7 @@ pub(crate) fn dlq_range(
 /// Normalize representation for successful transition comparisons. Adjacent
 /// batches merge only when every non-bound field matches, preserving every
 /// per-offset value and all global state, including pending DLQ work.
-pub(crate) fn canonical_state(mut state: super::AcquisitionState) -> super::AcquisitionState {
+pub fn canonical_state(mut state: super::AcquisitionState) -> super::AcquisitionState {
     state.coalesce();
     state
 }

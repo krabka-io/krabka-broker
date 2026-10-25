@@ -725,9 +725,11 @@ proptest! {
         let members: Vec<usize> = (0..start.len()).collect();
         let mut balancer_sizes = start.clone();
         let mut kernel_sizes = start.clone();
-        let mut balancer = Balancer::new(&members, &balancer_sizes);
+        let mut balancer = Balancer::new(&members, &balancer_sizes).expect("members are non-empty");
         for _ in 0..picks {
-            let from_balancer = balancer.next_least_loaded(&balancer_sizes);
+            let from_balancer = balancer
+                .next_least_loaded(&balancer_sizes)
+                .expect("the least-loaded range holds a member");
             balancer_sizes[from_balancer] += 1;
             let loads: Vec<SubscriberLoad> = kernel_sizes
                 .iter()

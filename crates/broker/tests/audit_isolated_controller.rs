@@ -5,6 +5,7 @@
 //! nothing. Kafka never places a replica on a controller-only node. The first
 //! broker-only node to start creates the topic on itself, and its audit writer
 //! then records the broker start in that partition.
+#![cfg(test)]
 
 use {
     crate::support::controller_voters,

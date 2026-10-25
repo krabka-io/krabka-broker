@@ -18,6 +18,8 @@ use {
         owned::{
             fetch_request::{FetchPartition, FetchRequest, FetchTopic},
             fetch_response::FetchResponse,
+            list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
+            list_offsets_response::ListOffsetsResponse,
         },
         primitives::uuid::Uuid as WireUuid,
     },
@@ -27,14 +29,15 @@ use {
         sync::Arc,
         time::Duration,
     },
+    tokio::{time, time::MissedTickBehavior},
     tokio_util::sync::CancellationToken,
 };
 
-pub(crate) fn effective_backlog(hwm: i64, spso: i64, log_start: i64) -> i64 {
+pub fn effective_backlog(hwm: i64, spso: i64, log_start: i64) -> i64 {
     krabka_verified::effective_share_backlog(hwm, spso, log_start)
 }
 
-pub(crate) struct BacklogPoller {
+pub struct BacklogPoller {
     pub node_id: NodeId,
     pub coordinator: Arc<GroupCoordinator>,
     pub metadata: Arc<dyn MetadataSource>,
@@ -51,8 +54,8 @@ pub(crate) struct BacklogPoller {
 impl BacklogPoller {
     pub(crate) fn spawn(self) {
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(self.period);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut interval = time::interval(self.period);
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let mut last = HashMap::new();
             loop {
                 tokio::select! {
@@ -184,30 +187,25 @@ impl BacklogPoller {
             .topic(topic)
             .ok_or_else(|| format!("missing topic metadata for {topic}"))?
             .topic_id;
-        let latest = krabka_protocol::owned::list_offsets_request::ListOffsetsRequest {
+        let latest = ListOffsetsRequest {
             replica_id: -1,
             isolation_level: 1,
-            topics: vec![
-                krabka_protocol::owned::list_offsets_request::ListOffsetsTopic {
-                    name: topic.to_owned(),
-                    partitions: vec![
-                        krabka_protocol::owned::list_offsets_request::ListOffsetsPartition {
-                            partition_index: partition,
-                            current_leader_epoch: partition_metadata.leader_epoch.0,
-                            timestamp: -1,
-                            ..Default::default()
-                        },
-                    ],
+            topics: vec![ListOffsetsTopic {
+                name: topic.to_owned(),
+                partitions: vec![ListOffsetsPartition {
+                    partition_index: partition,
+                    current_leader_epoch: partition_metadata.leader_epoch.0,
+                    timestamp: -1,
                     ..Default::default()
-                },
-            ],
+                }],
+                ..Default::default()
+            }],
             ..Default::default()
         };
-        let latest_response: krabka_protocol::owned::list_offsets_response::ListOffsetsResponse =
-            connection
-                .send(latest)
-                .await
-                .map_err(|error| error.to_string())?;
+        let latest_response: ListOffsetsResponse = connection
+            .send(latest)
+            .await
+            .map_err(|error| error.to_string())?;
         let fetch_offset = latest_fetch_offset(&latest_response, topic, partition)?;
         let request = FetchRequest {
             replica_id: -1,
@@ -242,7 +240,7 @@ impl BacklogPoller {
 }
 
 fn latest_fetch_offset(
-    response: &krabka_protocol::owned::list_offsets_response::ListOffsetsResponse,
+    response: &ListOffsetsResponse,
     topic: &str,
     partition: i32,
 ) -> Result<i64, String> {

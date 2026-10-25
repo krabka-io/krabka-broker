@@ -2,7 +2,7 @@
 //! Pure, sans-IO: no clock, no wire, no log bytes.
 
 pub use krabka_voters::NodeId;
-use {krabka_voters::VoterSet, uuid::Uuid};
+use {krabka_verified::consensus, krabka_voters::VoterSet, uuid::Uuid};
 
 #[derive(derive_more::From, derive_more::Into)]
 /// A simulated or logical instant in milliseconds.
@@ -140,7 +140,7 @@ impl QuorumState {
 
     /// Majority size for the current voter set: `floor(n/2) + 1`.
     #[must_use]
-    pub fn majority(&self) -> usize { krabka_verified::consensus::majority_size(self.voters.len()) }
+    pub fn majority(&self) -> usize { consensus::majority_size(self.voters.len()) }
 }
 
 #[cfg(test)]

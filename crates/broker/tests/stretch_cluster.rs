@@ -69,6 +69,7 @@
 //!
 //! Every wait is bounded with `tokio::time::timeout`. CI kills a test at 600s
 //! and reports TIMEOUT with no cause; a bounded wait names the step that hung.
+#![cfg(test)]
 
 use {
     std::{future::Future, time::Duration},

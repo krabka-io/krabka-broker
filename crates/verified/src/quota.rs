@@ -17,8 +17,10 @@ mod request;
 pub use request::quota_whole_request;
 
 /// Credit micro-tokens to a quota bucket, repaying debt before filling its
-/// balance. Both refill and refund use this transition; rate and clock
-/// conversion and atomic state publication remain with the caller.
+/// balance.
+///
+/// Both refill and refund use this transition; rate and clock conversion and
+/// atomic state publication remain with the caller.
 #[ensures(result.0@ <= burst@)]
 #[ensures(result.1@ == debt@ - if debt@ <= credit@ { debt@ } else { credit@ })]
 #[ensures(result.0@ == crate::throttle::capped(available@,
@@ -37,8 +39,10 @@ pub fn quota_credit(available: u64, debt: u64, credit: u64, burst: u64) -> (u64,
 }
 
 /// Charge the effective micro-token request in full, retaining its unpaid
-/// portion as debt up to `debt_cap`. A smaller cap intentionally forgets debt;
-/// `u64::MAX` is the unbounded mode's representability limit.
+/// portion as debt up to `debt_cap`.
+///
+/// A smaller cap intentionally forgets debt; `u64::MAX` is the unbounded mode's
+/// representability limit.
 #[ensures(result.0@ == if requested@ <= crate::throttle::capped(available@, 0, burst@) {
     crate::throttle::capped(available@, 0, burst@) - requested@
 } else { 0 })]

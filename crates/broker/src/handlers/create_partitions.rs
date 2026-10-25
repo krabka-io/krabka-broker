@@ -76,11 +76,13 @@ use {
         quota::ControllerMutationQuota,
         site_placement::PlacementRng,
     },
+    std::cmp,
+    tokio::time::Instant,
 };
 
 krabka_macros::decoded_dispatch! {
     /// Apply explicit assignments and placement rules after the request reaches the controller.
-    pub(crate) async fn dispatch(
+    pub async fn dispatch(
         broker: &Broker,
         version: ApiVersion,
         req_bytes: &[u8],
@@ -120,7 +122,7 @@ fn request_refusal(
     }
 }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: CreatePartitionsRequest,
     version: ApiVersion,
@@ -176,8 +178,8 @@ pub(crate) async fn handle(
     // every topic after it.
     let quota = Mutex::new(ctx.controller_mutation_quota(broker, &image, version >= 3));
 
-    let deadline = tokio::time::Instant::now()
-        + Duration::from_millis(u64::try_from(req.timeout_ms).unwrap_or(0));
+    let deadline =
+        Instant::now() + Duration::from_millis(u64::try_from(req.timeout_ms).unwrap_or(0));
     let validate_only = req.validate_only;
 
     for t in req.topics {
@@ -343,7 +345,7 @@ async fn grow_topic(
 
     broker
         .controller
-        .submit_change_if_image(records, image.clone())
+        .submit_change_if_image(records, Arc::clone(&image))
         .await?;
     PartitionMaterialization {
         broker,
@@ -363,7 +365,18 @@ async fn grow_topic(
 }
 
 async fn reconcile_growth_charge(growth: &GrowthContext<'_, '_>, current: u64) -> bool {
+    // The lock spans the whole read and update of `charged`, so concurrent
+    // attempts reconcile one after another.
     let mut quota = growth.quota.lock().await;
+    reconcile_locked_growth_charge(&mut quota, growth, current)
+}
+
+/// [`reconcile_growth_charge`] under the quota lock.
+fn reconcile_locked_growth_charge(
+    quota: &mut ControllerMutationQuota,
+    growth: &GrowthContext<'_, '_>,
+    current: u64,
+) -> bool {
     let previous = growth.charged.load(Ordering::Relaxed);
     if quota
         .reconcile_record(previous, current, growth.prior_delay)
@@ -372,9 +385,10 @@ async fn reconcile_growth_charge(growth: &GrowthContext<'_, '_>, current: u64) -
         // A refused increment was never submitted, and the earlier stale
         // reservation did not commit. Preserve the refusal's response delay.
         let refusal_delay = quota.delay();
-        quota
-            .reconcile_record(previous, 0, refusal_delay)
-            .expect("refunding a reservation adds no mutations");
+        // A refund adds no mutations, so the quota never refuses it.
+        if let Err(error) = quota.reconcile_record(previous, 0, refusal_delay) {
+            tracing::error!(?error, "CreatePartitions quota refund was refused");
+        }
         growth.charged.store(0, Ordering::Relaxed);
         return false;
     }
@@ -482,17 +496,17 @@ fn admit_growth(
         })
     };
     match count.cmp(&existing) {
-        std::cmp::Ordering::Equal => {
+        cmp::Ordering::Equal => {
             return invalid(format!("Topic already has {existing} partition(s)."));
         }
-        std::cmp::Ordering::Less => {
+        cmp::Ordering::Less => {
             return invalid(format!(
                 "The topic {} currently has {existing} partition(s); {count} would not be an \
                  increase.",
                 topic.name
             ));
         }
-        std::cmp::Ordering::Greater => {}
+        cmp::Ordering::Greater => {}
     }
     let additional = i64::from(count) - i64::from(existing);
     if let Some(assignments) = &topic.assignments

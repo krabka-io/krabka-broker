@@ -214,15 +214,20 @@ pub fn normalize_prefix(prefix: Option<&str>) -> Option<String> {
 /// prefix [`normalize_prefix`] already produced.
 #[must_use]
 pub fn prefixed_key(prefix: Option<&str>, relative: &str) -> Path {
-    match prefix {
-        Some(prefix) => Path::from(format!("{prefix}/{relative}")),
-        None => Path::from(relative),
-    }
+    prefix.map_or_else(
+        || Path::from(relative),
+        |prefix| Path::from(format!("{prefix}/{relative}")),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check, clap::Parser};
+    use {
+        super::*,
+        assert2::check,
+        clap::Parser,
+        std::{iter, path},
+    };
 
     #[derive(Parser, Debug)]
     struct Cli {
@@ -231,8 +236,7 @@ mod tests {
     }
 
     fn parse(argv: &[&str]) -> Result<ArchiveArgs, clap::Error> {
-        Cli::try_parse_from(std::iter::once("tool").chain(argv.iter().copied()))
-            .map(|cli| cli.archive)
+        Cli::try_parse_from(iter::once("tool").chain(argv.iter().copied())).map(|cli| cli.archive)
     }
 
     fn s3_archive_args(prefix: &str) -> ArchiveArgs {
@@ -402,7 +406,7 @@ mod tests {
         .to_config()
         .expect("config");
         check!(
-            matches!(config, ObjectStoreConfig::Local { root } if root == std::path::Path::new("/archive"))
+            matches!(config, ObjectStoreConfig::Local { root } if root == path::Path::new("/archive"))
         );
     }
 

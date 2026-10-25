@@ -45,10 +45,11 @@ impl Log {
             if batch.is_transactional || batch.bytes.len() < HEADER_LEN {
                 return None;
             }
-            let attributes = Attributes(i16::from_be_bytes([
-                batch.bytes[CRC_COVERAGE_START],
-                batch.bytes[CRC_COVERAGE_START + 1],
-            ]));
+            let &attributes = batch
+                .bytes
+                .get(CRC_COVERAGE_START..)
+                .and_then(<[u8]>::first_chunk::<2>)?;
+            let attributes = Attributes(i16::from_be_bytes(attributes));
             if attributes.is_control_batch() || attributes.is_transactional() {
                 return None;
             }
@@ -103,7 +104,7 @@ impl Log {
         self.rollover_flusher.check()?;
         self.active
             .as_mut()
-            .expect("group admission requires an active segment")
+            .ok_or_else(super::no_active_segment)?
             .append_verbatim_group(batches, index_interval)?;
         let result = (|| {
             for &PlacedBatch { batch, base } in batches {
@@ -121,7 +122,11 @@ impl Log {
             }
             self.refresh_lso()
         })();
-        self.complete_append_state(result, batches[0].base)?;
+        match batches.first() {
+            Some(first) => self.complete_append_state(result, first.base)?,
+            // An empty group appended nothing to roll back.
+            None => result?,
+        }
         Ok(batches.iter().map(|placed| placed.base).collect())
     }
 }

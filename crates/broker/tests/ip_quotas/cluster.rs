@@ -19,7 +19,7 @@ use {
 /// Starts a single-broker PLAINTEXT cluster with explicit connection caps,
 /// `max.connections` and `max.connections.per.ip`. Returns
 /// `(handle, _dir, addr)`.
-pub(crate) async fn start_single_broker_plaintext_with_conn_caps(
+pub async fn start_single_broker_plaintext_with_conn_caps(
     max_connections: usize,
     max_connections_per_ip: usize,
 ) -> (BrokerHandle, TempDir, SocketAddr) {

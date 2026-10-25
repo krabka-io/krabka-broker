@@ -7,9 +7,22 @@ use {
     crate::{
         MetadataLogConfig, NoEventQueueRecorder,
         kraft::{Activation, transport::NullPeerSender},
+        test_support,
     },
-    krabka_units::prelude::{TimeExt as _, secs},
-    std::time::Duration as StdDuration,
+    krabka_metadata::{
+        voters,
+        voters::{KRaftVersionRange, Voter, VoterEndpoint},
+    },
+    krabka_units::{
+        prelude,
+        prelude::{TimeExt as _, secs},
+    },
+    std::{
+        collections,
+        path::PathBuf,
+        time::{Duration as StdDuration, SystemTime},
+    },
+    tokio::{task::JoinHandle, time},
 };
 
 /// Deadline every test-side channel receive is bounded by.
@@ -35,8 +48,8 @@ pub const TEST_TIMEOUTS: QuorumTimeouts = QuorumTimeouts {
 /// newest snapshot and moves the log start up to it.
 pub fn test_metadata_log() -> MetadataLogConfig {
     MetadataLogConfig {
-        max_retention_size: Some(krabka_units::prelude::bytes(0)),
-        max_idle_interval: krabka_units::prelude::millis(0),
+        max_retention_size: Some(prelude::bytes(0)),
+        max_idle_interval: prelude::millis(0),
         ..MetadataLogConfig::default()
     }
 }
@@ -55,18 +68,16 @@ pub struct ControllerInDir {
     pub dir: tempfile::TempDir,
 }
 
-pub fn voter_set(ids: &[NodeId]) -> krabka_metadata::voters::VoterSet {
-    krabka_metadata::voters::VoterSet::from_voters(ids.iter().map(|&id| {
-        krabka_metadata::voters::Voter {
-            id,
-            directory_id: uuid::Uuid::nil(),
-            endpoints: vec![krabka_metadata::voters::VoterEndpoint {
-                name: "CONTROLLER".into(),
-                host: "127.0.0.1".into(),
-                port: 9_093,
-            }],
-            kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
-        }
+pub fn voter_set(ids: &[NodeId]) -> voters::VoterSet {
+    voters::VoterSet::from_voters(ids.iter().map(|&id| Voter {
+        id,
+        directory_id: uuid::Uuid::nil(),
+        endpoints: vec![VoterEndpoint {
+            name: "CONTROLLER".into(),
+            host: "127.0.0.1".into(),
+            port: 9_093,
+        }],
+        kraft_version: KRaftVersionRange::default(),
     }))
 }
 
@@ -166,8 +177,8 @@ pub fn test_kraft_config(me: NodeId, cluster_id: uuid::Uuid, state: QuorumState)
         metadata_raft_fetch_max: MetadataRaftFetchMax::default(),
         peers: Arc::new(NullPeerSender),
         snapshot_interval_records: 0,
-        max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
-        max_snapshot_interval: krabka_units::prelude::millis(0),
+        max_bytes_between_snapshots: prelude::bytes(0),
+        max_snapshot_interval: prelude::millis(0),
         metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
         metadata_log: test_metadata_log(),
         activation: Activation::default(),
@@ -176,7 +187,7 @@ pub fn test_kraft_config(me: NodeId, cluster_id: uuid::Uuid, state: QuorumState)
 }
 
 pub fn open_test_controller(
-    data_dir: std::path::PathBuf,
+    data_dir: PathBuf,
     cluster_id: uuid::Uuid,
     voters: VoterSet,
 ) -> Result<KraftController, RaftError> {
@@ -199,7 +210,7 @@ pub struct ControllerOpenSetup {
 
 #[bon::builder]
 pub fn open_test_controller_with(
-    data_dir: std::path::PathBuf,
+    data_dir: PathBuf,
     #[builder(default)] cluster_id: uuid::Uuid,
     #[builder(default = voter_set (& [NodeId (1)]))] voters: VoterSet,
     #[builder(default = TEST_ELECTION_TIMEOUT)] election_timeout: krabka_units::Time,
@@ -234,8 +245,8 @@ pub fn open_test_controller_with(
         MetadataRaftFetchMax::default(),
         Arc::new(NullPeerSender),
         0,
-        krabka_units::prelude::bytes(0),
-        krabka_units::prelude::millis(0),
+        prelude::bytes(0),
+        prelude::millis(0),
         MetadataSnapshotFetchMax::default(),
         test_metadata_log(),
         activation,
@@ -254,7 +265,8 @@ fn spawn_test_controller(
     let state = QuorumState::bootstrap(uuid::Uuid::nil(), voter_set(ids));
     let mut config = test_kraft_config(me, uuid::Uuid::nil(), state);
     customize(&mut config);
-    let ctrl = KraftController::spawn(config, log, dir.path().to_path_buf());
+    let ctrl =
+        KraftController::spawn(config, log, dir.path().to_path_buf()).expect("spawn controller");
     (ctrl, dir)
 }
 
@@ -350,10 +362,10 @@ pub fn build_engine_only(
             commit_waiters: Vec::new(),
             was_leader,
             held_epoch,
-            registration_writes: std::collections::BTreeMap::new(),
+            registration_writes: collections::BTreeMap::new(),
             snapshot_interval_records: 0,
-            max_bytes_between_snapshots: krabka_units::prelude::bytes(0),
-            max_snapshot_interval: krabka_units::prelude::millis(0),
+            max_bytes_between_snapshots: prelude::bytes(0),
+            max_snapshot_interval: prelude::millis(0),
             metadata_snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
             metadata_log,
             noop_at: None,
@@ -376,7 +388,7 @@ pub fn build_engine_only(
             directory_id: uuid::Uuid::nil(),
             observers: BTreeMap::new(),
             fetch_purgatory: Vec::new(),
-            wall_clock_base: std::time::SystemTime::now(),
+            wall_clock_base: SystemTime::now(),
             leader_reported_hwm: log_hwm_at_open,
             pending_reconfig: None,
             activation: Activation::default(),
@@ -449,7 +461,7 @@ pub fn record_peer_sends(
 pub async fn recv_peer_send(
     rx: &mut mpsc::UnboundedReceiver<CapturedPeerSend>,
 ) -> CapturedPeerSend {
-    tokio::time::timeout(TEST_RECV_TIMEOUT.to_std(), rx.recv())
+    time::timeout(TEST_RECV_TIMEOUT.to_std(), rx.recv())
         .await
         .expect("peer send timed out")
         .expect("peer send channel closed")
@@ -459,10 +471,10 @@ pub async fn recv_peer_send_with_api(
     rx: &mut mpsc::UnboundedReceiver<CapturedPeerSend>,
     api_key: i16,
 ) -> CapturedPeerSend {
-    let deadline = tokio::time::Instant::now() + TEST_RECV_TIMEOUT.to_std();
+    let deadline = time::Instant::now() + TEST_RECV_TIMEOUT.to_std();
     loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let send = tokio::time::timeout(remaining, rx.recv())
+        let remaining = deadline.saturating_duration_since(time::Instant::now());
+        let send = time::timeout(remaining, rx.recv())
             .await
             .expect("peer send with api timed out")
             .expect("peer send channel closed");
@@ -513,17 +525,15 @@ pub fn topic_record(name: &str) -> Vec<krabka_metadata::MetadataRecord> {
 
 pub fn topic_record_named(name: &str, id: u128) -> Vec<krabka_metadata::MetadataRecord> {
     vec![
-        krabka_metadata::MetadataRecord::V1Topic(crate::test_support::single_partition_topic(
+        krabka_metadata::MetadataRecord::V1Topic(test_support::single_partition_topic(
             name,
             uuid::Uuid::from_u128(id),
         )),
-        krabka_metadata::MetadataRecord::V1Partition(
-            crate::test_support::single_replica_partition(
-                name,
-                krabka_ids::PartitionIndex(0),
-                NodeId(1),
-            ),
-        ),
+        krabka_metadata::MetadataRecord::V1Partition(test_support::single_replica_partition(
+            name,
+            krabka_ids::PartitionIndex(0),
+            NodeId(1),
+        )),
     ]
 }
 
@@ -554,7 +564,7 @@ pub async fn elect_leader_with_helper(ctrl: &KraftController, me: NodeId, helper
 }
 
 pub async fn await_leader(ctrl: &KraftController, want: Option<NodeId>) {
-    let result = tokio::time::timeout(StdDuration::from_secs(2), async {
+    let result = time::timeout(StdDuration::from_secs(2), async {
         let mut rx = ctrl.watch_leader();
         loop {
             if *rx.borrow() == want {
@@ -572,7 +582,7 @@ pub async fn submit_change_with_timeout(
     records: Vec<krabka_metadata::MetadataRecord>,
     context: &str,
 ) -> Result<(), RaftError> {
-    tokio::time::timeout(StdDuration::from_secs(2), ctrl.submit_change(records))
+    time::timeout(StdDuration::from_secs(2), ctrl.submit_change(records))
         .await
         .unwrap_or_else(|_| panic!("{context} submit_change timed out"))
         .map(|_| ())
@@ -626,7 +636,7 @@ pub fn submit_on_engine(
 pub fn spawn_submit(
     ctrl: &KraftController,
     records: Vec<krabka_metadata::MetadataRecord>,
-) -> tokio::task::JoinHandle<Result<SubmitChangeResult, RaftError>> {
+) -> JoinHandle<Result<SubmitChangeResult, RaftError>> {
     let ctrl = ctrl.clone();
     tokio::spawn(async move { ctrl.submit_change(records).await })
 }
@@ -635,8 +645,8 @@ pub fn spawn_submit(
 pub async fn pending_submission(
     ctrl: &KraftController,
     records: Vec<krabka_metadata::MetadataRecord>,
-) -> tokio::task::JoinHandle<Result<SubmitChangeResult, RaftError>> {
+) -> JoinHandle<Result<SubmitChangeResult, RaftError>> {
     let submission = spawn_submit(ctrl, records);
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    time::sleep(StdDuration::from_millis(20)).await;
     submission
 }

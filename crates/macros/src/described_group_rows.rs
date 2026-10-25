@@ -5,7 +5,7 @@ use {
     moxy::{ast::ParseError, token::TokenStream},
 };
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let rows = nonempty_paths(input, "expected at least one group response type")?;
     Ok(moxy::template! {
         @for ty in rows {
@@ -26,7 +26,7 @@ pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     })
 }
 
-pub(crate) fn partition_results(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn partition_results(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let rows = nonempty_paths(input, "expected share-state response types")?;
     Ok(moxy::template! {
         @for response in rows {

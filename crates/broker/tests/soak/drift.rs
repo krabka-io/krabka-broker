@@ -41,7 +41,7 @@ const MIN_TREND_SAMPLES: usize = 8;
 
 /// One observation of one resource.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Point {
+pub struct Point {
     /// Time since the load started.
     pub(crate) elapsed: Duration,
     pub(crate) value: f64,
@@ -53,7 +53,7 @@ impl Point {
 
 /// What a series is allowed to do.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Bound {
+pub struct Bound {
     /// No sample may exceed this.
     pub(crate) ceiling: f64,
     /// The rise the fitted slope may account for across the second half, as a
@@ -67,7 +67,7 @@ pub(crate) struct Bound {
 
 /// A named list of observations of one resource.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Series {
+pub struct Series {
     /// What was sampled, e.g. `broker-2 rss`.
     pub(crate) name: String,
     /// What the numbers are, e.g. `bytes`.
@@ -110,7 +110,7 @@ impl Series {
 
 /// What [`judge`] concluded about one series.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Verdict {
+pub enum Verdict {
     /// Under the ceiling and flat over the second half.
     Level {
         series: String,
@@ -207,8 +207,8 @@ fn slope_per_second(points: &[Point]) -> Option<f64> {
     let mut covariance = 0.0;
     let mut variance = 0.0;
     for (x, point) in xs.iter().zip(points) {
-        covariance += (x - mean_x) * (point.value - mean_y);
-        variance += (x - mean_x) * (x - mean_x);
+        covariance = (x - mean_x).mul_add(point.value - mean_y, covariance);
+        variance = (x - mean_x).mul_add(x - mean_x, variance);
     }
     if variance <= f64::EPSILON {
         return None;
@@ -222,7 +222,7 @@ fn slope_per_second(points: &[Point]) -> Option<f64> {
 /// touched 4 GiB while filling its caches is over the ceiling whenever it did
 /// it. The trend is checked over the second half alone, for the reason in the
 /// module documentation.
-pub(crate) fn judge(series: &Series, bound: Bound) -> Verdict {
+pub fn judge(series: &Series, bound: Bound) -> Verdict {
     let worst = series
         .points
         .iter()
@@ -278,13 +278,13 @@ pub(crate) fn judge(series: &Series, bound: Bound) -> Verdict {
 }
 
 /// A series and the bound it is judged against.
-pub(crate) struct BoundedSeries {
+pub struct BoundedSeries {
     pub(crate) series: Series,
     pub(crate) bound: Bound,
 }
 
 /// Judge every series, returning one verdict each in the order given.
-pub(crate) fn judge_all(series: &[BoundedSeries]) -> Vec<Verdict> {
+pub fn judge_all(series: &[BoundedSeries]) -> Vec<Verdict> {
     series
         .iter()
         .map(|BoundedSeries { series, bound }| judge(series, *bound))
@@ -325,7 +325,7 @@ mod tests {
         for tooth in 0..teeth {
             for step in 0..period {
                 let ramp = height * count(step) / count(period);
-                values.push(base + per_tooth * count(tooth) + ramp);
+                values.push(per_tooth.mul_add(count(tooth), base) + ramp);
             }
         }
         values
@@ -353,7 +353,9 @@ mod tests {
     /// The failure this lane exists for: a series that climbs steadily.
     #[test]
     fn a_rising_series_drifts() {
-        let values: Vec<f64> = (0..40).map(|i| 300.0 + 8.0 * f64::from(i)).collect();
+        let values: Vec<f64> = (0..40)
+            .map(|i| 8.0f64.mul_add(f64::from(i), 300.0))
+            .collect();
         let judged = judge(&series(&values), BOUND);
         assert!(let Verdict::Drift { .. } = &judged);
         let Verdict::Drift { from, to, rise, .. } = &judged else {
@@ -427,7 +429,9 @@ mod tests {
     /// on purpose, because a cache that shrinks is not a leak.
     #[test]
     fn a_falling_series_is_level() {
-        let values: Vec<f64> = (0..40).map(|i| 900.0 - 5.0 * f64::from(i)).collect();
+        let values: Vec<f64> = (0..40)
+            .map(|i| 5.0f64.mul_add(-f64::from(i), 900.0))
+            .collect();
         check!(!judge(&series(&values), BOUND).is_failure());
     }
 
@@ -444,7 +448,7 @@ mod tests {
     fn judge_all_reports_one_verdict_per_series() {
         let mut rising = series(
             &(0..40)
-                .map(|i| 300.0 + 8.0 * f64::from(i))
+                .map(|i| 8.0f64.mul_add(f64::from(i), 300.0))
                 .collect::<Vec<_>>(),
         );
         rising.name = "rising".into();

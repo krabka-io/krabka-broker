@@ -2,7 +2,7 @@
 //! in flight and records its duration when it finishes; the other counts a
 //! live client connection for the lifetime of its serve loop.
 
-use crate::metrics::BrokerMetrics;
+use {crate::metrics::BrokerMetrics, std::time::Instant, tokio::sync::OwnedSemaphorePermit};
 
 /// RAII guard for one dispatched request.
 ///
@@ -16,7 +16,7 @@ use crate::metrics::BrokerMetrics;
 pub(super) struct InFlightGuard<'a> {
     metrics: &'a BrokerMetrics,
     api_key: i16,
-    started: std::time::Instant,
+    started: Instant,
 }
 
 impl<'a> InFlightGuard<'a> {
@@ -25,7 +25,7 @@ impl<'a> InFlightGuard<'a> {
         Self {
             metrics,
             api_key,
-            started: std::time::Instant::now(),
+            started: Instant::now(),
         }
     }
 }
@@ -58,10 +58,10 @@ impl Drop for ActiveConnectionGuard<'_> {
 
 /// RAII guard for one queued request waiting for / holding execution capacity (#412).
 pub(super) struct QueuedRequestGuard<'a> {
-    _permit: tokio::sync::OwnedSemaphorePermit,
+    _permit: OwnedSemaphorePermit,
     /// The `queued.max.request.bytes` budget this request spent, given back
     /// when the guard drops. Absent when the knob is off.
-    _bytes: Option<tokio::sync::OwnedSemaphorePermit>,
+    _bytes: Option<OwnedSemaphorePermit>,
     metrics: &'a BrokerMetrics,
     /// The value this guard added to `queued_request_bytes`, kept as the
     /// gauge's own type so the decrement on drop is exactly the increment
@@ -71,8 +71,8 @@ pub(super) struct QueuedRequestGuard<'a> {
 
 impl<'a> QueuedRequestGuard<'a> {
     pub(super) fn new(
-        permit: tokio::sync::OwnedSemaphorePermit,
-        bytes_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+        permit: OwnedSemaphorePermit,
+        bytes_permit: Option<OwnedSemaphorePermit>,
         metrics: &'a BrokerMetrics,
         bytes: usize,
     ) -> Self {

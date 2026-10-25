@@ -1,8 +1,11 @@
 //! Bounded wire-response retries, whose decisions can lag a committed metadata image.
 
-use std::{
-    future::Future,
-    time::{Duration, Instant},
+use {
+    std::{
+        future::Future,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -36,13 +39,13 @@ where
         if ready(&response) || Instant::now() > deadline {
             return Ok(response);
         }
-        tokio::time::sleep(setup.backoff).await;
+        time::sleep(setup.backoff).await;
     }
 }
 
 /// Bound one cluster step with the caller's timeout and diagnostic.
 pub async fn within<F: Future>(what: &str, timeout: Duration, future: F) -> F::Output {
-    tokio::time::timeout(timeout, future)
+    time::timeout(timeout, future)
         .await
         .unwrap_or_else(|_| panic!("{what} did not finish within {timeout:?}"))
 }

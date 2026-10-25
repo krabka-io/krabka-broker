@@ -35,7 +35,7 @@ pub(super) fn static_controller_voter_set(
             id,
             directory_id,
             endpoints: vec![krabka_metadata::VoterEndpoint {
-                name: "CONTROLLER".to_string(),
+                name: "CONTROLLER".to_owned(),
                 host,
                 port,
             }],
@@ -66,7 +66,7 @@ pub(super) fn static_controller_voter_set(
 }
 
 /// Select a named registered listener, falling back to the legacy host and port.
-pub(crate) fn registered_listener_endpoint<'a>(
+pub fn registered_listener_endpoint<'a>(
     broker: &'a krabka_metadata::BrokerRegistrationRecord,
     listener_name: &str,
 ) -> (&'a str, u16) {
@@ -80,7 +80,7 @@ pub(crate) fn registered_listener_endpoint<'a>(
         )
 }
 
-pub(crate) fn leader_listener_endpoint<'a>(
+pub fn leader_listener_endpoint<'a>(
     image: &'a krabka_metadata::MetadataImage,
     leader: krabka_metadata::NodeId,
     listener_name: &str,
@@ -110,11 +110,11 @@ mod tests {
         let quorum = vec![
             (
                 krabka_raft::NodeId(0),
-                "demo-broker-0-0.demo-broker-headless.default.svc.cluster.local:9093".to_string(),
+                "demo-broker-0-0.demo-broker-headless.default.svc.cluster.local:9093".to_owned(),
             ),
             (
                 krabka_raft::NodeId(1),
-                "demo-broker-1-0.demo-broker-headless.default.svc.cluster.local:9093".to_string(),
+                "demo-broker-1-0.demo-broker-headless.default.svc.cluster.local:9093".to_owned(),
             ),
         ];
         let self_dir = uuid::Uuid::from_u128(7);
@@ -148,7 +148,7 @@ mod tests {
         // The configured endpoint is the advertised address, which can differ
         // from the bind address when the controller runs behind DNS or NAT, so
         // the voter set takes it from the configuration alone.
-        let quorum = vec![(krabka_raft::NodeId(3), "127.0.0.1:9093".to_string())];
+        let quorum = vec![(krabka_raft::NodeId(3), "127.0.0.1:9093".to_owned())];
         let self_dir = uuid::Uuid::from_u128(3);
         let set = static_controller_voter_set(&quorum, krabka_audit::NodeId(3), self_dir);
         assert!(set.len() == 1);

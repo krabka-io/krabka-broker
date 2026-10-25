@@ -12,7 +12,7 @@ use {
         unified::{
             classic_state::{ClassicGroup as ClassicState, GroupState as ClassicGroupState},
             consumer_state::GroupState,
-            group::CoordinatorGroup,
+            group::{CoordinatorGroup, GroupKind},
             migration,
             reconciler::ReconcileInput,
         },
@@ -102,7 +102,8 @@ fn build_consumer_snapshot(state: &GroupState, image: &ReconcileInput) -> GroupS
                     .get(&m.member_id)
                     .cloned()
                     .unwrap_or_default();
-                let assignment = migration::target_to_consumer_assignment(&target, image).to_vec();
+                let assignment = migration::target_to_consumer_assignment(&target, image)
+                    .map_or_else(Vec::new, |blob| blob.to_vec());
                 MemberSnapshot {
                     member_id: m.member_id.clone(),
                     client_id: m.client_id.clone(),
@@ -157,13 +158,10 @@ pub struct DescribeMember {
 pub(super) fn inspect_any(
     group: &CoordinatorGroup,
     metadata: &dyn MetadataProvider,
-) -> Option<GroupSnapshot> {
-    if let Some(state) = group.as_classic() {
-        Some(build_classic_view(state).snapshot())
-    } else {
-        group
-            .as_consumer()
-            .map(|state| build_consumer_snapshot(state, &metadata.snapshot()))
+) -> GroupSnapshot {
+    match &group.kind {
+        GroupKind::Classic(state) => build_classic_view(state).snapshot(),
+        GroupKind::Consumer(state) => build_consumer_snapshot(state, &metadata.snapshot()),
     }
 }
 
@@ -246,7 +244,7 @@ pub(super) fn preferred_server_assignor(state: &GroupState) -> Option<String> {
         .max_by(|(a_name, a_votes), (b_name, b_votes)| {
             a_votes.cmp(b_votes).then_with(|| b_name.cmp(a_name))
         })
-        .map(|(name, _)| name.to_string())
+        .map(|(name, _)| name.to_owned())
 }
 
 #[cfg(test)]
@@ -268,6 +266,7 @@ mod tests {
             },
         },
         assert2::{assert, check},
+        krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol,
     };
 
     /// Kafka's `preferredServerAssignor` takes the name the most members
@@ -305,7 +304,7 @@ mod tests {
             let mut state = GroupState::new("g");
             for (i, assignor) in assignors.iter().enumerate() {
                 let mut m = member(&format!("m{i}"));
-                m.server_assignor = assignor.map(str::to_string);
+                m.server_assignor = assignor.map(str::to_owned);
                 state.members.insert(m.member_id.clone(), m);
             }
             assert!(
@@ -329,12 +328,10 @@ mod tests {
                 group_id: "g".into(),
                 member_id: String::new(),
                 protocol_type: "consumer".into(),
-                protocols: vec![
-                    krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
-                        name: "range".into(),
-                        ..Default::default()
-                    },
-                ],
+                protocols: vec![JoinGroupRequestProtocol {
+                    name: "range".into(),
+                    ..Default::default()
+                }],
                 ..Default::default()
             },
             version: 4,
@@ -414,7 +411,7 @@ mod tests {
             "an upgraded consumer group must not be reported as a classic row"
         );
         assert!(
-            coord.consumer_group_ids().contains(&"g".to_string()),
+            coord.consumer_group_ids().contains(&"g".to_owned()),
             "the upgraded consumer group must be listed for the wire `consumer` pass"
         );
     }

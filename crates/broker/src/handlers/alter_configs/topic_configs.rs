@@ -21,8 +21,10 @@ use {
         codes, config_keys,
         topic_policy::{TopicPolicy, check},
     },
+    krabka_log::topic_name,
     krabka_metadata::{MetadataRecord, TopicConfigRecord},
     krabka_protocol::owned::alter_configs_request::AlterConfigsResource,
+    std::collections::BTreeMap,
 };
 
 /// Build the authoritative `V1TopicConfig` record for a topic resource. The
@@ -43,11 +45,11 @@ pub(super) fn topic_config_record(
             "Default topic resources are not allowed.".into(),
         ));
     }
-    if let Err(invalid) = krabka_log::topic_name::validate_topic_name(&resource.resource_name) {
+    if let Err(invalid) = topic_name::validate_topic_name(&resource.resource_name) {
         return Err((codes::INVALID_TOPIC_EXCEPTION, invalid.to_string()));
     }
     let current = image.topic_config(&resource.resource_name);
-    let mut overrides = std::collections::BTreeMap::new();
+    let mut overrides = BTreeMap::new();
     for cfg in &resource.configs {
         // A controller-managed key has no client writer, so it cannot take
         // part in the replacement. The check comes before the whitelist, so
@@ -148,14 +150,8 @@ mod tests {
         .expect_err("compaction on a scheduled topic must be rejected");
 
         assert!(code == codes::INVALID_CONFIG);
-        assert!(
-            message.contains(crate::config_keys::CLEANUP_POLICY),
-            "got: {message}"
-        );
-        assert!(
-            message.contains(crate::config_keys::DELIVERY_MODE),
-            "got: {message}"
-        );
+        assert!(message.contains(CLEANUP_POLICY), "got: {message}");
+        assert!(message.contains(DELIVERY_MODE), "got: {message}");
     }
 
     /// Kafka's `LogConfig.validateRemoteStorageRequiresDeleteCleanupPolicy`
@@ -189,8 +185,8 @@ mod tests {
         MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "orders".into(),
             overrides: maplit::btreemap! {
-                crate::config_keys::CLEANUP_POLICY.to_string() => "delete".to_string(),
-                extra.0.to_string() => extra.1.to_string(),
+                CLEANUP_POLICY.to_owned() => "delete".to_owned(),
+                extra.0.to_owned() => extra.1.to_owned(),
             },
         })
     }
@@ -356,7 +352,7 @@ mod tests {
 
         let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "orders".into(),
-            overrides: maplit::btreemap! {crate::config_keys::RETENTION_MS.to_string() => "60000".to_string()},
+            overrides: maplit::btreemap! {RETENTION_MS.to_owned() => "60000".to_owned()},
         });
         assert!(record == expected);
     }
@@ -367,8 +363,7 @@ mod tests {
                 config_keys::UNCLEAN_LEADER_ELECTION_ENABLE.to_owned(),
                 "true".to_owned(),
             )]
-            .into_iter()
-            .collect(),
+            .into(),
             ..TopicPolicy::default()
         }
     }
@@ -417,7 +412,7 @@ mod tests {
         let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "orders".into(),
             overrides: maplit::btreemap! {
-            config_keys::UNCLEAN_LEADER_ELECTION_ENABLE.to_string() => "false".to_string()},
+            config_keys::UNCLEAN_LEADER_ELECTION_ENABLE.to_owned() => "false".to_owned()},
         });
         check!(record == expected);
     }

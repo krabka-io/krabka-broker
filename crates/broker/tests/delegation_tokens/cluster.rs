@@ -9,9 +9,11 @@ use {
     crate::support::sasl::{
         delegation_token_defaults, sasl_temp_config, start_broker as start_sasl_broker,
     },
-    krabka_broker::{Broker, BrokerHandle},
+    krabka_broker::{
+        Broker, BrokerHandle, authorizer::SimpleAclAuthorizer, config::InterBrokerCredentials,
+    },
     krabka_security::SaslMechanism,
-    std::net::SocketAddr,
+    std::{net::SocketAddr, sync::Arc},
     tempfile::TempDir,
 };
 
@@ -27,19 +29,19 @@ use {
 ///     path.
 ///   - `delegation_token_secret_key = Some("e2e-master-key")`, which gates
 ///     the four delegation-token RPCs and the SCRAM token-fallback lookup
-pub(crate) async fn start_broker() -> (BrokerHandle, TempDir, SocketAddr) {
+pub async fn start_broker() -> (BrokerHandle, TempDir, SocketAddr) {
     let (log_dir, mut cfg) =
         sasl_temp_config(vec![SaslMechanism::Plain, SaslMechanism::ScramSha256]);
     cfg.plain_credentials
-        .insert("alice".to_string(), "wonderland".to_string());
+        .insert("alice".to_owned(), "wonderland".to_owned());
     cfg.plain_credentials
-        .insert("bob".to_string(), "builder".to_string());
+        .insert("bob".to_owned(), "builder".to_owned());
     // Inter-broker auth uses PLAIN as alice (the cluster only has one broker
     // so this is not exercised, but `BrokerConfig::validate` requires it
     // when the inter-broker listener is SASL).
-    cfg.inter_broker_credentials = Some(krabka_broker::config::InterBrokerCredentials::Plain {
-        username: "alice".to_string(),
-        password: "wonderland".to_string(),
+    cfg.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
+        username: "alice".to_owned(),
+        password: "wonderland".to_owned(),
     });
     // KIP-48 distinguishes the absolute ceiling (`max_lifetime_ms` →
     // `max_timestamp_ms`) from the initial renew window (`default_renew_period`
@@ -67,23 +69,23 @@ pub(crate) async fn start_broker() -> (BrokerHandle, TempDir, SocketAddr) {
 /// The protocol surface matches `start_broker`: PLAIN and SCRAM-SHA-256
 /// enabled, the master delegation-token key set, a 7d ceiling, and a 24h
 /// default renew period.
-pub(crate) fn start_broker_with_super_users(
+pub fn start_broker_with_super_users(
     plain_creds: &[(&str, &str)],
     super_users: &[&str],
-) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
+) -> impl Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let (log_dir, mut cfg) =
         sasl_temp_config(vec![SaslMechanism::Plain, SaslMechanism::ScramSha256]);
     for (user, password) in plain_creds {
         cfg.plain_credentials
-            .insert((*user).to_string(), (*password).to_string());
+            .insert((*user).to_owned(), (*password).to_owned());
     }
     for user in super_users {
-        cfg.super_users.insert((*user).to_string());
+        cfg.super_users.insert((*user).to_owned());
     }
     // Act-as is gated by KIP-373's `CreateTokens` ACL. With no ACL authorizer
     // Kafka allows every operation, so the gate is exercised against the ACL
     // authorizer, which grants the super users everything.
-    cfg.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
+    cfg.authorizer = Arc::new(SimpleAclAuthorizer::new(
         cfg.super_users.iter().cloned().collect(),
     ));
     // Inter-broker auth uses PLAIN as the first listed user. `BrokerConfig::
@@ -93,9 +95,9 @@ pub(crate) fn start_broker_with_super_users(
     let (ib_user, ib_pw) = plain_creds
         .first()
         .expect("must supply at least one PLAIN credential for inter-broker auth");
-    cfg.inter_broker_credentials = Some(krabka_broker::config::InterBrokerCredentials::Plain {
-        username: (*ib_user).to_string(),
-        password: (*ib_pw).to_string(),
+    cfg.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
+        username: (*ib_user).to_owned(),
+        password: (*ib_pw).to_owned(),
     });
     delegation_token_defaults(&mut cfg, b"act-as-master-key");
 
@@ -109,7 +111,7 @@ pub(crate) fn start_broker_with_super_users(
 // within a few ms.
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub(crate) async fn wait_for_token(
+pub async fn wait_for_token(
     handle: &BrokerHandle,
     token_id: &str,
 ) -> krabka_metadata::DelegationToken {
@@ -126,7 +128,7 @@ pub(crate) async fn wait_for_token(
         .clone()
 }
 
-pub(crate) async fn wait_for_token_gone(handle: &BrokerHandle, token_id: &str) {
+pub async fn wait_for_token_gone(handle: &BrokerHandle, token_id: &str) {
     // Watch the committed metadata image until the token's tombstone applies.
     handle
         .wait_for_image(|img| img.delegation_token_by_id(token_id).is_none())
@@ -134,6 +136,6 @@ pub(crate) async fn wait_for_token_gone(handle: &BrokerHandle, token_id: &str) {
 }
 
 /// The act-as cluster: an admin super user and an ordinary token owner.
-pub(crate) async fn start_admin_alice() -> (BrokerHandle, TempDir, SocketAddr) {
+pub async fn start_admin_alice() -> (BrokerHandle, TempDir, SocketAddr) {
     start_broker_with_super_users(&[("admin", "admin-pw"), ("alice", "alice-pw")], &["admin"]).await
 }

@@ -11,7 +11,7 @@
 use {
     crate::{
         describe::describe_offsets,
-        harness::{NONE, broker_config, join, produce_n, restart_directory},
+        harness::{NONE, RestartDirectory, broker_config, join, produce_n, restart_directory},
         support::share::{
             FetchSessionMode, ShareAck, ShareSessionSetup, acknowledge_success, fetch_row,
             fetch_until_acquired, restart_broker, set_auto_offset_reset, share_fetch_req,
@@ -29,6 +29,8 @@ use {
         share_fetch_response::AcquiredRecords,
     },
     krabka_raft::NodeId,
+    std::time::Duration,
+    tokio::time,
 };
 
 const GROUP: &str = "g1";
@@ -137,7 +139,7 @@ async fn join_and_load(
         if row.error_code != COORDINATOR_NOT_AVAILABLE {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
         row = fetch_row(client, request.clone(), FetchSessionMode::Initial).await;
     }
     assert!(
@@ -167,8 +169,13 @@ async fn join_and_load(
 /// because a fence and re-election on a loaded host raises them too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unwritten_start_is_resolved_again_and_the_first_ack_persists_it() {
-    let dir = restart_directory().await;
-    let log_dir = dir.path.clone();
+    // The permit and the directory stay bound to the end of the test: the
+    // permit holds this test's broker slot and the directory backs both boots.
+    let RestartDirectory {
+        permit: _permit,
+        dir: _dir,
+        path: log_dir,
+    } = restart_directory().await;
     let tid;
     let first_epoch;
     let before_restart;

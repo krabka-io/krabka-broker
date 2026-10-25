@@ -3,7 +3,8 @@
 use {
     crate::support::transactions::{ProducerEpoch, ProducerIdentity},
     bytes::Bytes,
-    krabka_protocol::records::{Record, RecordBatch},
+    krabka_protocol::records::{Attributes, Record, RecordBatch, RecordsPayload},
+    std::iter,
 };
 
 pub fn value_record(offset_delta: i32, value: Option<Bytes>) -> Record {
@@ -97,9 +98,9 @@ pub fn producer_values_batch(
 }
 
 /// Count v2 records in optional fetch payloads; absent and legacy payloads contribute zero.
-pub fn record_count(payload: Option<&krabka_protocol::records::RecordsPayload>) -> usize {
+pub fn record_count(payload: Option<&RecordsPayload>) -> usize {
     payload
-        .and_then(krabka_protocol::records::RecordsPayload::as_v2)
+        .and_then(RecordsPayload::as_v2)
         .map_or(0, |batches| {
             batches.iter().map(|batch| batch.records.len()).sum()
         })
@@ -115,7 +116,7 @@ krabka_macros::unix_millis_fixture!(
 
 /// Lazily decode each metadata batch so callers retain their image-application order.
 pub fn metadata_batches(mut wire: &[u8]) -> impl Iterator<Item = RecordBatch> + '_ {
-    std::iter::from_fn(move || {
+    iter::from_fn(move || {
         if wire.is_empty() {
             None
         } else {
@@ -160,7 +161,7 @@ pub fn transaction_probe_batch(
         transaction,
     };
     RecordBatch {
-        attributes: krabka_protocol::records::Attributes::default()
+        attributes: Attributes::default()
             .with_transactional(setup.transaction == BatchTransaction::Transactional),
         producer_id: setup.producer.id.0,
         producer_epoch: setup.producer.epoch.0,

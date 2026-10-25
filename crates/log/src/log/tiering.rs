@@ -14,8 +14,11 @@ use {
     },
     krabka_ids::{LeaderEpoch, Offset},
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
-    std::path::{Path, PathBuf},
-    tracing::instrument,
+    std::{
+        fs, iter,
+        path::{Path, PathBuf},
+    },
+    tracing::{field, instrument},
 };
 
 /// A sealed segment described for tiered-storage offload (KIP-405).
@@ -117,7 +120,7 @@ pub(super) struct SealedSegment<'a> {
 /// modification time in epoch milliseconds, or `0` when it cannot be read,
 /// which is what `java.io.File.lastModified()` returns for an I/O error.
 fn last_modified_ms(path: &Path) -> i64 {
-    std::fs::metadata(path)
+    fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .map_or(0, retention::now_ms)
 }
@@ -136,7 +139,7 @@ impl Log {
                     .iter()
                     .skip(1)
                     .map(Segment::base_offset)
-                    .chain(std::iter::once(active_base)),
+                    .chain(iter::once(active_base)),
             )
             .map(|(segment, next_base)| SealedSegment { segment, next_base })
     }
@@ -195,7 +198,7 @@ impl Log {
     #[instrument(
         level = "info",
         skip(self),
-        fields(removed = tracing::field::Empty),
+        fields(removed = field::Empty),
         err,
     )]
     pub fn delete_local_segments_through(&mut self, target: Offset) -> Result<usize, LogError> {

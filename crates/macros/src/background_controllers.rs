@@ -8,7 +8,7 @@ use {
     },
 };
 
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let fields = named_fields(&item, "BackgroundControllers")?;
     if let Some(required) = first_missing_named_field(fields, &["handle", "node_id"]) {
         return Err(ParseError::new(

@@ -10,6 +10,7 @@
 //! Only the leader can put a replica back into the ISR. A follower that
 //! restarts and catches up is therefore the test: it rejoins the ISR only when
 //! the `AlterPartition` of the leader reaches the controller.
+#![cfg(test)]
 
 use {
     crate::support::{

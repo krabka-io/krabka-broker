@@ -76,7 +76,10 @@ pub fn local_recovery_segment_chain(bases: &[i64]) -> bool {
             && (j == 0 || bases@[j - 1]@ < bases@[j]@))]
     #[variant(bases@.len() - i@)]
     while i < bases.len() {
-        if bases[i] < 0 || (i > 0 && bases[i - 1] >= bases[i]) {
+        let Some(&base) = bases.get(i) else {
+            return false;
+        };
+        if base < 0 || (i > 0 && matches!(bases.get(i - 1), Some(&previous) if previous >= base)) {
             return false;
         }
         i += 1;
@@ -99,6 +102,7 @@ pub fn local_recovery_sealed_last(base: i64, next_base: i64) -> Option<i64> {
 }
 
 /// Admit one completely decoded batch into the maximal valid tail prefix.
+///
 /// Compaction gaps are allowed, but overlap, empty byte progress, file-bound
 /// overflow, malformed offsets, and signed offset overflow stop the prefix.
 #[ensures(match result {

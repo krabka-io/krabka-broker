@@ -17,13 +17,16 @@ use {
     super::buckets::{ControllerMutationBucket, QuotaBuckets},
     krabka_metadata::MetadataImage,
     krabka_units::{Time, convert::TimeExt, secs},
-    std::sync::{Arc, Mutex},
+    std::{
+        sync::{Arc, Mutex, MutexGuard, PoisonError},
+        time::Instant,
+    },
 };
 
 /// A strict quota refused one mutation: Kafka's
 /// `ThrottlingQuotaExceededException`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ThrottlingQuotaExceeded;
+pub struct ThrottlingQuotaExceeded;
 
 /// The bucket one request charges and the entity it belongs to.
 struct Limit {
@@ -42,14 +45,14 @@ struct Limit {
 /// recorded even when it drives the bucket below zero. A permissive quota
 /// records every mutation and reports the time the bucket needs to refill as
 /// the throttle.
-pub(crate) struct ControllerMutationQuota {
+pub struct ControllerMutationQuota {
     limit: Option<Limit>,
     strict: bool,
     delay: Time,
 }
 
 /// The inputs that pick the bucket of one request.
-pub(crate) struct QuotaRequest<'a> {
+pub struct QuotaRequest<'a> {
     pub(crate) image: &'a MetadataImage,
     pub(crate) buckets: &'a QuotaBuckets,
     pub(crate) principal: &'a str,
@@ -145,13 +148,14 @@ impl ControllerMutationQuota {
         let Some(limit) = &self.limit else {
             return Ok(());
         };
-        let mut bucket = refilled_bucket(limit);
-        bucket.tokens = (bucket.tokens + super::u64_to_f64(previous - current))
-            .min(limit.rate * limit.window_secs);
-        if current > 0 && !self.strict && bucket.tokens < 0.0 {
-            self.delay = self
-                .delay
-                .max(Time::from_secs_f64(-bucket.tokens / limit.rate));
+        let tokens = {
+            let mut bucket = refilled_bucket(limit);
+            bucket.tokens = (bucket.tokens + super::u64_to_f64(previous - current))
+                .min(limit.rate * limit.window_secs);
+            bucket.tokens
+        };
+        if current > 0 && !self.strict && tokens < 0.0 {
+            self.delay = self.delay.max(Time::from_secs_f64(-tokens / limit.rate));
         }
         Ok(())
     }
@@ -171,11 +175,8 @@ impl ControllerMutationQuota {
     }
 }
 
-fn refilled_bucket(limit: &Limit) -> std::sync::MutexGuard<'_, ControllerMutationBucket> {
-    let mut bucket = limit
-        .bucket
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+fn refilled_bucket(limit: &Limit) -> MutexGuard<'_, ControllerMutationBucket> {
+    let mut bucket = limit.bucket.lock().unwrap_or_else(PoisonError::into_inner);
     refresh_bucket(&mut bucket, limit);
     bucket
 }
@@ -183,10 +184,12 @@ fn refilled_bucket(limit: &Limit) -> std::sync::MutexGuard<'_, ControllerMutatio
 /// Refill at the previous rate before applying a new rate/capacity. Existing
 /// debt survives quota changes, matching Kafka's token bucket (#1241).
 fn refresh_bucket(bucket: &mut ControllerMutationBucket, limit: &Limit) {
-    let now = std::time::Instant::now();
-    let refilled = (bucket.tokens
-        + now.duration_since(bucket.updated_at).as_secs_f64() * bucket.rate)
-        .min(bucket.rate * bucket.window_secs);
+    let now = Instant::now();
+    let refilled = (now
+        .duration_since(bucket.updated_at)
+        .as_secs_f64()
+        .mul_add(bucket.rate, bucket.tokens))
+    .min(bucket.rate * bucket.window_secs);
     bucket.tokens = refilled.min(limit.rate * limit.window_secs);
     bucket.rate = limit.rate;
     bucket.window_secs = limit.window_secs;
@@ -194,10 +197,12 @@ fn refresh_bucket(bucket: &mut ControllerMutationBucket, limit: &Limit) {
 }
 
 /// Consume `mutations` from the permissive `controller_mutation_rate` bucket
-/// for `(principal, client_id)`, with a one-second window. This function
-/// returns the throttle delay to apply before the handler sends the response.
-/// The delay is zero if no quota is configured or if there is no overage. Like
-/// Kafka's `ControllerMutationQuotaManager.throttleTimeMs`, it is not bounded.
+/// for `(principal, client_id)`, with a one-second window.
+///
+/// This function returns the throttle delay to apply before the handler sends
+/// the response. The delay is zero if no quota is configured or if there is no
+/// overage. Like Kafka's `ControllerMutationQuotaManager.throttleTimeMs`, it
+/// is not bounded.
 #[must_use]
 pub fn consume_controller_mutation_quota(
     image: &MetadataImage,
@@ -229,6 +234,7 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_units::{millis, secs},
+        std::time::Duration,
     };
 
     fn img_with_quota(
@@ -286,7 +292,7 @@ mod tests {
             .bucket
             .lock()
             .unwrap()
-            .updated_at -= std::time::Duration::from_secs(20);
+            .updated_at -= Duration::from_secs(20);
         quota.reconcile_record(9, 1, Time::ZERO).unwrap();
         quota.record(3).unwrap();
         assert!(quota.delay() == millis(500));

@@ -3,9 +3,10 @@
 
 use {
     crate::runtime_args::RuntimeArgs,
-    base64::Engine as _,
+    base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
     clap::Parser,
     krabka_raft::NodeId,
+    krabka_telemetry::profiling::ProfilingConfig,
     krabka_units::{ByteSize, Time},
     std::{net::SocketAddr, path::PathBuf},
     uuid::Uuid,
@@ -24,7 +25,7 @@ pub struct Args {
     pub runtime: RuntimeArgs,
 
     #[command(flatten)]
-    pub profiling: krabka_telemetry::profiling::ProfilingConfig,
+    pub profiling: ProfilingConfig,
 
     /// TCP address of the client listener. Mutually exclusive with
     /// `--config-file`. A node without the `broker` role opens no client
@@ -362,7 +363,7 @@ pub struct Args {
 /// `Metadata` and `DescribeCluster` report, e.g. `AQIDBAUGBwgJCgsMDQ4PEA`) or
 /// `java.util.UUID`'s hyphenated form.
 fn parse_cluster_id(value: &str) -> Result<uuid::Uuid, String> {
-    if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(value)
+    if let Ok(bytes) = URL_SAFE_NO_PAD.decode(value)
         && let Ok(bytes) = <[u8; 16]>::try_from(bytes)
     {
         return Ok(uuid::Uuid::from_bytes(bytes));
@@ -380,7 +381,10 @@ fn parse_metadata_raft_command_queue_capacity(value: &str) -> Result<usize, Stri
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::test_support::env_guard, assert2::assert, krabka_units::secs};
+    use {
+        super::*, crate::test_support::env_guard, assert2::assert,
+        krabka_telemetry::profiling::ProfilingConfig, krabka_units::secs, std::path::Path,
+    };
 
     /// `--cluster-id` accepts Kafka's base64 `Uuid` form -- what `Metadata`
     /// and `DescribeCluster` report (#1082) -- as well as the hyphenated
@@ -409,7 +413,7 @@ mod tests {
         let _guard = env_guard();
 
         let defaults = Args::try_parse_from(["krabka-broker"]).expect("parse defaults");
-        assert!(defaults.profiling == krabka_telemetry::profiling::ProfilingConfig::default());
+        assert!(defaults.profiling == ProfilingConfig::default());
 
         temp_env::with_vars(
             [
@@ -487,7 +491,7 @@ mod tests {
         let _guard = env_guard();
 
         let args = Args::try_parse_from(["krabka-broker", "--config-file=/tmp/a.toml"]).unwrap();
-        assert!(args.config_file.as_deref() == Some(std::path::Path::new("/tmp/a.toml")));
+        assert!(args.config_file.as_deref() == Some(Path::new("/tmp/a.toml")));
         assert!(args.advertised_listener.is_none());
     }
 
@@ -508,7 +512,7 @@ mod tests {
         let args = Args::try_parse_from(["krabka-broker", "--controller-quorum-voters", endpoint])
             .unwrap();
         assert!(args.controller_quorum_voters[0].0 == krabka_raft::NodeId(2));
-        assert!(args.controller_quorum_voters[0].1 == &endpoint[2..]);
+        assert!(endpoint.strip_prefix("2@") == Some(args.controller_quorum_voters[0].1.as_str()));
     }
 
     /// The values each flag is offered in [`top_level_flags_keep_their_shape`].
@@ -545,9 +549,9 @@ mod tests {
     fn top_level_flag_shapes() -> String {
         use clap::{Args as _, CommandFactory as _};
 
-        let flattened = krabka_telemetry::profiling::ProfilingConfig::augment_args(
-            RuntimeArgs::augment_args(clap::Command::new("flattened")),
-        );
+        let flattened = ProfilingConfig::augment_args(RuntimeArgs::augment_args(
+            clap::Command::new("flattened"),
+        ));
         let command = Args::command();
         command
             .get_arguments()

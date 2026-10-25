@@ -37,8 +37,11 @@ use {
     std::{
         collections::{BTreeMap, VecDeque},
         fs::File,
-        io::{Error, ErrorKind},
-        sync::{Arc, Condvar, Mutex},
+        io::{self, Error, ErrorKind},
+        mem,
+        panic::{self, AssertUnwindSafe},
+        sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
+        thread,
     },
 };
 
@@ -47,7 +50,7 @@ mod ring;
 
 /// The `O_DIRECT` alignment rules of one file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DioAlign {
+pub struct DioAlign {
     /// Required alignment of a buffer's address, in bytes. A power of two, >= 1.
     pub(crate) mem: usize,
     /// Required alignment of a file offset and of a write's length, in bytes. A power of two, >= 1.
@@ -55,7 +58,7 @@ pub(crate) struct DioAlign {
 }
 
 impl DioAlign {
-    fn validate(self) -> std::io::Result<()> {
+    fn validate(self) -> io::Result<()> {
         if self.mem.is_power_of_two() && self.block.is_power_of_two() {
             Ok(())
         } else {
@@ -80,7 +83,7 @@ impl DioAlign {
 /// `Vec` never changes length after it is made, so its heap address, and with
 /// it the alignment, stays fixed until the next growth. A growth makes a new
 /// `Vec`, aligns it again, and copies the contents.
-pub(crate) struct AlignedBuf {
+pub struct AlignedBuf {
     align: usize,
     storage: Vec<u8>,
     offset: usize,
@@ -103,8 +106,11 @@ impl AlignedBuf {
         let new_len = self.len + bytes.len();
         self.reserve(new_len);
         let at = self.offset + self.len;
-        self.storage[at..at + bytes.len()].copy_from_slice(bytes);
-        self.len = new_len;
+        // `reserve` made room for `new_len` bytes after the aligned start.
+        if let Some(room) = self.storage.get_mut(at..at + bytes.len()) {
+            room.copy_from_slice(bytes);
+            self.len = new_len;
+        }
     }
 
     /// Set the length to `len`. New bytes are zero, also where an earlier
@@ -112,12 +118,23 @@ impl AlignedBuf {
     pub(crate) fn resize(&mut self, len: usize) {
         if len > self.len {
             self.reserve(len);
-            self.storage[self.offset + self.len..self.offset + len].fill(0);
+            // `reserve` made room for `len` bytes after the aligned start.
+            if let Some(fresh) = self
+                .storage
+                .get_mut(self.offset + self.len..self.offset + len)
+            {
+                fresh.fill(0);
+            }
         }
         self.len = len;
     }
 
-    pub(crate) fn as_slice(&self) -> &[u8] { &self.storage[self.offset..self.offset + self.len] }
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        // The contents always lie inside the storage.
+        self.storage
+            .get(self.offset..self.offset + self.len)
+            .unwrap_or_default()
+    }
 
     /// Lend the storage out for a write that must own its buffer: the
     /// `Vec`, and where the contents start in it and how long they are.
@@ -125,7 +142,7 @@ impl AlignedBuf {
     /// a buffer whose storage never comes back stays a valid empty one.
     #[cfg(target_os = "linux")]
     fn lend(&mut self) -> (Vec<u8>, usize, usize) {
-        let lent = (std::mem::take(&mut self.storage), self.offset, self.len);
+        let lent = (mem::take(&mut self.storage), self.offset, self.len);
         self.offset = 0;
         self.len = 0;
         lent
@@ -159,8 +176,11 @@ impl AlignedBuf {
             offset,
             len: 0,
         };
-        grown.storage[offset..offset + self.len].copy_from_slice(self.as_slice());
-        grown.len = self.len;
+        // `capacity >= needed > self.len`, so the contents fit.
+        if let Some(room) = grown.storage.get_mut(offset..offset + self.len) {
+            room.copy_from_slice(self.as_slice());
+            grown.len = self.len;
+        }
         *self = grown;
     }
 }
@@ -202,7 +222,7 @@ const WRITE_THREADS: usize = 8;
 /// append and every [`Self::drain`]: the bytes it held were already
 /// acknowledged, as a page-cache writeback error is, so the segment must not
 /// go on.
-pub(crate) struct DirectWriter {
+pub struct DirectWriter {
     align: DioAlign,
     end: u64,
     tail: Vec<u8>,
@@ -219,6 +239,8 @@ struct Shared {
     io: Mutex<Arc<dyn LogIo>>,
     queue: Mutex<Queue>,
     changed: Condvar,
+    /// The write threads, started when the writer was made.
+    pool: Arc<Pool>,
 }
 
 struct Queue {
@@ -286,7 +308,7 @@ impl Queue {
         usize::try_from(self.queued_end.saturating_sub(self.written)).unwrap_or(usize::MAX)
     }
 
-    fn failed(&self) -> std::io::Result<()> {
+    fn failed(&self) -> io::Result<()> {
         match &self.failure {
             Some((kind, message)) => Err(Error::new(*kind, message.clone())),
             None => Ok(()),
@@ -357,10 +379,11 @@ impl DirectWriter {
         end: u64,
         tail: Vec<u8>,
         io: Arc<dyn LogIo>,
-    ) -> std::io::Result<Self> {
+    ) -> io::Result<Self> {
         align.validate()?;
         check_tail(align, end, &tail)?;
-        let ring = Pool::shared()?.takes(io.as_ref());
+        let pool = Pool::shared()?;
+        let ring = pool.takes(io.as_ref());
         Ok(Self {
             align,
             end,
@@ -385,6 +408,7 @@ impl DirectWriter {
                     ring,
                 }),
                 changed: Condvar::new(),
+                pool,
             }),
         })
     }
@@ -399,15 +423,27 @@ impl DirectWriter {
 
     /// Write the next appends through `io`.
     pub(crate) fn set_io(&self, io: Arc<dyn LogIo>) {
-        let ring = Pool::shared()
-            .expect("the write threads started when the writer was made")
-            .takes(io.as_ref());
-        *self.shared.io.lock().unwrap() = io;
-        self.shared.queue.lock().unwrap().ring = ring;
+        let ring = self.shared.pool.takes(io.as_ref());
+        *self
+            .shared
+            .io
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = io;
+        self.shared
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .ring = ring;
     }
 
     /// Every byte below this is on the disk.
-    pub(crate) fn written(&self) -> u64 { self.shared.queue.lock().unwrap().written }
+    pub(crate) fn written(&self) -> u64 {
+        self.shared
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .written
+    }
 
     /// Whether one append fits without waiting for the disk. The owner keeps the segment lock from this check through the append; completion can only make more room in the queue.
     pub(crate) fn can_queue(&self, bytes: usize) -> bool {
@@ -437,13 +473,17 @@ impl DirectWriter {
     ///
     /// The error of an earlier write. [`Self::end`] and the partial last
     /// block do not change then.
-    pub(crate) fn append(&mut self, parts: &[&[u8]]) -> std::io::Result<()> {
+    pub(crate) fn append(&mut self, parts: &[&[u8]]) -> io::Result<()> {
         let total: usize = parts.iter().map(|part| part.len()).sum();
         let block = self.align.block;
         let logical = self.tail.len() + total;
         let whole = logical - logical % block;
         let mut buf = {
-            let mut queue = self.shared.queue.lock().unwrap();
+            let mut queue = self
+                .shared
+                .queue
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             queue.failed()?;
             if total == 0 {
                 return Ok(());
@@ -452,7 +492,11 @@ impl DirectWriter {
                 && queue.unwritten() + whole > self.queue_limit
                 && queue.failure.is_none()
             {
-                queue = self.shared.changed.wait(queue).unwrap();
+                queue = self
+                    .shared
+                    .changed
+                    .wait(queue)
+                    .unwrap_or_else(PoisonError::into_inner);
             }
             queue.failed()?;
             queue
@@ -466,12 +510,21 @@ impl DirectWriter {
         for part in parts {
             buf.extend_from_slice(part);
         }
-        let tail = buf.as_slice()[whole..logical].to_vec();
+        // `buf` holds the old tail and every part: `logical` bytes.
+        let tail = buf
+            .as_slice()
+            .get(whole..logical)
+            .ok_or_else(|| Error::other("an O_DIRECT append lost bytes it was given"))?
+            .to_vec();
         buf.resize(whole);
         let at = self.end - to_u64(self.tail.len());
         let end = self.end + to_u64(total);
 
-        let mut queue = self.shared.queue.lock().unwrap();
+        let mut queue = self
+            .shared
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
 
         // A write may have failed while the buffer was filled. Its handler
 
@@ -505,15 +558,23 @@ impl DirectWriter {
     /// # Errors
     ///
     /// The error of a failed write.
-    pub(crate) fn drain(&self) -> std::io::Result<()> { self.settle().failed() }
+    pub(crate) fn drain(&self) -> io::Result<()> { self.settle().failed() }
 
     /// Wait until no write is queued or running and the bytes are on the
     /// disk, or a write failed, and return the queue then.
-    fn settle(&self) -> std::sync::MutexGuard<'_, Queue> {
-        let mut queue = self.shared.queue.lock().unwrap();
+    fn settle(&self) -> MutexGuard<'_, Queue> {
+        let mut queue = self
+            .shared
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         self.shared.schedule(&mut queue);
         while !queue.settled() {
-            queue = self.shared.changed.wait(queue).unwrap();
+            queue = self
+                .shared
+                .changed
+                .wait(queue)
+                .unwrap_or_else(PoisonError::into_inner);
         }
         queue
     }
@@ -526,7 +587,7 @@ impl DirectWriter {
     ///
     /// `InvalidInput` when `tail.len()` is not `end % block`. The writer does
     /// not change then.
-    pub(crate) fn reset(&mut self, end: u64, tail: Vec<u8>) -> std::io::Result<()> {
+    pub(crate) fn reset(&mut self, end: u64, tail: Vec<u8>) -> io::Result<()> {
         check_tail(self.align, end, &tail)?;
         let mut queue = self.settle();
         queue.written = end;
@@ -543,7 +604,7 @@ impl DirectWriter {
     /// Cut the file to the end of the bytes it holds, once its queued writes
     /// are done: [`Self::end`], or after a failed write, the end of the bytes
     /// that reached the disk without a gap.
-    pub(crate) fn cut_padding(&self) -> std::io::Result<()> {
+    pub(crate) fn cut_padding(&self) -> io::Result<()> {
         let queue = self.settle();
         let end = if queue.failure.is_some() {
             queue.written
@@ -575,8 +636,8 @@ struct Pool {
 static POOL: Mutex<Option<Arc<Pool>>> = Mutex::new(None);
 
 impl Pool {
-    fn shared() -> std::io::Result<Arc<Self>> {
-        let mut pool = POOL.lock().unwrap();
+    fn shared() -> io::Result<Arc<Self>> {
+        let mut pool = POOL.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(pool) = pool.as_ref() {
             return Ok(Arc::clone(pool));
         }
@@ -590,11 +651,12 @@ impl Pool {
             let worker = Arc::clone(&started);
             // A thread that did start keeps waiting on an empty list, which
             // costs nothing, if a later one fails.
-            std::thread::Builder::new()
+            thread::Builder::new()
                 .name(format!("log-direct-write-{index}"))
                 .spawn(move || worker.run())?;
         }
         *pool = Some(Arc::clone(&started));
+        drop(pool);
         Ok(started)
     }
 
@@ -618,19 +680,25 @@ impl Pool {
             return;
         }
         let _ = ring;
-        self.ready.lock().unwrap().push_back(segment);
+        self.ready
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push_back(segment);
         self.changed.notify_one();
     }
 
-    fn run(&self) {
+    fn run(&self) -> ! {
         loop {
             let segment = {
-                let mut ready = self.ready.lock().unwrap();
+                let mut ready = self.ready.lock().unwrap_or_else(PoisonError::into_inner);
                 loop {
                     if let Some(segment) = ready.pop_front() {
                         break segment;
                     }
-                    ready = self.changed.wait(ready).unwrap();
+                    ready = self
+                        .changed
+                        .wait(ready)
+                        .unwrap_or_else(PoisonError::into_inner);
                 }
             };
             segment.write_one();
@@ -645,9 +713,7 @@ impl Shared {
             return;
         }
         queue.ready = true;
-        Pool::shared()
-            .expect("the write threads started when the writer was made")
-            .push(Arc::clone(self), queue.ring);
+        self.pool.push(Arc::clone(self), queue.ring);
     }
 
     /// Make one write on this thread, through [`LogIo::write_direct`].
@@ -659,9 +725,9 @@ impl Shared {
             Work::Blocks(job) => (job.buf.as_slice(), job.at),
             Work::Tail { buf, at, .. } => (buf.as_slice(), *at),
         };
-        let io = Arc::clone(&self.io.lock().unwrap());
+        let io = Arc::clone(&self.io.lock().unwrap_or_else(PoisonError::into_inner));
         let step = self.align.step();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
             write_aligned(&self.file, buf, at, step, |file, buf, offset| {
                 io.write_direct(file, buf, offset)
             })
@@ -673,38 +739,40 @@ impl Shared {
     /// Take the next write to start, and put the segment back on the ready
     /// list first if another can run beside it.
     fn take_work(self: &Arc<Self>) -> Option<Work> {
-        let mut queue = self.queue.lock().unwrap();
+        let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
         queue.ready = false;
         if !queue.has_work() {
             return None;
         }
-        let work = if let Some(job) = queue.jobs.pop_front() {
-            Work::Blocks(job)
-        } else {
-            let block = self.align.block;
-            let at = queue.end - to_u64(queue.tail.len());
-            let mut buf = queue
-                .spare
-                .pop()
-                .unwrap_or_else(|| AlignedBuf::new(self.align.mem));
-            buf.clear();
-            buf.extend_from_slice(&queue.tail);
-            buf.resize(block);
-            queue.tail_writing = true;
-            Work::Tail {
-                buf,
-                at,
-                end: queue.end,
-            }
-        };
+        let work = queue.jobs.pop_front().map_or_else(
+            || {
+                let block = self.align.block;
+                let at = queue.end - to_u64(queue.tail.len());
+                let mut buf = queue
+                    .spare
+                    .pop()
+                    .unwrap_or_else(|| AlignedBuf::new(self.align.mem));
+                buf.clear();
+                buf.extend_from_slice(&queue.tail);
+                buf.resize(block);
+                queue.tail_writing = true;
+                Work::Tail {
+                    buf,
+                    at,
+                    end: queue.end,
+                }
+            },
+            Work::Blocks,
+        );
         queue.in_flight += 1;
         self.schedule(&mut queue);
+        drop(queue);
         Some(work)
     }
 
     /// Record the outcome of a write [`Self::take_work`] handed out.
-    fn complete(self: &Arc<Self>, work: Work, result: std::io::Result<()>) {
-        let mut queue = self.queue.lock().unwrap();
+    fn complete(self: &Arc<Self>, work: Work, result: io::Result<()>) {
+        let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
         queue.in_flight -= 1;
         let at = match &work {
             Work::Blocks(job) => job.at,
@@ -731,10 +799,11 @@ impl Shared {
             tracing::error!(%error, at, "O_DIRECT write failed; the segment fails every later write");
             queue
                 .failure
-                .get_or_insert((error.kind(), error.to_string()));
+                .get_or_insert_with(|| (error.kind(), error.to_string()));
             queue.jobs.clear();
         }
         self.schedule(&mut queue);
+        drop(queue);
         self.changed.notify_all();
     }
 }
@@ -756,11 +825,11 @@ fn write_aligned(
     buf: &[u8],
     offset: u64,
     step: usize,
-    mut write: impl FnMut(&File, &[u8], u64) -> std::io::Result<usize>,
-) -> std::io::Result<()> {
+    mut write: impl FnMut(&File, &[u8], u64) -> io::Result<usize>,
+) -> io::Result<()> {
     let mut done = 0;
-    while done < buf.len() {
-        match write(file, &buf[done..], offset + to_u64(done)) {
+    while let Some(rest) = buf.get(done..).filter(|rest| !rest.is_empty()) {
+        match write(file, rest, offset + to_u64(done)) {
             Ok(written) => done = aligned_progress(done, written, buf.len(), offset, step)?,
             Err(error) if error.kind() == ErrorKind::Interrupted => {}
             Err(error) => return Err(error),
@@ -782,7 +851,7 @@ fn aligned_progress(
     len: usize,
     offset: u64,
     step: usize,
-) -> std::io::Result<usize> {
+) -> io::Result<usize> {
     let reached = done.saturating_add(written).min(len);
     // The end of the buffer is block-aligned, and a write that reaches it
     // ends the loop, so only a short write rounds.
@@ -803,7 +872,7 @@ fn aligned_progress(
     Ok(next)
 }
 
-fn check_tail(align: DioAlign, end: u64, tail: &[u8]) -> std::io::Result<()> {
+fn check_tail(align: DioAlign, end: u64, tail: &[u8]) -> io::Result<()> {
     let expected = end % to_u64(align.block);
     if to_u64(tail.len()) == expected {
         Ok(())
@@ -818,9 +887,8 @@ fn check_tail(align: DioAlign, end: u64, tail: &[u8]) -> std::io::Result<()> {
     }
 }
 
-fn to_u64(n: usize) -> u64 {
-    u64::try_from(n).expect("a usize fits in a u64 on every supported target")
-}
+/// A `usize` widened to a `u64`; no supported target has a wider `usize`.
+fn to_u64(n: usize) -> u64 { n as u64 }
 
 /// The most recently appended bytes of an active segment, `[start, end)`, at
 /// most about `cap` bytes, and every byte at or past `written` whatever the
@@ -830,7 +898,7 @@ fn to_u64(n: usize) -> u64 {
 /// nothing, and eviction drops the oldest chunk. A chunk that is not on the
 /// disk yet is never evicted, so a read below [`Self::start`] can always go to
 /// the file.
-pub(crate) struct TailCache {
+pub struct TailCache {
     cap: usize,
     start: u64,
     len: usize,
@@ -872,18 +940,15 @@ impl TailCache {
         self.len += bytes.len();
         self.chunks.push_back(bytes);
         while self.len > self.cap && self.chunks.len() > 1 {
-            let oldest = to_u64(
-                self.chunks
-                    .front()
-                    .expect("more than one chunk remains")
-                    .len(),
-            );
-            if self.start + oldest > self.written {
+            let Some(oldest) = self.chunks.front().map(Bytes::len) else {
+                break;
+            };
+            if self.start + to_u64(oldest) > self.written {
                 break;
             }
             self.chunks.pop_front();
-            self.len -= usize::try_from(oldest).expect("a chunk length fits in a usize");
-            self.start += oldest;
+            self.len -= oldest;
+            self.start += to_u64(oldest);
         }
     }
 
@@ -901,9 +966,13 @@ impl TailCache {
         // bytes still fit in `cap`; the newest survives regardless.
         let mut kept = 0usize;
         let mut first_kept = ends.len();
-        for i in (0..ends.len()).rev() {
-            let start = if i == 0 { 0 } else { ends[i - 1] };
-            let len = ends[i] - start;
+        for (i, &end) in ends.iter().enumerate().rev() {
+            let start = i
+                .checked_sub(1)
+                .and_then(|prev| ends.get(prev))
+                .copied()
+                .unwrap_or(0);
+            let len = end - start;
             if first_kept != ends.len() && kept + len > self.cap {
                 break;
             }
@@ -912,10 +981,11 @@ impl TailCache {
         }
         let mut start = 0;
         for (i, &end) in ends.iter().enumerate() {
+            let batch = group.slice(start..end);
             let batch = if i >= first_kept {
-                Bytes::copy_from_slice(&group[start..end])
+                Bytes::copy_from_slice(&batch)
             } else {
-                group.slice(start..end)
+                batch
             };
             self.push(batch);
             start = end;
@@ -931,8 +1001,7 @@ impl TailCache {
         if pos < self.start || pos >= self.end() {
             return None;
         }
-        let mut skip =
-            usize::try_from(pos - self.start).expect("an offset in the window fits in a usize");
+        let mut skip = usize::try_from(pos - self.start).ok()?;
         let mut taken: Vec<Bytes> = Vec::new();
         let mut total = 0;
         for chunk in &self.chunks {
@@ -968,8 +1037,9 @@ impl TailCache {
         if pos < self.start || read_end > self.end() {
             return false;
         }
-        let mut skip =
-            usize::try_from(pos - self.start).expect("an offset in the window fits in a usize");
+        let Ok(mut skip) = usize::try_from(pos - self.start) else {
+            return false;
+        };
         let mut filled = 0;
         for chunk in &self.chunks {
             if filled == out.len() {
@@ -980,7 +1050,13 @@ impl TailCache {
                 continue;
             }
             let take = (chunk.len() - skip).min(out.len() - filled);
-            out[filled..filled + take].copy_from_slice(&chunk[skip..skip + take]);
+            let (Some(dst), Some(src)) = (
+                out.get_mut(filled..filled + take),
+                chunk.get(skip..skip + take),
+            ) else {
+                return false;
+            };
+            dst.copy_from_slice(src);
             filled += take;
             skip = 0;
         }
@@ -1003,8 +1079,8 @@ impl TailCache {
             self.written = end;
             return;
         }
-        let keep =
-            usize::try_from(end - self.start).expect("an offset in the window fits in a usize");
+        // `end` is below the window's end, so `keep` is below `self.len`.
+        let keep = usize::try_from(end - self.start).unwrap_or(self.len);
         let mut kept = 0;
         let mut chunks = 0;
         for chunk in &mut self.chunks {
@@ -1021,13 +1097,22 @@ impl TailCache {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use {
         super::*,
         crate::io::FileIo,
         assert2::{assert, check},
-        std::{cell::Cell, os::unix::fs::FileExt},
+        std::{
+            cell::{Cell, RefCell},
+            fs, io, mem,
+            ops::Range,
+            os::unix::fs::FileExt,
+            sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+            thread,
+            time::Duration,
+        },
     };
 
     const MEM: usize = 512;
@@ -1058,7 +1143,7 @@ mod tests {
     struct RecordingIo {
         align: DioAlign,
         calls: Mutex<Vec<WriteCall>>,
-        fail: std::sync::atomic::AtomicBool,
+        fail: AtomicBool,
         held: Mutex<bool>,
         released: Condvar,
     }
@@ -1074,7 +1159,7 @@ mod tests {
             })
         }
 
-        fn take_calls(&self) -> Vec<WriteCall> { std::mem::take(&mut *self.calls.lock().unwrap()) }
+        fn take_calls(&self) -> Vec<WriteCall> { mem::take(&mut *self.calls.lock().unwrap()) }
 
         fn hold(&self, held: bool) {
             *self.held.lock().unwrap() = held;
@@ -1083,13 +1168,13 @@ mod tests {
     }
 
     impl LogIo for RecordingIo {
-        fn write_direct(&self, file: &File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
+        fn write_direct(&self, file: &File, buf: &[u8], offset: u64) -> io::Result<usize> {
             let mut held = self.held.lock().unwrap();
             while *held {
                 held = self.released.wait(held).unwrap();
             }
             drop(held);
-            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            if self.fail.load(Ordering::SeqCst) {
                 return Err(Error::other("disk on fire"));
             }
             assert!(buf.as_ptr().addr() % self.align.mem == 0);
@@ -1251,16 +1336,16 @@ mod tests {
         check!(!writer.can_queue(usize::MAX));
 
         let second = pattern(2, 600);
-        let appended = std::sync::atomic::AtomicBool::new(false);
-        let writer = std::thread::scope(|scope| {
+        let appended = AtomicBool::new(false);
+        let writer = thread::scope(|scope| {
             let (second, appended) = (&second, &appended);
             let waiting = scope.spawn(move || {
                 writer.append(&[second]).unwrap();
-                appended.store(true, std::sync::atomic::Ordering::SeqCst);
+                appended.store(true, Ordering::SeqCst);
                 writer
             });
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            check!(!appended.load(std::sync::atomic::Ordering::SeqCst));
+            thread::sleep(Duration::from_millis(50));
+            check!(!appended.load(Ordering::SeqCst));
             io.hold(false);
             waiting.join().unwrap()
         });
@@ -1330,15 +1415,15 @@ mod tests {
     fn several_writes_of_one_segment_run_at_once() {
         #[derive(Debug)]
         struct Overlapping {
-            running: std::sync::atomic::AtomicUsize,
-            most: std::sync::atomic::AtomicUsize,
+            running: AtomicUsize,
+            most: AtomicUsize,
         }
         impl LogIo for Overlapping {
-            fn write_direct(&self, file: &File, buf: &[u8], offset: u64) -> std::io::Result<usize> {
+            fn write_direct(&self, file: &File, buf: &[u8], offset: u64) -> io::Result<usize> {
                 use std::sync::atomic::Ordering::SeqCst;
                 let now = self.running.fetch_add(1, SeqCst) + 1;
                 self.most.fetch_max(now, SeqCst);
-                std::thread::sleep(std::time::Duration::from_millis(20));
+                thread::sleep(Duration::from_millis(20));
                 self.running.fetch_sub(1, SeqCst);
                 file.write_at(buf, offset)
             }
@@ -1359,8 +1444,8 @@ mod tests {
             logical.extend_from_slice(&bytes);
         }
         writer.drain().unwrap();
-        check!(io.most.load(std::sync::atomic::Ordering::SeqCst) > 1);
-        check!(io.most.load(std::sync::atomic::Ordering::SeqCst) <= WRITES_IN_FLIGHT);
+        check!(io.most.load(Ordering::SeqCst) > 1);
+        check!(io.most.load(Ordering::SeqCst) <= WRITES_IN_FLIGHT);
         check!(writer.written() == 8192);
         check!(file_contents(writer.file()) == logical);
     }
@@ -1418,7 +1503,7 @@ mod tests {
         }
         writer.drain().unwrap();
         check!(writer.written() == to_u64(logical.len()));
-        check!(std::fs::read(&path).unwrap() == padded(&logical, align.block));
+        check!(fs::read(&path).unwrap() == padded(&logical, align.block));
     }
 
     /// The bytes of a failed write were already acknowledged, so the writer
@@ -1432,7 +1517,7 @@ mod tests {
         writer.append(&[&first]).unwrap();
         writer.drain().unwrap();
 
-        io.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        io.fail.store(true, Ordering::SeqCst);
         writer.append(&[&pattern(2, 3000)]).unwrap();
         check!(writer.drain().unwrap_err().to_string() == "disk on fire");
         check!(writer.written() == 700);
@@ -1492,7 +1577,7 @@ mod tests {
     fn a_short_unaligned_write_resumes_from_an_aligned_position() {
         let file = tempfile::tempfile().unwrap();
         let bytes = padded(&pattern(1, 1500), 512);
-        let calls = std::cell::RefCell::new(Vec::new());
+        let calls = RefCell::new(Vec::new());
         let first = Cell::new(true);
         write_aligned(&file, &bytes, 0, 512, |file, buf, offset| {
             calls.borrow_mut().push(WriteCall {
@@ -1699,7 +1784,7 @@ mod tests {
         struct Case {
             pos: u64,
             len: usize,
-            range: Option<std::ops::Range<usize>>,
+            range: Option<Range<usize>>,
         }
         let ThreeChunks { cache, all } = three_chunks(1 << 20);
         check!((cache.start(), cache.end()) == (1000, 1060));

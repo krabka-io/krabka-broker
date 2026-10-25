@@ -7,16 +7,16 @@ use krabka_units::{Time, convert::wire::opt_time_from_millis_i64};
 /// behavior. `scheduled` makes each batch's `max_timestamp` its delivery time,
 /// so a record stays invisible to consumers until it comes due. This is the
 /// one delivery key that reaches [`krabka_log::LogConfig::delivery_policy`].
-pub(crate) const DELIVERY_MODE: &str = "delivery.mode";
-pub(crate) const DELIVERY_MODE_IMMEDIATE: &str = "immediate";
-pub(crate) const DELIVERY_MODE_SCHEDULED: &str = "scheduled";
+pub const DELIVERY_MODE: &str = "delivery.mode";
+pub const DELIVERY_MODE_IMMEDIATE: &str = "immediate";
+pub const DELIVERY_MODE_SCHEDULED: &str = "scheduled";
 
 /// KFC-1: the largest delay the produce path accepts, measured forward from
 /// produce time. `-1` removes the limit. A batch scheduled further ahead is
 /// rejected with `INVALID_TIMESTAMP` (32).
-pub(crate) const DELIVERY_MAX_DELAY_MS: &str = "delivery.max.delay.ms";
+pub const DELIVERY_MAX_DELAY_MS: &str = "delivery.max.delay.ms";
 /// Default `delivery.max.delay.ms`: 7 days.
-pub(crate) const DEFAULT_DELIVERY_MAX_DELAY_MS: i64 = 604_800_000;
+pub const DEFAULT_DELIVERY_MAX_DELAY_MS: i64 = 604_800_000;
 
 /// KFC-1: when `true`, the log refuses a batch whose delivery time is before
 /// the largest delivery time already in the partition. It turns a silently
@@ -24,7 +24,7 @@ pub(crate) const DEFAULT_DELIVERY_MAX_DELAY_MS: i64 = 604_800_000;
 /// caused it. Default `false`. It reaches
 /// [`krabka_log::LogConfig::schedule_order`], because only the log's own
 /// lock makes the test and the append it guards one critical section.
-pub(crate) const DELIVERY_SCHEDULE_MONOTONIC: &str = "delivery.schedule.monotonic";
+pub const DELIVERY_SCHEDULE_MONOTONIC: &str = "delivery.schedule.monotonic";
 
 /// KFC-1 sentinel for `delivery.max.delay.ms`: `-1` means no bound on how far
 /// ahead a batch may be scheduled, and is the lowest legal value.
@@ -36,7 +36,7 @@ pub(super) const DELIVERY_MAX_DELAY_UNLIMITED: i64 = -1;
 /// the 7-day default, which matches the permissive runtime behavior of the
 /// other Produce-side topic config reads.
 #[must_use]
-pub(crate) fn resolve_delivery_max_delay(
+pub fn resolve_delivery_max_delay(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
 ) -> Option<Time> {

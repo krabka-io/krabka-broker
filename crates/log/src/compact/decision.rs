@@ -12,11 +12,11 @@ use krabka_ids::ProducerId;
 // boundaries explicit while `compact_model.rs` and `core_tests` keep driving
 // the exact production path.
 // ---------------------------------------------------------------------------
-pub(crate) use krabka_verified::{RecordMeta, RetainDecision, TxnDataState};
+pub use krabka_verified::{RecordMeta, RetainDecision, TxnDataState};
 
 /// Per-batch facts the retain decision needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BatchMeta {
+pub struct BatchMeta {
     pub is_control: bool,
     pub producer_id: ProducerId,
     /// The batch's existing delete horizon, which is `base_timestamp` when
@@ -25,14 +25,14 @@ pub(crate) struct BatchMeta {
 }
 
 #[cfg(test)]
-pub(crate) struct RetentionMetadata {
+pub struct RetentionMetadata {
     pub(crate) record: RecordMeta,
     pub(crate) batch: BatchMeta,
 }
 
 #[bon::builder]
 #[cfg(test)]
-pub(crate) fn data_retention_metadata(
+pub fn data_retention_metadata(
     has_key: bool,
     has_value: bool,
     existing_horizon: Option<i64>,
@@ -49,7 +49,7 @@ pub(crate) fn data_retention_metadata(
 
 #[bon::builder]
 #[cfg(test)]
-pub(crate) fn marker_retention_metadata(
+pub fn marker_retention_metadata(
     producer_id: i64,
     existing_horizon: Option<i64>,
 ) -> RetentionMetadata {
@@ -71,13 +71,13 @@ pub(crate) fn marker_retention_metadata(
 /// value.
 #[must_use]
 #[cfg(test)]
-pub(crate) const fn compute_horizon(now_ms: i64, delete_retention_ms: i64) -> i64 {
+pub const fn compute_horizon(now_ms: i64, delete_retention_ms: i64) -> i64 {
     krabka_verified::compute_horizon(now_ms, delete_retention_ms)
 }
 
 /// The single per-record KIP-534 retain decision.
 #[must_use]
-pub(crate) const fn retain_decision(
+pub const fn retain_decision(
     rec: RecordMeta,
     batch: BatchMeta,
     is_newest_for_key: bool,
@@ -102,7 +102,7 @@ pub(crate) const fn retain_decision(
 /// `build_offset_map` filter. The control-batch bug fix is here.
 /// Control-batch records carry a control-type key, a commit or abort marker,
 /// that must NEVER enter the dedup map. Null-key data is also never indexed.
-pub(crate) fn should_index_key(key: Option<&[u8]>, is_control_batch: bool) -> bool {
+pub fn should_index_key(key: Option<&[u8]>, is_control_batch: bool) -> bool {
     !is_control_batch && key.is_some()
 }
 
@@ -113,7 +113,7 @@ pub(crate) fn should_index_key(key: Option<&[u8]>, is_control_batch: bool) -> bo
 /// delegates the same arithmetic to `RecordBatch::with_delete_horizon`, so the
 /// function is `dead_code` outside tests.
 #[cfg(test)]
-pub(crate) fn rewrite_batch_horizon(
+pub fn rewrite_batch_horizon(
     base_timestamp: i64,
     deltas: &[i64],
     horizon: i64,
@@ -131,7 +131,7 @@ pub(crate) fn rewrite_batch_horizon(
 /// The base timestamp and per-record timestamp deltas that
 /// [`rewrite_batch_horizon`] produces.
 #[cfg(test)]
-pub(crate) struct RewrittenTimestamps {
+pub struct RewrittenTimestamps {
     pub(crate) base_timestamp: i64,
     pub(crate) deltas: Vec<i64>,
 }

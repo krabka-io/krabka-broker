@@ -79,7 +79,7 @@ impl fmt::Display for FindingKind {
 }
 
 /// One failure of the reconciliation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Finding {
     pub kind: FindingKind,
     pub path: String,
@@ -129,7 +129,7 @@ pub struct Tally {
 }
 
 /// The reconciler's whole answer.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reconciliation {
     pub findings: Vec<Finding>,
     pub tallies: Vec<Tally>,
@@ -462,7 +462,7 @@ mod tests {
             schedule::expand,
         },
         assert2::check,
-        std::collections::BTreeMap,
+        std::{collections::BTreeMap, iter},
     };
 
     const IDEMPOTENT: &str = "classic-idempotent";
@@ -563,7 +563,7 @@ mod tests {
         let outcome = reconcile(&contract, &expand(&contract).unwrap(), &evidence);
         check!(outcome.findings.len() == 1);
         check!(outcome.findings[0].kind == FindingKind::Lost);
-        check!(outcome.findings[0].seqs == [3].into_iter().collect());
+        check!(outcome.findings[0].seqs == iter::once(3).collect());
     }
 
     type Edit = fn(&mut Evidence);
@@ -653,7 +653,7 @@ mod tests {
         let outcome = reconcile(&contract, &expand(&contract).unwrap(), &evidence);
         check!(outcome.findings.len() == 1);
         check!(outcome.findings[0].kind == FindingKind::CompactionRegression);
-        check!(outcome.findings[0].seqs == [6].into_iter().collect());
+        check!(outcome.findings[0].seqs == iter::once(6).collect());
     }
 
     /// The latest acknowledged record of each key, one record at a time: the

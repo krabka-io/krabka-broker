@@ -61,7 +61,7 @@ use {
             EpochEndOffset, OffsetForLeaderEpochResponse, OffsetForLeaderTopicResult,
         },
     },
-    std::sync::atomic::Ordering,
+    std::sync::{Arc, PoisonError, atomic::Ordering},
 };
 
 /// The two-state leader check Kafka's `ReplicaManager.lastOffsetForLeaderEpoch`
@@ -85,21 +85,21 @@ fn not_leader(
     !installed || committed_elsewhere
 }
 
-pub(crate) fn handle(
+pub fn handle(
     broker: &Broker,
     req: &OffsetForLeaderEpochRequest,
     _version: i16,
     ctx: &RequestContext<'_>,
 ) -> OffsetForLeaderEpochResponse {
-    let partitions = broker.partitions.clone();
+    let partitions = Arc::clone(&broker.partitions);
     // Test-only: count served OFLE requests so the KIP-320 proactive-validation
     // integration test can prove the consumer's validate pass issued an OFLE
     // RPC (vs. the reactive in-band fetch paths, which issue none).
     #[cfg(any(test, feature = "test-helpers"))]
-    let ofle_counter = broker.offset_for_leader_epoch_requests.clone();
+    let ofle_counter = Arc::clone(&broker.offset_for_leader_epoch_requests);
     {
         #[cfg(any(test, feature = "test-helpers"))]
-        ofle_counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        ofle_counter.fetch_add(1, Ordering::AcqRel);
 
         // ── ACL preamble ────────────────────────────────────────────
         // Kafka checks `ClusterAction` on `Cluster("kafka-cluster")` once as
@@ -221,7 +221,7 @@ pub(crate) fn handle(
                 // also what `UnifiedLog.endOffsetForEpoch`'s `None` leaves in
                 // the row. No error either way: the hosting checks above are
                 // what set an error code, not this KIP-101 lookup.
-                let log = p.log.lock().expect("log mutex poisoned");
+                let log = p.log.lock().unwrap_or_else(PoisonError::into_inner);
                 let leo = log.log_end_offset();
                 let (found_epoch, end_offset) = log
                     .epoch_checkpoint()
@@ -492,7 +492,10 @@ mod tests {
     /// `current_leader_epoch`, which this also sets via
     /// `test_set_leader_epoch`.
     use krabka_ids::LeaderEpoch;
-    use krabka_metadata::NodeId;
+    use {
+        krabka_metadata::NodeId, krabka_protocol::records::RecordBatch, std::time::Duration,
+        tokio::time,
+    };
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
     struct SeededEpochTopicSetup<'a> {
@@ -513,7 +516,7 @@ mod tests {
         #[builder(default = uuid :: Uuid :: from_u128 (1))] topic_id: uuid::Uuid,
         #[builder(into, default = NodeId (1))] leader: NodeId,
         #[builder(into, default = LeaderEpoch (0))] leader_epoch: LeaderEpoch,
-    ) -> std::sync::Arc<Partition> {
+    ) -> Arc<Partition> {
         let setup = SeededEpochTopicSetup {
             topic,
             topic_id,
@@ -535,14 +538,14 @@ mod tests {
             .await;
 
         let shared = broker_handle.broker_arc_for_test();
-        let partition = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let partition = time::timeout(Duration::from_secs(10), async {
             loop {
                 if let Some(partition) = shared.partitions.get(topic, krabka_ids::PartitionIndex(0))
                     && partition.current_leader.load(Ordering::Acquire) == leader.0
                 {
                     return partition;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
@@ -551,7 +554,7 @@ mod tests {
         partition.test_set_leader_epoch(leader_epoch.0);
 
         let records = record_values(&[&b"first"[..], &b"second"[..]]);
-        let mut batch = krabka_protocol::records::RecordBatch {
+        let mut batch = RecordBatch {
             last_offset_delta: 1,
             partition_leader_epoch: leader_epoch.0,
             records,
@@ -803,14 +806,14 @@ mod tests {
             .leader_epoch(3)
             .call()
             .await;
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        time::timeout(Duration::from_secs(10), async {
             while shared
                 .controller
                 .current_image()
                 .partition("ofle-moved", 0)
                 .is_none()
             {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await

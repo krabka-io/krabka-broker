@@ -1,7 +1,10 @@
 use {
     super::*,
     crate::{
-        config::{KafkaRlmmConfig, RemoteStorageBackend},
+        config::{
+            DEFAULT_RLMM_TOPIC_MIN_ISR, DEFAULT_RLMM_TOPIC_NUM_PARTITIONS,
+            DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR, KafkaRlmmConfig, RemoteStorageBackend,
+        },
         diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
         handlers::test_support::replicated_partition,
         metrics::{BrokerMetrics, MetadataPartitionLabel},
@@ -9,7 +12,18 @@ use {
     },
     assert2::{assert, check},
     krabka_units::{mebibytes, millis, minutes, secs},
+    std::{
+        ops::Range,
+        time::{self, Instant},
+    },
     tempfile::tempdir,
+    tokio::{
+        net::TcpListener,
+        runtime::Handle,
+        sync::watch,
+        task,
+        time::{advance, pause, timeout},
+    },
 };
 
 #[bon::builder]
@@ -51,33 +65,27 @@ fn loopback_bootstrap_maps_wildcard_to_loopback() {
 async fn rlmm_bootstrap_backoff_returns_false_when_cancelled() {
     let shutdown = CancellationToken::new();
     shutdown.cancel();
-    let mut backoff = std::time::Duration::from_mins(1);
+    let mut backoff = time::Duration::from_mins(1);
 
-    assert!(
-        !rlmm_bootstrap_backoff(&mut backoff, std::time::Duration::from_mins(2), &shutdown,).await
-    );
-    assert!(backoff == std::time::Duration::from_mins(1));
+    assert!(!rlmm_bootstrap_backoff(&mut backoff, time::Duration::from_mins(2), &shutdown,).await);
+    assert!(backoff == time::Duration::from_mins(1));
 }
 
 #[tokio::test]
 async fn rlmm_bootstrap_backoff_returns_true_after_sleep_and_advances() {
-    tokio::time::pause();
+    pause();
     let shutdown = CancellationToken::new();
     let task = tokio::spawn(async move {
-        let mut backoff = std::time::Duration::from_millis(250);
-        let ok = rlmm_bootstrap_backoff(
-            &mut backoff,
-            std::time::Duration::from_millis(500),
-            &shutdown,
-        )
-        .await;
+        let mut backoff = time::Duration::from_millis(250);
+        let ok =
+            rlmm_bootstrap_backoff(&mut backoff, time::Duration::from_millis(500), &shutdown).await;
         (ok, backoff)
     });
 
-    tokio::time::advance(std::time::Duration::from_millis(250)).await;
+    advance(time::Duration::from_millis(250)).await;
     let (ok, backoff) = task.await.expect("backoff task");
     assert!(ok);
-    assert!(backoff == std::time::Duration::from_millis(500));
+    assert!(backoff == time::Duration::from_millis(500));
 }
 
 #[tokio::test]
@@ -87,39 +95,39 @@ async fn rlmm_reconciler_applies_initial_and_changed_assignments() {
     let snapshot_dir = tempfile::tempdir().expect("snapshot tempdir");
     let manager = krabka_remote_storage_topic::TopicBasedRemoteLogMetadataManager::start(
         log,
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         snapshot_dir.path().join("rlmm-manager"),
-        std::time::Duration::from_hours(1),
+        time::Duration::from_hours(1),
     )
     .expect("topic-backed manager start");
-    let (set_tx, set_rx) = tokio::sync::watch::channel(vec![0, 2]);
+    let (set_tx, set_rx) = watch::channel(vec![0, 2]);
     let shutdown = CancellationToken::new();
 
     let metrics = BrokerMetrics::new();
     let reconciler = tokio::spawn(run_rlmm_reconciler(
-        manager.clone(),
+        Arc::clone(&manager),
         metrics.clone(),
         set_rx,
-        std::time::Duration::from_secs(1),
+        time::Duration::from_secs(1),
         shutdown.clone(),
     ));
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = Instant::now() + time::Duration::from_secs(2);
     while manager.assigned_metadata_partitions() != vec![0, 2] {
         assert!(
-            std::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "initial assignment was not reconciled"
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 
     set_tx.send(vec![1]).expect("send changed assignment");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = Instant::now() + time::Duration::from_secs(2);
     while manager.assigned_metadata_partitions() != vec![1] {
         assert!(
-            std::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "changed assignment was not reconciled"
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 
     shutdown.cancel();
@@ -148,7 +156,7 @@ struct RlmmGauges {
 }
 
 /// The gauges of every partition in `partitions` that has at least one series.
-fn rlmm_gauges(metrics: &BrokerMetrics, partitions: std::ops::Range<i32>) -> Vec<RlmmGauges> {
+fn rlmm_gauges(metrics: &BrokerMetrics, partitions: Range<i32>) -> Vec<RlmmGauges> {
     partitions
         .map(|metadata_partition| {
             let label = MetadataPartitionLabel { metadata_partition };
@@ -334,19 +342,19 @@ async fn topic_assignment_uses_discovered_count_after_config_changes() {
     let snapshot_dir = tempdir().unwrap();
     let manager = TopicBasedRemoteLogMetadataManager::start(
         InProcessMetadataEventLog::new(3),
-        tokio::runtime::Handle::current(),
+        Handle::current(),
         snapshot_dir.path().join("manager"),
-        std::time::Duration::from_hours(1),
+        time::Duration::from_hours(1),
     )
     .unwrap();
-    let (image_tx, image_rx) = tokio::sync::watch::channel(Arc::new(first_image));
+    let (image_tx, image_rx) = watch::channel(Arc::new(first_image));
     let shutdown = CancellationToken::new();
     let assignment = tokio::spawn(run_topic_assignment(
-        manager.clone(),
+        Arc::clone(&manager),
         BrokerMetrics::new(),
         node,
         image_rx,
-        std::time::Duration::from_secs(1),
+        time::Duration::from_secs(1),
         shutdown.clone(),
     ));
     for (expected, next_image) in [
@@ -359,9 +367,9 @@ async fn topic_assignment_uses_discovered_count_after_config_changes() {
         if let Some(image) = next_image {
             image_tx.send(Arc::new(image)).unwrap();
         }
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        timeout(time::Duration::from_secs(2), async {
             while manager.assigned_metadata_partitions() != expected {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
@@ -393,19 +401,16 @@ fn rlmm_backoff_doubles_then_caps() {
 fn diskless_index_gets_topic_kickoff_with_in_memory_rlmm() {
     let dir = tempdir().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    check!(matches!(
-        config.remote_log_metadata,
-        crate::config::RlmmKind::InMemory
-    ));
+    check!(matches!(config.remote_log_metadata, RlmmKind::InMemory));
     check!(kafka_swap_kickoff(&config).is_none());
 
     config.remote_storage_backend = Some(RemoteStorageBackend::Local {
         dir: dir.path().join("objects"),
     });
     let kickoff = kafka_swap_kickoff(&config).expect("diskless index kickoff");
-    check!(kickoff.cfg.num_partitions == crate::config::DEFAULT_RLMM_TOPIC_NUM_PARTITIONS);
-    check!(kickoff.cfg.replication == crate::config::DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR);
-    check!(kickoff.cfg.min_isr == crate::config::DEFAULT_RLMM_TOPIC_MIN_ISR);
+    check!(kickoff.cfg.num_partitions == DEFAULT_RLMM_TOPIC_NUM_PARTITIONS);
+    check!(kickoff.cfg.replication == DEFAULT_RLMM_TOPIC_REPLICATION_FACTOR);
+    check!(kickoff.cfg.min_isr == DEFAULT_RLMM_TOPIC_MIN_ISR);
 }
 
 #[test]
@@ -454,7 +459,7 @@ fn metadata_log_config_copies_shared_transport_policy() {
     }
     check!(rlmm.topic == krabka_remote_storage_topic::METADATA_TOPIC);
     check!(rlmm.client_id == "rlmm-client");
-    check!(diskless.topic == crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC);
+    check!(diskless.topic == DISKLESS_WAL_INDEX_TOPIC);
     check!(diskless.client_id == "diskless-client");
 }
 
@@ -464,7 +469,7 @@ async fn cancelled_topic_rlmm_bootstrap_attempts_once_without_activating() {
     // port, then drop the listener so the bootstrap's dial cannot
     // succeed. On Windows such a connect does not fail fast, which is
     // exactly why the bootstrap must honour the token mid-attempt.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let bootstrap = listener.local_addr().unwrap().to_string();
     drop(listener);
 
@@ -483,18 +488,18 @@ async fn cancelled_topic_rlmm_bootstrap_attempts_once_without_activating() {
         ..KafkaRlmmConfig::default()
     });
     let metrics = BrokerMetrics::new();
-    let (_image_tx, image_rx) = tokio::sync::watch::channel(Arc::new(
-        krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
-    ));
+    let (_image_tx, image_rx) = watch::channel(Arc::new(krabka_metadata::MetadataImage::new(
+        uuid::Uuid::from_u128(1),
+    )));
     let shutdown = CancellationToken::new();
     shutdown.cancel();
 
-    tokio::time::timeout(
-        std::time::Duration::from_secs(2),
+    timeout(
+        time::Duration::from_secs(2),
         bootstrap_topic_rlmm(
             swap,
             cfg,
-            tokio::runtime::Handle::current(),
+            Handle::current(),
             metrics.clone(),
             krabka_raft::NodeId(7),
             image_rx,

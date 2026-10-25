@@ -177,8 +177,15 @@ pub(super) async fn handle_v4(
                 transactional_id,
                 producer_id: txn.producer_id,
                 producer_epoch: txn.producer_epoch,
-                topics: added_topics[transactional_id],
-                response_topics: answered_topics[transactional_id],
+                // Both maps hold every transactional id of the request.
+                topics: added_topics
+                    .get(transactional_id)
+                    .copied()
+                    .unwrap_or_default(),
+                response_topics: answered_topics
+                    .get(transactional_id)
+                    .copied()
+                    .unwrap_or_default(),
                 verify_only: txn.verify_only,
             },
             version,

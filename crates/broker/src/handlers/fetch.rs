@@ -23,7 +23,7 @@ use {
     bytes::BytesMut,
     krabka_log::Offset,
     krabka_protocol::{
-        Decode, Encode,
+        Decode, Encode, kafka_3_6_2,
         owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
     },
     krabka_units::convert::ByteSizeExt as _,
@@ -60,7 +60,7 @@ mod leader_throttle_tests;
 #[cfg(test)]
 mod topic_resolution_tests;
 
-pub(crate) use self::{plan::PendingRead, read::LiveOffsets, throttle::apply_consumer_fetch_quota};
+pub use self::{plan::PendingRead, read::LiveOffsets, throttle::apply_consumer_fetch_quota};
 use {
     self::{
         node_endpoints::fetch_node_endpoints,
@@ -87,12 +87,14 @@ use {
         quota::ActiveClock,
         wal::quorum::wire::{KIP_595_FETCH_VERSION, decode_fetch_request},
     },
+    krabka_protocol::{api_key::ApiKey, records::RecordsPayload},
+    std::time::Instant,
 };
 
 /// This handler's own wire api key, for the `api_key` label the request-phase
 /// and throttle histograms carry. The dispatcher labels the total latency from
 /// the frame it parsed; the handler labels its phases from the same number.
-const FETCH_API_KEY: ApiKeyCode = krabka_protocol::api_key::ApiKey::Fetch as i16;
+const FETCH_API_KEY: ApiKeyCode = ApiKey::Fetch as i16;
 
 /// First `Fetch` response version that carries the KIP-951 `CurrentLeader`
 /// hint and its `NodeEndpoints` companion. `NodeEndpoints` is a tagged field
@@ -108,7 +110,7 @@ const FIRST_TOPIC_ID_VERSION: i16 = 13;
 /// The whole-response byte budget of a consumer read, which a `ShareFetch`
 /// shares with a consumer `Fetch`: Kafka's
 /// `min(maxBytes, fetch.max.bytes, maxQuotaWindowBytes)`.
-pub(crate) fn consumer_response_byte_budget(
+pub fn consumer_response_byte_budget(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     context: &RequestContext<'_>,
@@ -155,7 +157,7 @@ fn fetch_response_byte_budget(
     fields(api = "Fetch", version, req_bytes = req_bytes.len()),
     err,
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     version: i16,
     _correlation_id: i32,
@@ -183,8 +185,7 @@ pub(crate) async fn handle(
     let phases = RequestPhases::default();
     let mut cur: &[u8] = req_bytes;
     let req: FetchRequest = if version < 4 {
-        krabka_protocol::kafka_3_6_2::owned::fetch_request::FetchRequest::decode(&mut cur, version)?
-            .into()
+        kafka_3_6_2::owned::fetch_request::FetchRequest::decode(&mut cur, version)?.into()
     } else {
         FetchRequest::decode(&mut cur, version)?
     };
@@ -250,7 +251,7 @@ pub(crate) async fn handle(
         else {
             return Ok((cluster_authorization_failed(), version));
         };
-        let routing_start = std::time::Instant::now();
+        let routing_start = Instant::now();
         if let Some(response) = broker
             .wal_router
             .route_fetch_request_wait(&req, authenticated_node)
@@ -431,7 +432,7 @@ fn cluster_authorization_failed() -> FetchResponse {
 /// path. `fetch_visibility_model.rs` covers it with exhaustive tests and
 /// property tests in isolation.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct VisibilityWindow {
+pub struct VisibilityWindow {
     /// `fetch_offset < log_start` or `fetch_offset > log_end`. The caller
     /// returns `OFFSET_OUT_OF_RANGE`; the log end itself is a valid empty read.
     pub out_of_range: bool,
@@ -467,7 +468,7 @@ pub(crate) struct VisibilityWindow {
 /// consumer never reads at or past `hw`, `deliverable`, or (under
 /// `read_committed`) `lso`, whatever the caller passes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct FetchWatermarks {
+pub struct FetchWatermarks {
     /// The floor below which this read is out of range. On a tiered partition
     /// (KIP-405) that is the *local* log start, not the global one: the band
     /// between the two belongs to the remote tier, and calling it out of range
@@ -485,7 +486,7 @@ pub(crate) struct FetchWatermarks {
 
 /// The caller sets `read_committed` for consumer fetches only, so
 /// `read_committed` implies `!is_follower`.
-pub(crate) fn compute_visibility_window(
+pub fn compute_visibility_window(
     is_follower: bool,
     read_committed: bool,
     watermarks: FetchWatermarks,
@@ -519,14 +520,13 @@ pub(crate) fn compute_visibility_window(
 /// The function chooses the legacy `kafka_3_6_2` codec for Fetch v0-3 and the
 /// current canonical codec for v4+. This version boundary matches the
 /// request-decode boundary.
-pub(crate) fn encode_fetch_response(
+pub fn encode_fetch_response(
     mut resp: FetchResponse,
     version: i16,
 ) -> Result<BytesMut, BrokerError> {
     serve_empty_rather_than_null_records(&mut resp);
     if version < 4 {
-        let legacy: krabka_protocol::kafka_3_6_2::owned::fetch_response::FetchResponse =
-            resp.into();
+        let legacy: kafka_3_6_2::owned::fetch_response::FetchResponse = resp.into();
         let mut buf = BytesMut::with_capacity(legacy.encoded_len(version));
         legacy.encode(&mut buf, version)?;
         Ok(buf)
@@ -561,9 +561,7 @@ fn serve_empty_rather_than_null_records(resp: &mut FetchResponse) {
     for topic in &mut resp.responses {
         for partition in &mut topic.partitions {
             if records_to_serve(partition.records.as_ref()).is_none() {
-                partition.records = Some(krabka_protocol::records::RecordsPayload::Raw(
-                    bytes::Bytes::new(),
-                ));
+                partition.records = Some(RecordsPayload::Raw(bytes::Bytes::new()));
             }
         }
     }
@@ -605,7 +603,7 @@ mod tests {
             for records in [None, Some(RecordsPayload::Raw(Bytes::new()))] {
                 let resp = FetchResponse {
                     responses: vec![FetchableTopicResponse {
-                        topic: "t".to_string(),
+                        topic: "t".to_owned(),
                         partitions: vec![PartitionData {
                             partition_index: 0,
                             records,
@@ -626,18 +624,23 @@ mod tests {
         }
     }
 
-    use crate::{
-        BrokerHandle,
-        authorizer::AuthorizationResult,
-        broker::Broker,
-        config::BrokerConfig,
-        handlers::RequestContext,
-        test_support::{peer, sasl_principal},
-        wal::quorum::{
-            engine::WalShardEngine,
-            registry::ShardId,
-            wire::{KIP_595_FETCH_VERSION, QuorumGroup, fetch_request},
+    use {
+        crate::{
+            BrokerHandle,
+            authorizer::AuthorizationResult,
+            broker::Broker,
+            codes,
+            config::BrokerConfig,
+            handlers::RequestContext,
+            test_support::{peer, sasl_principal},
+            wal::quorum::{
+                engine::WalShardEngine,
+                registry::{ShardId, WalPlacement},
+                wire::{KIP_595_FETCH_VERSION, QuorumGroup, fetch_request},
+            },
         },
+        prometheus_client::encoding::text,
+        std::path::Path,
     };
 
     #[derive(Debug)]
@@ -660,12 +663,12 @@ mod tests {
     /// Start a broker holding one routable diskless-WAL shard, so a KIP-595
     /// Fetch addressed at it takes the routed branch of [`super::handle`].
     /// Returns the handle and the shard's topic id.
-    async fn broker_with_routable_wal_shard(dir: &std::path::Path) -> WalShardBroker {
+    async fn broker_with_routable_wal_shard(dir: &Path) -> WalShardBroker {
         let broker_handle = Broker::start(BrokerConfig::for_tests(dir.to_path_buf()))
             .await
             .expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
-        let source = std::sync::Arc::new(Mutex::new(
+        let source = Arc::new(Mutex::new(
             Log::open(dir.join("wal-source"), LogConfig::default()).expect("open log"),
         ));
         let mut batch = RecordBatch {
@@ -692,7 +695,7 @@ mod tests {
                 topic_id,
                 partition: PartitionIndex(0),
             },
-            std::sync::Arc::new(WalShardEngine::for_logs(
+            Arc::new(WalShardEngine::for_logs(
                 maplit::btreemap! {krabka_raft::NodeId(1) => source},
             )),
         );
@@ -701,7 +704,7 @@ mod tests {
             .replace_placements(&maplit::hashmap! {ShardId {
                 topic_id,
                 partition: PartitionIndex(0),
-            } => crate::wal::quorum::registry::WalPlacement {
+            } => WalPlacement {
                 voters: vec![local_node_id, krabka_raft::NodeId(2)],
                 leader_epoch: 0,
             }});
@@ -850,13 +853,12 @@ mod tests {
             "route WAL fetch",
         )
         .await;
-        assert!(response.error_code == crate::codes::NONE);
+        assert!(response.error_code == codes::NONE);
 
         let mut rendered = String::new();
         {
             let registry = wal.broker.metrics.registry.lock().await;
-            prometheus_client::encoding::text::encode(&mut rendered, &registry)
-                .expect("encode registry");
+            text::encode(&mut rendered, &registry).expect("encode registry");
         }
         for family in [
             "request_local_duration_seconds",
@@ -882,7 +884,7 @@ mod tests {
     async fn wal_fetch_requires_cluster_action() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-        config.authorizer = std::sync::Arc::new(TopicReadOnly);
+        config.authorizer = Arc::new(TopicReadOnly);
         let broker_handle = Broker::start(config).await.expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
         let request = fetch_request(
@@ -908,7 +910,7 @@ mod tests {
             .await
             .expect("deny WAL fetch");
 
-        assert!(response.error_code == crate::codes::CLUSTER_AUTHORIZATION_FAILED);
+        assert!(response.error_code == codes::CLUSTER_AUTHORIZATION_FAILED);
         assert!(response.responses.is_empty());
         broker_handle.shutdown().await;
     }
@@ -931,7 +933,7 @@ mod tests {
         )
         .await;
 
-        assert!(response.error_code == crate::codes::CLUSTER_AUTHORIZATION_FAILED);
+        assert!(response.error_code == codes::CLUSTER_AUTHORIZATION_FAILED);
         assert!(response.responses.is_empty());
         wal.handle.shutdown().await;
     }

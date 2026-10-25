@@ -21,10 +21,14 @@ use {
     krabka_metadata::MetadataRecord,
     krabka_protocol::owned::create_topics_request::{CreatableReplicaAssignment, CreatableTopic},
     krabka_raft::NodeId,
+    std::{
+        collections::{BTreeSet, HashSet},
+        ops::Range,
+    },
 };
 
 /// The seeds that a test runs the placement with.
-const SEEDS: std::ops::Range<u64> = 0..32;
+const SEEDS: Range<u64> = 0..32;
 
 /// A broker id and the rack it registers with.
 struct BrokerRack {
@@ -82,7 +86,7 @@ fn stretch_image(
         image.apply(&MetadataRecord::V1BrokerRegistration(
             krabka_metadata::BrokerRegistrationRecord {
                 incarnation_id: uuid::Uuid::from_u128(u128::from(*node_id)),
-                rack: rack.map(str::to_string),
+                rack: rack.map(str::to_owned),
                 ..broker_registration(krabka_raft::NodeId(*node_id))
             },
         ));
@@ -162,7 +166,7 @@ fn site_of(brokers: &[BrokerRack], node_id: NodeId) -> String {
         .find(|broker| NodeId(broker.node_id) == node_id)
         .and_then(|broker| broker.rack)
         .expect("the placement returns a broker that declared a site")
-        .to_string()
+        .to_owned()
 }
 
 /// The sites of one replica list, sorted, so the caller can compare the
@@ -175,17 +179,12 @@ fn broker_views(
     image: &krabka_metadata::MetadataImage,
     local_broker: Option<NodeId>,
 ) -> Vec<super::SiteBrokerView> {
-    site_broker_views(
-        image,
-        local_broker,
-        &std::collections::HashSet::new(),
-        &std::collections::HashSet::new(),
-    )
+    site_broker_views(image, local_broker, &HashSet::new(), &HashSet::new())
 }
 
 fn views_with_fenced_brokers(
     image: &krabka_metadata::MetadataImage,
-    fenced: &std::collections::HashSet<u64>,
+    fenced: &HashSet<u64>,
 ) -> Vec<super::SiteBrokerView> {
     site_broker_views(
         image,
@@ -395,7 +394,7 @@ fn site_broker_views_read_the_rack_and_the_witness_role() {
     let expected = vec![
         ViewRow {
             node_id: NodeId(1),
-            site: Some("a".to_string()),
+            site: Some("a".to_owned()),
             is_witness: false,
         },
         ViewRow {
@@ -405,7 +404,7 @@ fn site_broker_views_read_the_rack_and_the_witness_role() {
         },
         ViewRow {
             node_id: NodeId(3),
-            site: Some("c".to_string()),
+            site: Some("c".to_owned()),
             is_witness: true,
         },
     ];
@@ -418,7 +417,7 @@ fn site_broker_views_read_the_rack_and_the_witness_role() {
 #[test]
 fn a_fenced_broker_is_a_tagged_last_resort_candidate() {
     let mut image = stretch_image(&RACKLESS_BROKERS, &[], None);
-    let fenced = std::collections::HashSet::from([2]);
+    let fenced = HashSet::from([2]);
     let views = views_with_fenced_brokers(&image, &fenced);
 
     assert!(
@@ -602,11 +601,11 @@ fn a_fenced_broker_is_out_of_controlled_shutdown() {
 fn the_isr_leaves_out_fenced_and_shutting_down_brokers() {
     let mut image = stretch_image(&RACKLESS_BROKERS, &[], None);
     enter_controlled_shutdown(&mut image, 3);
-    let fenced = std::collections::HashSet::from([2]);
+    let fenced = HashSet::from([2]);
     let inactive = inactive_brokers(&image, &fenced);
     let replicas = vec![vec![NodeId(1), NodeId(2), NodeId(3)]];
 
-    assert!(inactive == std::collections::HashSet::from([2, 3]));
+    assert!(inactive == HashSet::from([2, 3]));
     assert!(
         automatic_leaderships(&replicas, &inactive)
             == vec![InitialLeadership {
@@ -616,7 +615,7 @@ fn the_isr_leaves_out_fenced_and_shutting_down_brokers() {
     );
     // A manual assignment follows the same rule, and refuses a list of
     // brokers that are all inactive.
-    let witnesses = std::collections::HashSet::new();
+    let witnesses = HashSet::new();
     assert!(
         manual_leaderships(
             &[vec![NodeId(3), NodeId(2), NodeId(1)]],
@@ -691,12 +690,7 @@ fn three_sites_hold_one_replica_of_every_partition() {
             .map(|replicas| replicas[0])
             .collect::<Vec<_>>();
         assert!(
-            leaders[..3]
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                == 3
-                && leaders[3] == leaders[0],
+            leaders[..3].iter().collect::<BTreeSet<_>>().len() == 3 && leaders[3] == leaders[0],
             "seed {seed}"
         );
     }
@@ -786,8 +780,8 @@ fn a_cluster_without_racks_starts_each_topic_at_a_random_broker() {
         .map(|seed| {
             assign(&auto_topic(1, 1), &views, None, seed).expect("automatic placement")[0][0]
         })
-        .collect::<std::collections::BTreeSet<_>>();
-    assert!(leaders == std::collections::BTreeSet::from([NodeId(1), NodeId(2), NodeId(3)]));
+        .collect::<BTreeSet<_>>();
+    assert!(leaders == BTreeSet::from([NodeId(1), NodeId(2), NodeId(3)]));
 
     for (partitions, rf) in [(1, 1), (3, 1), (3, 2), (4, 3), (5, 2)] {
         let assignments =
@@ -951,13 +945,8 @@ fn fully_cordoned_brokers_are_not_automatic_placement_candidates() {
         if let Some(node_id) = shutting_down {
             enter_controlled_shutdown(&mut image, node_id);
         }
-        let excluded = automatic_placement_exclusions(&image, &std::collections::HashSet::new());
-        let views = site_broker_views(
-            &image,
-            Some(NodeId(1)),
-            &excluded,
-            &std::collections::HashSet::new(),
-        );
+        let excluded = automatic_placement_exclusions(&image, &HashSet::new());
+        let views = site_broker_views(&image, Some(NodeId(1)), &excluded, &HashSet::new());
         assert!(
             views.iter().map(|view| view.node_id).collect::<Vec<_>>() == want,
             "{label}"
@@ -976,13 +965,8 @@ fn fully_cordoned_brokers_are_not_automatic_placement_candidates() {
     registration.log_dirs = vec![dir(10)];
     registration.cordoned_log_dirs = Some(vec![dir(10)]);
     all_cordoned.apply(&MetadataRecord::V1BrokerRegistration(registration));
-    let excluded = automatic_placement_exclusions(&all_cordoned, &std::collections::HashSet::new());
-    let views = site_broker_views(
-        &all_cordoned,
-        Some(NodeId(1)),
-        &excluded,
-        &std::collections::HashSet::new(),
-    );
+    let excluded = automatic_placement_exclusions(&all_cordoned, &HashSet::new());
+    let views = site_broker_views(&all_cordoned, Some(NodeId(1)), &excluded, &HashSet::new());
     assert!(views.is_empty());
     assert!(assign(&auto_topic(1, 1), &views, None, 0) == Ok(Vec::new()));
     assert!(

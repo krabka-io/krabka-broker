@@ -232,7 +232,7 @@ mod tests {
             },
         },
         assert2::{assert, check},
-        std::sync::Arc,
+        std::{sync::Arc, time::Duration},
     };
 
     /// Kafka's `shareGroupHeartbeat`: only initialized partitions are
@@ -296,7 +296,7 @@ mod tests {
             ]),
         ];
         for (index, (initialized, steps)) in scenarios.into_iter().enumerate() {
-            let (coord, _log) = make_coordinator(metadata.clone());
+            let (coord, _log) = make_coordinator(Arc::clone(&metadata));
             let handle = coord.get_or_create_share("g");
             if let Some(partitions) = initialized {
                 seed_initialized()
@@ -576,7 +576,7 @@ mod tests {
                 .name(TopicMetadataSetup::four_partitions().name)
                 .partitions(TopicMetadataSetup::four_partitions().partitions)
                 .share(ShareGroupConfig {
-                    assignment_interval: std::time::Duration::from_mins(1),
+                    assignment_interval: Duration::from_mins(1),
                     ..ShareGroupConfig::default()
                 })
                 .call();

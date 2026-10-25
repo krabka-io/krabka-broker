@@ -51,10 +51,18 @@ use {
         topic_resolve::resolve,
     },
     bytes::Bytes,
-    futures_util::{StreamExt as _, stream::FuturesUnordered},
-    krabka_protocol::owned::produce_response::{PartitionProduceResponse, TopicProduceResponse},
+    futures_util::{StreamExt as _, future, stream::FuturesUnordered},
+    krabka_protocol::{
+        api_key::ApiKey,
+        owned::produce_response::{PartitionProduceResponse, TopicProduceResponse},
+    },
     krabka_verified::FreezeMutationKind,
-    std::{collections::HashMap, sync::Arc, task::Poll, time::Duration},
+    std::{
+        collections::HashMap,
+        sync::Arc,
+        task::Poll,
+        time::{Duration, Instant},
+    },
 };
 
 mod append;
@@ -62,8 +70,10 @@ mod authorization;
 mod delivery;
 mod framing;
 /// Benchmark seam over `prepare_batch`, `build_produce_data` and the log
-/// append behind them. `benches/produce.rs` is its only caller; the module is
-/// gated so a release build of the broker never carries it.
+/// append behind them.
+///
+/// `benches/produce.rs` is its only caller; the module is gated so a release
+/// build of the broker never carries it.
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod hot_path;
 mod leadership;
@@ -80,7 +90,7 @@ mod throttle;
 mod topic_settings;
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 
 #[cfg(test)]
 mod broker_default_tests;
@@ -127,7 +137,7 @@ struct AcksRequest<'a> {
     topic_data: &'a [framing::FramedTopic],
     acks: i16,
     version: i16,
-    handler_start: std::time::Instant,
+    handler_start: Instant,
 }
 
 fn invalid_required_acks_response(
@@ -162,7 +172,7 @@ fn invalid_required_acks_response(
 /// This handler's own wire api key, for the `api_key` label the request-phase
 /// and throttle histograms carry. The dispatcher labels the total latency from
 /// the frame it parsed; the handler labels its phases from the same number.
-pub(super) const PRODUCE_API_KEY: ApiKeyCode = krabka_protocol::api_key::ApiKey::Produce as i16;
+pub(super) const PRODUCE_API_KEY: ApiKeyCode = ApiKey::Produce as i16;
 
 /// The first `Produce` version that names each topic by `topic_id` only
 /// (KIP-516). The request schema carries `name` at versions 0-12 and
@@ -191,7 +201,7 @@ const NO_LEADER_ID: i32 = -1;
     fields(api = "Produce", version, req_bytes = req_bytes.len()),
     err,
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     version: i16,
     req_bytes: &[u8],
@@ -201,7 +211,7 @@ pub(crate) async fn handle(
     // KIP-124 request_percentage meters server-side handler time; capture the
     // start so the request throttle can be combined with the byte-rate throttle
     // below (KIP-219).
-    let handler_start = std::time::Instant::now();
+    let handler_start = Instant::now();
     // Phase accounting for `request_{local,remote}_duration_seconds`. One
     // Produce appends to many partitions, so the local phase is a sum over the
     // partitions below: `dispatch_prepared` opens an interval around each
@@ -210,10 +220,10 @@ pub(crate) async fn handle(
     // high-watermark waits of every appended partition run as one wait.
     let phases = RequestPhases::default();
     let record_decompression_policy = broker.config.record_decompression_policy()?;
-    let partitions = broker.partitions.clone();
-    let controller = broker.controller.clone();
-    let producer_state = broker.producer_state.clone();
-    let txn_coordinator = broker.txn_coordinator.clone();
+    let partitions = Arc::clone(&broker.partitions);
+    let controller = Arc::clone(&broker.controller);
+    let producer_state = Arc::clone(&broker.producer_state);
+    let txn_coordinator = Arc::clone(&broker.txn_coordinator);
     let log_dir_status = broker.log_dir_status.clone();
     let broker_policy = BrokerProducePolicy {
         node_id: broker.config.node_id,
@@ -332,7 +342,6 @@ pub(crate) async fn handle(
     // remembers where its row goes, because the response is built topic by
     // topic while the waits are driven once, after every partition has
     // appended.
-    let mut awaiting: Vec<PendingPartition> = Vec::new();
     // The partitions that passed every gate before the transaction check, in
     // request order, with the rows they reserved.
     let mut admitted: Vec<AdmittedPartition> = Vec::new();
@@ -474,7 +483,7 @@ pub(crate) async fn handle(
             // request and charging it to each partition would count it N times.
             // The transaction coordinator call is not in it either: it is one
             // call for the whole request too.
-            let started = std::time::Instant::now();
+            let started = Instant::now();
             let admission = admit_partition(
                 PartitionInput {
                     part_data,
@@ -484,7 +493,7 @@ pub(crate) async fn handle(
                     max_message_bytes,
                     delivery,
                     schema,
-                    topic_name: topic_name.clone(),
+                    topic_name: Arc::clone(&topic_name),
                     freeze,
                     internal_topic_denied,
                     transaction,
@@ -508,7 +517,7 @@ pub(crate) async fn handle(
                     admitted.push(AdmittedPartition {
                         topic_row: topic_results.len(),
                         partition_row: partition_results.len(),
-                        topic_name: topic_name.clone(),
+                        topic_name: Arc::clone(&topic_name),
                         idx,
                         micros,
                         batch,
@@ -531,6 +540,7 @@ pub(crate) async fn handle(
     }
 
     // ── the one transaction check, then every append ────────────────
+    let mut awaiting: Vec<PendingPartition> = Vec::new();
     complete_admitted(
         admitted,
         services,
@@ -541,7 +551,8 @@ pub(crate) async fn handle(
     .await?;
 
     // ── the one acks=-1 high-watermark wait ─────────────────────────
-    await_durability(broker, awaiting, &mut topic_results, timeout, &phases).await;
+    await_durability(broker, &mut awaiting, &mut topic_results, timeout, &phases).await;
+    drop(awaiting);
 
     // The suppressed response is the only signal an acks=0 producer gets, so
     // Kafka closes the connection on it rather than mute it. `acks != 0`
@@ -622,8 +633,9 @@ async fn complete_admitted(
 ) -> Result<(), BrokerError> {
     // Most producers send one partition. It needs the same coordinator and
     // append checks, but no lane map, boxed future or concurrent scheduler.
-    if admitted.len() == 1 {
-        let partition = admitted.pop().expect("one admitted partition");
+    if admitted.len() == 1
+        && let Some(partition) = admitted.pop()
+    {
         let answer = verify_single_admitted(
             &partition.batch,
             services.txn_coordinator,
@@ -645,7 +657,7 @@ async fn complete_admitted(
     )
     .await;
     let lanes = partition_lanes(admitted.into_iter().zip(answers));
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let mut finished: Vec<(usize, LaneOutcome)> = Vec::with_capacity(lanes.len());
     // A lane is polled once where it is started. Most finish there, appending
     // on this task to an idle writer, and only a lane that has to wait joins
@@ -702,16 +714,18 @@ async fn complete_single_admitted(
     topic_results: &mut [TopicProduceResponse],
     awaiting: &mut Vec<PendingPartition>,
 ) -> Result<(), BrokerError> {
-    let completed = complete_timed_partition(partition, answer, services).await?;
-    record_partition_cpu(
-        services.metrics,
-        &completed.topic_name,
-        completed.idx,
-        completed
-            .admit_micros
-            .saturating_add(completed.stage_micros),
-    );
-    finish_completed_partition(completed, services.metrics, topic_results, awaiting);
+    {
+        let completed = complete_timed_partition(partition, answer, services).await?;
+        record_partition_cpu(
+            services.metrics,
+            &completed.topic_name,
+            completed.idx,
+            completed
+                .admit_micros
+                .saturating_add(completed.stage_micros),
+        );
+        finish_completed_partition(completed, services.metrics, topic_results, awaiting);
+    }
     Ok(())
 }
 
@@ -730,7 +744,7 @@ async fn complete_timed_partition(
         micros,
         batch,
     } = partition;
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let outcome = complete_partition(*batch, answer, services).await;
     let stage_micros = elapsed_micros(started);
     let outcome = outcome.inspect_err(|_| {
@@ -770,7 +784,7 @@ fn finish_completed_partition(
     match outcome {
         PartitionOutcome::Done(out) => {
             record_partition_failure(metrics, &topic_name, out.error_code);
-            topic_results[topic_row].partition_responses[partition_row] = out;
+            set_partition_row(topic_results, (topic_row, partition_row), out);
         }
         PartitionOutcome::AwaitingHighWatermark(ack) => {
             awaiting.push(PendingPartition {
@@ -784,7 +798,7 @@ fn finish_completed_partition(
 }
 
 /// Microseconds since `started`, saturating.
-fn elapsed_micros(started: std::time::Instant) -> u64 {
+fn elapsed_micros(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 
@@ -810,11 +824,12 @@ fn partition_lanes(entries: impl IntoIterator<Item = LaneEntry>) -> Vec<Vec<Lane
     let mut lanes: Vec<Vec<LaneEntry>> = Vec::new();
     for entry in entries {
         let key = (Arc::clone(&entry.0.topic_name), entry.0.idx);
-        let lane = *lane_of.entry(key).or_insert_with(|| {
-            lanes.push(Vec::new());
-            lanes.len() - 1
-        });
-        lanes[lane].push(entry);
+        if let Some(lane) = lane_of.get(&key).and_then(|&lane| lanes.get_mut(lane)) {
+            lane.push(entry);
+        } else {
+            lane_of.insert(key, lanes.len());
+            lanes.push(vec![entry]);
+        }
     }
     lanes
 }
@@ -896,9 +911,11 @@ struct PendingPartition {
 /// The whole wait is the request's remote phase. Everything it waits for is a
 /// follower taking an append this broker already made durable, and it is
 /// charged once because it happened once.
+///
+/// It drains `awaiting`.
 async fn await_durability(
     broker: &Broker,
-    mut awaiting: Vec<PendingPartition>,
+    awaiting: &mut Vec<PendingPartition>,
     topic_results: &mut [TopicProduceResponse],
     timeout: Duration,
     phases: &RequestPhases,
@@ -906,7 +923,7 @@ async fn await_durability(
     if awaiting.is_empty() {
         return;
     }
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let deadline = started + timeout;
     let min_isr_layers = (
         broker.config.node_id,
@@ -920,23 +937,24 @@ async fn await_durability(
             min_isr_layers,
         )
     };
-    if awaiting.len() == 1 {
-        let PendingPartition {
+    if awaiting.len() == 1
+        && let Some(PendingPartition {
             topic_row,
             partition_row,
             topic_name,
             ack,
-        } = awaiting.pop().expect("one pending partition");
+        }) = awaiting.pop()
+    {
         let leadership_changed = ack.leadership_changed(broker.controller.watch_image());
         let row = ack
             .finish(deadline, current_min_isr, leadership_changed)
             .await;
         phases.add_remote(started.elapsed());
         record_partition_failure(&broker.metrics, &topic_name, row.error_code);
-        topic_results[topic_row].partition_responses[partition_row] = row;
+        set_partition_row(topic_results, (topic_row, partition_row), row);
         return;
     }
-    let finished = futures_util::future::join_all(awaiting.into_iter().map(|pending| {
+    let finished = future::join_all(awaiting.drain(..).map(|pending| {
         let PendingPartition {
             topic_row,
             partition_row,
@@ -958,7 +976,22 @@ async fn await_durability(
     phases.add_remote(started.elapsed());
     for (topic_row, partition_row, topic_name, row) in finished {
         record_partition_failure(&broker.metrics, &topic_name, row.error_code);
-        topic_results[topic_row].partition_responses[partition_row] = row;
+        set_partition_row(topic_results, (topic_row, partition_row), row);
+    }
+}
+
+/// Write `row` into the response slot `(topic_row, partition_row)` that the
+/// request reserved for it.
+fn set_partition_row(
+    topic_results: &mut [TopicProduceResponse],
+    (topic_row, partition_row): (usize, usize),
+    row: PartitionProduceResponse,
+) {
+    if let Some(slot) = topic_results
+        .get_mut(topic_row)
+        .and_then(|topic| topic.partition_responses.get_mut(partition_row))
+    {
+        *slot = row;
     }
 }
 
@@ -1016,7 +1049,7 @@ fn any_partition_failed(topic_results: &[TopicProduceResponse]) -> bool {
 
 /// Whether Kafka requires a response for this Produce request. `acks=0`
 /// requests are one-way even when an append or authorization check fails.
-pub(crate) fn response_required(request_bytes: &[u8], version: i16) -> Result<bool, BrokerError> {
+pub fn response_required(request_bytes: &[u8], version: i16) -> Result<bool, BrokerError> {
     Ok(framing::produce_acks(request_bytes, version)? != 0)
 }
 

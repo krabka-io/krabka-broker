@@ -16,6 +16,8 @@ use {
     krabka_ids::PartitionIndex,
     krabka_metadata::NodeId,
     krabka_units::{convert::TimeExt as _, secs},
+    std::time::{Duration, Instant},
+    tokio::time,
 };
 
 /// Block until the sweep has counted `want` clean passes, or give up.
@@ -24,12 +26,12 @@ use {
 /// are all on disk once it moves. Bounded real time, hang-guard only: the
 /// cadence itself is the manual clock's, not this poll's.
 async fn swept(metrics: &BrokerMetrics, want: u64) -> bool {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
         if metrics.log_retention_runs_total.get() >= want {
             return true;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        time::sleep(Duration::from_millis(10)).await;
     }
     false
 }

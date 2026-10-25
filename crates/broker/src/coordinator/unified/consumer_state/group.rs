@@ -290,7 +290,7 @@ impl GroupState {
             {
                 let timeout = member.rebalance_timeout;
                 self.rebalance_deadlines
-                    .entry(member_id.to_string())
+                    .entry(member_id.to_owned())
                     .or_insert(now + timeout);
             }
             _ => {
@@ -366,17 +366,17 @@ impl GroupState {
         if member_id != previous {
             self.remove_member(member_id);
         }
-        member.member_id = member_id.to_string();
+        member_id.clone_into(&mut member.member_id);
         member.member_epoch = 0;
         member.previous_member_epoch = 0;
         if let Some(instance_id) = &member.instance_id {
             self.instance_to_member
-                .insert(instance_id.clone(), member_id.to_string());
+                .insert(instance_id.clone(), member_id.to_owned());
         }
         if let Some(target) = self.target.per_member.remove(previous) {
-            self.target.per_member.insert(member_id.to_string(), target);
+            self.target.per_member.insert(member_id.to_owned(), target);
         }
-        self.members.insert(member_id.to_string(), member);
+        self.members.insert(member_id.to_owned(), member);
     }
 
     /// Sets a static member that leaves for a while to epoch -2, as Kafka's
@@ -795,7 +795,7 @@ mod tests {
 
         fn reconcile_step(g: &mut GroupState, topics: &Topics, step: ReconciliationStep) {
             g.group_epoch = step.epoch;
-            g.install_target([("m1".to_string(), [(T, step.target)].into())].into());
+            g.install_target([("m1".to_owned(), [(T, step.target)].into())].into());
             g.reconcile_member("m1", Some(&[(T, step.owned)].into()), false, topics);
         }
 
@@ -807,7 +807,7 @@ mod tests {
 
         // Epoch 1: granted partitions 0 and 1.
         g.group_epoch = 1;
-        g.install_target([("m1".to_string(), [(T, vec![0, 1])].into())].into());
+        g.install_target([("m1".to_owned(), [(T, vec![0, 1])].into())].into());
         g.reconcile_member("m1", Some(&HashMap::new()), true, &topics);
         steps.push(epochs(&g));
 
@@ -880,7 +880,7 @@ mod tests {
         g.add_or_update_member(m);
         g.add_or_update_member(member("m2"));
         let evicted = g.evict_expired(Instant::now(), Duration::from_mins(1));
-        assert!(evicted == vec!["m1".to_string()]);
+        assert!(evicted == vec!["m1".to_owned()]);
         assert!(g.members.contains_key("m2"));
     }
 
@@ -1003,7 +1003,7 @@ mod tests {
         assert!(g.next_rebalance_deadline() == Some(start + Duration::from_mins(1)));
         assert!(
             g.fence_rebalance_timeouts(start + Duration::from_mins(1))
-                == vec!["classic".to_string()]
+                == vec!["classic".to_owned()]
         );
     }
 

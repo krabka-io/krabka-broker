@@ -75,6 +75,7 @@ use {
         features::{ELR_VERSION, feature_enabled},
     },
     krabka_metadata::{MetadataImage, MetadataRecord, NodeId},
+    std::collections::BTreeSet,
 };
 
 /// The `V1PartitionElr` records that take `node` out of every ELR it is named
@@ -84,7 +85,7 @@ use {
 /// cluster at Kafka's default `min.insync.replicas` of 1 can never have a
 /// non-empty ELR at all. Submit these ahead of the registration record they
 /// accompany, the order `ClusterControlManager.registerBroker` uses.
-pub(crate) fn withdraw_elr_membership(image: &MetadataImage, node: NodeId) -> Vec<MetadataRecord> {
+pub fn withdraw_elr_membership(image: &MetadataImage, node: NodeId) -> Vec<MetadataRecord> {
     // A node id too wide for the wire could never have been published into an
     // ELR value in the first place -- `wire_node_ids` drops it -- so there is
     // nothing to withdraw.
@@ -98,7 +99,7 @@ pub(crate) fn withdraw_elr_membership(image: &MetadataImage, node: NodeId) -> Ve
     if !feature_enabled(image, ELR_VERSION, 1) {
         return Vec::new();
     }
-    let topics: std::collections::BTreeSet<_> = image
+    let topics: BTreeSet<_> = image
         .all_partitions()
         .map(|partition| partition.topic.as_str())
         .collect();
@@ -131,16 +132,16 @@ pub(crate) fn withdraw_elr_membership(image: &MetadataImage, node: NodeId) -> Ve
 ///
 /// Empty when no topic carries the override, which is every cluster that
 /// never turned the feature on.
-pub(crate) fn clear_published_elr(image: &MetadataImage) -> Vec<MetadataRecord> {
+pub fn clear_published_elr(image: &MetadataImage) -> Vec<MetadataRecord> {
     clear_published_elr_for_topic(image, None)
 }
 
 /// Clear published and legacy ELR for the selected topic, or the whole image.
-pub(crate) fn clear_published_elr_for_topic(
+pub fn clear_published_elr_for_topic(
     image: &MetadataImage,
     topic: Option<&str>,
 ) -> Vec<MetadataRecord> {
-    let topics: std::collections::BTreeSet<_> = image
+    let topics: BTreeSet<_> = image
         .all_partitions()
         .filter(|partition| topic.is_none_or(|name| partition.topic == name))
         .map(|partition| partition.topic.as_str())

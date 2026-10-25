@@ -73,7 +73,7 @@ impl SchemaValidator {
             return Ok(());
         }
 
-        let [magic, id_0, id_1, id_2, id_3, ..] = field else {
+        let [magic, id_0, id_1, id_2, id_3, after_prefix @ ..] = field else {
             return Err(RejectReason::Unframed(
                 "Confluent frame is shorter than its five-byte prefix".to_owned(),
             ));
@@ -123,7 +123,7 @@ impl SchemaValidator {
             }
             (index, body)
         } else {
-            (Vec::new(), &field[5..])
+            (Vec::new(), after_prefix)
         };
 
         schema_body
@@ -583,7 +583,7 @@ mod tests {
                 "orders",
                 Role::Value,
                 ValidationMode::Full,
-                &framed(KNOWN_ID, br"{}"),
+                &framed(KNOWN_ID, b"{}"),
                 &no_metrics(),
             )
             .await;

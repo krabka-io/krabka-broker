@@ -24,7 +24,10 @@ use {
     crate::{error::LogError, log_start_offset_checkpoint},
     krabka_ids::Offset,
     krabka_units::prelude::TimeExt as _,
-    std::time::{Duration, Instant},
+    std::{
+        sync::PoisonError,
+        time::{Duration, Instant},
+    },
 };
 
 impl Log {
@@ -51,7 +54,7 @@ impl Log {
             let interval = self
                 .config
                 .read()
-                .unwrap()
+                .unwrap_or_else(PoisonError::into_inner)
                 .start_offset_checkpoint_interval
                 .millis_i64_trunc()
                 .clamp(0, i64::from(i32::MAX));

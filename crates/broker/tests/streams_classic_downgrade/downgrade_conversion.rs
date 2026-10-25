@@ -19,6 +19,8 @@ use {
     },
     assert2::{assert, check},
     krabka_broker::{Broker, coordinator::unified::GroupType},
+    std::{sync::Arc, time::Duration},
+    tokio::time,
 };
 
 /// A drained streams group with a committed offset converts to classic on a
@@ -35,12 +37,10 @@ async fn drained_streams_group_downgrades_and_preserves_offsets() {
     // ── Phase 1: form a streams group, commit offset 42, then leave. ──
     let (member_id, resp) =
         streams_join_and_converge(&streams_client, "g", topology("in"), 1, CONVERGE_TRIES).await;
-    broker
-        .wait_until_group_type("g", krabka_broker::coordinator::unified::GroupType::Streams)
-        .await;
+    broker.wait_until_group_type("g", GroupType::Streams).await;
     let group_type = broker.group_type_for_test("g");
-    let empty_waiter_timed_out = tokio::time::timeout(
-        std::time::Duration::from_millis(75),
+    let empty_waiter_timed_out = time::timeout(
+        Duration::from_millis(75),
         broker.wait_until_streams_group_empty("g"),
     )
     .await
@@ -50,7 +50,7 @@ async fn drained_streams_group_downgrades_and_preserves_offsets() {
         "streams member must converge without error (precondition for the downgrade): {resp:?}"
     );
     check!(
-        group_type == Some(krabka_broker::coordinator::unified::GroupType::Streams),
+        group_type == Some(GroupType::Streams),
         "streams member must converge on a Streams-typed group (precondition for the \
          downgrade): {resp:?}"
     );
@@ -136,21 +136,13 @@ async fn downgrade_survives_restart() {
 
         // Downgrade: classic JoinGroup on drained streams group.
         let _ = classic_join_sync(&cc, "g4").await;
-        broker
-            .wait_until_group_type(
-                "g4",
-                krabka_broker::coordinator::unified::GroupType::Classic,
-            )
-            .await;
-        assert!(
-            broker.group_type_for_test("g4")
-                == Some(krabka_broker::coordinator::unified::GroupType::Classic)
-        );
+        broker.wait_until_group_type("g4", GroupType::Classic).await;
+        assert!(broker.group_type_for_test("g4") == Some(GroupType::Classic));
         broker.shutdown().await;
     }
     {
         let (broker, _bootstrap, client) = start_client(rejoin_config(log_dir), Some("c1")).await;
-        let cc = std::sync::Arc::new(client);
+        let cc = Arc::new(client);
         // Replay must reconstruct g4 as a classic actor from the committed
         // offset. Offset-only groups are Kafka-typeless, so they do not carry a
         // Classic type lock in `group_type_for_test`.
@@ -159,8 +151,7 @@ async fn downgrade_survives_restart() {
             "offset-only replay must seed a classic actor for g4"
         );
         assert!(
-            broker.group_type_for_test("g4")
-                != Some(krabka_broker::coordinator::unified::GroupType::Streams),
+            broker.group_type_for_test("g4") != Some(GroupType::Streams),
             "group must not replay as Streams after downgrade"
         );
         let fr = cc

@@ -4,6 +4,7 @@
 use {
     super::super::{DecodeEnv, PartitionPayload, PreparedBatch, PreparedSource, prepare_batch},
     crate::{
+        codes,
         handlers::produce::{append::build_produce_data, topic_settings::TimestampPolicy},
         metrics::BrokerMetrics,
         partition::ProduceData,
@@ -166,7 +167,7 @@ fn fallback_when_null_field() {
     // A wire-null records field is rejected as INVALID_REQUEST.
     let m = BrokerMetrics::new();
     let err = prepare_for_topic(PartitionPayload::Null, None, &m, 13).unwrap_err();
-    assert!(err == crate::codes::INVALID_REQUEST);
+    assert!(err == codes::INVALID_REQUEST);
 }
 
 #[test]
@@ -185,7 +186,7 @@ fn rejects_client_log_append_time() {
         .attributes
         .with_timestamp_type(TimestampType::LogAppendTime);
     let err = rejected_batch(&b);
-    assert!(err == crate::codes::INVALID_TIMESTAMP);
+    assert!(err == codes::INVALID_TIMESTAMP);
 }
 
 #[test]
@@ -193,7 +194,7 @@ fn rejects_client_control_batch() {
     let mut b = plain_batch();
     b.attributes = Attributes::default().with_control(true);
     let err = rejected_batch(&b);
-    assert!(err == crate::codes::INVALID_RECORD);
+    assert!(err == codes::INVALID_RECORD);
 }
 
 /// `ProduceRequest.validateRecords` refuses a zstd batch below `Produce` v7
@@ -230,7 +231,7 @@ fn rejects_zstd_below_v7_and_admits_it_from_v7_on_both_paths(
         assert2::assert!(result.is_ok(), "version {version}: {result:?}");
     } else {
         assert2::assert!(
-            result.as_ref().err() == Some(&crate::codes::UNSUPPORTED_COMPRESSION_TYPE),
+            result.as_ref().err() == Some(&codes::UNSUPPORTED_COMPRESSION_TYPE),
             "version {version}: {result:?}"
         );
     }
@@ -288,7 +289,7 @@ fn rejects_invalid_client_batch_metadata_on_header_and_owned_paths() {
         ];
         for payload in payloads {
             let err = prepare_for_topic(payload, None, &BrokerMetrics::new(), 13).unwrap_err();
-            assert!(err == crate::codes::INVALID_RECORD, "case: {name}");
+            assert!(err == codes::INVALID_RECORD, "case: {name}");
         }
     }
 }
@@ -398,7 +399,7 @@ fn rejects_crc_valid_malformed_record_body() {
         13,
     )
     .unwrap_err();
-    assert!(error == crate::codes::INVALID_RECORD);
+    assert!(error == codes::INVALID_RECORD);
 }
 
 #[test]
@@ -416,7 +417,7 @@ fn fallback_on_multiple_batches_in_slice() {
         13,
     )
     .unwrap_err();
-    assert!(err == crate::codes::INVALID_RECORD);
+    assert!(err == codes::INVALID_RECORD);
 }
 
 #[test]

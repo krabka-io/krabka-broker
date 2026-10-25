@@ -1,7 +1,4 @@
-// rustc 1.95 clippy::pedantic ICEs on these test files (an upstream bug
-// in clippy's body-analysis pass that also bites `acl_handlers.rs` and
-// `admin_handlers.rs`). Disable pedantic locally; the rest of the
-// workspace still enforces the full pedantic gate.
+#![cfg(test)]
 
 //! KIP-429 batch-4 T4A: broker-side `JoinGroup` protocol-set negotiation tests.
 
@@ -18,7 +15,8 @@ use {
     krabka_protocol::owned::{
         join_group_request::JoinGroupRequest, join_group_response::JoinGroupResponse,
     },
-    std::time::Duration,
+    std::{iter, time::Duration},
+    tokio::time,
 };
 
 // Kafka error codes consumed by these tests.
@@ -82,20 +80,20 @@ fn join_group_request(
     JoinGroupRequest {
         group_instance_id: None,
         ..classic_join_request()
-            .group_id(setup.group_id.to_string())
-            .member_id(setup.member_id.to_string())
+            .group_id(setup.group_id.to_owned())
+            .member_id(setup.member_id.to_owned())
             .timeouts(ClassicTimeouts {
                 rebalance: krabka_units::millis(60_000),
                 ..Default::default()
             })
-            .protocol_type(setup.protocol_type.to_string())
+            .protocol_type(setup.protocol_type.to_owned())
             .protocols(
                 setup
                     .protocols
                     .iter()
                     .map(|protocol| {
                         join_protocol(
-                            protocol.name.to_string(),
+                            protocol.name.to_owned(),
                             Bytes::copy_from_slice(protocol.metadata),
                         )
                     })
@@ -398,7 +396,7 @@ async fn race_consumer_joins<const N: usize>(
     for (client, member) in clients.iter().zip(&members) {
         member_ids.push(bootstrap_member_id(client, group, "consumer", member.protocols).await);
     }
-    let groups: Vec<_> = (0..N).map(|_| group.to_owned()).collect();
+    let groups: Vec<_> = iter::repeat_with(|| group.to_owned()).take(N).collect();
     let mut joins = Vec::with_capacity(N);
     for (((client, member_id), group), member) in
         clients.into_iter().zip(member_ids).zip(groups).zip(members)
@@ -410,7 +408,7 @@ async fn race_consumer_joins<const N: usize>(
             ..
         } = member;
         let task = tokio::spawn(async move {
-            tokio::time::timeout(
+            time::timeout(
                 Duration::from_secs(10),
                 second_join(&client, &group, &member_id, "consumer", protocols),
             )

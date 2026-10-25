@@ -36,7 +36,7 @@ use {
         network::auth::ConnectionAuth,
         time_util::now_ms,
     },
-    krabka_metadata::{DelegationToken, DelegationTokenRecord},
+    krabka_metadata::{DelegationToken, DelegationTokenRecord, metadata_version},
     krabka_protocol::owned::{
         renew_delegation_token_request::RenewDelegationTokenRequest,
         renew_delegation_token_response::RenewDelegationTokenResponse,
@@ -60,7 +60,7 @@ const ERROR_TIMESTAMP: i64 = -1;
     skip_all,
     fields(api = "RenewDelegationToken")
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     req: &RenewDelegationTokenRequest,
     auth: &ConnectionAuth,
     secret_key: Option<&SecretBytes>,
@@ -131,7 +131,7 @@ pub(crate) async fn handle(
 /// refusal's error code and the expiry its response carries:
 /// `ERROR_TIMESTAMP` for a broker-side refusal, the schema default of 0 for a
 /// controller-side one.
-pub(crate) fn admit_token_request<'a>(
+pub fn admit_token_request<'a>(
     api: TokenApi,
     auth: &'a ConnectionAuth,
     secret_key: Option<&SecretBytes>,
@@ -154,7 +154,7 @@ pub(crate) fn admit_token_request<'a>(
     if require_feature(
         &image,
         METADATA_VERSION,
-        krabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
+        metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
     )
     .is_err()
     {

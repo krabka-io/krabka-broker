@@ -18,7 +18,12 @@ use {
         fmt::Human as _,
         prelude::{ByteSize, Time, hours, mebibytes, millis, secs},
     },
-    std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration},
+    std::{
+        net::{Ipv4Addr, SocketAddr},
+        path::PathBuf,
+        sync::Arc,
+        time::Duration,
+    },
     uuid::Uuid,
 };
 
@@ -106,8 +111,9 @@ pub enum BootstrapMode {
 }
 
 /// The limits Kafka's `SocketServer` puts on every listener, including the
-/// controller's: `ControllerServer` builds its own `SocketServer`, and that
-/// hands `socket.request.max.bytes` and `connections.max.idle.ms` to each
+/// controller's.
+///
+/// `ControllerServer` builds its own `SocketServer`, and that hands `socket.request.max.bytes` and `connections.max.idle.ms` to each
 /// `Processor` and creates a `ConnectionQuotas` for `max.connections` and
 /// `max.connections.per.ip`.
 ///
@@ -262,11 +268,9 @@ pub struct ControllerConfig {
 }
 
 impl ControllerConfig {
-    /// # Panics
-    /// Panics only if the static loopback test address is invalid.
     #[must_use]
     pub fn for_tests(node_id: NodeId, log_dir: PathBuf) -> Self {
-        let listen: SocketAddr = "127.0.0.1:0".parse().expect("static");
+        let listen = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
         let directory_id = Uuid::from_u128(u128::from(node_id.0));
         Self {
             client_dispatch_queue_capacity:

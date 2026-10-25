@@ -19,9 +19,10 @@ use {
         },
     },
     assert2::assert,
-    krabka_broker::{Broker, BrokerConfig},
+    krabka_broker::{Broker, BrokerConfig, config::ListenerSpec},
     krabka_log::LogConfig,
-    std::{io::Write, process::Stdio},
+    std::{io::Write, net::SocketAddr, process::Stdio, time::Duration},
+    tokio::{time, time::Instant},
 };
 
 /// A zombie-fencing probe (KIP-360): two JVM producers share one
@@ -140,7 +141,7 @@ async fn transactional_console_producer_eos() {
     let controller_ports = [9793u16, 9893, 9993];
     let inter_broker_ports = [9794u16, 9894, 9994];
 
-    let voters: Vec<(u64, std::net::SocketAddr)> = (0..3)
+    let voters: Vec<(u64, SocketAddr)> = (0..3)
         .map(|i| {
             (
                 u64::try_from(i + 1).unwrap(),
@@ -171,8 +172,8 @@ async fn transactional_console_producer_eos() {
                 ..LogConfig::default()
             },
             listeners: vec![
-                krabka_broker::config::ListenerSpec {
-                    name: "EXTERNAL".to_string(),
+                ListenerSpec {
+                    name: "EXTERNAL".to_owned(),
                     bind_addr: listen_addr,
                     advertised: advertised_listener.clone(),
                     protocol: krabka_security::ListenerProtocol::Plaintext,
@@ -180,8 +181,8 @@ async fn transactional_console_producer_eos() {
                     sasl_mechanisms: None,
                     principal_mapper: krabka_broker::SslPrincipalMapper::default(),
                 },
-                krabka_broker::config::ListenerSpec {
-                    name: "INTERNAL".to_string(),
+                ListenerSpec {
+                    name: "INTERNAL".to_owned(),
                     bind_addr: inter_broker_addr,
                     advertised: inter_broker_addr.to_string(),
                     protocol: krabka_security::ListenerProtocol::Plaintext,
@@ -190,7 +191,7 @@ async fn transactional_console_producer_eos() {
                     principal_mapper: krabka_broker::SslPrincipalMapper::default(),
                 },
             ],
-            inter_broker_listener_name: "INTERNAL".to_string(),
+            inter_broker_listener_name: "INTERNAL".to_owned(),
             ..jvm_broker_config()
                 .log_dir(dir.path().to_path_buf())
                 .node(u64::try_from(i + 1).unwrap())
@@ -222,17 +223,17 @@ async fn transactional_console_producer_eos() {
     // Wait for the partition to materialize on the broker that leads it: the
     // producer's first batch must not land before the log exists with the
     // segment size the cluster booted with.
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while !cluster.iter().any(|(broker, _)| {
         broker
             .partition_log_config_for_test(TOPIC, 0)
             .is_some_and(|config| config.segment_size == SEGMENT_SIZE)
     }) {
         assert!(
-            tokio::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "the transaction-log partition never materialized with a {SEGMENT_SIZE:?} segment"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        time::sleep(Duration::from_millis(25)).await;
     }
 
     // 2. Compile the small Java helper against the image's Kafka client jars.
@@ -283,7 +284,7 @@ async fn transactional_console_producer_eos() {
     // 3. Brief pause to let commit markers propagate through the log.
     // intentional: transactional commit-marker propagation and LSO advance are
     // not in the metadata image and have no krabka awaiter/metric.
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    time::sleep(Duration::from_secs(2)).await;
 
     // 4. read_committed must return the committed transaction and the later
     // record, even though the abort entry is now in a sealed segment.

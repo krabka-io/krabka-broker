@@ -33,7 +33,7 @@ pub fn first_timestamp_index(timestamps: &[i64], target: i64) -> Option<usize> {
     #[invariant(forall<i: Int> 0 <= i && i < index@ ==> timestamps@[i]@ < target@)]
     #[variant(timestamps@.len() - index@)]
     while index < timestamps.len() {
-        if timestamps[index] >= target {
+        if matches!(timestamps.get(index), Some(&timestamp) if timestamp >= target) {
             return Some(index);
         }
         index += 1;
@@ -65,7 +65,9 @@ pub fn earliest_max_timestamp_index(timestamps: &[i64]) -> Option<usize> {
         timestamps@[i]@ < timestamps@[best@]@)]
     #[variant(timestamps@.len() - index@)]
     while index < timestamps.len() {
-        if timestamps[index] > timestamps[best] {
+        if let (Some(&candidate), Some(&current)) = (timestamps.get(index), timestamps.get(best))
+            && candidate > current
+        {
             best = index;
         }
         index += 1;
@@ -151,7 +153,10 @@ pub fn first_timestamp_record_index(
         ==> records@[i].0@ < minimum@ || records@[i].1@ < target@)]
     #[variant(records@.len() - index@)]
     while index < records.len() {
-        if records[index].0 >= minimum && records[index].1 >= target {
+        if matches!(
+            records.get(index),
+            Some(&(offset, timestamp)) if offset >= minimum && timestamp >= target
+        ) {
             return Some(index);
         }
         index += 1;
@@ -175,10 +180,10 @@ pub fn timestamp_record_time(
     timestamp_delta: i64,
     append_time: Option<i64>,
 ) -> Option<i64> {
-    match append_time {
-        Some(stamp) => Some(stamp),
-        None => batch_timestamp.checked_add(timestamp_delta),
+    if let Some(stamp) = append_time {
+        return Some(stamp);
     }
+    batch_timestamp.checked_add(timestamp_delta)
 }
 
 #[cfg(test)]

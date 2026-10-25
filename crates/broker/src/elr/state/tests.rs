@@ -10,6 +10,7 @@ use {
         MetadataImage, MetadataRecord, NodeId, PartitionElrRecord, PartitionRecord,
         TopicConfigRecord,
     },
+    std::iter,
 };
 
 fn orders_partition_image() -> MetadataImage {
@@ -70,9 +71,7 @@ fn of_topic_reads_legacy_elr_until_it_is_migrated() {
     let mut image = orders_partition_image();
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: "orders".into(),
-        overrides: [("krabka.elr".to_owned(), "0:2,3:4".to_owned())]
-            .into_iter()
-            .collect(),
+        overrides: iter::once(("krabka.elr".to_owned(), "0:2,3:4".to_owned())).collect(),
     }));
 
     assert!(TopicElr::of_topic(&image, "orders").partition(0) == elr(&[], &[]));

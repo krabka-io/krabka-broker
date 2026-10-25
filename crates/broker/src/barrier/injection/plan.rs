@@ -19,7 +19,7 @@ use {
 /// image reported at this instant. A topic that the image does not hold has no
 /// partition to mark, so the set leaves it out. An edit to the group's topics
 /// and a partition-count change both apply from the next epoch.
-pub(crate) fn freeze_targets(topics: &[String], image: &MetadataImage) -> Vec<TopicTarget> {
+pub fn freeze_targets(topics: &[String], image: &MetadataImage) -> Vec<TopicTarget> {
     let mut out = Vec::with_capacity(topics.len());
     for topic in topics {
         if let Some(record) = image.topic(topic) {
@@ -39,7 +39,7 @@ pub(crate) fn freeze_targets(topics: &[String], image: &MetadataImage) -> Vec<To
 /// `leader_of` returns `None` for a partition that the metadata image does not
 /// hold. Those partitions group under `None`, and the fan-out leaves them for
 /// the next attempt.
-pub(crate) fn group_by_leader<F>(
+pub fn group_by_leader<F>(
     pending: &[TargetPartition],
     leader_of: F,
 ) -> BTreeMap<Option<NodeId>, Vec<TargetPartition>>
@@ -58,7 +58,7 @@ where
 /// The wait before retry number `attempt`, counted from zero.
 ///
 /// The wait doubles per attempt and stops at `max`.
-pub(crate) fn backoff_for(attempt: u32, base: Time, max: Time) -> Time {
+pub fn backoff_for(attempt: u32, base: Time, max: Time) -> Time {
     let base_ms = base.millis_i64().max(0);
     let max_ms = max.millis_i64().max(0);
     let factor = 1_i64 << attempt.min(20);

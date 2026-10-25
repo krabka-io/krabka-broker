@@ -10,15 +10,16 @@
 use {
     crate::coordinator::unified::streams::state::StreamsMemberState,
     krabka_log::Offset,
-    krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
+    krabka_protocol::owned::{
+        common::streams_group_heartbeat_request::{task_ids::TaskIds, task_offset::TaskOffset},
+        streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
+    },
     std::{collections::BTreeMap, time::Instant},
 };
 
 /// Converts request `TaskIds`, which hold a subtopology and its partitions,
 /// into the in-memory `subtopology -> partitions` task map.
-pub(super) fn task_ids_to_map(
-    tasks: &[krabka_protocol::owned::common::streams_group_heartbeat_request::task_ids::TaskIds],
-) -> BTreeMap<String, Vec<i32>> {
+pub(super) fn task_ids_to_map(tasks: &[TaskIds]) -> BTreeMap<String, Vec<i32>> {
     let mut map: BTreeMap<String, Vec<i32>> = BTreeMap::new();
     for t in tasks {
         let entry = map.entry(t.subtopology_id.clone()).or_default();
@@ -35,9 +36,7 @@ pub(super) fn task_ids_to_map(
 /// `(subtopology, partition) -> offset` map. The wire `o.offset` field stays a
 /// raw `i64`, and this function wraps it as an `Offset` for the in-memory
 /// changelog-position map.
-pub(super) fn task_offsets_to_map(
-    offsets: &[krabka_protocol::owned::common::streams_group_heartbeat_request::task_offset::TaskOffset],
-) -> BTreeMap<(String, i32), Offset> {
+pub(super) fn task_offsets_to_map(offsets: &[TaskOffset]) -> BTreeMap<(String, i32), Offset> {
     offsets
         .iter()
         .map(|o| ((o.subtopology_id.clone(), o.partition), Offset(o.offset)))
@@ -96,13 +95,13 @@ mod tests {
     fn task_offsets_to_map_wraps_each_wire_entry() {
         let wire = vec![
             TaskOffset {
-                subtopology_id: "sub-a".to_string(),
+                subtopology_id: "sub-a".to_owned(),
                 partition: 0,
                 offset: 42,
                 ..Default::default()
             },
             TaskOffset {
-                subtopology_id: "sub-a".to_string(),
+                subtopology_id: "sub-a".to_owned(),
                 partition: 1,
                 offset: 7,
                 ..Default::default()
@@ -111,8 +110,8 @@ mod tests {
         let map = task_offsets_to_map(&wire);
         check!(
             map == maplit::btreemap! {
-            ("sub-a".to_string(), 0) => Offset(42),
-            ("sub-a".to_string(), 1) => Offset(7)}
+            ("sub-a".to_owned(), 0) => Offset(42),
+            ("sub-a".to_owned(), 1) => Offset(7)}
         );
     }
 }

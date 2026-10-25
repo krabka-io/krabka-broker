@@ -39,10 +39,7 @@ use {
 /// cluster-wide one. A key neither layer holds is absent, which leaves the
 /// static default in force.
 #[must_use]
-pub(crate) fn dynamic_topic_defaults(
-    image: &MetadataImage,
-    node: NodeId,
-) -> BTreeMap<String, String> {
+pub fn dynamic_topic_defaults(image: &MetadataImage, node: NodeId) -> BTreeMap<String, String> {
     let per_broker = image.broker_config(node);
     let cluster = image.default_broker_config();
     if per_broker.is_none() && cluster.is_none() {
@@ -53,7 +50,10 @@ pub(crate) fn dynamic_topic_defaults(
         .filter_map(|(broker_key, topic_key)| {
             per_broker
                 .and_then(|configs| configs.get(*broker_key))
-                .or_else(|| cluster.and_then(|configs| configs.get(*broker_key)))
+                .or_else(|| {
+                    let configs = cluster?;
+                    configs.get(*broker_key)
+                })
                 .map(|value| ((*topic_key).to_owned(), value.clone()))
         })
         .collect()
@@ -63,7 +63,7 @@ pub(crate) fn dynamic_topic_defaults(
 /// `LogConfig` a partition falls back to for every key its topic does not
 /// override.
 #[must_use]
-pub(crate) fn dynamic_log_base(image: &MetadataImage, node: NodeId, base: &LogConfig) -> LogConfig {
+pub fn dynamic_log_base(image: &MetadataImage, node: NodeId, base: &LogConfig) -> LogConfig {
     apply_to_log_config(&dynamic_topic_defaults(image, node), base)
 }
 
@@ -73,7 +73,7 @@ pub(crate) fn dynamic_log_base(image: &MetadataImage, node: NodeId, base: &LogCo
 /// `resolve_compacted_topic` and `resolve_timestamp_policy`, which take these
 /// as their fallback.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct BrokerLogDefaults {
+pub struct BrokerLogDefaults {
     /// `message.max.bytes`, the default of `max.message.bytes`.
     pub(crate) max_message_size: ByteSize,
     /// `log.message.timestamp.type`.
@@ -120,9 +120,10 @@ impl BrokerLogDefaults {
         let log = applied.as_ref().unwrap_or(base);
         // An explicit `Long.MAX_VALUE`, like an unparseable stored value, is no
         // bound, as `resolve_timestamp_policy` reads a topic's own window.
-        let window = |key: &str, static_window: Option<i64>| match dynamic.get(key) {
-            Some(value) => long_value(value).filter(|ms| *ms != i64::MAX),
-            None => static_window,
+        let window = |key: &str, static_window: Option<i64>| {
+            dynamic.get(key).map_or(static_window, |value| {
+                long_value(value).filter(|ms| *ms != i64::MAX)
+            })
         };
         Self {
             max_message_size: log.max_message_size,

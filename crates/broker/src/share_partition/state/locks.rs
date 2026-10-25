@@ -97,9 +97,12 @@ impl AcquisitionState {
 mod tests {
     use {
         super::*,
-        crate::share_partition::state::{
-            AckType, AcquiredRange,
-            test_support::{LOCK, t0},
+        crate::{
+            codes,
+            share_partition::state::{
+                AckType, AcquiredRange,
+                test_support::{LOCK, t0},
+            },
         },
         assert2::assert,
     };
@@ -192,12 +195,12 @@ mod tests {
         let _ = s.acquire("m1", 10, krabka_log::Offset(i64::MAX), t0, LOCK, 5);
         // Wrong member.
         let err = s.renew("m2", Offset(0), Offset(2), t0, LOCK);
-        assert!(err == Err(crate::codes::INVALID_RECORD_STATE));
+        assert!(err == Err(codes::INVALID_RECORD_STATE));
 
         // Non-Acquired range: release [0,2] back to Available, then renew fails.
         s.acknowledge("m1", Offset(0), Offset(2), AckType::Release, 5)
             .unwrap();
         let err2 = s.renew("m1", Offset(0), Offset(2), t0, LOCK);
-        assert!(err2 == Err(crate::codes::INVALID_RECORD_STATE));
+        assert!(err2 == Err(codes::INVALID_RECORD_STATE));
     }
 }

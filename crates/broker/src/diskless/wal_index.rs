@@ -1,6 +1,6 @@
 //! Diskless WAL offset-to-object index records and in-memory projection.
 
-pub(crate) use krabka_remote_storage::diskless::{
+pub use krabka_remote_storage::diskless::{
     WalIndexEntry,
     index::{WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexKey},
 };
@@ -33,7 +33,7 @@ impl PartitionKey {
 }
 
 /// An indexed range and the object that holds it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedRange {
     /// The key of the object that holds the range.
     pub object_key: String,
@@ -55,7 +55,7 @@ pub struct FetchRange {
 /// The object slice that holds one indexed batch.
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ObjectSlice {
+pub struct ObjectSlice {
     pub(crate) object_key: String,
     pub(crate) byte_start: u64,
     pub(crate) byte_len: u32,
@@ -312,7 +312,7 @@ impl WalIndexCache {
         if logical.iter().any(|range| range.key > range.coordinate)
             || logical
                 .windows(2)
-                .any(|pair| pair[0].coordinate >= pair[1].key)
+                .any(|pair| matches!(pair, [left, right] if left.coordinate >= right.key))
         {
             return None;
         }
@@ -320,7 +320,7 @@ impl WalIndexCache {
         let IndexedRange {
             object_key,
             entry: first,
-        } = indexed[first_index];
+        } = indexed.get(first_index).copied()?;
 
         let mut byte_len = u64::from(first.byte_len);
         let max_bytes = u64::try_from(max_bytes).unwrap_or(u64::MAX);

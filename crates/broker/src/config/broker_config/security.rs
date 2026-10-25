@@ -1,24 +1,25 @@
 //! Static SASL/PLAIN credentials with redacted debug output.
 
+use std::{collections::HashMap, fmt};
 /// The broker's static SASL/PLAIN credential table: username → password.
 ///
 /// A newtype rather than a bare `HashMap` so that `BrokerConfig`'s derived
 /// `Debug` cannot print a password. The hand-written `Debug` below prints the
 /// usernames alone.
 #[derive(Clone, Default, PartialEq, Eq, derive_more::Deref, derive_more::DerefMut)]
-pub struct PlainCredentials(std::collections::HashMap<String, String>);
+pub struct PlainCredentials(HashMap<String, String>);
 
 impl PlainCredentials {
     /// The table as a plain map, for
     /// [`krabka_security::verify_plain`].
     #[must_use]
-    pub fn as_map(&self) -> &std::collections::HashMap<String, String> { &self.0 }
+    pub fn as_map(&self) -> &HashMap<String, String> { &self.0 }
 }
 
 /// Prints the usernames and no password, so `{config:?}` cannot leak the
 /// credential table.
-impl std::fmt::Debug for PlainCredentials {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for PlainCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_set().entries(self.0.keys()).finish()
     }
 }

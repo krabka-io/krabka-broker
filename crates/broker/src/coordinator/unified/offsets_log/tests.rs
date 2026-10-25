@@ -15,13 +15,24 @@ use {
     },
     assert2::assert,
     krabka_ids::{LeaderEpoch, Offset, PartitionIndex},
+    krabka_log::Log,
     krabka_metadata::{MetadataImage, NodeId},
     krabka_protocol::records::{Attributes, Record, RecordBatch},
-    std::sync::Arc,
+    std::sync::{Arc, atomic::Ordering},
 };
 
 /// This broker.
 const NODE: NodeId = NodeId(1);
+
+/// The leader epoch of every batch in `log`.
+fn epochs_in_log(log: &Log) -> Vec<i32> {
+    let end = log.log_end_offset();
+    if end == Offset(0) {
+        Vec::new()
+    } else {
+        read_epochs(log, end)
+    }
+}
 
 /// An image whose `__consumer_offsets` has one partition, led by `leader` at
 /// `epoch`.
@@ -187,15 +198,7 @@ async fn an_append_writes_only_as_the_partition_leader() {
 
         let result = offsets_log.append("group", group_batch()).await;
 
-        let logged_epochs = {
-            let log = log.lock().expect("the log is not poisoned");
-            let end = log.log_end_offset();
-            if end == Offset(0) {
-                Vec::new()
-            } else {
-                read_epochs(&log, end)
-            }
-        };
+        let logged_epochs = epochs_in_log(&*log.lock().expect("the log is not poisoned"));
         assert!(outcome(result) == case.expected, "{}", case.what);
         assert!(logged_epochs == case.logged_epochs, "{}", case.what);
     }
@@ -219,8 +222,7 @@ async fn fake_records_in_order() {
 #[tokio::test]
 async fn fake_fails_when_armed() {
     let log = super::fake::InMemoryOffsetsLog::default();
-    log.fail_next
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    log.fail_next.store(true, Ordering::SeqCst);
     assert!(log.append("g", RecordBatch::default()).await.is_err());
     assert!(log.append("g", RecordBatch::default()).await.is_ok());
 }

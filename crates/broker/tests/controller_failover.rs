@@ -14,6 +14,7 @@
 //! out its fetch timeout. A leader that stopped without resigning would leave
 //! the survivors to notice it only when their two-second fetch timer expired,
 //! and then to win an election.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -29,6 +30,7 @@ use {
     assert2::assert,
     krabka_broker::BrokerConfig,
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 mod support;
@@ -89,7 +91,7 @@ async fn a_gracefully_stopped_controller_is_replaced_within_the_bound() {
             {
                 return *leader;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await;
@@ -118,7 +120,7 @@ async fn a_gracefully_stopped_controller_is_replaced_within_the_bound() {
                     if response.topics[0].error_code == 0 {
                         return;
                     }
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    time::sleep(Duration::from_millis(50)).await;
                 }
             },
         )

@@ -21,7 +21,13 @@
 use crate::http_server::spawn;
 #[cfg(not(target_family = "wasm"))]
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
-use {crate::metrics::SharedRegistry, std::net::SocketAddr, tokio_util::sync::CancellationToken};
+use {
+    crate::metrics::SharedRegistry,
+    prometheus_client::encoding::text,
+    std::{io, net::SocketAddr},
+    tokio::net::TcpListener,
+    tokio_util::sync::CancellationToken,
+};
 
 /// Builds the public observability router. Profiling routes deliberately live
 /// on the separately configured, authenticated administration listener.
@@ -37,12 +43,12 @@ pub fn router(registry: SharedRegistry) -> Router {
 /// the port. On any axum error, which is normally a socket close, it logs the
 /// error and returns.
 #[cfg(not(target_family = "wasm"))]
-pub(crate) async fn run(
+pub async fn run(
     addr: SocketAddr,
     registry: SharedRegistry,
     shutdown: CancellationToken,
-) -> std::io::Result<SocketAddr> {
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+) -> io::Result<SocketAddr> {
+    let listener = TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
     tracing::info!(%bound, "metrics server listening");
     let app = router(registry);
@@ -72,7 +78,7 @@ pub(crate) fn run(
 async fn metrics(State(registry): State<SharedRegistry>) -> impl IntoResponse {
     let mut buf = String::new();
     let r = registry.lock().await;
-    if let Err(e) = prometheus_client::encoding::text::encode(&mut buf, &r) {
+    if let Err(e) = text::encode(&mut buf, &r) {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("encode: {e}")).into_response();
     }
     (
@@ -92,8 +98,11 @@ mod tests {
         super::*,
         crate::metrics::BrokerMetrics,
         assert2::assert,
-        axum::{body::Body, http::Request},
-        std::sync::Arc,
+        axum::{
+            body::{Body, to_bytes},
+            http::Request,
+        },
+        std::{str, sync::Arc},
         tower::ServiceExt as _,
     };
 
@@ -119,10 +128,8 @@ mod tests {
             .to_str()
             .unwrap();
         assert!(ct.starts_with("application/openmetrics-text"), "ct={ct}");
-        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
-            .await
-            .unwrap();
-        let s = std::str::from_utf8(&body).unwrap();
+        let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let s = str::from_utf8(&body).unwrap();
         for needle in ["krabka_broker_topic_bytes_in_total", "42", "# EOF"] {
             assert!(s.contains(needle), "missing {needle:?} in {s}");
         }
@@ -132,7 +139,7 @@ mod tests {
     async fn public_metrics_router_does_not_serve_profiling() {
         let m = BrokerMetrics::new();
         for uri in ["/debug/pprof/profile", "/debug/pprof/heap"] {
-            let response = router(m.registry.clone())
+            let response = router(Arc::clone(&m.registry))
                 .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
                 .await
                 .unwrap();

@@ -21,7 +21,7 @@ use {
     crate::codes,
     krabka_protocol::owned::fetch_request::FetchRequest,
     qubit_clock::MonotonicClock as _,
-    std::sync::atomic::Ordering,
+    std::sync::{PoisonError, atomic::Ordering},
 };
 
 /// Outcome of `FetchSessionCache::classify`. The handler dispatches on this
@@ -77,8 +77,6 @@ impl FetchSessionCache {
     /// (`nextCloseExistingAttemptNew`): it closes its old session by sending
     /// `INITIAL_EPOCH` with the old id, and expects a fresh session back, not
     /// an error.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn classify(&self, req: &FetchRequest, version: i16) -> SessionDecision {
         let sid = req.session_id;
         let epoch = req.session_epoch;
@@ -101,7 +99,7 @@ impl FetchSessionCache {
         // Not a full fetch: a genuine incremental epoch. Kafka looks the id
         // up unconditionally, `session_id == 0` included — id 0 is never
         // allocated, so an incremental naming it always misses.
-        let mut guard = self.inner.lock().expect("poisoned");
+        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
 
         let Some(session) = guard.sessions.get_mut(&sid) else {
             return SessionDecision::Error {
@@ -182,6 +180,7 @@ impl FetchSessionCache {
             partitions_after,
             self.clock.now().elapsed_since_origin(),
         );
+        drop(guard);
 
         SessionDecision::Incremental {
             session_id: sid,
@@ -548,7 +547,7 @@ mod tests {
 
     fn check_resolved_incremental(
         cache: &FetchSessionCache,
-        request: &krabka_protocol::owned::fetch_request::FetchRequest,
+        request: &FetchRequest,
         topic_id: WireUuid,
         expected: CachedPartitionState,
     ) {

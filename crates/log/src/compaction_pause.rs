@@ -5,7 +5,7 @@ use {
     crate::io::{IoTarget, LogIo},
     std::{
         fs::File,
-        io::Write as _,
+        io::{self, Write as _},
         sync::{
             Arc, Mutex, PoisonError,
             mpsc::{Receiver, Sender, channel},
@@ -66,7 +66,7 @@ impl CompactionPauseControl {
 }
 
 impl LogIo for CompactionPause {
-    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> std::io::Result<usize> {
+    fn write_at(&self, target: IoTarget, file: &File, buf: &[u8]) -> io::Result<usize> {
         let first = if target == IoTarget::CompactionSwap {
             self.paused
                 .lock()

@@ -19,7 +19,8 @@ use {
     krabka_metadata::{
         BreakGlassAction as GatedAction, MetadataRecord, PartitionRecord, TopicConfigRecord,
     },
-    std::time::Duration,
+    std::{iter, time::Duration},
+    tokio::time,
 };
 
 /// One row of the background-recovery table.
@@ -101,7 +102,7 @@ async fn check_background_outcome(
         // A negative outcome, so there is no event to await. The partition has
         // to still be leaderless after the recovery manager has had every
         // chance to elect, which a bounded wait is the only way to state.
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        time::sleep(Duration::from_secs(5)).await;
         check!(
             controller
                 .partition_record_for_test(RECOVERED, 0)
@@ -154,11 +155,10 @@ async fn background_recovery_case(case: &BackgroundCase) {
         .0
         .submit_metadata_record_for_test(MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: RECOVERED.to_owned(),
-            overrides: [(
+            overrides: iter::once((
                 "unclean.recovery.strategy".to_owned(),
                 "Aggressive".to_owned(),
-            )]
-            .into_iter()
+            ))
             .collect(),
         }))
         .await

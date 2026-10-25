@@ -18,6 +18,7 @@ use {
         add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
         add_partitions_to_txn_response::add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
     },
+    std::collections::HashSet,
 };
 
 /// Processes one `transactional_id`, `producer_id`, and `producer_epoch`
@@ -38,8 +39,8 @@ pub(super) struct TransactionRequest<'a> {
     /// so a repeated topic or partition gets a row per mention. A verify-only
     /// answer is keyed by partition instead and lists [`Self::topics`].
     pub(super) response_topics: &'a [AddPartitionsToTxnTopic],
-    pub(super) denied: &'a std::collections::HashSet<String>,
-    pub(super) frozen: &'a std::collections::HashSet<String>,
+    pub(super) denied: &'a HashSet<String>,
+    pub(super) frozen: &'a HashSet<String>,
     pub(super) txnv: TxnVersion,
     pub(super) verify_only: bool,
     /// The `AddPartitionsToTxn` request version, which selects between
@@ -79,17 +80,9 @@ pub(super) async fn process_one_txn(
     // on the add path and per-partition on the verify path (this code lands
     // on every row either way).
     if tid.is_empty() {
-        let unread = std::collections::HashSet::new();
+        let unread = HashSet::new();
         return per_topic_with_refusals(answer_topics, denied, &unread, codes::INVALID_REQUEST);
     }
-    // Topics allowed to proceed past the per-topic Write ACL gate and the
-    // write-freeze gate. A frozen topic never joins the partition set, which
-    // is what keeps the transaction from ever reaching its log.
-    let allowed_topics: Vec<&AddPartitionsToTxnTopic> = topics
-        .iter()
-        .filter(|t| !denied.contains(&t.name) && !frozen.contains(&t.name))
-        .collect();
-
     // 1. Coordinator check (applies only to non-denied topics — for
     //    denied topics we always emit TOPIC_AUTHORIZATION_FAILED).
     //
@@ -98,7 +91,7 @@ pub(super) async fn process_one_txn(
     //    it then retries at the real coordinator, which is the broker that
     //    owns the decision and answers the freeze.
     if let Some(code) = coord.coordinator_error(tid).await {
-        let unread = std::collections::HashSet::new();
+        let unread = HashSet::new();
         return per_topic_with_refusals(answer_topics, denied, &unread, code);
     }
 
@@ -122,8 +115,12 @@ pub(super) async fn process_one_txn(
     }
     drop(entry_mutex);
 
-    let partitions = allowed_topics
-        .into_iter()
+    // Topics allowed to proceed past the per-topic Write ACL gate and the
+    // write-freeze gate. A frozen topic never joins the partition set, which
+    // is what keeps the transaction from ever reaching its log.
+    let partitions = topics
+        .iter()
+        .filter(|t| !denied.contains(&t.name) && !frozen.contains(&t.name))
         .flat_map(|topic| {
             topic.partitions.iter().map(|&partition| TopicPartition {
                 topic: topic.name.clone(),

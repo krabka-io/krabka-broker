@@ -11,12 +11,19 @@ use {
         client::connect_client,
         discovery::{coordinator_lookup_request, topic_metadata_request},
         heartbeat_config,
-        topics::TopicPartitionCount,
+        topics::{self, TopicPartitionCount},
         transaction_wire::create_topic as create_transaction_topic,
     },
     assert2::assert,
     krabka_client_core::Client,
-    krabka_protocol::owned::update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
+    krabka_protocol::{
+        owned::{
+            add_partitions_to_txn_response,
+            update_features_request::{FeatureUpdateKey, UpdateFeaturesRequest},
+        },
+        primitives::uuid::Uuid,
+    },
+    std::path::PathBuf,
 };
 
 // Kafka error codes asserted below.
@@ -73,7 +80,7 @@ pub async fn downgrade_transaction_version(client: &Client, level: i16) {
 
 /// A single materialized transaction-state partition, optionally reopened on the same directory.
 pub fn config(
-    log_dir: std::path::PathBuf,
+    log_dir: PathBuf,
     bootstrap_mode: Option<krabka_broker::BootstrapMode>,
 ) -> krabka_broker::BrokerConfig {
     let mut config = heartbeat_config(log_dir);
@@ -86,14 +93,12 @@ pub fn config(
 }
 
 /// Locate the named topic in its own metadata response, retaining its diagnostic.
-pub async fn topic_id(client: &Client, topic: &str) -> krabka_protocol::primitives::uuid::Uuid {
+pub async fn topic_id(client: &Client, topic: &str) -> Uuid {
     client
-        .send(topic_metadata_request(Some(vec![
-            crate::support::topics::metadata_topic(
-                Some(topic.into()),
-                krabka_protocol::primitives::uuid::Uuid::default(),
-            ),
-        ])))
+        .send(topic_metadata_request(Some(vec![topics::metadata_topic(
+            Some(topic.into()),
+            Uuid::default(),
+        )])))
         .await
         .expect("Metadata")
         .topics
@@ -133,7 +138,7 @@ pub fn expected_partitions(
     transactional_id: &str,
     topic: &str,
     partitions: &[PartitionCode],
-) -> krabka_protocol::owned::add_partitions_to_txn_response::AddPartitionsToTxnResponse {
+) -> add_partitions_to_txn_response::AddPartitionsToTxnResponse {
     use krabka_protocol::owned::{
         add_partitions_to_txn_response::{AddPartitionsToTxnResponse, AddPartitionsToTxnResult},
         common::add_partitions_to_txn_response::{

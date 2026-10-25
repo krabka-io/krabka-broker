@@ -17,8 +17,12 @@ use {
         sasl_authenticate_request::SaslAuthenticateRequest,
         sasl_authenticate_response::SaslAuthenticateResponse,
     },
-    krabka_security::{Principal, SaslMechanism},
+    krabka_security::{
+        Principal, SaslMechanism,
+        gssapi::{provider::SspiAcceptor, server},
+    },
     krabka_units::{ByteSize, Time, kibibytes},
+    std::{mem, path::PathBuf},
 };
 
 /// Broker-side SASL/GSSAPI configuration.
@@ -30,7 +34,7 @@ use {
 #[derive(Debug, Clone)]
 pub struct GssapiConfig {
     /// Path to the broker's service keytab.
-    pub keytab_path: std::path::PathBuf,
+    pub keytab_path: PathBuf,
     /// Kafka `sasl.kerberos.service.name`, the SPN's first component.
     pub service_name: String,
     /// Parsed `auth_to_local` rules. The broker applies them in order, and the
@@ -101,19 +105,18 @@ pub fn handle_authenticate_gssapi(
         if let ConnectionAuth::Negotiating {
             exchange: SaslExchange::GssapiPending,
             mechanism,
-            pending_token_expiry_ms: _,
+            ..
         } = auth
         {
             let mech = *mechanism;
             let keytab = config.keytab_path.to_string_lossy();
-            let acceptor = match krabka_security::gssapi::provider::SspiAcceptor::new(
-                &keytab,
-                &config.service_name,
-                config.max_time_skew,
-            ) {
-                Ok(a) => a,
-                Err(e) => return fail_authenticate(&format!("GSSAPI acceptor init failed: {e}")),
-            };
+            let acceptor =
+                match SspiAcceptor::new(&keytab, &config.service_name, config.max_time_skew) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        return fail_authenticate(&format!("GSSAPI acceptor init failed: {e}"));
+                    }
+                };
             let exchange = GssapiServerExchange::new(Box::new(acceptor), GSSAPI_MAX_RECV);
             let step = match exchange.step(&req.auth_bytes) {
                 Ok(s) => s,
@@ -133,8 +136,8 @@ pub fn handle_authenticate_gssapi(
             let ConnectionAuth::Negotiating {
                 mechanism,
                 exchange: SaslExchange::Gssapi(exchange),
-                pending_token_expiry_ms: _,
-            } = std::mem::replace(auth, ConnectionAuth::Anonymous)
+                ..
+            } = mem::replace(auth, ConnectionAuth::Anonymous)
             else {
                 unreachable!("matched Negotiating{{Gssapi}} above");
             };
@@ -150,7 +153,7 @@ pub fn handle_authenticate_gssapi(
 }
 
 fn gssapi_step_response(
-    step: krabka_security::gssapi::server::ServerStep,
+    step: server::ServerStep,
     mechanism: SaslMechanism,
     config: &GssapiConfig,
     auth: &mut ConnectionAuth,
@@ -238,6 +241,10 @@ mod tests {
             assert_failed_authenticate_response, assert_success_authenticate_response,
         },
         assert2::{assert, check},
+        krabka_security::gssapi::{
+            AcceptStep, DEFAULT_GSSAPI_MAX_TIME_SKEW, GssAcceptor, GssError,
+        },
+        std::path::PathBuf,
     };
 
     fn gssapi_config(
@@ -246,12 +253,12 @@ mod tests {
         principal_to_local_rules: Vec<KerberosRule>,
     ) -> GssapiConfig {
         GssapiConfig {
-            keytab_path: std::path::PathBuf::from(keytab),
-            service_name: "kafka".to_string(),
+            keytab_path: PathBuf::from(keytab),
+            service_name: "kafka".to_owned(),
             principal_to_local_rules,
             realm: realm.map(str::to_owned),
             kdc: None,
-            max_time_skew: krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
+            max_time_skew: DEFAULT_GSSAPI_MAX_TIME_SKEW,
         }
     }
 
@@ -349,30 +356,18 @@ mod tests {
     /// mirrors `krabka-security`'s own `gssapi::server` unit tests.
     struct FakeAcceptor;
 
-    impl krabka_security::gssapi::GssAcceptor for FakeAcceptor {
-        fn accept(
-            &mut self,
-            _client_token: &[u8],
-        ) -> Result<krabka_security::gssapi::AcceptStep, krabka_security::gssapi::GssError>
-        {
-            Ok(krabka_security::gssapi::AcceptStep::Established(None))
+    impl GssAcceptor for FakeAcceptor {
+        fn accept(&mut self, _client_token: &[u8]) -> Result<AcceptStep, GssError> {
+            Ok(AcceptStep::Established(None))
         }
 
-        fn wrap(
-            &self,
-            plaintext: &[u8],
-            _confidential: bool,
-        ) -> Result<Vec<u8>, krabka_security::gssapi::GssError> {
+        fn wrap(&self, plaintext: &[u8], _confidential: bool) -> Result<Vec<u8>, GssError> {
             Ok(plaintext.to_vec())
         }
 
-        fn unwrap(&self, token: &[u8]) -> Result<Vec<u8>, krabka_security::gssapi::GssError> {
-            Ok(token.to_vec())
-        }
+        fn unwrap(&self, token: &[u8]) -> Result<Vec<u8>, GssError> { Ok(token.to_vec()) }
 
-        fn src_principal(&self) -> Result<String, krabka_security::gssapi::GssError> {
-            Ok("alice@KRABKA.TEST".to_string())
-        }
+        fn src_principal(&self) -> Result<String, GssError> { Ok("alice@KRABKA.TEST".to_owned()) }
     }
 
     #[test]

@@ -4,11 +4,11 @@
 use {
     super::*,
     crate::{
-        api_catalog::dispatched_apis,
+        api_catalog::{INTER_BROKER_ONLY_APIS, dispatched_apis},
         handlers::{self, ApiKeyCode, KRABKA_PRIVATE_API_KEY_FLOOR},
     },
     assert2::assert,
-    std::collections::BTreeSet,
+    std::{collections::BTreeSet, ptr},
 };
 
 #[test]
@@ -200,7 +200,7 @@ fn the_only_catalogued_krabka_private_key_is_inter_broker_only() {
 
     assert!(private == vec![ApiKey::GetReplicaLogInfo as i16]);
     assert!(ApiKey::GetReplicaLogInfo as i16 == 1020);
-    assert!(crate::api_catalog::INTER_BROKER_ONLY_APIS.contains(&1020));
+    assert!(INTER_BROKER_ONLY_APIS.contains(&1020));
 }
 
 #[test]
@@ -266,7 +266,7 @@ fn api_versions_is_a_self_accounted_context_dispatch() {
     let handler = registry
         .get_context(ApiKey::ApiVersions as i16)
         .expect("context ApiVersions handler");
-    assert!(std::ptr::fn_addr_eq(
+    assert!(ptr::fn_addr_eq(
         handler,
         handlers::api_versions::handle as ContextHandler
     ));

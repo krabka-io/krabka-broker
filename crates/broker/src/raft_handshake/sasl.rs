@@ -39,6 +39,7 @@ use {
     krabka_raft::{ControllerApiVersions, RaftHandshakeError},
     krabka_security::SaslMechanism,
     std::net::SocketAddr,
+    tokio::time,
 };
 
 /// The message of a SCRAM exchange that ends without a response.
@@ -94,7 +95,7 @@ const CONTROLLER_MAX_REAUTH: Option<krabka_units::Time> = None;
 /// listener's `Selector` delays them as a broker listener's does.
 async fn delay_failed_authentication(cfg: &BrokerRaftHandshake) {
     if !cfg.failed_authentication_delay.is_zero() {
-        tokio::time::sleep(cfg.failed_authentication_delay).await;
+        time::sleep(cfg.failed_authentication_delay).await;
     }
 }
 
@@ -375,8 +376,14 @@ mod tests {
             test_support::FakeMetadataSource,
         },
         assert2::{assert, check},
+        krabka_security::scram,
         std::time::Duration,
-        tokio::io::AsyncWriteExt,
+        tokio::{
+            io,
+            io::{AsyncWriteExt, DuplexStream},
+            task::JoinHandle,
+            time::Instant,
+        },
     };
 
     /// One controller-listener SCRAM-SHA-256 exchange whose client-final
@@ -388,12 +395,8 @@ mod tests {
     ) -> (Result<i16, String>, Vec<krabka_audit::AuditEvent>) {
         let mechanism = SaslMechanism::ScramSha256;
         let password = b"controller-password";
-        let credential = krabka_security::scram::hash_scram_password_with_salt(
-            password,
-            mechanism,
-            4096,
-            b"salt".to_vec(),
-        );
+        let credential =
+            scram::hash_scram_password_with_salt(password, mechanism, 4096, b"salt".to_vec());
         let source = FakeMetadataSource::builder()
             .records(&[krabka_metadata::MetadataRecord::V1ScramCredential(
                 krabka_metadata::ScramCredentialRecord {
@@ -499,8 +502,8 @@ mod tests {
 
     /// The client end of a duplex pipe and the server task reading the other.
     struct SaslServer {
-        client: tokio::io::DuplexStream,
-        task: tokio::task::JoinHandle<SaslResult>,
+        client: DuplexStream,
+        task: JoinHandle<SaslResult>,
     }
 
     fn sasl_server(
@@ -508,7 +511,7 @@ mod tests {
         configure: impl FnOnce() -> BrokerRaftHandshake + Send + 'static,
         api_versions: impl ControllerApiVersions + 'static,
     ) -> SaslServer {
-        let (client, mut server) = tokio::io::duplex(capacity);
+        let (client, mut server) = io::duplex(capacity);
         let task = tokio::spawn(async move {
             let cfg = configure();
             run_inbound_sasl(&mut server, &cfg, &test_peer(), &api_versions).await
@@ -516,7 +519,7 @@ mod tests {
         SaslServer { client, task }
     }
 
-    async fn plain_handshake(client: &mut tokio::io::DuplexStream, correlation_id: i32) -> Vec<u8> {
+    async fn plain_handshake(client: &mut DuplexStream, correlation_id: i32) -> Vec<u8> {
         client
             .write_all(
                 &request_frame()
@@ -532,7 +535,7 @@ mod tests {
     }
 
     async fn api_versions_round_trip(
-        client: &mut tokio::io::DuplexStream,
+        client: &mut DuplexStream,
         version: i16,
         correlation_id: i32,
         body: &[u8],
@@ -685,7 +688,7 @@ mod tests {
                 ip: "192.0.2.11".into(),
                 port: 9093,
             },
-            resp.error_message.clone(),
+            resp.error_message,
         );
     }
 
@@ -823,7 +826,7 @@ mod tests {
     /// after it.
     #[tokio::test]
     async fn a_frame_over_the_sasl_receive_limit_fails_the_exchange() {
-        let (mut client, mut server) = tokio::io::duplex(128);
+        let (mut client, mut server) = io::duplex(128);
         let server = tokio::spawn(async move {
             let mut cfg = sasl_test_config();
             cfg.sasl_max_receive_bytes = 64;
@@ -852,7 +855,7 @@ mod tests {
         let mut cfg = sasl_test_config();
         cfg.failed_authentication_delay = delay;
 
-        let started = tokio::time::Instant::now();
+        let started = Instant::now();
         let _login = rejected_plain_login(cfg).await;
         assert!(
             started.elapsed() >= delay,
@@ -860,7 +863,7 @@ mod tests {
             started.elapsed()
         );
 
-        let started = tokio::time::Instant::now();
+        let started = Instant::now();
         let PlainLogin { response: resp, .. } =
             plain_login(sasl_test_config(), "broker", "secret").await;
         assert!(resp.error_code == 0);

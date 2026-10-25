@@ -7,7 +7,7 @@ use {
 
 /// Local trimming leaves WAL records readable. Only the index's deletion
 /// floor and oldest surviving range can raise a diskless share position.
-pub(crate) async fn diskless_logical_start(
+pub async fn diskless_logical_start(
     reader: &DisklessReadHandle,
     partition: &Partition,
     topic_id: uuid::Uuid,
@@ -25,7 +25,7 @@ pub(crate) async fn diskless_logical_start(
 }
 
 #[cfg(test)]
-pub(crate) mod test_support {
+pub mod test_support {
     use {
         crate::{
             diskless::{
@@ -39,10 +39,11 @@ pub(crate) mod test_support {
         krabka_protocol::records::{Record, RecordBatch},
         object_store::{ObjectStoreExt as _, PutPayload, memory::InMemory, path::Path},
         std::sync::Arc,
+        tokio::sync::{Mutex, Notify},
     };
 
     /// Real batch bytes survive local trimming in an object and a replayed WAL index.
-    pub(crate) async fn diskless_partition(
+    pub async fn diskless_partition(
         timestamp: i64,
     ) -> (
         Arc<Partition>,
@@ -50,7 +51,7 @@ pub(crate) mod test_support {
         uuid::Uuid,
         tempfile::TempDir,
     ) {
-        let (mut partition, dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+        let (mut partition, dir) = test_partition(Arc::new(Notify::new()));
         partition.diskless = true;
         let topic_id = uuid::Uuid::from_u128(0x0057_414c);
         let mut bytes = BytesMut::new();
@@ -100,10 +101,7 @@ pub(crate) mod test_support {
             format_version: WalFlushRecord::FORMAT_VERSION,
             entries,
         });
-        let reader = Arc::new(DisklessReadHandle::new(
-            Arc::new(tokio::sync::Mutex::new(index)),
-            store,
-        ));
+        let reader = Arc::new(DisklessReadHandle::new(Arc::new(Mutex::new(index)), store));
         (Arc::new(partition), reader, topic_id, dir)
     }
 }

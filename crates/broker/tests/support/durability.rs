@@ -25,7 +25,7 @@ pub struct ReplicatedTopicSetup<'a> {
     pub brokers: BrokerCount,
     #[default("t")]
     pub topic: &'a str,
-    #[default(crate::support::topics::TopicReplicationFactor(3))]
+    #[default(TopicReplicationFactor(3))]
     pub replicas: TopicReplicationFactor,
 }
 
@@ -33,7 +33,7 @@ pub struct ReplicatedTopicSetup<'a> {
 pub struct TopicReplicasSetup<'a> {
     #[default("t")]
     pub topic: &'a str,
-    #[default(crate::support::topics::TopicReplicationFactor(1))]
+    #[default(TopicReplicationFactor(1))]
     pub replicas: TopicReplicationFactor,
 }
 
@@ -45,8 +45,7 @@ pub struct TopicReplicasSetup<'a> {
 pub async fn replicated_topic_fixture(
     #[builder(into, default = BrokerCount (3))] brokers: BrokerCount,
     #[builder(default = "t")] topic: &'_ str,
-    #[builder(default = crate :: support :: topics :: TopicReplicationFactor (3))]
-    replicas: TopicReplicationFactor,
+    #[builder(default = TopicReplicationFactor(3))] replicas: TopicReplicationFactor,
 ) -> (
     Vec<(BrokerHandle, krabka_broker::BrokerConfig, tempfile::TempDir)>,
     String,
@@ -88,11 +87,10 @@ pub async fn create_topic_on_replicas(
     broker: &BrokerHandle,
     bootstrap: &str,
     #[builder(default = "t")] topic: &'_ str,
-    #[builder(default = crate :: support :: topics :: TopicReplicationFactor (1))]
-    replicas: TopicReplicationFactor,
+    #[builder(default = TopicReplicationFactor(1))] replicas: TopicReplicationFactor,
 ) {
     let setup = TopicReplicasSetup { topic, replicas };
-    let client = connect_client(bootstrap.to_string(), None).await;
+    let client = connect_client(bootstrap.to_owned(), None).await;
     let replicas: Vec<i32> = (1..=i32::from(setup.replicas.0)).collect();
     let resp = client
         .send(create_topic_request(super::topic_on(setup.topic, &[
@@ -116,7 +114,7 @@ pub async fn produce_batch(
     batch: RecordBatch,
     mut setup: super::client::BatchProduceSetup<'_>,
 ) -> Result<i64, i16> {
-    let client = connect_client(bootstrap.to_string(), None).await;
+    let client = connect_client(bootstrap.to_owned(), None).await;
     setup.topic_id = topic_id_for(&client, setup.topic).await;
     let pr = super::client::produce_batch()
         .client(&client)

@@ -19,7 +19,8 @@ use {
         primitives::uuid::Uuid as WireUuid,
     },
     krabka_raft::NodeId,
-    std::time::Duration,
+    std::{future::Future, time::Duration},
+    tokio::time,
 };
 
 /// Queries one replica for its log-end-offset and leader-epoch state with
@@ -54,7 +55,7 @@ pub(super) async fn query_replica(
     query: ReplicaQuery,
 ) -> Option<ReplicaLogInfo> {
     let opts = krabka_client_core::ConnectionOptions {
-        client_id: "krabka-unclean-recovery".to_string(),
+        client_id: "krabka-unclean-recovery".to_owned(),
         ..krabka_client_core::ConnectionOptions::default()
     };
     let conn = client
@@ -117,12 +118,12 @@ pub(super) async fn query_replica(
 /// never silently discards partial data.
 pub(super) async fn gather_responses<F>(futs: Vec<F>, deadline: Duration) -> Vec<ReplicaLogInfo>
 where
-    F: std::future::Future<Output = Option<ReplicaLogInfo>> + Send + 'static,
+    F: Future<Output = Option<ReplicaLogInfo>> + Send + 'static,
 {
     let total = futs.len();
     let mut stream: FuturesUnordered<_> = futs.into_iter().collect();
     let mut out: Vec<ReplicaLogInfo> = Vec::with_capacity(total);
-    let sleep = tokio::time::sleep(deadline);
+    let sleep = time::sleep(deadline);
     tokio::pin!(sleep);
     loop {
         if out.len() == total {
@@ -159,7 +160,7 @@ mod tests {
     async fn query_fixture(slow_delay: Duration, deadline: Duration) -> Vec<ReplicaLogInfo> {
         let f1 = async { Some(info(1, 50)) };
         let f2 = async move {
-            tokio::time::sleep(slow_delay).await;
+            time::sleep(slow_delay).await;
             Some(info(2, 90))
         };
         gather_responses(vec![f1.boxed(), f2.boxed()], deadline).await

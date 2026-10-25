@@ -1,5 +1,4 @@
-// rustc 1.95 clippy ICEs on this file (same as throttle.rs / elect_leaders.rs).
-// Suppress locally; the workspace lint gate still applies elsewhere.
+#![cfg(test)]
 
 //! Broker-side integration tests for `DescribeUserScramCredentials`
 //! (`api_key` 50, KIP-554 read half).

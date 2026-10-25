@@ -51,7 +51,7 @@ impl TxnCoordinator {
         if let Some(code @ COORDINATOR_LOAD_IN_PROGRESS) = self.coordinator_error(tid).await {
             return code;
         }
-        let is_coordinator = self.is_coordinator_for(tid).await;
+        let is_coordinator = self.is_transaction_coordinator_for(tid).await;
         if !is_coordinator {
             return registration_code(
                 transaction_partition_registration(TransactionRegistrationFacts {
@@ -156,14 +156,13 @@ impl TxnCoordinator {
         // on the entry lock until this whole read-modify-persist sequence
         // finishes, so it always rereads the just-published state rather than
         // cloning the same stale snapshot this call started from.
-        match self
+        let published = self
             .put_under_state_partition_lock(snapshot, format_txnv)
             .await
-        {
-            Ok(persisted) => {
-                *entry = persisted;
-                NONE
-            }
+            .map(|persisted| *entry = persisted);
+        drop(entry);
+        match published {
+            Ok(()) => NONE,
             Err(error) => {
                 tracing::error!(tid, %error, "failed to persist registered transaction partitions");
                 self.append_error_code(tid, &error).await
@@ -206,7 +205,10 @@ mod tests {
     use {
         super::{TxnCoordinator, TxnState, TxnVersion},
         crate::{
-            codes::{INVALID_PRODUCER_EPOCH, PRODUCER_FENCED},
+            codes::{
+                CONCURRENT_TRANSACTIONS, INVALID_PRODUCER_EPOCH, INVALID_PRODUCER_ID_MAPPING,
+                INVALID_REQUEST, NONE, NOT_COORDINATOR, PRODUCER_FENCED,
+            },
             partition::Partition,
             test_support::open_partition,
             txn::{
@@ -218,13 +220,13 @@ mod tests {
         assert2::{assert, check},
         krabka_ids::PartitionIndex,
         krabka_log::ProducerId,
-        std::sync::Arc,
-        tokio::sync::Mutex,
+        std::{collections::HashSet, path::Path, sync::Arc},
+        tokio::{sync::Mutex, task::JoinSet},
     };
 
     fn partition(topic: &str, index: i32) -> TopicPartition {
         TopicPartition {
-            topic: topic.to_string(),
+            topic: topic.to_owned(),
             partition: PartitionIndex(index),
         }
     }
@@ -249,7 +251,7 @@ mod tests {
 
     fn open_transaction_partition(
         coordinator: &TxnCoordinator,
-        directory: &std::path::Path,
+        directory: &Path,
         transactional_id: &str,
     ) -> Arc<Partition> {
         let index = coordinator.partition_for(transactional_id);
@@ -292,14 +294,14 @@ mod tests {
 
         check!(
             register_fixture(&coordinator, ProducerId(7), 3, requested.clone(), 3).await
-                == crate::codes::NOT_COORDINATOR
+                == NOT_COORDINATOR
         );
         coordinator
             .lead_state_partition_for_test(coordinator.partition_for("tid-a"))
             .await;
         check!(
             register_fixture(&coordinator, ProducerId(7), 3, requested.clone(), 3).await
-                == crate::codes::INVALID_PRODUCER_ID_MAPPING
+                == INVALID_PRODUCER_ID_MAPPING
         );
 
         let malformed = TxnEntry::new_empty("other-tid".into(), ProducerId(7), 3, 60_000, 0);
@@ -308,7 +310,7 @@ mod tests {
             .insert("tid-a".into(), Arc::new(Mutex::new(malformed)));
         check!(
             register_fixture(&coordinator, ProducerId(7), 3, requested.clone(), 3).await
-                == crate::codes::INVALID_PRODUCER_ID_MAPPING
+                == INVALID_PRODUCER_ID_MAPPING
         );
 
         // A pending transition (a staged producer identity) is
@@ -321,7 +323,7 @@ mod tests {
             .insert("tid-a".into(), Arc::new(Mutex::new(entry)));
         check!(
             register_fixture(&coordinator, ProducerId(7), i16::MAX, requested.clone(), 3).await
-                == crate::codes::CONCURRENT_TRANSACTIONS
+                == CONCURRENT_TRANSACTIONS
         );
 
         // A producer-epoch mismatch is PRODUCER_FENCED at request version 2
@@ -343,7 +345,7 @@ mod tests {
 
         check!(
             register_fixture(&coordinator, ProducerId(-1), i16::MAX, requested.clone(), 3).await
-                == crate::codes::INVALID_PRODUCER_ID_MAPPING
+                == INVALID_PRODUCER_ID_MAPPING
         );
 
         // Matching identity but a state that cannot move to Ongoing (Dead)
@@ -352,7 +354,7 @@ mod tests {
         store_dead_entry(&coordinator);
         check!(
             register_fixture(&coordinator, ProducerId(7), i16::MAX, requested, 3).await
-                == crate::codes::CONCURRENT_TRANSACTIONS
+                == CONCURRENT_TRANSACTIONS
         );
     }
 
@@ -373,7 +375,7 @@ mod tests {
                     3,
                 )
                 .await
-                == crate::codes::INVALID_REQUEST
+                == INVALID_REQUEST
         );
     }
 
@@ -395,7 +397,7 @@ mod tests {
             3,
         )
         .await;
-        check!(first == crate::codes::NONE);
+        check!(first == NONE);
         check!(transaction_partition.log_end_offset().0 == 1);
 
         // Kafka's optimization: every requested partition is already in this
@@ -409,7 +411,7 @@ mod tests {
             3,
         )
         .await;
-        check!(retry == crate::codes::NONE);
+        check!(retry == NONE);
         check!(transaction_partition.log_end_offset().0 == 1);
 
         // A new partition in the same request still writes.
@@ -421,7 +423,7 @@ mod tests {
             3,
         )
         .await;
-        check!(grown == crate::codes::NONE);
+        check!(grown == NONE);
         check!(transaction_partition.log_end_offset().0 == 2);
 
         let stored = coordinator.get("tid-a").expect("registered entry");
@@ -438,7 +440,7 @@ mod tests {
             3,
         )
         .await;
-        check!(stale == crate::codes::PRODUCER_FENCED);
+        check!(stale == PRODUCER_FENCED);
         check!(transaction_partition.log_end_offset().0 == 2);
     }
 
@@ -460,12 +462,13 @@ mod tests {
 
         let code =
             register_fixture(&coordinator, ProducerId(7), 0, vec![requested.clone()], 3).await;
-        check!(code == crate::codes::NONE);
+        check!(code == NONE);
         check!(transaction_partition.log_end_offset().0 == 1);
         let stored = coordinator.get("tid-a").expect("registered entry");
         let stored = stored.lock().await;
         check!(stored.state == TxnState::Ongoing);
         assert!(stored.partitions.contains(&requested));
+        drop(stored);
     }
 
     #[tokio::test]
@@ -481,7 +484,7 @@ mod tests {
         for _ in 0..2 {
             check!(
                 register_fixture(&coordinator, ProducerId(7), 0, vec![requested.clone()], 3).await
-                    == crate::codes::NOT_COORDINATOR
+                    == NOT_COORDINATOR
             );
         }
         // No partition, on the state-partition being unopened for this test,
@@ -493,6 +496,7 @@ mod tests {
         let stored = stored.lock().await;
         assert!(!stored.partitions.contains(&requested));
         check!(stored.state == TxnState::Empty);
+        drop(stored);
     }
 
     /// Regression test for a P1 review finding on PR #1135: two concurrent
@@ -517,8 +521,8 @@ mod tests {
         let _transaction_partition =
             open_transaction_partition(&coordinator, directory.path(), "tid-a");
 
-        let mut expected = std::collections::HashSet::new();
-        let mut tasks = tokio::task::JoinSet::new();
+        let mut expected = HashSet::new();
+        let mut tasks = JoinSet::new();
         for index in 0..CONCURRENT_CALLS {
             let requested = partition("orders", index);
             expected.insert(requested.clone());
@@ -528,7 +532,7 @@ mod tests {
             });
         }
         while let Some(result) = tasks.join_next().await {
-            check!(result.expect("registration task did not panic") == crate::codes::NONE);
+            check!(result.expect("registration task did not panic") == NONE);
         }
 
         let stored = coordinator.get("tid-a").expect("entry remains present");

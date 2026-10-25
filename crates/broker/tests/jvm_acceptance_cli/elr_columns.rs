@@ -21,9 +21,10 @@ use {
     },
     assert2::assert,
     std::{
-        process::{Command, Stdio},
+        process::{self, Command, Output, Stdio},
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// The topic both brokers get. The name is part of every rendered line, so the
@@ -53,7 +54,7 @@ fn describe_args() -> Vec<&'static str> { vec!["--describe", "--topic", TOPIC] }
 
 /// Run `kafka-topics` inside the JVM broker's own container, against its
 /// loopback listener. Nothing has to be published to the host for this side.
-fn kafka_topics_in_container(container: &str, args: &[&str]) -> std::process::Output {
+fn kafka_topics_in_container(container: &str, args: &[&str]) -> Output {
     Command::new("docker")
         .args(["exec", container, KAFKA_TOPICS])
         .args(["--bootstrap-server", "localhost:9092"])
@@ -66,7 +67,7 @@ fn kafka_topics_in_container(container: &str, args: &[&str]) -> std::process::Ou
 
 /// Run `kafka-topics` from a throwaway container of the same image, against
 /// the krabka broker on the host.
-fn kafka_topics_against_krabka(args: &[&str]) -> std::process::Output {
+fn kafka_topics_against_krabka(args: &[&str]) -> Output {
     let mut command = vec![KAFKA_TOPICS, "--bootstrap-server", broker0_advertised()];
     command.extend_from_slice(args);
     docker_run_kafka_tool_with_image(KAFKA_IMAGE_ELR, &command)
@@ -118,7 +119,7 @@ async fn start_jvm_broker(container: &str) {
             "JVM broker {container} never became ready: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
 }
 
@@ -140,7 +141,7 @@ async fn describe_krabka_once_led() -> Vec<String> {
             Instant::now() <= deadline,
             "krabka never elected a leader for every partition: {lines:?}"
         );
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -167,7 +168,7 @@ fn partition_lines(describe: &str) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker"]
 async fn kafka_topics_describe_renders_the_same_elr_columns_as_apache_kafka() {
-    let container = format!("krabka-elr-columns-{}", std::process::id());
+    let container = format!("krabka-elr-columns-{}", process::id());
     let _ = Command::new("docker")
         .args(["rm", "-f", &container])
         .output();

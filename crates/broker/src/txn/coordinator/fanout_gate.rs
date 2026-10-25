@@ -23,7 +23,7 @@ pub enum MarkerFanoutMode {
 
 /// The gate state that the coordinator and the test share.
 #[derive(Debug, krabka_macros::FieldDefaults)]
-pub(crate) struct MarkerFanoutGate {
+pub struct MarkerFanoutGate {
     #[default(watch::Sender::new(MarkerFanoutMode::Open))]
     mode: watch::Sender<MarkerFanoutMode>,
     #[default(watch::Sender::new(0))]

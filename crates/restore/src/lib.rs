@@ -45,7 +45,12 @@ use {
     self::authenticity::SourceAuthentication,
     clap::Parser,
     krabka_remote_storage::{AuthenticatedArchive, diskless::capture::DisklessWalCapture},
-    std::{ffi::OsString, path::Path},
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        ffi::OsString,
+        fs,
+        path::Path,
+    },
 };
 
 mod args;
@@ -117,8 +122,16 @@ pub async fn run(args: RestoreArgs) -> i32 {
             if let Some(warning) = report.metadata.warning() {
                 eprintln!("krabka restore: {warning}");
             }
-            println!("{}", report.render(format));
-            EXIT_OK
+            match report.render(format) {
+                Ok(rendered) => {
+                    println!("{rendered}");
+                    EXIT_OK
+                }
+                Err(error) => {
+                    eprintln!("krabka restore: cannot render the report: {error}");
+                    EXIT_MATERIALIZE
+                }
+            }
         }
         Err(error) => {
             eprintln!("krabka restore: {error}");
@@ -221,7 +234,7 @@ pub async fn restore(args: &RestoreArgs) -> Result<RestoreReport, RestoreError> 
         rlmm_snapshot.as_ref(),
     )?;
 
-    let mut consumed_authenticated_objects = std::collections::BTreeSet::new();
+    let mut consumed_authenticated_objects = BTreeSet::new();
     if metadata_bytes.is_some() {
         consumed_authenticated_objects.insert("cluster-metadata.checkpoint".to_owned());
     }
@@ -348,7 +361,7 @@ async fn format_with_next_offsets(
     archive: &ArchiveInventory,
     predicates: &Predicates,
     capture: Option<&DisklessWalCapture>,
-    claims: Option<&std::collections::BTreeMap<String, krabka_remote_storage::ObjectEntry>>,
+    claims: Option<&BTreeMap<String, krabka_remote_storage::ObjectEntry>>,
     metadata_snapshot: Option<&[u8]>,
 ) -> Result<(FormatTargetOutcome, Vec<diskless::DisklessNextOffset>), RestoreError> {
     let next_offsets = match capture {
@@ -369,7 +382,7 @@ fn ensure_empty_log_dir(log_dir: &Path) -> Result<(), RestoreError> {
     if !log_dir.exists() {
         return Ok(());
     }
-    if std::fs::read_dir(log_dir)?.next().is_some() {
+    if fs::read_dir(log_dir)?.next().is_some() {
         return Err(RestoreError::LogDirNotEmpty(log_dir.to_path_buf()));
     }
     Ok(())
@@ -397,7 +410,7 @@ mod tests {
     #[test]
     fn a_target_that_holds_anything_is_refused() {
         let target = tempfile::tempdir().expect("temp dir");
-        std::fs::write(target.path().join("meta.properties"), b"version=1\n").expect("write");
+        fs::write(target.path().join("meta.properties"), b"version=1\n").expect("write");
         let refused = ensure_empty_log_dir(target.path());
         check!(matches!(refused, Err(RestoreError::LogDirNotEmpty(_))));
         check!(refused.expect_err("refused").exit_code() == EXIT_DIRTY_LOG_DIR);

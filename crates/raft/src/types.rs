@@ -37,7 +37,7 @@ impl Node {
     pub fn controller_addr(&self) -> Option<String> { controller_endpoint_addr(&self.endpoints) }
 }
 
-pub(crate) fn controller_endpoint_addr(endpoints: &[VoterEndpoint]) -> Option<String> {
+pub fn controller_endpoint_addr(endpoints: &[VoterEndpoint]) -> Option<String> {
     let endpoint = endpoints
         .iter()
         .find(|e| e.name == "CONTROLLER")
@@ -73,9 +73,10 @@ pub struct SubmitChangeResult {
     pub offset_reservations: Vec<OffsetReservation>,
 }
 
-/// A token mutation bound to the exact committed record observed by its
-/// caller. The controller compares `expected` and applies the change in one
-/// engine turn, so a snapshot/write race cannot replace a newer generation.
+/// A token mutation bound to the exact committed record observed by its caller.
+///
+/// The controller compares `expected` and applies the change in one engine
+/// turn, so a snapshot/write race cannot replace a newer generation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DelegationTokenMutation {
     Renew {
@@ -123,7 +124,7 @@ mod node_tests {
             ],
             kraft_version: krabka_metadata::KRaftVersionRange::default(),
         };
-        assert2::assert!(n.controller_addr() == Some("127.0.0.1:9093".to_string()));
+        assert2::assert!(n.controller_addr() == Some("127.0.0.1:9093".to_owned()));
     }
 
     #[test]

@@ -11,25 +11,26 @@ use {
     krabka_security::ListenerProtocol,
     schemars::JsonSchema,
     serde::Deserialize,
-    std::net::SocketAddr,
+    std::{net::SocketAddr, path::PathBuf},
 };
 
 #[krabka_macros::config_table(open)]
+#[derive(Eq)]
 pub struct FileTlsConfig {
     /// PEM file holding this listener's server certificate chain.
-    pub cert_path: std::path::PathBuf,
+    pub cert_path: PathBuf,
     /// PEM file holding the private key for `cert_path`.
-    pub key_path: std::path::PathBuf,
+    pub key_path: PathBuf,
     /// PEM file of CA(s) this broker trusts when validating a PEER's server
     /// cert as an outbound inter-broker / controller-quorum dialer. The
     /// operator renders the cluster CA here so KIP-595 controller peers can
     /// mutually authenticate over the controller listener. Maps to
     /// [`krabka_security::TlsConfig::trust_roots_path`].
-    pub trust_roots_path: Option<std::path::PathBuf>,
+    pub trust_roots_path: Option<PathBuf>,
     /// PEM file of CA(s) this listener validates client certificates
     /// against. Absent leaves mTLS without a client trust store, so
     /// `client_auth` has to be `Disabled`.
-    pub client_ca_path: Option<std::path::PathBuf>,
+    pub client_ca_path: Option<PathBuf>,
     /// Whether this listener asks for and requires a client certificate.
     /// See [`FileClientAuthMode`]. Defaults to `Disabled`.
     #[serde(default)]
@@ -71,6 +72,7 @@ pub enum FileClientAuthMode {
 }
 
 #[krabka_macros::config_table(open)]
+#[derive(Eq)]
 pub struct FileListenerSaslConfig {
     /// SASL mechanisms this listener accepts, Kafka's
     /// `sasl.enabled.mechanisms`. Each entry is a wire name such as `PLAIN`,
@@ -174,8 +176,9 @@ impl FileListener {
 mod listener_auth_tests {
     use {
         super::*,
-        crate::file_config::{FileConfig, test_support::configured_unwrap_parse},
+        crate::file_config::{FileConfig, FileConfigError, test_support::configured_unwrap_parse},
         assert2::assert,
+        std::path::PathBuf,
     };
 
     #[test]
@@ -203,10 +206,10 @@ tls_config = { cert_path = "/tls/broker.crt", key_path = "/tls/broker.key", clie
         assert!(cfg.listeners[0].tls_config.is_none());
         let data_tls = cfg.listeners[1].tls_config.as_ref().unwrap();
         let expected = FileTlsConfig {
-            cert_path: std::path::PathBuf::from("/tls/broker.crt"),
-            key_path: std::path::PathBuf::from("/tls/broker.key"),
+            cert_path: PathBuf::from("/tls/broker.crt"),
+            key_path: PathBuf::from("/tls/broker.key"),
             trust_roots_path: None,
-            client_ca_path: Some(std::path::PathBuf::from("/tls/clients-ca.crt")),
+            client_ca_path: Some(PathBuf::from("/tls/clients-ca.crt")),
             client_auth: FileClientAuthMode::Required,
             principal_mapping_rules: vec!["DEFAULT".to_owned()],
         };
@@ -306,10 +309,7 @@ protocol = "Ssl"
 tls_config = { cert_path = "/tls/c", key_path = "/tls/k", principal_mapping_rules = ["NOT_A_RULE:::"] }
 "#;
         let err = configured_unwrap_parse(toml).unwrap_err();
-        assert!(matches!(
-            err,
-            crate::file_config::FileConfigError::InvalidConfig(_)
-        ));
+        assert!(matches!(err, FileConfigError::InvalidConfig(_)));
     }
 
     #[test]
@@ -344,6 +344,7 @@ mod tests {
         super::*,
         crate::file_config::FileConfig,
         assert2::{assert, check},
+        std::path::PathBuf,
     };
 
     #[test]
@@ -407,7 +408,7 @@ client_auth = "Required"
         let cfg: FileConfig = toml::from_str(src).expect("parse TLS config");
         assert!(cfg.controller_listener_protocol == Some(ListenerProtocol::Ssl));
         let tls = cfg.tls_config.expect("tls_config present");
-        assert!(tls.cert_path == std::path::PathBuf::from("/etc/krabka/broker-tls/0.crt"));
+        assert!(tls.cert_path == PathBuf::from("/etc/krabka/broker-tls/0.crt"));
         assert!(tls.client_auth == FileClientAuthMode::Required);
     }
     #[test]

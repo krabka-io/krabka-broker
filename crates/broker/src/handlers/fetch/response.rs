@@ -8,6 +8,7 @@ use {
         owned::fetch_response::{FetchableTopicResponse, LeaderIdAndEpoch},
         records::RecordsPayload,
     },
+    std::{sync::Arc, time::Duration},
 };
 
 /// Group the resolved `PendingRead`s back into per-topic response entries.
@@ -35,7 +36,7 @@ pub(super) struct GroupedResponses {
     /// purgatory and completes it off the request-handler thread, so KIP-124
     /// charges none of it to `request_percentage`. Zero for a fetch that did
     /// not park.
-    pub(super) long_poll_active: std::time::Duration,
+    pub(super) long_poll_active: Duration,
 }
 
 pub(super) fn group_into_topic_responses(pending: Vec<PendingRead>) -> GroupedResponses {
@@ -72,7 +73,7 @@ pub(super) fn group_into_topic_responses(pending: Vec<PendingRead>) -> GroupedRe
     GroupedResponses {
         responses,
         cpu_micros,
-        long_poll_active: std::time::Duration::ZERO,
+        long_poll_active: Duration::ZERO,
     }
 }
 
@@ -142,7 +143,7 @@ struct PartitionMetricRow {
 
 /// The partition rows of one topic, under the shared name that labels its metrics.
 struct TopicMetricRows {
-    topic_name: std::sync::Arc<str>,
+    topic_name: Arc<str>,
     partitions: Vec<PartitionMetricRow>,
 }
 
@@ -334,7 +335,7 @@ mod tests {
         for (version, expected_leader) in [
             (12, LeaderIdAndEpoch::default()),
             (15, LeaderIdAndEpoch::default()),
-            (16, leader.clone()),
+            (16, leader),
         ] {
             let mut responses = vec![topic("t", 1, vec![fenced.clone()])];
             withhold_current_leader_before_kip_951(version, &mut responses);

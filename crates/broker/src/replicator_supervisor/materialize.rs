@@ -21,8 +21,8 @@ use {
         wal::quorum::{follower::hydrate_on_promotion, registry::ShardId},
     },
     krabka_ids::PartitionIndex,
-    krabka_log::{Log, LogConfig},
-    std::{path::PathBuf, sync::Arc},
+    krabka_log::{Log, LogConfig, topic_name},
+    std::{fs, path::PathBuf, sync::Arc},
 };
 
 /// Open (or recover) the on-disk `Partition` for `(topic, partition)` and
@@ -37,7 +37,7 @@ use {
 ///
 /// Returns `Ok(())` if the partition is already present, which is a no-op, or
 /// if the function opened it. Returns `Err(String)` on I/O failure.
-pub(crate) struct MaterializePartitionConfig<'a> {
+pub struct MaterializePartitionConfig<'a> {
     pub partitions: &'a PartitionRegistry,
     pub topic: &'a str,
     pub topic_id: Option<uuid::Uuid>,
@@ -49,7 +49,7 @@ pub(crate) struct MaterializePartitionConfig<'a> {
     pub runtime: PartitionRuntimeConfig,
 }
 
-pub(crate) fn materialize_partition(config: MaterializePartitionConfig<'_>) -> Result<(), String> {
+pub fn materialize_partition(config: MaterializePartitionConfig<'_>) -> Result<(), String> {
     materialize_partition_with_replication_target(config, None)
 }
 
@@ -78,7 +78,7 @@ pub(super) fn materialize_partition_with_replication_target(
         // The name comes from the metadata log. Refuse a name that would put
         // the partition directory outside the log directory, whatever path
         // wrote it there.
-        krabka_log::topic_name::validate_topic_name(topic).map_err(|e| e.to_string())?;
+        topic_name::validate_topic_name(topic).map_err(|e| e.to_string())?;
         let partition_index = PartitionIndex(partition);
         let preferred = topic_id.and_then(|id| partitions.preferred_log_dir(id, partition_index));
         if preferred
@@ -98,7 +98,7 @@ pub(super) fn materialize_partition_with_replication_target(
             },
             |log_dir| partition_dir(log_dir, topic, partition),
         );
-        std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
+        fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
         let open_config = open_config(log_config, runtime.diskless);
         let mut log = Log::open(&dir, open_config).map_err(|e| format!("Log::open: {e}"))?;
         if let Some(stamp_source) = partitions.stamp_source() {
@@ -135,16 +135,16 @@ pub(super) fn materialize_partition_with_replication_target(
         );
         let owning_dir = dir
             .parent()
-            .expect("placed partition dir always has a parent log.dir")
+            .ok_or_else(|| "placed partition dir has no parent log.dir".to_owned())?
             .to_path_buf();
         let spawn = PartitionSpawnConfig {
-            topic: topic.to_string(),
+            topic: topic.to_owned(),
             topic_id,
             partition_id: PartitionIndex(partition),
             log_dir: owning_dir,
             log,
             log_dir_status: log_dir_status.clone(),
-            producer_state: producer_state.clone(),
+            producer_state: Arc::clone(producer_state),
             runtime,
         };
         let partition = match initial_target {
@@ -152,11 +152,11 @@ pub(super) fn materialize_partition_with_replication_target(
             None => try_spawn_partition_with_sequencer(spawn),
         }
         .map_err(|e| format!("spawn partition: {e}"))?;
-        if preferred.is_some() {
-            partitions.clear_preferred_log_dir(
-                topic_id.expect("a preference is keyed by topic id"),
-                partition_index,
-            );
+        // A preference is keyed by topic id, so it exists only with one.
+        if preferred.is_some()
+            && let Some(topic_id) = topic_id
+        {
+            partitions.clear_preferred_log_dir(topic_id, partition_index);
         }
         Ok(partition)
     })
@@ -174,7 +174,14 @@ mod tests {
             },
         },
         assert2::assert,
-        std::sync::atomic::{AtomicU64, Ordering},
+        krabka_log::topic_name,
+        std::{
+            ffi::OsString,
+            fs,
+            path::Path,
+            slice,
+            sync::atomic::{AtomicU64, Ordering},
+        },
     };
 
     #[derive(Debug)]
@@ -186,7 +193,7 @@ mod tests {
 
     fn materialize_test_partition(
         partitions: &Arc<PartitionRegistry>,
-        log_dir: &std::path::Path,
+        log_dir: &Path,
         topic: &str,
     ) {
         MaterializeFixture::default().materialize(partitions, MaterializeSetup {
@@ -219,7 +226,7 @@ mod tests {
         let part = partitions.get("t", PartitionIndex(0)).expect("part");
         // Mirror what reconcile does for leader partitions.
         install_three_replica_isr(&part).await;
-        let st = part.replica_state.lock().await;
+        let st = part.replica_state.lock().await.clone();
         assert!(st.isr.len() == 3);
     }
 
@@ -230,7 +237,7 @@ mod tests {
     async fn materialization_refuses_a_topic_name_that_escapes_the_log_dir() {
         let root = tempfile::tempdir().expect("root");
         let log_dir = root.path().join("logs");
-        std::fs::create_dir_all(&log_dir).expect("log dir");
+        fs::create_dir_all(&log_dir).expect("log dir");
         let escaping = "../outside".to_owned();
         let absolute = format!("{}/abs", root.path().display());
         for topic in [escaping.as_str(), absolute.as_str(), "..", ""] {
@@ -239,27 +246,27 @@ mod tests {
                 &partitions,
                 MaterializeSetup {
                     topic,
-                    log_dirs: std::slice::from_ref(&log_dir),
+                    log_dirs: slice::from_ref(&log_dir),
                     ..Default::default()
                 },
             ));
             assert!(
                 result
-                    == Err(krabka_log::topic_name::validate_topic_name(topic)
+                    == Err(topic_name::validate_topic_name(topic)
                         .expect_err("invalid name")
                         .to_string()),
                 "{topic:?}"
             );
             assert!(partitions.get(topic, PartitionIndex(0)).is_none());
         }
-        let mut entries: Vec<_> = std::fs::read_dir(root.path())
+        let mut entries: Vec<_> = fs::read_dir(root.path())
             .expect("read root")
             .map(|entry| entry.expect("entry").file_name())
             .collect();
         entries.sort();
-        assert!(entries == vec![std::ffi::OsString::from("logs")]);
+        assert!(entries == vec![OsString::from("logs")]);
         assert!(
-            std::fs::read_dir(&log_dir)
+            fs::read_dir(&log_dir)
                 .expect("read log dir")
                 .next()
                 .is_none()
@@ -330,7 +337,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let partition_dir = partition_dir(dir.path(), "recovered", 0);
-        std::fs::create_dir_all(&partition_dir).expect("partition dir");
+        fs::create_dir_all(&partition_dir).expect("partition dir");
         let mut existing = Log::open(&partition_dir, LogConfig::default()).expect("open existing");
         existing
             .append(&mut RecordBatch {
@@ -369,7 +376,7 @@ mod tests {
             runtime: PartitionRuntimeConfig::new(
                 (1_024, 64, 3),
                 true,
-                (Some(hot_tail), Some(wal_shards.clone()), None),
+                (Some(hot_tail), Some(Arc::clone(&wal_shards)), None),
             ),
             ..MaterializeFixture::default().config(&partitions, MaterializeSetup {
                 topic: "diskless",
@@ -381,7 +388,7 @@ mod tests {
 
         assert!(
             wal_shards
-                .get(crate::wal::quorum::registry::ShardId {
+                .get(ShardId {
                     topic_id,
                     partition: PartitionIndex(0),
                 })

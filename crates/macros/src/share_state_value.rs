@@ -99,7 +99,7 @@ fn is_batches(ty: &Type) -> bool {
     })
 }
 
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let docs = item.parse_meta::<ValueDocs>("share_state")?.ok_or_else(|| {
         ParseError::new(item.ident.span(), "`ShareStateValue` needs `#[share_state(encode_doc = \"...\", decode_doc = \"...\")]`")
     })?;

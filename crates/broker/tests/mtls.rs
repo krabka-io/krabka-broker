@@ -1,5 +1,4 @@
-// Rust 1.95 annotate-snippets ICE on clippy::pedantic in test files,
-// matching the convention in auth_handlers.rs / elect_leaders.rs.
+#![cfg(test)]
 
 //! mTLS client authentication.
 //!
@@ -33,10 +32,22 @@ use {
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
     krabka_protocol::{Decode, Encode, owned::create_topics_response::CreateTopicsResponse},
     krabka_security::{ClientAuthMode, TlsConfig},
-    std::sync::Arc,
-    tokio::net::TcpStream,
+    rustls::crypto::aws_lc_rs,
+    std::{
+        fs, io,
+        net::SocketAddr,
+        path::{Path, PathBuf},
+        sync::Arc,
+        time::Duration,
+    },
+    tokio::{
+        io::{AsyncRead, AsyncWrite},
+        net::TcpStream,
+        time,
+    },
     tokio_rustls::{
         TlsConnector,
+        client::TlsStream,
         rustls::{
             ClientConfig,
             pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject as _},
@@ -51,9 +62,9 @@ use crate::support::tls::{
     CLIENT_PRINCIPAL, DEV_CERT, DEV_CLIENT_CA, DEV_CLIENT_CERT, DEV_CLIENT_KEY, DEV_KEY,
 };
 
-fn write_fixture(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
+fn write_fixture(dir: &Path, name: &str, contents: &str) -> PathBuf {
     let p = dir.join(name);
-    std::fs::write(&p, contents).unwrap();
+    fs::write(&p, contents).unwrap();
     p
 }
 
@@ -88,7 +99,7 @@ fn client_config_with_pinned_server_and_client_cert(
 async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
     // Provider registration is shared with auth_handlers.rs; tolerate
     // an earlier installer.
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
 
     // The cert's Subject DN is the principal name. Set it as a
     // super-user so the authorizer permits CreateTopics; with no
@@ -146,7 +157,7 @@ async fn mtls_principal_is_cert_dn_and_super_user_bypass_works() {
 /// cert, same DN in `super_users` -- so the only difference is the rule list.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unmappable_certificate_dn_closes_the_connection() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
 
     let MtlsFixture {
         log_dir: _log_dir,
@@ -162,7 +173,7 @@ async fn an_unmappable_certificate_dn_closes_the_connection() {
     // succeeds, an ANONYMOUS fall-through comes back
     // CLUSTER_AUTHORIZATION_FAILED. Only the refusal ends the connection with
     // no reply at all, which is what this test reads.
-    cfg.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_string()};
+    cfg.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_owned()};
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -198,7 +209,7 @@ async fn an_unmappable_certificate_dn_closes_the_connection() {
 /// direction, so between them the branch cannot be flattened either way.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
 
     let MtlsBroker {
         log_dir: _log_dir,
@@ -238,13 +249,13 @@ async fn a_connection_with_no_certificate_is_served_rather_than_closed() {
     handle.shutdown().await;
 }
 
-async fn timed_create_topics<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+async fn timed_create_topics<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     body: &[u8],
     timeout_context: &str,
-) -> std::io::Result<Vec<u8>> {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+) -> io::Result<Vec<u8>> {
+    time::timeout(
+        Duration::from_secs(10),
         kafka_wire::round_trip()
             .stream(stream)
             .api_key(19)
@@ -285,7 +296,7 @@ fn mtls_fixture(client_auth: ClientAuthMode) -> MtlsFixture {
     let client_ca_path = write_fixture(pem_dir.path(), "client_ca.pem", DEV_CLIENT_CA);
 
     let cfg = ssl_config(log_dir.path().to_path_buf(), TlsConfig {
-        cert_chain_path: server_cert_path.clone(),
+        cert_chain_path: server_cert_path,
         private_key_path: server_key_path,
         trust_roots_path: None,
         client_ca_path: Some(client_ca_path),
@@ -303,7 +314,7 @@ struct MtlsBroker {
     log_dir: tempfile::TempDir,
     pem_dir: tempfile::TempDir,
     handle: BrokerHandle,
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
 }
 
 fn server_certificate() -> CertificateDer<'static> {
@@ -311,7 +322,6 @@ fn server_certificate() -> CertificateDer<'static> {
         .next()
         .expect("dev server cert present")
         .expect("dev server cert parses")
-        .clone()
 }
 
 fn create_topics_body(topic: &str) -> BytesMut {
@@ -322,10 +332,10 @@ fn create_topics_body(topic: &str) -> BytesMut {
 }
 
 async fn mtls_connect(
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
     connector: TlsConnector,
     context: &str,
-) -> tokio_rustls::client::TlsStream<TcpStream> {
+) -> TlsStream<TcpStream> {
     let tcp = TcpStream::connect(addr).await.expect("tcp connect");
     let server_name = ServerName::try_from("krabka-dev").unwrap();
     connector.connect(server_name, tcp).await.expect(context)
@@ -337,7 +347,7 @@ async fn mtls_super_user(client_auth: ClientAuthMode) -> MtlsBroker {
         pem_dir,
         mut config,
     } = mtls_fixture(client_auth);
-    config.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_string()};
+    config.super_users = maplit::hashset! {CLIENT_PRINCIPAL.to_owned()};
     let handle = Broker::start(config).await.expect("broker must start");
     let addr = handle.listen_addr();
     MtlsBroker {

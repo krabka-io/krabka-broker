@@ -36,13 +36,9 @@ pub fn restore_record_selected(
     timestamp_bound: Option<i64>,
     exclusions: RestoreExclusions,
 ) -> bool {
-    (match offset_bound {
-        Some(bound) => offset <= bound,
-        None => true,
-    }) && (match timestamp_bound {
-        Some(bound) => timestamp < bound,
-        None => true,
-    }) && !(exclusions.producer
+    !(matches!(offset_bound, Some(bound) if offset > bound)
+        || matches!(timestamp_bound, Some(bound) if timestamp >= bound)
+        || exclusions.producer
         || exclusions.offset
         || exclusions.content.key
         || exclusions.content.header)
@@ -73,10 +69,7 @@ pub fn restore_batch_filter_decision(saw_keep: bool, saw_drop: bool) -> RestoreF
 })]
 #[must_use]
 pub fn restore_batch_past_offset_bound(batch_base: i64, offset_bound: Option<i64>) -> bool {
-    match offset_bound {
-        Some(bound) => batch_base > bound,
-        None => false,
-    }
+    matches!(offset_bound, Some(bound) if batch_base > bound)
 }
 
 /// Reconcile one archive-scan observation with one snapshot lifecycle state.

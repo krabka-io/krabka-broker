@@ -43,7 +43,7 @@ fn throttle_series(metrics: &BrokerMetrics) -> Vec<String> {
     let body = encode_metrics(metrics);
     body.lines()
         .filter(|line| line.starts_with("krabka_broker_quota_entity_throttle_seconds_total{"))
-        .map(ToString::to_string)
+        .map(str::to_owned)
         .collect()
 }
 

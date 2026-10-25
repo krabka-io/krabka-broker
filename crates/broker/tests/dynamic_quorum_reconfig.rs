@@ -18,20 +18,27 @@
 //! formatted directory: the cluster and directory ids come from the
 //! `meta.properties` that `krabka-format` wrote, read as the binary reads it,
 //! and a fresh directory starts in `Bootstrap` mode.
+#![cfg(test)]
 
 use {
     crate::support::addressed_node_config,
     assert2::assert,
-    krabka_broker::{BootstrapMode, Broker, BrokerHandle, NodeId, config::NodeRole},
+    krabka_broker::{
+        BootstrapMode, Broker, BrokerHandle, NodeId, bootstrap, codes, config::NodeRole,
+    },
     krabka_client_admin::{AdminClient, AdminError, RaftVoterEndpoint},
     std::{
         collections::BTreeSet,
         net::SocketAddr,
         path::{Path, PathBuf},
+        slice,
         time::{Duration, Instant},
     },
     tempfile::TempDir,
-    tokio::net::{TcpListener, TcpSocket, TcpStream},
+    tokio::{
+        net::{TcpListener, TcpSocket, TcpStream},
+        time,
+    },
 };
 
 mod support;
@@ -99,13 +106,9 @@ async fn start(
     log_dir: &Path,
     bootstrap: &[SocketAddr],
 ) -> StartedNode {
-    let meta = krabka_broker::bootstrap::initialize_log_dirs(
-        log_dir,
-        &[log_dir.to_path_buf()],
-        NodeId(node.id),
-        None,
-    )
-    .expect("krabka-format wrote meta.properties");
+    let meta =
+        bootstrap::initialize_log_dirs(log_dir, &[log_dir.to_path_buf()], NodeId(node.id), None)
+            .expect("krabka-format wrote meta.properties");
     let mut config = addressed_node_config()
         .log_dir(log_dir)
         .node(node.id)
@@ -118,7 +121,7 @@ async fn start(
     config.bootstrap_mode = BootstrapMode::Bootstrap;
     config.cluster_id = Some(meta.cluster_id);
     config.directory_id = meta.directory_id;
-    let handle = tokio::time::timeout(
+    let handle = time::timeout(
         DEADLINE,
         Broker::start_with_listeners(config, node.controller, Some(node.client)),
     )
@@ -177,7 +180,7 @@ async fn wait_for_quorum(broker: SocketAddr, leader: i32, voters: &[i32], observ
             Instant::now() <= deadline,
             "the quorum described through {broker} is {described:?}, not {expected:?}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -187,7 +190,7 @@ async fn wait_for_quorum(broker: SocketAddr, leader: i32, voters: &[i32], observ
 async fn until_ok<F, Fut>(what: &str, mut operation: F)
 where
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<(), String>>,
+    Fut: Future<Output = Result<(), String>>,
 {
     let deadline = Instant::now() + DEADLINE;
     loop {
@@ -196,7 +199,7 @@ where
             return;
         }
         assert!(Instant::now() <= deadline, "{what}: {outcome:?}");
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -294,8 +297,8 @@ async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_serv
 
     // `kafka-metadata-quorum add-controller` sends `AddRaftVoter` for the new
     // controller through the bootstrap controller.
-    let second_directory = krabka_broker::bootstrap::read_directory_id(&log_dir)
-        .expect("the joining controller's meta.properties");
+    let second_directory =
+        bootstrap::read_directory_id(&log_dir).expect("the joining controller's meta.properties");
     let endpoint = RaftVoterEndpoint::new(
         "CONTROLLER",
         second_controller.ip().to_string(),
@@ -307,14 +310,9 @@ async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_serv
             .await
             .map_err(|error| error.to_string())?;
         let added = admin
-            .add_raft_voter(
-                None,
-                3002,
-                second_directory,
-                std::slice::from_ref(&endpoint),
-            )
+            .add_raft_voter(None, 3002, second_directory, slice::from_ref(&endpoint))
             .await;
-        voter_change(added, krabka_broker::codes::DUPLICATE_VOTER)
+        voter_change(added, codes::DUPLICATE_VOTER)
     })
     .await;
     wait_for_quorum(through, 3001, &[3001, 3002], &[1, 2]).await;
@@ -328,7 +326,7 @@ async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_serv
         .await
         .map_err(|error| error.to_string())?;
         let removed = admin.remove_raft_voter(None, 3001, first_directory).await;
-        voter_change(removed, krabka_broker::codes::VOTER_NOT_FOUND)
+        voter_change(removed, codes::VOTER_NOT_FOUND)
     })
     .await;
     wait_for_quorum(through, 3002, &[3002], &[1, 2, 3001]).await;
@@ -337,7 +335,7 @@ async fn brokers_and_controllers_find_a_standalone_quorum_through_bootstrap_serv
     // reach it on the endpoint the voter set names. A new leader starts every
     // registered broker alive, so the check waits out a heartbeat session
     // first, after which a broker whose heartbeats go elsewhere is fenced.
-    tokio::time::sleep(FENCING_WINDOW).await;
+    time::sleep(FENCING_WINDOW).await;
     let fenced = second.fenced_broker_ids_for_test();
     assert!(fenced.is_empty(), "fenced under the new leader: {fenced:?}");
 
@@ -416,7 +414,7 @@ async fn a_wildcard_controller_advertises_the_host_name_in_the_voter_set() {
             Instant::now() <= deadline,
             "the voter set advertises {nodes:?}, not {advertised:?}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
     controller.shutdown().await;
 }

@@ -86,17 +86,14 @@ fn skip_headers(fields: &mut &[u8]) -> Option<()> {
 /// Longer encodings retain the protocol decoder's limits and overflow rules.
 #[inline]
 fn short_integer(buf: &mut &[u8]) -> Option<i16> {
-    let first = *buf.first()?;
-    let (encoded, length) = if first < 128 {
-        (i16::from(first), 1)
-    } else {
-        let second = *buf.get(1)?;
-        if second >= 128 {
-            return None;
+    let (encoded, rest) = match *buf {
+        [first, rest @ ..] if *first < 128 => (i16::from(*first), rest),
+        [first, second, rest @ ..] if *second < 128 => {
+            (i16::from(*first & 127) | (i16::from(*second) << 7), rest)
         }
-        (i16::from(first & 127) | (i16::from(second) << 7), 2)
+        _ => return None,
     };
-    *buf = &buf[length..];
+    *buf = rest;
     Some((encoded >> 1) ^ -(encoded & 1))
 }
 

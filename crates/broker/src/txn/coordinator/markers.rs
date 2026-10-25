@@ -46,10 +46,7 @@ impl TxnCoordinator {
         self.marker_fanout_gate.pass().await?;
         let outcome = self.fan_out_markers(entry, marker_type).await;
         self.remove_marked_partitions(entry, &outcome.written).await;
-        match outcome.failure {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+        outcome.failure.map_or(Ok(()), Err)
     }
 
     async fn fan_out_markers(&self, entry: &TxnEntry, marker_type: MarkerType) -> MarkerFanOut {
@@ -167,6 +164,8 @@ mod tests {
             txn::coordinator::test_support::{test_coordinator, test_prelude::*},
         },
         assert2::{assert, check},
+        std::{fs::create_dir_all, sync::Arc},
+        tokio::sync::Mutex,
     };
 
     #[test]
@@ -176,7 +175,7 @@ mod tests {
 
     fn tp(topic: &str) -> TopicPartition {
         TopicPartition {
-            topic: topic.to_string(),
+            topic: topic.to_owned(),
             partition: PartitionIndex(0),
         }
     }
@@ -236,9 +235,9 @@ mod tests {
         let coordinator = test_coordinator();
         let dir = tempfile::tempdir().expect("temp dir");
         let part_dir = partition_dir(dir.path(), "a", 0);
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        create_dir_all(&part_dir).expect("partition dir");
         let local = spawn_partition(
-            "a".to_string(),
+            "a".to_owned(),
             PartitionIndex(0),
             dir.path().to_path_buf(),
             Log::open(&part_dir, LogConfig::default()).expect("open log"),
@@ -252,17 +251,17 @@ mod tests {
             .partitions
             .insert("a".into(), PartitionIndex(0), local);
         let mut snapshot = prepared(TxnState::PrepareCommit, 3);
-        let live = Arc::new(tokio::sync::Mutex::new(snapshot.clone()));
+        let live = Arc::new(Mutex::new(snapshot.clone()));
         coordinator
             .state
-            .insert(snapshot.transactional_id.clone(), live.clone());
+            .insert(snapshot.transactional_id.clone(), Arc::clone(&live));
 
         // `b-0` is neither local nor reachable, so its marker fails.
         let result = coordinator
             .dispatch_transaction_markers(&mut snapshot, MarkerType::Commit)
             .await;
 
-        let outstanding: HashSet<TopicPartition> = [tp("b")].into_iter().collect();
+        let outstanding = HashSet::from([tp("b")]);
         assert!(result.is_err());
         assert!(
             (live.lock().await.partitions.clone(), snapshot.partitions)

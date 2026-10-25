@@ -6,6 +6,7 @@
 //! a level, `DescribeConfigs` reads it back, `ListConfigResources` lists the
 //! resource, and a `tracing` event proves the filter actually moved — the
 //! whole point of the feature is the events, not the config entry.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -16,6 +17,9 @@ use {
         },
     },
     assert2::{assert, check},
+    krabka_broker::config,
+    std::net::SocketAddr,
+    tracing::dispatcher,
 };
 mod support;
 
@@ -49,7 +53,7 @@ const CHILD_TARGET: &str = "krabka_broker::broker_logger_wire_test";
 /// names a real `krabka-broker` process actually has: a seed that stopped
 /// naming `krabka_broker` would fail this test with `Logger krabka_broker does
 /// not exist!` instead of passing against a fixture nobody ships.
-const STARTING_SPEC: &str = krabka_broker::config::DEFAULT_LOG_FILTER;
+const STARTING_SPEC: &str = config::DEFAULT_LOG_FILTER;
 
 // Record admitted events as target:LEVEL and panic on a poisoned capture lock.
 krabka_macros::capture_layer_fixture!(CaptureLayer, Captured, unwrap);
@@ -60,7 +64,7 @@ krabka_macros::capture_layer_fixture!(CaptureLayer, Captured, unwrap);
 /// The emission is synchronous inside `with_default`, so it cannot migrate to
 /// another worker thread between setting the dispatcher and logging.
 fn debug_event_is_emitted(dispatch: &tracing::Dispatch, captured: &Captured) -> bool {
-    tracing::dispatcher::with_default(dispatch, || {
+    dispatcher::with_default(dispatch, || {
         tracing::debug!(target: CHILD_TARGET, "broker logger probe");
     });
     let mut seen = captured.lock().unwrap();
@@ -71,7 +75,7 @@ fn debug_event_is_emitted(dispatch: &tracing::Dispatch, captured: &Captured) -> 
     hit
 }
 
-async fn build_client(addr: std::net::SocketAddr) -> krabka_client_core::Client {
+async fn build_client(addr: SocketAddr) -> krabka_client_core::Client {
     connect_owned(
         format!("127.0.0.1:{}", addr.port()),
         "broker-logger-config-test",

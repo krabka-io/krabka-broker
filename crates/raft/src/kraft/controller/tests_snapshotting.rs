@@ -26,16 +26,23 @@ use {
         snapshot::{SnapshotReader, SnapshotWriter},
     },
     assert2::assert,
+    krabka_units::prelude,
+    std::{
+        fs,
+        io::{self, Cursor, Read, Seek, SeekFrom},
+        path::Path,
+    },
+    tokio::{sync::oneshot, task, time},
 };
 
-async fn assert_checkpoint_pruned(ctrl: &KraftController, dir: &std::path::Path) {
-    let quorum = tokio::time::timeout(Duration::from_secs(2), async {
+async fn assert_checkpoint_pruned(ctrl: &KraftController, dir: &Path) {
+    let quorum = time::timeout(Duration::from_secs(2), async {
         loop {
             let quorum = ctrl.quorum_state().await.unwrap();
             if quorum.log_start_offset > 0 {
                 break quorum;
             }
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
@@ -51,7 +58,7 @@ async fn assert_checkpoint_pruned(ctrl: &KraftController, dir: &std::path::Path)
 /// `SnapshotHeaderRecord` is stamped with. The header is the first control
 /// batch of the artifact, so decoding it is how a reader — the JVM
 /// `kafka-dump-log --cluster-metadata-decoder` included — sees the value.
-fn latest_header_timestamp(checkpoint_dir: &std::path::Path) -> i64 {
+fn latest_header_timestamp(checkpoint_dir: &Path) -> i64 {
     let bytes = load_latest_checkpoint(checkpoint_dir)
         .expect("scan checkpoints")
         .expect("a checkpoint exists");
@@ -86,7 +93,7 @@ fn delayed_snapshot_engine(topic: &str) -> (Engine, tempfile::TempDir) {
     (engine, dir)
 }
 
-fn assert_checkpoint_contains_topic(dir: &std::path::Path, topic: &str) {
+fn assert_checkpoint_contains_topic(dir: &Path, topic: &str) {
     let bytes = load_latest_checkpoint(dir).unwrap().unwrap();
     let contents = SnapshotReader::read(&bytes).unwrap();
     let image = MetadataImage::from_records(uuid::Uuid::nil(), &contents.metadata_records);
@@ -104,25 +111,25 @@ async fn delayed_regular_checkpoint_keeps_engine_commands_moving() {
     let task = tokio::spawn(engine.run(rx));
 
     // This first query completes its turn and starts the regular worker.
-    let (reply, answer) = tokio::sync::oneshot::channel();
+    let (reply, answer) = oneshot::channel();
     tx.send(Command::QuorumStateSnapshot { reply })
         .await
         .unwrap();
     answer.await.expect("first query");
 
-    let (reply, answer) = tokio::sync::oneshot::channel();
+    let (reply, answer) = oneshot::channel();
     tx.send(Command::QuorumStateSnapshot { reply })
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_millis(100), answer)
+    time::timeout(Duration::from_millis(100), answer)
         .await
         .expect("engine was blocked by checkpoint")
         .expect("second query");
     assert2::assert!(latest_checkpoint_id(dir.path()).is_none());
 
-    tokio::time::timeout(Duration::from_secs(2), async {
+    time::timeout(Duration::from_secs(2), async {
         while latest_checkpoint_id(dir.path()).is_none() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -156,7 +163,7 @@ async fn halting_joins_regular_checkpoint_before_releasing_the_directory() {
     let (tx, rx) = CommandSender::channel(4);
     engine.cmd_tx = tx.clone();
     tx.send(Command::Halt).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(2), engine.run(rx))
+    time::timeout(Duration::from_secs(2), engine.run(rx))
         .await
         .expect("halt joins the checkpoint worker");
     assert_checkpoint_contains_topic(dir.path(), "snapshot-halt");
@@ -278,7 +285,7 @@ async fn leader_snapshots_and_prunes_at_threshold() {
 async fn leader_snapshots_and_prunes_at_byte_threshold_across_many_small_commits() {
     let (ctrl, dir) = build()
         .ids(&[NodeId(1)])
-        .max_bytes_between_snapshots(krabka_units::prelude::bytes(200))
+        .max_bytes_between_snapshots(prelude::bytes(200))
         .call();
     ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
     await_leader(&ctrl, Some(NodeId(1))).await;
@@ -317,8 +324,8 @@ fn latest_checkpoint_id_picks_highest_offset_then_epoch() {
     assert2::assert!(latest == b"eleven-one");
 }
 
-fn checkpoint_entry_count(dir: &std::path::Path) -> usize {
-    std::fs::read_dir(dir)
+fn checkpoint_entry_count(dir: &Path) -> usize {
+    fs::read_dir(dir)
         .expect("read checkpoint dir")
         .collect::<Result<Vec<_>, _>>()
         .expect("read entries")
@@ -563,20 +570,20 @@ async fn a_submitted_change_stamps_its_checkpoint_with_the_append_wall_clock() {
 /// A reader that counts the bytes it hands out, to show what a chunk read
 /// costs.
 struct CountingReader {
-    inner: std::io::Cursor<Vec<u8>>,
+    inner: Cursor<Vec<u8>>,
     read: u64,
 }
 
-impl std::io::Read for CountingReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+impl Read for CountingReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.inner.read(buf)?;
         self.read += u64::try_from(n).expect("a read fits in u64");
         Ok(n)
     }
 }
 
-impl std::io::Seek for CountingReader {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> { self.inner.seek(pos) }
+impl Seek for CountingReader {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> { self.inner.seek(pos) }
 }
 
 /// A chunk read validates the position against the length, clamps the chunk
@@ -601,7 +608,7 @@ fn checkpoint_chunk_reads_only_the_requested_range(
 ) {
     let mut file = CheckpointFile::new(
         CountingReader {
-            inner: std::io::Cursor::new(b"0123456789".to_vec()),
+            inner: Cursor::new(b"0123456789".to_vec()),
             read: 0,
         },
         10,

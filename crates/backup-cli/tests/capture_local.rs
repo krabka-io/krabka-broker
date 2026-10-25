@@ -9,6 +9,7 @@
 //!
 //! The offsets half of the tool needs a live cluster and is covered by
 //! `crates/restore/tests/dr_roundtrip.rs`.
+#![cfg(test)]
 
 use {
     assert2::{assert, check},
@@ -19,6 +20,7 @@ use {
         manifest::{MANIFEST, METADATA_CHECKPOINT, Manifest, RLMM_SNAPSHOT, sha256_hex},
         run,
     },
+    std::{fs, path::Path},
 };
 
 /// The RLMM snapshot bytes a fixture node holds. The capture copies bytes and
@@ -40,13 +42,13 @@ impl FixtureNode {
         let log_dir = node_with_rlmm();
 
         let metadata = log_dir.path().join("__cluster_metadata-0");
-        std::fs::create_dir_all(&metadata).expect("create the metadata dir");
-        std::fs::write(
+        fs::create_dir_all(&metadata).expect("create the metadata dir");
+        fs::write(
             metadata.join("00000000000000000009-0000000000.checkpoint"),
             b"an older controller checkpoint",
         )
         .expect("write the older checkpoint");
-        std::fs::write(
+        fs::write(
             metadata.join("00000000000000000042-0000000001.checkpoint"),
             NEWEST_CHECKPOINT_BYTES,
         )
@@ -55,14 +57,14 @@ impl FixtureNode {
     }
 }
 
-fn archive_args(root: &std::path::Path) -> ArchiveArgs {
+fn archive_args(root: &Path) -> ArchiveArgs {
     ArchiveArgs {
         local: Some(root.to_path_buf()),
         ..ArchiveArgs::default()
     }
 }
 
-async fn read_manifest(archive_root: &std::path::Path, capture: &str) -> Manifest {
+async fn read_manifest(archive_root: &Path, capture: &str) -> Manifest {
     let store = Archive::open(&archive_args(archive_root)).expect("open the archive");
     let bytes = store
         .get(&capture_key(capture, MANIFEST))
@@ -208,7 +210,7 @@ async fn verify_reports_an_artifact_the_archive_no_longer_holds_whole() {
     let damaged = archive_root
         .path()
         .join(capture_key(&capture, RLMM_SNAPSHOT));
-    std::fs::write(&damaged, b"rlmm snapshot byt").expect("truncate the captured snapshot");
+    fs::write(&damaged, b"rlmm snapshot byt").expect("truncate the captured snapshot");
 
     let error = run::verify("latest", &args)
         .await
@@ -268,7 +270,7 @@ async fn verification_keeps_successful_checks_before_a_later_read_failure() {
         args,
         capture,
     } = captured_node().await;
-    std::fs::remove_file(
+    fs::remove_file(
         archive_root
             .path()
             .join(capture_key(&capture, METADATA_CHECKPOINT)),

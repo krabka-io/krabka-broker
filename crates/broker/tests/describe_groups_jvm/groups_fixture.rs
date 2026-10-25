@@ -4,7 +4,11 @@
 //! String fields are written verbatim and byte fields as hex plus a UTF-8-lossy
 //! rendering, so a fixture is both diffable and readable by a person.
 
-use {crate::support::manifest_dir, std::path::PathBuf};
+use {
+    crate::support::manifest_dir,
+    krabka_protocol::owned::describe_groups_response::DescribedGroup,
+    std::{fs, path::PathBuf},
+};
 
 fn fixtures_dir() -> PathBuf {
     manifest_dir()
@@ -13,11 +17,11 @@ fn fixtures_dir() -> PathBuf {
         .join("describe_groups")
 }
 
-pub(crate) fn write_fixture(name: &str, body: &str) {
+pub fn write_fixture(name: &str, body: &str) {
     let dir = fixtures_dir();
-    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("create dir {}: {e}", dir.display()));
+    fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("create dir {}: {e}", dir.display()));
     let path = dir.join(name);
-    std::fs::write(&path, body).unwrap_or_else(|e| panic!("write fixture {}: {e}", path.display()));
+    fs::write(&path, body).unwrap_or_else(|e| panic!("write fixture {}: {e}", path.display()));
     eprintln!("CAPTURE wrote {} ({} bytes)", path.display(), body.len());
 }
 
@@ -34,9 +38,7 @@ fn hex(bytes: &[u8]) -> String {
 ///
 /// String fields stay verbatim. Member byte fields become hex plus UTF-8-lossy,
 /// so the fixture is both diffable and readable.
-pub(crate) fn group_json(
-    g: &krabka_protocol::owned::describe_groups_response::DescribedGroup,
-) -> serde_json::Value {
+pub fn group_json(g: &DescribedGroup) -> serde_json::Value {
     let members: Vec<serde_json::Value> = g
         .members
         .iter()

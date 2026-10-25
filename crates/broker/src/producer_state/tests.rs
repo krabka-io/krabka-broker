@@ -4,10 +4,16 @@
 use {
     super::*,
     crate::{
-        producer_state::test_support::{commit_fixture, opened_log, producer_batch},
+        producer_state::{
+            NO_EARLIER_BATCHES,
+            test_support::{commit_fixture, opened_log, producer_batch},
+        },
         test_support::default_records_batch,
     },
     assert2::{assert, check},
+    krabka_log::name::producer_snapshot_path,
+    krabka_units::prelude,
+    std::{fs::remove_file, path::Path},
 };
 
 async fn mirror_marker(state: &ProducerState) {
@@ -27,11 +33,11 @@ async fn mirror_marker(state: &ProducerState) {
         .await;
 }
 
-fn remove_snapshots(dir: &std::path::Path, offsets: impl IntoIterator<Item = i64>) {
+fn remove_snapshots(dir: &Path, offsets: impl IntoIterator<Item = i64>) {
     for offset in offsets {
-        let path = krabka_log::name::producer_snapshot_path(dir, offset);
+        let path = producer_snapshot_path(dir, offset);
         if path.exists() {
-            std::fs::remove_file(path).unwrap();
+            remove_file(path).unwrap();
         }
     }
 }
@@ -311,7 +317,7 @@ async fn snapshot_reports_committed_entries() {
         last_timestamp: 1,
         entry_timestamp: 1,
         current_txn_first_offset: None,
-        earlier: crate::producer_state::NO_EARLIER_BATCHES,
+        earlier: NO_EARLIER_BATCHES,
     })];
     assert!(snap == expected);
     // Untouched partition / topic report empty without panicking.
@@ -436,7 +442,7 @@ async fn a_rebuild_retains_the_replayed_tail_for_duplicates() {
         let end = log.log_end_offset().0;
         let seed = expected[1].3;
         log.sync().unwrap();
-        assert!(krabka_log::name::producer_snapshot_path(dir.path(), seed).exists());
+        assert!(producer_snapshot_path(dir.path(), seed).exists());
         drop(log);
         remove_snapshots(dir.path(), (seed + 1)..=end);
         let log = krabka_log::Log::open(dir.path(), config).unwrap();
@@ -504,7 +510,7 @@ async fn replay_chooses_first_retained_alias_after_sequence_wrap() {
         .unwrap();
     }
     log.sync().unwrap();
-    assert!(krabka_log::name::producer_snapshot_path(dir.path(), 1).exists());
+    assert!(producer_snapshot_path(dir.path(), 1).exists());
     drop(log);
     remove_snapshots(dir.path(), [
         i64::from(i32::MAX) + 1,
@@ -563,7 +569,7 @@ async fn snapshot_reload_preserves_retry_frontiers_and_epoch_fencing() {
         .unwrap();
         log.sync().unwrap();
         log.take_producer_snapshot().unwrap();
-        assert!(krabka_log::name::producer_snapshot_path(dir.path(), 6).exists());
+        assert!(producer_snapshot_path(dir.path(), 6).exists());
         drop(log);
         let log = krabka_log::Log::open(dir.path(), config).unwrap();
         let recovered = log.recovered_producers();
@@ -618,9 +624,9 @@ struct RollingLog {
 }
 
 /// Every append rolls, exposing the snapshot plus uncovered replay tail.
-fn snapshot_rolling_log(path: &std::path::Path) -> RollingLog {
+fn snapshot_rolling_log(path: &Path) -> RollingLog {
     let config = krabka_log::LogConfig {
-        segment_size: krabka_units::prelude::bytes(1),
+        segment_size: prelude::bytes(1),
         ..Default::default()
     };
     let log = krabka_log::Log::open(path, config.clone()).unwrap();

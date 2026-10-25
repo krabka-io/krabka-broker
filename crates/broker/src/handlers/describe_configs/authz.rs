@@ -17,7 +17,11 @@ use {
         handlers::acl_wire::CLUSTER_RESOURCE_NAME,
     },
     krabka_metadata::{AclOperation, ResourceType},
-    krabka_protocol::owned::describe_configs_response::DescribeConfigsResult,
+    krabka_protocol::owned::{
+        describe_configs_request::DescribeConfigsResource,
+        describe_configs_response::DescribeConfigsResult,
+    },
+    std::net::SocketAddr,
 };
 
 /// The ACL resource a described config resource is authorized on, and the
@@ -44,7 +48,7 @@ pub(super) fn resource_authz_failure(
     authorizer: &dyn Authorizer,
     image: &krabka_metadata::MetadataImage,
     principal: &krabka_security::Principal,
-    host: &std::net::SocketAddr,
+    host: &SocketAddr,
     resource_type: i8,
     resource_name: &str,
 ) -> Option<i16> {
@@ -97,7 +101,7 @@ const INVALID_REQUEST_MESSAGE: &str = "This most likely occurs because of a requ
 /// `DescribeConfigsRequest.getErrorResponse` stamps *every* resource of the
 /// request with `INVALID_REQUEST`, the generic message and no configs.
 pub(super) fn unexpected_resource_type_results(
-    resources: &[krabka_protocol::owned::describe_configs_request::DescribeConfigsResource],
+    resources: &[DescribeConfigsResource],
 ) -> Option<Vec<DescribeConfigsResult>> {
     let known = |resource_type| {
         matches!(
@@ -159,12 +163,13 @@ mod tests {
         super::*,
         crate::{
             authorizer::SimpleAclAuthorizer,
-            codes::{CLUSTER_AUTHORIZATION_FAILED, TOPIC_AUTHORIZATION_FAILED},
+            codes::{CLUSTER_AUTHORIZATION_FAILED, INVALID_REQUEST, TOPIC_AUTHORIZATION_FAILED},
             handlers::acl_wire::CLUSTER_RESOURCE_NAME,
             test_support::{allow_acl, peer, principal},
         },
         assert2::assert,
         krabka_metadata::MetadataImage,
+        std::collections::HashSet,
         uuid::Uuid,
     };
 
@@ -172,7 +177,7 @@ mod tests {
 
     /// Refuse an anonymous resource probe against the empty ACL image.
     fn empty_acl_resource_failure(kind: i8, name: &str) -> Option<i16> {
-        let authorizer = SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        let authorizer = SimpleAclAuthorizer::new(HashSet::new());
         let image = MetadataImage::new(Uuid::nil());
         let peer = peer();
         super::resource_authz_failure(&authorizer, &image, &anon(), &peer, kind, name)
@@ -181,17 +186,17 @@ mod tests {
     #[test]
     fn topic_resource_denied_yields_topic_authorization_failed() {
         let code = empty_acl_resource_failure(super::RESOURCE_TYPE_TOPIC, "t");
-        assert!(code == Some(crate::codes::TOPIC_AUTHORIZATION_FAILED));
+        assert!(code == Some(TOPIC_AUTHORIZATION_FAILED));
         let res = super::denied_result(
             super::RESOURCE_TYPE_TOPIC,
             "t".into(),
             TOPIC_AUTHORIZATION_FAILED,
         );
         let expected = krabka_macros::tagged_wire!(DescribeConfigsResult {
-            error_code: crate::codes::TOPIC_AUTHORIZATION_FAILED,
-            error_message: Some("Topic authorization failed.".to_string()),
+            error_code: TOPIC_AUTHORIZATION_FAILED,
+            error_message: Some("Topic authorization failed.".to_owned()),
             resource_type: super::RESOURCE_TYPE_TOPIC,
-            resource_name: "t".to_string(),
+            resource_name: "t".to_owned(),
             configs: Vec::new(),
         });
         assert!(res == expected);
@@ -211,7 +216,7 @@ mod tests {
                 Some(CLUSTER_AUTHORIZATION_FAILED),
             ),
         ];
-        let authz = SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        let authz = SimpleAclAuthorizer::new(HashSet::new());
         let peer = peer();
         for (grant, want) in cases {
             let mut image = MetadataImage::new(Uuid::nil());
@@ -243,7 +248,7 @@ mod tests {
         assert!(
             denied
                 == krabka_macros::tagged_wire!(DescribeConfigsResult {
-                    error_code: crate::codes::CLUSTER_AUTHORIZATION_FAILED,
+                    error_code: CLUSTER_AUTHORIZATION_FAILED,
                     error_message: Some("Cluster authorization failed.".to_owned()),
                     resource_type: super::RESOURCE_TYPE_CLIENT_METRICS,
                     resource_name: "sub-a".to_owned(),
@@ -273,7 +278,7 @@ mod tests {
         let mixed = [resource(RESOURCE_TYPE_TOPIC, "t"), resource(0, "x")];
         let refused = |resource_type, name: &str| {
             krabka_macros::tagged_wire!(DescribeConfigsResult {
-                error_code: crate::codes::INVALID_REQUEST,
+                error_code: INVALID_REQUEST,
                 error_message: Some(
                     "This most likely occurs because of a request being malformed by the client \
                  library or the message was sent to an incompatible broker. See the broker logs \
@@ -294,6 +299,6 @@ mod tests {
     #[test]
     fn broker_resource_denied_yields_cluster_authorization_failed() {
         let code = empty_acl_resource_failure(super::RESOURCE_TYPE_BROKER, "1");
-        assert!(code == Some(crate::codes::CLUSTER_AUTHORIZATION_FAILED));
+        assert!(code == Some(CLUSTER_AUTHORIZATION_FAILED));
     }
 }

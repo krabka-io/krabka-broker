@@ -11,6 +11,7 @@ use {
         support::client::connect_owned,
     },
     assert2::assert,
+    krabka_broker::codes,
     krabka_protocol::owned::{
         describe_groups_request::DescribeGroupsRequest,
         describe_groups_response::{DescribeGroupsResponse, DescribedGroup},
@@ -21,7 +22,7 @@ async fn describe_real_groups(groups: &[&str]) -> DescribeGroupsResponse {
     let client = connect_owned(HOST_BOOTSTRAP, "cap", "client build against real kafka").await;
     let response = client
         .send(DescribeGroupsRequest {
-            groups: groups.iter().map(|group| (*group).to_string()).collect(),
+            groups: groups.iter().map(|group| (*group).to_owned()).collect(),
             include_authorized_operations: false,
             ..Default::default()
         })
@@ -93,7 +94,7 @@ fn persist_and_assert_next_gen(response: &DescribeGroupsResponse) {
         "real_kafka_next_gen.json",
         &serde_json::to_string_pretty(&fixture).unwrap(),
     );
-    assert!(next_gen.error_code == krabka_broker::codes::GROUP_ID_NOT_FOUND);
+    assert!(next_gen.error_code == codes::GROUP_ID_NOT_FOUND);
     assert!(next_gen.error_message.as_deref() == Some("Group g-next is not a classic group."));
     assert!(next_gen.protocol_type.is_empty());
     assert!(next_gen.protocol_data.is_empty());

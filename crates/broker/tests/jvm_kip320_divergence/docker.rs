@@ -8,8 +8,8 @@
 
 use {
     crate::support::{bridge_gateway, jvm_acks_all_producer, jvm_tool_output},
-    base64::Engine as _,
-    std::process::Command,
+    base64::{Engine as _, engine::general_purpose},
+    std::process::{Command, Output},
     uuid::Uuid,
 };
 
@@ -37,7 +37,7 @@ pub const KAFKA_IMAGE_FEATURES: &str = "mirror.gcr.io/apache/kafka:4.3.1";
 /// the *same* 16 bytes or the two sides reject each other on cluster-id
 /// mismatch. This helper is lifted verbatim from `jvm_static_quorum_spike.rs`.
 pub fn kafka_cluster_id_string(id: Uuid) -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(id.as_bytes())
+    general_purpose::URL_SAFE_NO_PAD.encode(id.as_bytes())
 }
 
 pub fn docker_rm(name: &str) { let _ = Command::new("docker").args(["rm", "-f", name]).output(); }
@@ -80,7 +80,7 @@ pub fn docker_bridge_gateway() -> String {
 /// Run a bundled Kafka CLI tool in a throwaway cp-kafka container on the
 /// default bridge with `host.docker.internal` wired to the host gateway.
 /// Mirrors `jvm_acceptance.rs::docker_run_kafka_tool_with_image`.
-pub fn docker_run_kafka_tool_with_image(image: &str, args: &[&str]) -> std::process::Output {
+pub fn docker_run_kafka_tool_with_image(image: &str, args: &[&str]) -> Output {
     jvm_tool_output(image, args, "kip320")
 }
 

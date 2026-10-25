@@ -12,6 +12,7 @@ use {
         role::{ReplicaProgress, Role},
         types::{Epoch, LogView, NodeId, ReplicaKey, SimInstant},
     },
+    krabka_verified::consensus,
     std::collections::{BTreeMap, BTreeSet},
 };
 
@@ -229,10 +230,7 @@ impl QuorumStateMachine {
                     .iter()
                     .filter(|id| self.state.voters.contains(**id))
                     .count();
-                krabka_verified::consensus::election_has_quorum(
-                    self.state.voters.len(),
-                    current_grants,
-                )
+                consensus::election_has_quorum(self.state.voters.len(), current_grants)
             }
             _ => false,
         }

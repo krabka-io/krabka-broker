@@ -11,6 +11,7 @@ use {
     },
     assert2::assert,
     krabka_security::SaslMechanism,
+    std::time::{SystemTime, UNIX_EPOCH},
 };
 
 const KAFKA_DUPLICATE_RESOURCE: i16 = 92;
@@ -105,8 +106,8 @@ async fn describe_unknown_user_returns_error() {
 async fn describe_duplicate_requested_user_returns_single_duplicate_resource_row() {
     let admin_pass = format!(
         "admin-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .expect("system clock before UNIX_EPOCH")
             .as_nanos()
     );

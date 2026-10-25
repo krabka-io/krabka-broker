@@ -6,12 +6,14 @@
 
 use {
     super::ObserverConfig,
+    krabka_protocol::records::{Record, RecordBatch},
+    krabka_raft::kraft::snapshot_fetch::MetadataSnapshotFetchMax,
     krabka_units::{ByteSize, mebibytes, minutes},
     std::{path::PathBuf, sync::Arc},
 };
 
 /// Per-fetch soft byte cap for every observer fixture: 1 MiB.
-pub(crate) const TEST_MAX_FETCH_BYTES: ByteSize = mebibytes(1);
+pub const TEST_MAX_FETCH_BYTES: ByteSize = mebibytes(1);
 
 /// An observer config a fixture can build on: no voters, the plaintext dialer,
 /// a real timer, and no self-written checkpoints. Tests override the fields
@@ -20,7 +22,7 @@ pub(crate) const TEST_MAX_FETCH_BYTES: ByteSize = mebibytes(1);
 ///
 /// `data_dir` is where the observer keeps its metadata checkpoints, so it must
 /// outlive the observer — pass the path of a `TempDir` the test still holds.
-pub(crate) fn observer_config(cluster_id: uuid::Uuid, data_dir: PathBuf) -> ObserverConfig {
+pub fn observer_config(cluster_id: uuid::Uuid, data_dir: PathBuf) -> ObserverConfig {
     ObserverConfig {
         client_dispatch_queue_capacity:
             krabka_client_core::ConnectionDispatchQueueCapacity::default(),
@@ -37,7 +39,7 @@ pub(crate) fn observer_config(cluster_id: uuid::Uuid, data_dir: PathBuf) -> Obse
         // Off by default: a fixture that is about resuming from disk turns it
         // on, and every other one is spared the image serialization.
         snapshot_interval_records: 0,
-        snapshot_fetch_max: krabka_raft::kraft::snapshot_fetch::MetadataSnapshotFetchMax::default(),
+        snapshot_fetch_max: MetadataSnapshotFetchMax::default(),
         max_bytes: TEST_MAX_FETCH_BYTES,
         poll_interval: minutes(1),
         timer: Arc::new(qubit_clock::StdTimer::new()),
@@ -46,7 +48,7 @@ pub(crate) fn observer_config(cluster_id: uuid::Uuid, data_dir: PathBuf) -> Obse
 
 /// The `ApiVersions` response body a [`krabka_client_core::MockBroker`] must
 /// answer the dial handshake with before the observer can issue anything.
-pub(crate) fn api_versions_response_v0() -> Vec<u8> {
+pub fn api_versions_response_v0() -> Vec<u8> {
     use krabka_protocol::{
         Encode as _,
         owned::{
@@ -73,7 +75,7 @@ pub(crate) fn api_versions_response_v0() -> Vec<u8> {
 
 /// The KIP-631 value bytes of a `TopicRecord` for `name`: the frame version,
 /// apiKey and apiVersion are its first three bytes, each a one-byte varint.
-pub(crate) fn topic_value(name: &str, id: u128) -> Vec<u8> {
+pub fn topic_value(name: &str, id: u128) -> Vec<u8> {
     let record = krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
         name: name.into(),
         topic_id: uuid::Uuid::from_u128(id),
@@ -91,7 +93,7 @@ pub(crate) fn topic_value(name: &str, id: u128) -> Vec<u8> {
 
 /// [`topic_value`] with byte `index` set to `byte`: index 0 is the frame
 /// version, 1 the apiKey and 2 the apiVersion.
-pub(crate) fn patched_topic_value(index: usize, byte: u8) -> Vec<u8> {
+pub fn patched_topic_value(index: usize, byte: u8) -> Vec<u8> {
     let mut value = topic_value("patched", 99);
     value[index] = byte;
     value
@@ -99,7 +101,7 @@ pub(crate) fn patched_topic_value(index: usize, byte: u8) -> Vec<u8> {
 
 /// A `NoOpRecord` carrying krabka-private tag 1003 whose body is not a
 /// record.
-pub(crate) fn undecodable_private_value() -> Vec<u8> {
+pub fn undecodable_private_value() -> Vec<u8> {
     use krabka_protocol::{
         owned::no_op_record::NoOpRecord,
         records::metadata::KraftMetadataRecord,
@@ -117,19 +119,16 @@ pub(crate) fn undecodable_private_value() -> Vec<u8> {
 }
 
 /// A metadata batch at `base_offset` with one record per value.
-pub(crate) fn values_batch(
-    base_offset: i64,
-    values: &[Vec<u8>],
-) -> krabka_protocol::records::RecordBatch {
-    let records: Vec<krabka_protocol::records::Record> = (0_i32..)
+pub fn values_batch(base_offset: i64, values: &[Vec<u8>]) -> RecordBatch {
+    let records: Vec<Record> = (0_i32..)
         .zip(values)
-        .map(|(offset_delta, value)| krabka_protocol::records::Record {
+        .map(|(offset_delta, value)| Record {
             offset_delta,
             value: Some(bytes::Bytes::from(value.clone())),
             ..Default::default()
         })
         .collect();
-    krabka_protocol::records::RecordBatch {
+    RecordBatch {
         base_offset,
         last_offset_delta: i32::try_from(records.len().saturating_sub(1)).expect("delta"),
         records,
@@ -139,9 +138,7 @@ pub(crate) fn values_batch(
 
 /// A control batch at `base_offset` whose one record is a `KRaftVersionRecord`
 /// with a negative `kraft.version`, which Kafka refuses on every role.
-pub(crate) fn negative_kraft_version_batch(
-    base_offset: i64,
-) -> krabka_protocol::records::RecordBatch {
+pub fn negative_kraft_version_batch(base_offset: i64) -> RecordBatch {
     use krabka_protocol::{
         owned::k_raft_version_record::KRaftVersionRecord,
         records::{header::Attributes, metadata::control::ControlRecord},
@@ -152,11 +149,11 @@ pub(crate) fn negative_kraft_version_batch(
     })
     .encode_key_value()
     .expect("encode a control record");
-    krabka_protocol::records::RecordBatch {
+    RecordBatch {
         base_offset,
         attributes: Attributes::default().with_control(true),
         last_offset_delta: 0,
-        records: vec![krabka_protocol::records::Record {
+        records: vec![Record {
             key: Some(key),
             value: Some(value),
             ..Default::default()
@@ -166,7 +163,7 @@ pub(crate) fn negative_kraft_version_batch(
 }
 
 /// The wire bytes of `batches`, as a `MetadataFetch` response carries them.
-pub(crate) fn encode_batches(batches: &[krabka_protocol::records::RecordBatch]) -> bytes::Bytes {
+pub fn encode_batches(batches: &[RecordBatch]) -> bytes::Bytes {
     let mut out = Vec::new();
     for batch in batches {
         batch.encode(&mut out).expect("encode batch");

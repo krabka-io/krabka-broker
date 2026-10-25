@@ -159,7 +159,7 @@ impl StretchModel {
                      is_witness,
                  }| SiteBrokerView {
                     node_id: NodeId(node_id),
-                    site: Some(sites[site].name.to_string()),
+                    site: Some(sites[site].name.to_owned()),
                     is_witness,
                     fenced: false,
                 },

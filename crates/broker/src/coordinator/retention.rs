@@ -54,6 +54,7 @@ use {
     krabka_metadata::NodeId,
     krabka_units::{Time, convert::TimeExt as _},
     std::sync::Arc,
+    tokio::time,
     tokio_util::sync::CancellationToken,
 };
 
@@ -61,7 +62,7 @@ use {
 mod tests;
 
 /// Runs the sweep. It returns when `shutdown` is cancelled.
-pub(crate) async fn run(
+pub async fn run(
     node_id: NodeId,
     metadata: Arc<dyn MetadataSource>,
     coordinator: Arc<GroupCoordinator>,
@@ -70,7 +71,7 @@ pub(crate) async fn run(
     shutdown: CancellationToken,
 ) {
     let retention_ms = retention.millis_i64();
-    let tick = tokio::time::interval(interval.to_std());
+    let tick = time::interval(interval.to_std());
     let (metadata, coordinator) = (&metadata, &coordinator);
     run_every(tick, &shutdown, move || async move {
         let image = metadata.current_image();
@@ -89,8 +90,8 @@ pub(crate) async fn run(
 }
 
 /// A group that a sweep changed, and what the sweep did to it.
-#[derive(Debug, PartialEq)]
-pub(crate) struct ReapedGroup {
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReapedGroup {
     pub group_id: String,
     pub outcome: ReapOutcome,
 }
@@ -103,7 +104,7 @@ pub(crate) struct ReapedGroup {
 /// must have been memberless before the pass may delete it for holding no
 /// offsets at all. The returned rows name every group the pass changed, which
 /// is what a test asserts on and what the caller logs.
-pub(crate) async fn sweep(
+pub async fn sweep(
     coordinator: &GroupCoordinator,
     owned: impl Fn(&str) -> bool,
     now_ms: i64,

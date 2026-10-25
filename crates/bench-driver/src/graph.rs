@@ -36,9 +36,8 @@ use {
 };
 
 pub(super) fn push_fmt(output: &mut String, args: Arguments<'_>) {
-    output
-        .write_fmt(args)
-        .expect("writing formatted data to a String cannot fail");
+    // Writing formatted data to a `String` cannot fail.
+    let _ = output.write_fmt(args);
 }
 
 /// The plotly.js version that the `plotly` crate (0.14) renders against. Pin the
@@ -89,17 +88,19 @@ pub struct TaggedRun {
 }
 
 /// Renders an HTML *fragment* with no `<html>` wrapper, for the Zola website to
-/// embed. The fragment holds the averaged scalar summary, and then throughput,
-/// CPU, and memory over the run window for each scenario. Every individual run
-/// is a faint line, and the across-run mean is a bold line. `tagged` pairs each
-/// run with the `runNN` tag parsed from the result filename, so every per-run
-/// trace carries a name.
+/// embed.
+///
+/// The fragment holds the averaged scalar summary, and then throughput, CPU,
+/// and memory over the run window for each scenario. Every individual run is a
+/// faint line, and the across-run mean is a bold line. `tagged` pairs each run
+/// with the `runNN` tag parsed from the result filename, so every per-run trace
+/// carries a name.
 #[must_use]
 pub fn render_web_fragment(tagged: &[TaggedRun]) -> String {
     let runs: Vec<RunOutput> = tagged.iter().map(|t| t.run.clone()).collect();
     let cells = aggregate_cells(&runs);
     if cells.is_empty() {
-        return "<p>No benchmark runs available yet.</p>\n".to_string();
+        return "<p>No benchmark runs available yet.</p>\n".to_owned();
     }
     let ts = averaged_timeseries(&runs);
 
@@ -525,19 +526,19 @@ mod tests {
         };
         let tagged = vec![
             TaggedRun {
-                tag: "run01".to_string(),
+                tag: "run01".to_owned(),
                 run: mk(Stack::Krabka, per_sec(1000), 2.0, mebibytes(300)),
             },
             TaggedRun {
-                tag: "run02".to_string(),
+                tag: "run02".to_owned(),
                 run: mk(Stack::Krabka, per_sec(1200), 2.2, mebibytes(320)),
             },
             TaggedRun {
-                tag: "run01".to_string(),
+                tag: "run01".to_owned(),
                 run: mk(Stack::Kafka, per_sec(800), 3.5, mebibytes(2000)),
             },
             TaggedRun {
-                tag: "run02".to_string(),
+                tag: "run02".to_owned(),
                 run: mk(Stack::Kafka, per_sec(820), 3.6, mebibytes(2100)),
             },
         ];

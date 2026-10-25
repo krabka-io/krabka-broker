@@ -31,7 +31,7 @@ use {
 };
 
 /// `MetadataResponse.NO_CONTROLLER_ID`, which `DescribeCluster` shares.
-pub(crate) const NO_CONTROLLER_ID: i32 = -1;
+pub const NO_CONTROLLER_ID: i32 = -1;
 
 /// The rotation cursor behind [`advertised_controller_id`].
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -41,7 +41,7 @@ static NEXT: AtomicUsize = AtomicUsize::new(0);
 ///
 /// [`NO_CONTROLLER_ID`] when no registered broker is unfenced, which is what a
 /// caller sees while a cluster is wholly fenced.
-pub(crate) fn advertised_controller_id(image: &MetadataImage, unavailable: &HashSet<u64>) -> i32 {
+pub fn advertised_controller_id(image: &MetadataImage, unavailable: &HashSet<u64>) -> i32 {
     advertised_controller_id_among(image, unavailable, |_| true)
 }
 
@@ -53,7 +53,7 @@ pub(crate) fn advertised_controller_id(image: &MetadataImage, unavailable: &Hash
 /// [`NO_CONTROLLER_ID`] for a drawn id that the list does not hold. Drawing
 /// from the listed brokers alone gives one of the answers Kafka's draw can
 /// give, and never a needless `-1`.
-pub(crate) fn advertised_controller_id_among(
+pub fn advertised_controller_id_among(
     image: &MetadataImage,
     unavailable: &HashSet<u64>,
     eligible: impl Fn(&BrokerRegistrationRecord) -> bool,
@@ -72,10 +72,10 @@ pub(crate) fn advertised_controller_id_among(
 /// The `nth` broker of `alive` by rotation, or [`NO_CONTROLLER_ID`] when
 /// `alive` is empty.
 fn rotate(alive: &[i32], nth: usize) -> i32 {
-    if alive.is_empty() {
-        return NO_CONTROLLER_ID;
-    }
-    alive[nth % alive.len()]
+    nth.checked_rem(alive.len())
+        .and_then(|index| alive.get(index))
+        .copied()
+        .unwrap_or(NO_CONTROLLER_ID)
 }
 
 #[cfg(test)]
@@ -85,7 +85,7 @@ mod tests {
         crate::test_support::broker_registration,
         assert2::assert,
         krabka_metadata::{BrokerRegistrationRecord, MetadataRecord, NodeId},
-        std::collections::BTreeSet,
+        std::{collections::BTreeSet, iter},
     };
 
     fn broker_record(node_id: NodeId) -> BrokerRegistrationRecord {
@@ -161,16 +161,17 @@ mod tests {
 
         // Every call names a registered broker, and the rotation reaches both
         // of them rather than pinning one.
-        let seen: BTreeSet<i32> = (0..8)
-            .map(|_| advertised_controller_id(&image, &unfenced))
+        let seen: BTreeSet<i32> = iter::repeat_with(|| advertised_controller_id(&image, &unfenced))
+            .take(8)
             .collect();
         assert!(seen == BTreeSet::from([2, 3]));
 
         // A fenced broker drops out.
         let fenced_three = HashSet::from([3]);
-        let seen: BTreeSet<i32> = (0..8)
-            .map(|_| advertised_controller_id(&image, &fenced_three))
-            .collect();
+        let seen: BTreeSet<i32> =
+            iter::repeat_with(|| advertised_controller_id(&image, &fenced_three))
+                .take(8)
+                .collect();
         assert!(seen == BTreeSet::from([2]));
 
         // Wholly fenced, and unregistered, both answer NO_CONTROLLER_ID.

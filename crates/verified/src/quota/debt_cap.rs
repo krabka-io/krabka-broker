@@ -1,6 +1,7 @@
 use creusot_std::prelude::*;
 
 /// Greatest representable whole micro-token debt earned during this wait.
+///
 /// The caller converts its time bound to the clock's nanosecond resolution;
 /// carried fractional credit can only repay this conservative cap sooner.
 #[ensures(result@ == (wait_nanos@ * rate@ / 1_000_000_000).min(u64::MAX@))]

@@ -143,11 +143,11 @@ struct Client<'a> {
 impl Client<'_> {
     fn attrs(&self, instance: Uuid) -> ClientAttributes {
         ClientAttributes {
-            connection_id: self.ctx.connection_id.to_string(),
+            connection_id: self.ctx.connection_id.to_owned(),
             client_instance_id: instance,
-            client_id: self.ctx.client_id.to_string(),
-            software_name: self.ctx.software_name.to_string(),
-            software_version: self.ctx.software_version.to_string(),
+            client_id: self.ctx.client_id.to_owned(),
+            software_name: self.ctx.software_name.to_owned(),
+            software_version: self.ctx.software_version.to_owned(),
             source_address: self.ctx.source_address(),
             source_port: self.ctx.peer.port(),
         }
@@ -340,7 +340,7 @@ async fn push_without_a_get_builds_the_instance() {
         .submit_metadata_record_for_test(MetadataRecord::V1ClientMetricsConfig(
             ClientMetricsConfigRecord {
                 name: "cpu".into(),
-                configs: [("metrics".to_string(), "cpu.utilization".to_string())].into(),
+                configs: [("metrics".to_owned(), "cpu.utilization".to_owned())].into(),
             },
         ))
         .await
@@ -415,8 +415,8 @@ async fn push_checks_metrics_against_the_instances_first_attributes() {
             ClientMetricsConfigRecord {
                 name: "client-b-only".into(),
                 configs: [
-                    ("metrics".to_string(), "cpu.utilization".to_string()),
-                    ("match".to_string(), "client_id=client-b".to_string()),
+                    ("metrics".to_owned(), "cpu.utilization".to_owned()),
+                    ("match".to_owned(), "client_id=client-b".to_owned()),
                 ]
                 .into(),
             },

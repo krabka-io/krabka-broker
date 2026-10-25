@@ -79,7 +79,7 @@ pub(super) fn trim_steps_converge(
         ==> wal == wal_start && local == local_start)]
     #[variant(applied@.len() - i@)]
     while i < applied.len() {
-        if applied[i] {
+        if matches!(applied.get(i), Some(true)) {
             match delete_records_trim_application(requested, wal, local) {
                 DeleteRecordsTrimApplication::TrimWal { frontier } => wal = frontier,
                 DeleteRecordsTrimApplication::TrimLocal { frontier } => local = frontier,
@@ -179,7 +179,7 @@ pub(super) fn admitted_trim_bounds_reload_and_retry(
         log_end: facts.log_end,
     };
     let selected = producer_snapshot_latest_index(snapshots, range);
-    let snapshot = selected.map(|index| snapshots[index]);
+    let snapshot = selected.and_then(|index| snapshots.get(index).copied());
     let cursor = producer_snapshot_replay_start(range, snapshot)
         .expect("completed trim preserves reload bounds");
     Ok((local, selected, cursor))

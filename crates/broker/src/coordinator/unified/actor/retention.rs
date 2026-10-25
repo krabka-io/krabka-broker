@@ -62,6 +62,7 @@ use {
         },
         error::BrokerError,
     },
+    krabka_protocol::records::RecordBatch,
     std::collections::HashSet,
     tokio::sync::oneshot,
 };
@@ -316,7 +317,7 @@ fn tombstone_batch(
     expired: &[(String, i32)],
     delete_group_of_kind: Option<&GroupKind>,
     now_ms: i64,
-) -> Result<krabka_protocol::records::RecordBatch, BrokerError> {
+) -> Result<RecordBatch, BrokerError> {
     let mut builder = OffsetRecordBatchBuilder::default();
     for (topic, partition) in expired {
         builder.push(
@@ -365,7 +366,7 @@ mod tests {
         assert2::check,
         bytes::Bytes,
         krabka_log::Offset,
-        std::collections::HashMap,
+        std::{collections::HashMap, time::Duration},
     };
 
     const RETENTION_MS: i64 = 1_000;
@@ -383,7 +384,7 @@ mod tests {
         let mut group = ClassicGroup::new("g");
         group.state = state;
         group.protocol_type = protocol_type.map(String::from);
-        group.protocol_name = (!members.is_empty()).then(|| "range".to_string());
+        group.protocol_name = (!members.is_empty()).then(|| "range".to_owned());
         for (index, topics) in members.iter().enumerate() {
             let id = format!("m{index}");
             group.members.insert(
@@ -392,8 +393,8 @@ mod tests {
                     id,
                     "client",
                     "host",
-                    std::time::Duration::from_secs(30),
-                    std::time::Duration::from_mins(1),
+                    Duration::from_secs(30),
+                    Duration::from_mins(1),
                     vec![("range".into(), subscription_blob(topics))],
                 ),
             );
@@ -405,7 +406,7 @@ mod tests {
         let mut group = ConsumerState::new("g");
         for (index, topics) in subscriptions.iter().enumerate() {
             let mut m = member(&format!("m{index}"));
-            m.subscribed_topic_names = topics.iter().map(|topic| (*topic).to_string()).collect();
+            m.subscribed_topic_names = topics.iter().map(|topic| (*topic).to_owned()).collect();
             group.add_or_update_member(m);
         }
         GroupKind::Consumer(group)
@@ -428,7 +429,7 @@ mod tests {
         commits
             .iter()
             .map(|commit| {
-                ((commit.topic.to_string(), 0), OffsetEntry {
+                ((commit.topic.to_owned(), 0), OffsetEntry {
                     offset: Offset(7),
                     leader_epoch: -1,
                     metadata: String::new(),
@@ -443,7 +444,7 @@ mod tests {
     fn keys(topics: &[&str]) -> Vec<(String, i32)> {
         topics
             .iter()
-            .map(|topic| ((*topic).to_string(), 0))
+            .map(|topic| ((*topic).to_owned(), 0))
             .collect()
     }
 
@@ -646,7 +647,7 @@ mod tests {
     fn group_tombstones_follow_kafka() {
         let tombstone = |key: Bytes| (Some(key), None::<Bytes>);
         let ng = |key: NextGenKey| tombstone(encode_next_gen_key(&key).unwrap());
-        let gid = || "g".to_string();
+        let gid = || "g".to_owned();
         let expired = tombstone(OffsetCommitValue::encode_key("g", "t", 0).unwrap());
         let rows = [
             ("no group tombstone", None, vec![expired.clone()]),
@@ -678,7 +679,7 @@ mod tests {
                     GroupKind::Consumer(group)
                 }),
                 vec![
-                    expired.clone(),
+                    expired,
                     ng(NextGenKey::TargetAssignmentMetadata { group_id: gid() }),
                     ng(NextGenKey::RegularExpression {
                         group_id: gid(),

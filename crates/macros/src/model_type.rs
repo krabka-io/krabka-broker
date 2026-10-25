@@ -3,8 +3,10 @@
 use {
     crate::meta::parenthesized_list,
     moxy::{
-        ast::{FromMeta, Item, List, Meta, ParseError, Parser, Path, PathArguments, Token},
-        token::{Spanner, TokenStream},
+        ast::{
+            FromMeta, Item, List, Meta, ParseError, Parser, Path, PathArguments, PathSegment, Token,
+        },
+        token::{Ident, Spacing, Spanner, TokenStream},
     },
     proc_macro::TokenStream as NativeTokenStream,
 };
@@ -14,22 +16,36 @@ struct DerivePaths {
 }
 
 impl DerivePaths {
-    fn proof_default() -> Self {
-        Self {
-            paths: List::parse_all(&Parser::from_tokens(&moxy::template! {
-                std::clone::Clone, Copy, DeepModel
-            }))
-            .expect("fixed proof derives"),
+    /// Derive paths spelled as their `::`-separated segments.
+    fn from_segments(paths: &[&[&str]]) -> Self {
+        let mut list = List::new();
+        for segments in paths {
+            let mut path = Path::from(
+                segments
+                    .iter()
+                    .map(|segment| PathSegment {
+                        ident: Ident::new(segment),
+                        args: PathArguments::None,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            // A `::` separator renders as one token only with a joint first colon.
+            for mut pair in path.pairs_mut() {
+                if let Some(separator) = pair.punct_mut() {
+                    separator.0.set_spacing(Spacing::Joint);
+                }
+            }
+            list.push(path);
         }
+        Self { paths: list }
+    }
+
+    fn proof_default() -> Self {
+        Self::from_segments(&[&["std", "clone", "Clone"], &["Copy"], &["DeepModel"]])
     }
 
     fn runtime_default() -> Self {
-        Self {
-            paths: List::parse_all(&Parser::from_tokens(&moxy::template! {
-                Clone, Copy, Debug, PartialEq, Eq
-            }))
-            .expect("fixed runtime derives"),
-        }
+        Self::from_segments(&[&["Clone"], &["Copy"], &["Debug"], &["PartialEq"], &["Eq"]])
     }
 }
 
@@ -85,7 +101,7 @@ fn attributes(meta: &TokenStream, declaration: &TokenStream) -> Result<TokenStre
     })
 }
 
-pub(crate) fn expand(
+pub fn expand(
     meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {

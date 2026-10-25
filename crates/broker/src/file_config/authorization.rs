@@ -55,7 +55,7 @@ pub struct FileAuthorizationConfig {
 /// matches the principal name of a connection, so the `User:` type prefix is
 /// removed. An entry without the prefix is the name itself.
 pub(super) fn super_user_name(entry: &str) -> String {
-    entry.strip_prefix("User:").unwrap_or(entry).to_string()
+    entry.strip_prefix("User:").unwrap_or(entry).to_owned()
 }
 
 /// Which [`crate::authorizer::Authorizer`] impl to instantiate.
@@ -125,6 +125,8 @@ mod tests {
             test_support::{peer, sasl_principal},
         },
         krabka_units::{Time, convert::TimeExt as _},
+        std::{collections::HashSet, net::SocketAddr},
+        tokio::runtime::Runtime,
     };
 
     /// Both `super_users` lists take Kafka's `User:<name>` form, and
@@ -148,10 +150,10 @@ super_users = ["User:admin", "User:ANONYMOUS", "operator"]
         for (case, toml) in cases {
             let cfg = configured_unwrap_parse(toml).unwrap();
 
-            let expected: std::collections::HashSet<String> = [
-                "admin".to_string(),
-                "ANONYMOUS".to_string(),
-                "operator".to_string(),
+            let expected: HashSet<String> = [
+                "admin".to_owned(),
+                "ANONYMOUS".to_owned(),
+                "operator".to_owned(),
             ]
             .into();
             assert2::assert!(cfg.super_users == expected, "{case}");
@@ -166,8 +168,7 @@ super_users = ["operator", "admin"]
 "#;
         let cfg = configured_unwrap_parse(toml).unwrap();
 
-        let expected: std::collections::HashSet<String> =
-            ["operator".to_string(), "admin".to_string()].into();
+        let expected: HashSet<String> = ["operator".to_owned(), "admin".to_owned()].into();
         assert2::assert!(cfg.super_users == expected);
     }
     // `[authorization]` TOML section → `Arc<dyn Authorizer>`.
@@ -176,7 +177,7 @@ super_users = ["operator", "admin"]
 
     fn topic_read_request<'a>(
         principal: &'a krabka_security::Principal,
-        host: &'a std::net::SocketAddr,
+        host: &'a SocketAddr,
     ) -> AuthorizationRequest<'a> {
         AuthorizationRequest {
             principal,
@@ -298,7 +299,7 @@ expire_after_ms = 60000
         assert2::assert!(!opa.allow_on_error, "allow_on_error must default to false");
 
         // And the built authorizer must Deny on OPA error (fail-closed).
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = Runtime::new().unwrap();
         rt.block_on(async {
             use {
                 crate::authorizer::{AuthorizationResult, Authorizer},
@@ -306,9 +307,9 @@ expire_after_ms = 60000
             };
 
             let auth = OpaAuthorizer::new(
-                std::collections::HashSet::new(),
+                HashSet::new(),
                 // Unresolvable host → every call errors.
-                "http://opa.invalid:8181/v1/data/k/a".to_string(),
+                "http://opa.invalid:8181/v1/data/k/a".to_owned(),
                 opa.allow_on_error,
                 opa.maximum_cache_size,
                 Time::from_millis(opa.expire_after_ms),

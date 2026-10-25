@@ -75,7 +75,7 @@ fn body(domain: &Domain) -> ConstructorBody {
     }
 }
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     let domain = Ident::parse(&parser)?;
     let domain = match domain.text() {

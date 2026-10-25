@@ -16,6 +16,7 @@ use {
     },
     assert2::check,
     krabka_units::prelude::{bytes, mebibytes},
+    std::path::Path,
     tempfile::tempdir,
 };
 
@@ -265,7 +266,7 @@ fn delete_local_segments_through_removes_the_evicted_bases_snapshots() {
     let mut log = rolled_log(dir.path(), &LogConfig::default());
     log.sync().unwrap();
     let exports = log.tierable_segments();
-    let snapshots = |dir: &std::path::Path| -> Vec<Offset> {
+    let snapshots = |dir: &Path| -> Vec<Offset> {
         producer_snapshot::list(dir)
             .unwrap()
             .into_iter()

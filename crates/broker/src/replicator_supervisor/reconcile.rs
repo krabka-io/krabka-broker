@@ -10,6 +10,7 @@ use {
     },
     krabka_ids::PartitionIndex,
     krabka_metadata::MetadataImage,
+    std::{num::NonZeroUsize, sync::Arc},
     tracing::warn,
 };
 
@@ -20,7 +21,7 @@ impl ReplicatorSupervisor {
             let shortfall = self
                 .diskless_wal_local_replica_count
                 .saturating_sub(placement.voters.len());
-            if let Some(shortfall) = std::num::NonZeroUsize::new(shortfall) {
+            if let Some(shortfall) = NonZeroUsize::new(shortfall) {
                 warn!(
                     topic_id = %shard.topic_id,
                     partition = shard.partition.0,
@@ -114,7 +115,7 @@ impl ReplicatorSupervisor {
         // local leadership installation. The coordinator driver consumes this
         // handoff independently of replica reconciliation and dir reporting.
         self.coordinator_ready
-            .send_replace(Some(std::sync::Arc::new(image.clone())));
+            .send_replace(Some(Arc::new(image.clone())));
 
         // 4. KIP-858: report any (topic, partition) whose owning log-dir UUID
         //    has changed since the last successful report (first materialization

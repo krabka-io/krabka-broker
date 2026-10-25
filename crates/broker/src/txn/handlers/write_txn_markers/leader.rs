@@ -37,11 +37,11 @@ mod tests;
 /// How long a marker waits to commit: the default of Kafka's broker
 /// `request.timeout.ms`, which `handleWriteTxnMarkersRequest` passes to
 /// `appendRecords`.
-pub(crate) const MARKER_COMMIT_TIMEOUT: Duration = Duration::from_secs(30);
+pub const MARKER_COMMIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A marker in this broker's log of its partition, whose commit is not
 /// confirmed yet.
-pub(crate) struct PendingMarker {
+pub struct PendingMarker {
     partition: Arc<Partition>,
     /// The leader and the leader epoch that the partition had installed when
     /// it took the marker.
@@ -79,7 +79,7 @@ struct MarkerTerm {
 /// `NOT_ENOUGH_REPLICAS` when its ISR is smaller than `min.insync.replicas`.
 /// The function appends nothing then. Returns the error of
 /// `append_marker_and_materialize` when the append itself fails.
-pub(crate) async fn append_marker_as_leader(
+pub async fn append_marker_as_leader(
     partition: &Arc<Partition>,
     node_id: NodeId,
     group_coordinator: Option<&Arc<GroupCoordinator>>,

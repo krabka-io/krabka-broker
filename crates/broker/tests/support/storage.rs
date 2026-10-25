@@ -2,13 +2,17 @@
 use {
     crate::support::heartbeat_config,
     krabka_broker::{Broker, BrokerConfig, BrokerHandle},
-    std::net::SocketAddr,
+    std::{
+        fs::{self, Metadata, ReadDir},
+        net::SocketAddr,
+        path::{Path, PathBuf},
+    },
     tempfile::TempDir,
 };
 
 /// The metadata for each `*.log` file directly under a partition directory.
-pub fn local_log_segment_metadata(directory: &std::path::Path) -> Vec<std::fs::Metadata> {
-    let Ok(entries) = std::fs::read_dir(directory) else {
+pub fn local_log_segment_metadata(directory: &Path) -> Vec<Metadata> {
+    let Ok(entries) = fs::read_dir(directory) else {
         return Vec::new();
     };
     entries
@@ -25,7 +29,7 @@ pub fn local_log_segment_metadata(directory: &std::path::Path) -> Vec<std::fs::M
 }
 
 /// Preserve the primary directory and the one extra directory in configured order.
-pub fn two_dir_config(primary: &std::path::Path, extra: &std::path::Path) -> BrokerConfig {
+pub fn two_dir_config(primary: &Path, extra: &Path) -> BrokerConfig {
     let mut config = heartbeat_config(primary);
     config.extra_log_dirs = vec![extra.to_path_buf()];
     config
@@ -36,8 +40,8 @@ pub fn two_dir_config(primary: &std::path::Path, extra: &std::path::Path) -> Bro
 /// # Panics
 ///
 /// Panics if either temporary directory cannot be created or the broker cannot start.
-pub fn start_two_dir_broker()
--> impl std::future::Future<Output = (BrokerHandle, TempDir, TempDir, SocketAddr)> {
+pub fn start_two_dir_broker() -> impl Future<Output = (BrokerHandle, TempDir, TempDir, SocketAddr)>
+{
     let primary = tempfile::tempdir().unwrap();
     let extra = tempfile::tempdir().unwrap();
     let cfg = two_dir_config(primary.path(), extra.path());
@@ -50,8 +54,8 @@ pub fn start_two_dir_broker()
 
 /// Current segment objects, including legacy objects named `log`, in walk order.
 /// The base offsets of the segments in `partition_dir`, ascending.
-pub fn local_segment_bases(partition_dir: &std::path::Path) -> Vec<i64> {
-    let mut bases: Vec<i64> = std::fs::read_dir(partition_dir)
+pub fn local_segment_bases(partition_dir: &Path) -> Vec<i64> {
+    let mut bases: Vec<i64> = fs::read_dir(partition_dir)
         .map(|entries| {
             entries
                 .flatten()
@@ -66,9 +70,9 @@ pub fn local_segment_bases(partition_dir: &std::path::Path) -> Vec<i64> {
     bases
 }
 
-pub fn remote_log_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
-    fn walk(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
+pub fn remote_log_files(root: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
@@ -88,8 +92,8 @@ pub fn remote_log_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 }
 
 /// Segment objects under root's immediate directories whose names begin with topic.
-pub fn topic_remote_log_files(root: &std::path::Path, topic: &str) -> Vec<std::path::PathBuf> {
-    let Ok(entries) = std::fs::read_dir(root) else {
+pub fn topic_remote_log_files(root: &Path, topic: &str) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(root) else {
         return Vec::new();
     };
     let mut files = Vec::new();
@@ -107,7 +111,7 @@ pub fn topic_remote_log_files(root: &std::path::Path, topic: &str) -> Vec<std::p
 }
 
 /// Count immediate topic partition directories, optionally including future moves.
-pub fn count_partition_dirs(entries: std::fs::ReadDir, topic: &str, include_future: bool) -> usize {
+pub fn count_partition_dirs(entries: ReadDir, topic: &str, include_future: bool) -> usize {
     let prefix = format!("{topic}-");
     entries
         .filter_map(Result::ok)
@@ -125,9 +129,9 @@ pub fn count_partition_dirs(entries: std::fs::ReadDir, topic: &str, include_futu
 /// # Panics
 /// Panics if the host directory's metadata cannot be read.
 #[cfg(unix)]
-pub fn host_directory_user(path: &std::path::Path) -> String {
+pub fn host_directory_user(path: &Path) -> String {
     use std::os::unix::fs::MetadataExt as _;
-    let metadata = std::fs::metadata(path).expect("stat the host data directory");
+    let metadata = fs::metadata(path).expect("stat the host data directory");
     format!("{}:{}", metadata.uid(), metadata.gid())
 }
 
@@ -136,7 +140,7 @@ pub fn host_directory_user(_path: &std::path::Path) -> String { "0:0".to_string(
 
 /// The readiness a storage scenario requires before it reads partition state.
 #[derive(Clone, Copy, Default)]
-pub(crate) enum PartitionReadiness {
+pub enum PartitionReadiness {
     #[default]
     MetadataPublished,
     LocalWriterPresent,

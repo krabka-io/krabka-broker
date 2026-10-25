@@ -10,6 +10,10 @@ use {
         reconfig::{AddVoter, ReconfigOutcome, RemoveVoter, UpdateVoter, VoterChange},
         types::{Node, NodeId},
     },
+    std::{
+        collections::BTreeSet,
+        future::{self, Ready},
+    },
 };
 
 impl ControllerHandle {
@@ -17,12 +21,9 @@ impl ControllerHandle {
     ///
     /// # Errors
     /// Rejects multi-node batch changes; KIP-642 is a separate operation.
-    pub async fn change_membership(
-        &self,
-        new_voters: std::collections::BTreeSet<NodeId>,
-    ) -> Result<(), RaftError> {
+    pub async fn change_membership(&self, new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
         let current = self.engine.quorum_snapshot().voters;
-        let current_ids: std::collections::BTreeSet<NodeId> = current.ids().into_iter().collect();
+        let current_ids: BTreeSet<NodeId> = current.ids().into_iter().collect();
         let added: Vec<NodeId> = new_voters.difference(&current_ids).copied().collect();
         let removed: Vec<NodeId> = current_ids.difference(&new_voters).copied().collect();
         if added.len() + removed.len() > 1 {
@@ -79,11 +80,7 @@ impl ControllerHandle {
     /// # Errors
     /// The observer catches up by fetching from the leader; this call does not
     /// alter quorum membership.
-    pub fn add_learner(
-        &self,
-        node_id: NodeId,
-        node: Node,
-    ) -> std::future::Ready<Result<(), RaftError>> {
+    pub fn add_learner(&self, node_id: NodeId, node: Node) -> Ready<Result<(), RaftError>> {
         let result = self
             .staged_learners
             .lock()
@@ -91,7 +88,7 @@ impl ControllerHandle {
             .map(|mut learners| {
                 learners.insert(node_id, node);
             });
-        std::future::ready(result)
+        future::ready(result)
     }
 
     /// Add a caught-up controller voter through the Raft control log.

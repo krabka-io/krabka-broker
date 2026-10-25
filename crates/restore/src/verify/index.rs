@@ -14,20 +14,21 @@ use {
     },
     krabka_verified::log_index::IndexEntry,
     object_store::path::Path,
+    std::mem,
 };
 
 /// Byte length of one serialized offset-index entry. `krabka_remote_storage`
 /// keeps its own copy of this constant private, so it is recomputed here from
 /// the zerocopy struct it mirrors.
-const OFFSET_INDEX_ENTRY_LEN: usize = std::mem::size_of::<OffsetIndexEntry>();
+const OFFSET_INDEX_ENTRY_LEN: usize = mem::size_of::<OffsetIndexEntry>();
 
 /// Byte length of one serialized time-index entry. See
 /// [`OFFSET_INDEX_ENTRY_LEN`].
-const TIME_INDEX_ENTRY_LEN: usize = std::mem::size_of::<TimeIndexEntry>();
+const TIME_INDEX_ENTRY_LEN: usize = mem::size_of::<TimeIndexEntry>();
 
 /// Byte length of one serialized aborted-transaction index entry. See
 /// [`OFFSET_INDEX_ENTRY_LEN`].
-const TXN_INDEX_ENTRY_LEN: usize = std::mem::size_of::<AbortedTxnIndexEntry>();
+const TXN_INDEX_ENTRY_LEN: usize = mem::size_of::<AbortedTxnIndexEntry>();
 
 /// Byte position of one fixed-width index entry, for a
 /// [`RestoreError::TruncatedSegment`].

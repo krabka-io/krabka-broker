@@ -15,15 +15,21 @@ use {
         },
     },
     assert2::assert,
-    krabka_protocol::owned::fetch_request::{FetchPartition, FetchRequest},
+    krabka_protocol::{
+        owned::{
+            fetch_request::{FetchPartition, FetchRequest},
+            fetch_response::FetchResponse,
+        },
+        primitives::uuid::Uuid,
+    },
 };
 
 async fn fetch_with_epoch(
     client: &krabka_client_core::Client,
     topic: &str,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    topic_id: Uuid,
     epoch: i32,
-) -> krabka_protocol::owned::fetch_response::FetchResponse {
+) -> FetchResponse {
     client
         .send(FetchRequest {
             replica_id: 99,

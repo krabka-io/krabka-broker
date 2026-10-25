@@ -1,5 +1,4 @@
-// rustc 1.95 clippy ICEs on annotate-snippets in pedantic lints on these
-// raw-wire test files; match the opt-out used by jbod.rs / compaction.rs.
+#![cfg(test)]
 
 //! KIP-112 runtime log-dir failure path.
 //!
@@ -42,8 +41,8 @@ use {
         },
         primitives::uuid::Uuid as ProtocolUuid,
     },
-    std::net::SocketAddr,
-    tokio::net::TcpStream,
+    std::{fs, net::SocketAddr, path::Path, time::Duration},
+    tokio::{net::TcpStream, time},
 };
 
 krabka_macros::assignment_dirs_fixture!(assignment_dirs_request);
@@ -56,17 +55,17 @@ krabka_macros::wire_test_driver!(flexible round_trip, CLIENT_ID, 1);
 
 /// Lists the partition indices of `topic` whose data dir lives directly under
 /// `dir`.
-fn partitions_in_dir(dir: &std::path::Path, topic: &str) -> Vec<i32> {
+fn partitions_in_dir(dir: &Path, topic: &str) -> Vec<i32> {
     let prefix = format!("{topic}-");
-    std::fs::read_dir(dir)
+    fs::read_dir(dir)
         .unwrap()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .filter_map(|e| {
             let name = e.file_name();
             let s = name.to_str()?;
-            s.strip_prefix(&prefix)
-                .and_then(|suffix| suffix.parse::<i32>().ok())
+            let suffix = s.strip_prefix(&prefix)?;
+            suffix.parse::<i32>().ok()
         })
         .collect()
 }
@@ -183,7 +182,7 @@ async fn all_log_dirs_offline_triggers_self_shutdown() {
 
     // Wait up to 15 s for the heartbeat client to detect the all-dirs
     // condition and latch should_shutdown to true.
-    let woke = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+    let woke = time::timeout(Duration::from_secs(15), async {
         loop {
             if *shutdown_rx.borrow_and_update() {
                 return;

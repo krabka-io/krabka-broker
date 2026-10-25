@@ -21,6 +21,7 @@ use {
         unclean_recovery::UncleanRecoveryHandle,
     },
     assert2::assert,
+    std::{iter, sync, time::Duration},
 };
 
 struct TickFixture {
@@ -44,7 +45,7 @@ impl TickFixture {
                     .build(),
             ),
             liveness: Arc::new(ControllerLivenessState::with_test_clock(
-                std::time::Duration::from_millis(10),
+                Duration::from_millis(10),
                 &clock,
             )),
             clock,
@@ -64,7 +65,8 @@ impl TickFixture {
     }
 
     async fn tick(&mut self) {
-        let controller: Arc<dyn MetadataSource> = self.source.clone();
+        let controller: Arc<dyn MetadataSource> =
+            sync::Arc::<FakeMetadataSource>::clone(&self.source);
         run_liveness_tick(
             &controller,
             NodeId(2),
@@ -105,7 +107,7 @@ async fn tick_discovers_registered_broker_that_never_heartbeated_and_fails_it_ov
 
     // One full window later brokers 2 and 3 heartbeated again. Broker 1
     // did not. The tick expires it and fails t-0 over to broker 2.
-    fixture.clock.advance(std::time::Duration::from_millis(11));
+    fixture.clock.advance(Duration::from_millis(11));
     fixture.liveness.record_heartbeat(2).await;
     fixture.liveness.record_heartbeat(3).await;
     fixture.tick().await;
@@ -133,7 +135,7 @@ async fn tick_on_a_follower_tracks_nothing_and_submits_nothing() {
     let mut fixture = TickFixture::registered_partition(9, false);
 
     fixture.tick().await;
-    fixture.clock.advance(std::time::Duration::from_millis(11));
+    fixture.clock.advance(Duration::from_millis(11));
     fixture.tick().await;
 
     // A follower does not receive heartbeats, so it must not start
@@ -155,7 +157,7 @@ async fn first_tick_of_a_new_term_seeds_before_it_sweeps() {
     for broker in [1, 2, 3] {
         fixture.liveness.record_heartbeat(broker).await;
     }
-    fixture.clock.advance(std::time::Duration::from_millis(11));
+    fixture.clock.advance(Duration::from_millis(11));
     fixture.tick().await;
     assert!(fixture.liveness.dead_snapshot().await == [1, 2, 3].into_iter().collect());
 
@@ -171,12 +173,12 @@ async fn first_tick_of_a_new_term_seeds_before_it_sweeps() {
 
     // The seeded window is a real one: a broker that stays silent for a
     // full window afterwards still expires and fails over.
-    fixture.clock.advance(std::time::Duration::from_millis(11));
+    fixture.clock.advance(Duration::from_millis(11));
     for broker in [2, 3] {
         fixture.liveness.record_heartbeat(broker).await;
     }
     fixture.tick().await;
-    assert!(fixture.liveness.dead_snapshot().await == [1].into_iter().collect());
+    assert!(fixture.liveness.dead_snapshot().await == iter::once(1).collect());
     let batches = fixture.source.submitted();
     assert!(partition_batches(&batches).len() == 1);
     // The death is published in the same tick that detects it, so a

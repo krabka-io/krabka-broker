@@ -49,7 +49,7 @@ pub(super) fn tiered_partitions(
                     .is_ok_and(|log| log.config_snapshot().remote_storage_enable)
             })
         })
-        .map(|index| TopicIdPartition::new(topic_id, topic_name.to_string(), index.get()))
+        .map(|index| TopicIdPartition::new(topic_id, topic_name.to_owned(), index.get()))
         .collect()
 }
 
@@ -69,9 +69,9 @@ pub(super) fn spawn_remote_cascades(
 ) {
     if let Some(reader) = reader {
         for tp in tiered_to_cascade {
-            let rsm = reader.rsm.clone();
-            let rlmm = reader.rlmm.clone();
-            let index_cache = reader.index_cache.clone();
+            let rsm = Arc::clone(&reader.rsm);
+            let rlmm = Arc::clone(&reader.rlmm);
+            let index_cache = Arc::clone(&reader.index_cache);
             tokio::spawn(cascade_remote_partition_delete(
                 tp,
                 broker_id,

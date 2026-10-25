@@ -18,11 +18,12 @@ use {
     },
     bytes::Bytes,
     krabka_protocol::owned::sync_group_request::SyncGroupRequest,
+    std::collections::HashMap,
 };
 
 /// What the actor should do with a `ClassicSync`.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum SyncAction {
+pub enum SyncAction {
     /// Reply right away: a validation error, `REBALANCE_IN_PROGRESS` while the
     /// group prepares a rebalance, or the current assignment while it is
     /// `Stable`.
@@ -36,7 +37,7 @@ pub(crate) enum SyncAction {
 
 /// Port of Kafka's `classicGroupSyncToClassicGroup`. It operates on
 /// `ClassicState`.
-pub(crate) fn handle_sync(state: &mut ClassicState, req: &SyncGroupRequest) -> SyncAction {
+pub fn handle_sync(state: &mut ClassicState, req: &SyncGroupRequest) -> SyncAction {
     if let Err(code) = validate_sync(state, req) {
         return SyncAction::Immediate(sync_err(code));
     }
@@ -95,7 +96,7 @@ fn is_protocol_inconsistent(requested: Option<&str>, group: Option<&str>) -> boo
 /// the leader omitted gets an empty assignment instead of keeping bytes from the
 /// previous generation, as Kafka's `membersWithMissingAssignment`.
 fn install_leader_assignments(state: &mut ClassicState, req: &SyncGroupRequest) {
-    let supplied: std::collections::HashMap<&str, &Bytes> = req
+    let supplied: HashMap<&str, &Bytes> = req
         .assignments
         .iter()
         .map(|a| (a.member_id.as_str(), &a.assignment))
@@ -128,7 +129,7 @@ fn read_current(state: &ClassicState, member_id: &str) -> SyncResult {
 /// Read back one member's installed assignment. It returns
 /// `REBALANCE_IN_PROGRESS`, with no protocol fields, if the group is not
 /// `Stable`.
-pub(crate) fn read_sync_result(
+pub fn read_sync_result(
     state: &ClassicState,
     member_id: &str,
     protocol_type: Option<String>,
@@ -164,6 +165,7 @@ mod tests {
     use {
         super::*, crate::coordinator::unified::classic_ops::test_support::prelude::*,
         assert2::assert, krabka_protocol::owned::sync_group_request::SyncGroupRequestAssignment,
+        std::collections::HashMap,
     };
 
     fn sync_req(member_id: &str, generation: i32) -> SyncGroupRequest {
@@ -208,9 +210,9 @@ mod tests {
     fn group(start: Start) -> ClassicState {
         let mut g = stable_two_member_group();
         if matches!(start, Start::Stable | Start::Preparing) {
-            g.install_assignments(std::collections::HashMap::from([
-                ("m1".to_string(), Bytes::from_static(b"L")),
-                ("m2".to_string(), Bytes::from_static(b"F")),
+            g.install_assignments(HashMap::from([
+                ("m1".to_owned(), Bytes::from_static(b"L")),
+                ("m2".to_owned(), Bytes::from_static(b"F")),
             ]));
         }
         if matches!(start, Start::Preparing) {
@@ -424,7 +426,7 @@ mod tests {
         let mut req = sync_req(&leader, cur_gen);
         req.assignments = vec![
             SyncGroupRequestAssignment {
-                member_id: leader.clone(),
+                member_id: leader,
                 assignment: Bytes::from_static(b"L"),
                 ..Default::default()
             },

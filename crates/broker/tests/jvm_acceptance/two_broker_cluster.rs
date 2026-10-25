@@ -45,7 +45,7 @@ async fn start_configured(
 /// other's advertised host. This function sets that host to
 /// `host.docker.internal:<port>`, so the JVM containers can use the same
 /// metadata response.
-pub(crate) async fn start_two_sasl_brokers(admin: &str, admin_pass: &str) -> TwoSaslBrokers {
+pub async fn start_two_sasl_brokers(admin: &str, admin_pass: &str) -> TwoSaslBrokers {
     start_configured(admin, admin_pass, |_| {}).await
 }
 
@@ -57,7 +57,7 @@ pub(crate) async fn start_two_sasl_brokers(admin: &str, admin_pass: &str) -> Two
 /// `host.docker.internal:<port>` so the JVM containers can reach them with
 /// `--add-host=host.docker.internal:host-gateway` AND so each broker can
 /// dial its peer with the same host name.
-pub(crate) async fn start_two_sasl_ssl_brokers_with_controller_protocol(
+pub async fn start_two_sasl_ssl_brokers_with_controller_protocol(
     ctrl_protocol: krabka_security::ListenerProtocol,
     admin: &str,
     admin_pass: &str,

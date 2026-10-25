@@ -18,7 +18,7 @@ use {
 
 /// One marker that an append placed, and the offset it took.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MarkerPlacement {
+pub struct MarkerPlacement {
     pub(crate) target: TargetPartition,
     pub(crate) offset: Offset,
 }
@@ -30,7 +30,7 @@ pub(crate) struct MarkerPlacement {
 /// other partition of the group lands in the `missing` list of the cut.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub(crate) trait RemoteMarkerWriter: Send + Sync {
+pub trait RemoteMarkerWriter: Send + Sync {
     /// Append `marker` into every partition of `targets`, which `leader`
     /// leads.
     ///

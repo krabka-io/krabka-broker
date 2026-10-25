@@ -15,7 +15,8 @@ use {
         },
     },
     assert2::assert,
-    std::process::Stdio,
+    std::{process::Stdio, time::Duration},
+    tokio::time,
 };
 
 // `acks=all` survives a leader crash mid-produce burst: 3-broker Krabka
@@ -100,7 +101,7 @@ async fn acks_all_survives_leader_crash() {
     // 5. After ~50ms (producer has connected), kill the partition leader.
     // intentional: this timing window — killing the leader mid-produce — is the
     // behavior under test, not a wait on any observable broker state.
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    time::sleep(Duration::from_millis(50)).await;
 
     let leader_idx = usize::try_from((leader_node_id - 1).max(0)).unwrap_or(0);
     if leader_idx < cluster.len() {
@@ -127,7 +128,7 @@ async fn acks_all_survives_leader_crash() {
     // intentional: post-election follower high-watermark convergence is not in
     // the metadata image and has no krabka awaiter/metric; the JVM consumer
     // below has its own poll timeout to absorb any remaining replication lag.
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    time::sleep(Duration::from_secs(3)).await;
 
     // 8. Consume from a survivor. Require at least 1 record — the cluster
     //    must serve reads after a leader crash.

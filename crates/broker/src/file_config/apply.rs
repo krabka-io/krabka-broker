@@ -24,6 +24,7 @@ use {
         config::{BrokerConfig, DEFAULT_BROKER_ID},
         replica_selector::ReplicaSelectorKind,
     },
+    std::path::PathBuf,
 };
 
 impl FileConfig {
@@ -139,19 +140,15 @@ impl FileConfig {
         if let Some(ld) = self.log_dir
             && cfg.log_dir == defaults.log_dir
         {
-            cfg.log_dir = std::path::PathBuf::from(ld);
+            cfg.log_dir = PathBuf::from(ld);
         }
         if !self.extra_log_dirs.is_empty() && cfg.extra_log_dirs.is_empty() {
-            cfg.extra_log_dirs = self
-                .extra_log_dirs
-                .into_iter()
-                .map(std::path::PathBuf::from)
-                .collect();
+            cfg.extra_log_dirs = self.extra_log_dirs.into_iter().map(PathBuf::from).collect();
         }
         if let Some(dir) = self.metadata_log_dir
             && cfg.metadata_log_dir.is_none()
         {
-            cfg.metadata_log_dir = Some(std::path::PathBuf::from(dir));
+            cfg.metadata_log_dir = Some(PathBuf::from(dir));
         }
         apply_listener_settings(
             ListenerSettings {
@@ -250,6 +247,7 @@ mod tests {
         assert2::{assert, check},
         krabka_security::ListenerProtocol,
         krabka_units::{millis, secs},
+        std::path::PathBuf,
     };
 
     #[test]
@@ -261,7 +259,7 @@ mod tests {
     #[test]
     fn applies_inter_broker_principal_node_ids() {
         let cfg = configured_unwrap_parse(
-            r"
+            "
 [inter_broker_principal_node_ids]
 admin = 1
 ",
@@ -302,7 +300,7 @@ protocol = "Plaintext"
             topic_policy: None,
             runtime: None,
             broker_id: Some(0),
-            log_dir: Some("/var/lib/krabka/data".to_string()),
+            log_dir: Some("/var/lib/krabka/data".to_owned()),
             extra_log_dirs: vec![],
             metadata_log_dir: None,
             rack: None,
@@ -314,7 +312,7 @@ protocol = "Plaintext"
             controller_fetch_timeout: None,
             controller_election_timeout: None,
             controller_heartbeat_interval: None,
-            inter_broker_listener_name: Some("PLAIN".to_string()),
+            inter_broker_listener_name: Some("PLAIN".to_owned()),
             max_connections: None,
             max_connections_per_ip: None,
             connections_max_idle: None,
@@ -325,9 +323,9 @@ protocol = "Plaintext"
             controller_server_name: None,
             listeners: vec![
                 FileListener {
-                    name: "PLAIN".to_string(),
+                    name: "PLAIN".to_owned(),
                     bind_addr: "0.0.0.0:9092".parse().unwrap(),
-                    advertised: "demo-0:9092".to_string(),
+                    advertised: "demo-0:9092".to_owned(),
                     protocol: ListenerProtocol::Plaintext,
                     tls_config: None,
                     sasl_config: None,
@@ -335,9 +333,9 @@ protocol = "Plaintext"
                     connections_max_reauth: None,
                 },
                 FileListener {
-                    name: "EXTERNAL".to_string(),
+                    name: "EXTERNAL".to_owned(),
                     bind_addr: "0.0.0.0:9094".parse().unwrap(),
-                    advertised: "10.0.1.5:32100".to_string(),
+                    advertised: "10.0.1.5:32100".to_owned(),
                     protocol: ListenerProtocol::Plaintext,
                     tls_config: None,
                     sasl_config: None,
@@ -345,7 +343,7 @@ protocol = "Plaintext"
                     connections_max_reauth: None,
                 },
             ],
-            server_properties: maplit::btreemap! {"log.retention.hours".to_string() => "24".to_string()},
+            server_properties: maplit::btreemap! {"log.retention.hours".to_owned() => "24".to_owned()},
             controller_listener_protocol: None,
             tls_config: None,
             oauthbearer: None,
@@ -370,14 +368,14 @@ protocol = "Plaintext"
 
         let mut default_cfg = BrokerConfig::default();
         file.clone().apply_to(&mut default_cfg).unwrap();
-        assert!(default_cfg.log_dir == std::path::PathBuf::from("/var/lib/krabka/file"));
+        assert!(default_cfg.log_dir == PathBuf::from("/var/lib/krabka/file"));
 
         let mut existing_cfg = BrokerConfig {
-            log_dir: std::path::PathBuf::from("/var/lib/krabka/cli"),
+            log_dir: PathBuf::from("/var/lib/krabka/cli"),
             ..BrokerConfig::default()
         };
         file.apply_to(&mut existing_cfg).unwrap();
-        assert!(existing_cfg.log_dir == std::path::PathBuf::from("/var/lib/krabka/cli"));
+        assert!(existing_cfg.log_dir == PathBuf::from("/var/lib/krabka/cli"));
     }
     /// `metadata_log_dir` is Kafka's `metadata.log.dir`: the file sets it
     /// unless `--metadata-log-dir` already did, and unset it leaves the
@@ -445,36 +443,30 @@ protocol = "Plaintext"
         let mut default_cfg = BrokerConfig::default();
         file.clone().apply_to(&mut default_cfg).unwrap();
         assert!(
-            default_cfg.extra_log_dirs
-                == vec![
-                    std::path::PathBuf::from("/mnt/a"),
-                    std::path::PathBuf::from("/mnt/b"),
-                ]
+            default_cfg.extra_log_dirs == vec![PathBuf::from("/mnt/a"), PathBuf::from("/mnt/b"),]
         );
 
         let mut existing_cfg = BrokerConfig {
-            extra_log_dirs: vec![std::path::PathBuf::from("/mnt/cli")],
+            extra_log_dirs: vec![PathBuf::from("/mnt/cli")],
             ..BrokerConfig::default()
         };
         file.apply_to(&mut existing_cfg).unwrap();
-        assert!(existing_cfg.extra_log_dirs == vec![std::path::PathBuf::from("/mnt/cli")]);
+        assert!(existing_cfg.extra_log_dirs == vec![PathBuf::from("/mnt/cli")]);
 
         let mut empty_file_existing_cfg = BrokerConfig {
-            extra_log_dirs: vec![std::path::PathBuf::from("/mnt/cli")],
+            extra_log_dirs: vec![PathBuf::from("/mnt/cli")],
             ..BrokerConfig::default()
         };
         FileConfig::default()
             .apply_to(&mut empty_file_existing_cfg)
             .unwrap();
-        assert!(
-            empty_file_existing_cfg.extra_log_dirs == vec![std::path::PathBuf::from("/mnt/cli")]
-        );
+        assert!(empty_file_existing_cfg.extra_log_dirs == vec![PathBuf::from("/mnt/cli")]);
     }
     #[test]
     fn apply_to_does_not_clobber_non_default_broker_id() {
         use crate::config::BrokerConfig;
 
-        let src = r"broker_id = 42";
+        let src = "broker_id = 42";
         let file: FileConfig = toml::from_str(src).unwrap();
         // simulate CLI --broker-id 7 already applied
         let mut cfg = BrokerConfig {
@@ -491,7 +483,7 @@ protocol = "Plaintext"
     fn apply_to_fills_in_default_broker_id() {
         use crate::config::BrokerConfig;
 
-        let src = r"broker_id = 42";
+        let src = "broker_id = 42";
         let file: FileConfig = toml::from_str(src).unwrap();
         let mut cfg = BrokerConfig::default(); // broker_id == default (1)
 

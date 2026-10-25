@@ -11,6 +11,11 @@ use {
     },
     assert2::check,
     krabka_metadata::{LeaderEpoch, PartitionRecord, TopicRecord},
+    std::{future, time::Instant},
+    tokio::{
+        sync::{mpsc, oneshot, watch},
+        task, time,
+    },
 };
 
 /// The incarnation `register_brokers` registers broker 3 under.
@@ -163,7 +168,7 @@ async fn an_unbound_admission_retires_this_nodes_restart_and_refuses_another_bro
     for &node in fenced {
         fence(&mut image, node);
     }
-    let (_images, receiver) = tokio::sync::watch::channel(Arc::new(image));
+    let (_images, receiver) = watch::channel(Arc::new(image));
     let admission = BrokerRegistrationAdmission::new(
         NodeId(this_node),
         receiver,
@@ -211,13 +216,13 @@ async fn a_controller_retires_a_restarted_leader_in_its_registration_batch() {
         bind(broker_handle, _dir, broker);
         boot [start_broker_with(|config| config.heartbeat_timeout = krabka_units::minutes(10))];
     };
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !is_active_controller(&broker) {
         check!(
-            std::time::Instant::now() <= deadline,
+            Instant::now() <= deadline,
             "the broker leads the controller"
         );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        time::sleep(Duration::from_millis(25)).await;
     }
     let registered = |node: u64, incarnation: u128| {
         MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
@@ -293,18 +298,18 @@ async fn recoveries_are_handed_off_once_the_new_incarnation_is_registered_and_th
 ) {
     let mut image = img_with_partition().call();
     register_brokers(&mut image, &[1, 2, 3]);
-    let (images, receiver) = tokio::sync::watch::channel(Arc::new(image.clone()));
-    let (sender, mut jobs) = tokio::sync::mpsc::channel(4);
-    let (bind, bound) = tokio::sync::oneshot::channel();
+    let (images, receiver) = watch::channel(Arc::new(image.clone()));
+    let (sender, mut jobs) = mpsc::channel(4);
+    let (bind, bound) = oneshot::channel();
 
     let task = hand_off_recoveries(
         receiver,
         async move { bound.await.ok() },
         (NodeId(3), Uuid::from_u128(RESTARTED)),
-        vec![("t".to_string(), 0, RecoveryStrategy::Balanced)],
+        vec![("t".to_owned(), 0, RecoveryStrategy::Balanced)],
     )
     .expect("a recovery to hand off");
-    tokio::task::yield_now().await;
+    task::yield_now().await;
     check!(
         jobs.try_recv().is_err(),
         "nothing before the registration commits"
@@ -312,7 +317,7 @@ async fn recoveries_are_handed_off_once_the_new_incarnation_is_registered_and_th
 
     image.apply(&registration(RESTARTED));
     images.send_replace(Arc::new(image));
-    tokio::task::yield_now().await;
+    task::yield_now().await;
     check!(jobs.try_recv().is_err(), "nothing before the broker binds");
 
     if binds {
@@ -333,19 +338,19 @@ async fn recoveries_are_handed_off_once_the_new_incarnation_is_registered_and_th
             job.proposal.is_none(),
         )
     });
-    check!(job == binds.then(|| ("t".to_string(), 0, RecoveryStrategy::Balanced, true)));
+    check!(job == binds.then(|| ("t".to_owned(), 0, RecoveryStrategy::Balanced, true)));
 }
 
 /// No recovery to hand off starts no task.
 #[test]
 fn no_recoveries_start_no_hand_off() {
-    let (_images, receiver) = tokio::sync::watch::channel(Arc::new(img_with_partition().call()));
-    let (sender, _jobs) = tokio::sync::mpsc::channel(1);
+    let (_images, receiver) = watch::channel(Arc::new(img_with_partition().call()));
+    let (sender, _jobs) = mpsc::channel(1);
 
     check!(
         hand_off_recoveries(
             receiver,
-            std::future::ready(Some(UncleanRecoveryHandle::for_tests(sender))),
+            future::ready(Some(UncleanRecoveryHandle::for_tests(sender))),
             (NodeId(3), Uuid::from_u128(RESTARTED)),
             vec![],
         )

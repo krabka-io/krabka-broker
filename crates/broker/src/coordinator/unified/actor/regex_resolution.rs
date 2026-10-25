@@ -32,18 +32,18 @@ use {
         time_util::duration_millis,
     },
     std::{
-        collections::{BTreeSet, HashMap},
+        collections::{BTreeMap, BTreeSet, HashMap},
         time::Duration,
     },
 };
 
 /// What a resolution of a group's regular expressions found, by regular
 /// expression, before the group applies it.
-pub(crate) type Resolutions = HashMap<String, ResolvedRegularExpression>;
+pub type Resolutions = HashMap<String, ResolvedRegularExpression>;
 
 /// What a heartbeat brings to resolve a group's regular expressions.
 #[derive(Clone, Copy)]
-pub(crate) struct RegexResolution<'a> {
+pub struct RegexResolution<'a> {
     /// Resolves patterns with the principal of the heartbeat.
     pub resolver: &'a dyn TopicRegexResolver,
     /// Kafka's `lastMetadataImageWithNewTopics`: the metadata version of the
@@ -111,12 +111,12 @@ impl<'a> RegexResolution<'a> {
 
 /// A `ConsumerGroupRegularExpression` record to write: the regular
 /// expression, and its resolution or `None` for a tombstone.
-pub(crate) type RegexRecord = (String, Option<RegularExpressionValue>);
+pub type RegexRecord = (String, Option<RegularExpressionValue>);
 
 /// Kafka's `UpdateRegularExpressionStatus`: what a heartbeat did to the
 /// group's regular expression subscriptions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RegexUpdate {
+pub enum RegexUpdate {
     /// The member's pattern did not change.
     NoChange,
     /// The member changed its pattern to one that is not resolved yet. The
@@ -153,7 +153,7 @@ impl RegexUpdate {
 ///    the last resolution in a way that can change it
 ///    ([`RegexResolution::refresh_version`]), or the last resolution is older
 ///    than `group.consumer.regex.refresh.interval.ms`.
-pub(crate) fn maybe_update_regular_expressions(
+pub fn maybe_update_regular_expressions(
     state: &mut GroupState,
     old_regex: Option<&str>,
     new_regex: Option<&str>,
@@ -258,13 +258,12 @@ fn decrement(counts: &mut HashMap<String, usize>, regex: &str) {
 /// moves, with a `ConsumerGroupMetadata` record, when a pattern resolved to
 /// other topics than before or when the metadata hash of the subscribed
 /// topics changed.
-pub(crate) fn apply_regex_result(
+pub fn apply_regex_result(
     state: &mut GroupState,
     resolved: Resolutions,
     input: &ReconcileInput,
 ) -> PendingRecords {
-    let resolved: std::collections::BTreeMap<String, ResolvedRegularExpression> =
-        resolved.into_iter().collect();
+    let resolved: BTreeMap<String, ResolvedRegularExpression> = resolved.into_iter().collect();
     let mut bump = false;
     let mut records = Vec::new();
     for (regex, resolution) in resolved {
@@ -304,7 +303,7 @@ pub(crate) fn apply_regex_result(
 /// the patterns that no member uses any more, after members left, and returns
 /// their tombstones.
 #[must_use]
-pub(crate) fn delete_unsubscribed_regexes(state: &mut GroupState) -> Vec<RegexRecord> {
+pub fn delete_unsubscribed_regexes(state: &mut GroupState) -> Vec<RegexRecord> {
     state
         .unsubscribed_resolved_regexes()
         .into_iter()

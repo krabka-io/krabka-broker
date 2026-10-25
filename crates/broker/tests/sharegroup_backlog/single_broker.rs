@@ -9,7 +9,7 @@
 use {
     crate::{
         harness::{TOPIC, create_topic, produce_five, scrape, test_lock},
-        support::client::connect_client,
+        support::{client::connect_client, listeners},
     },
     assert2::assert,
     krabka_broker::{Broker, BrokerConfig, metrics::ShareGroupLabel},
@@ -33,7 +33,7 @@ async fn backlog_is_scraped_and_survives_scale_to_zero() {
     let _guard = test_lock().lock().await;
     let dir = tempfile::tempdir().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.listeners = vec![crate::support::listeners::loopback_listener(
+    config.listeners = vec![listeners::loopback_listener(
         "PLAINTEXT",
         ListenerProtocol::Plaintext,
     )];

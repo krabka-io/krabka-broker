@@ -92,6 +92,7 @@
 //! tool runs. The cases are one file each: `frozen_produce` and
 //! `freeze_config_key` for the write freeze, `break_glass_delete` and
 //! `break_glass_election` for the two-person rule.
+#![cfg(test)]
 
 mod jvm_acceptance;
 mod support;

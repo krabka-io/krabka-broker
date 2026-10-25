@@ -1,13 +1,18 @@
 //! Errors returned by `Log` and `Segment`.
 
-use {krabka_ids::Offset, thiserror::Error};
+use {
+    krabka_ids::Offset,
+    krabka_protocol::records::RecordsError,
+    std::{io, path::PathBuf},
+    thiserror::Error,
+};
 
 /// Errors returned by [`Log`](crate::Log) and [`Segment`](crate::Segment).
 #[derive(Debug, Error)]
 pub enum LogError {
     /// An I/O operation against the filesystem failed.
     #[error("I/O: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// Recovery found a partial batch at the tail of a `.log` file. The log
     /// truncates the trailing bytes back to the last cleanly decoded batch.
@@ -62,7 +67,7 @@ pub enum LogError {
 
     /// The encode or decode of a `RecordBatch` failed.
     #[error("records: {0}")]
-    Records(#[from] krabka_protocol::records::RecordsError),
+    Records(#[from] RecordsError),
 
     /// A segment filename would not parse. For example, it has the wrong
     /// length, or it is not all digits.
@@ -94,7 +99,7 @@ pub enum LogError {
         /// The artifact kind, such as `stampindex` or `leader-epoch-checkpoint`.
         artifact: &'static str,
         /// The file that carries the version.
-        path: std::path::PathBuf,
+        path: PathBuf,
         /// The version the file carries.
         found: i64,
     },
@@ -110,7 +115,7 @@ pub enum LogError {
         /// The artifact kind, such as `stampindex` or `leader-epoch-checkpoint`.
         artifact: &'static str,
         /// The file that lacks the marker.
-        path: std::path::PathBuf,
+        path: PathBuf,
     },
 
     /// A control record's key or end-transaction-marker value is too short to

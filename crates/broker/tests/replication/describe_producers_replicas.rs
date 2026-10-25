@@ -20,7 +20,7 @@ use {
             produce::{SinglePartitionProduceSetup, batch_request},
             shutdown_cluster,
             topics::CreateTopicRequestSetup,
-            transactions::{ProducerEpoch, ProducerIdentity, TransactionOutcome},
+            transactions::{self, ProducerEpoch, ProducerIdentity, TransactionOutcome},
             {self},
         },
     },
@@ -45,6 +45,7 @@ use {
     },
     std::{net::SocketAddr, time::Duration},
     tempfile::TempDir,
+    tokio::time,
 };
 
 type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
@@ -137,7 +138,7 @@ async fn start_cluster() -> Cluster {
             Err(error) => {
                 last_error = Some(error);
                 // intentional: a new attempt needs the old ports released.
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                time::sleep(Duration::from_secs(2)).await;
             }
         }
     }
@@ -203,15 +204,12 @@ async fn end_transaction(
     let response = leader
         .send(WriteTxnMarkersRequest {
             markers: vec![
-                crate::support::transactions::transaction_marker()
+                transactions::transaction_marker()
                     .producer(producer)
                     .outcome(commit)
                     .coordinator_epoch(COORDINATOR_EPOCH)
                     .transaction_version(transaction_version)
-                    .topics(vec![crate::support::transactions::marker_topic(
-                        TOPIC.into(),
-                        vec![0],
-                    )])
+                    .topics(vec![transactions::marker_topic(TOPIC.into(), vec![0])])
                     .call(),
             ],
             ..Default::default()

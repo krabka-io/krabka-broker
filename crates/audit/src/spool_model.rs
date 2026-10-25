@@ -454,7 +454,7 @@ impl Model for SpoolModel {
                     .iter()
                     .enumerate()
                     .fold(0_u8, |mask, (record, count)| {
-                        mask | u8::from(*count > 0) << record
+                        mask | (u8::from(*count > 0) << record)
                     });
                 state.durable_history & !(delivered | state.durable) == 0
             }),

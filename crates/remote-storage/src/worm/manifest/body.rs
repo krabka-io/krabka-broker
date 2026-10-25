@@ -158,7 +158,7 @@ mod tests {
                     ..sample_body()
                 },
                 signature: Some(ManifestSignature {
-                    key_id: KEY_ID.to_string(),
+                    key_id: KEY_ID.to_owned(),
                     public_key: HexBytes(vec![0x01, 0x02, 0x03]),
                     signature: HexBytes(vec![0xfe, 0xed]),
                 }),

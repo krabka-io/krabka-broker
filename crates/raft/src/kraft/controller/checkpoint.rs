@@ -4,7 +4,11 @@
 
 use {
     crate::{error::RaftError, kraft::snapshot_fetch::SnapshotId},
-    std::io::{Read, Seek, SeekFrom},
+    std::{
+        fs::{self, File},
+        io::{self, Error, Read, Seek, SeekFrom},
+        path::Path,
+    },
 };
 
 /// Kafka's `Snapshots.BOOTSTRAP_SNAPSHOT_ID`: the id of the bootstrap
@@ -22,12 +26,12 @@ pub(crate) const BOOTSTRAP_SNAPSHOT_ID: SnapshotId = (0, 0);
 /// Returns an error when the directory cannot be created, or the temporary
 /// file cannot be written, synced or renamed into place.
 pub fn write_checkpoint(
-    dir: &std::path::Path,
+    dir: &Path,
     end_offset: i64,
     epoch: i32,
     bytes: &[u8],
 ) -> Result<(), RaftError> {
-    std::fs::create_dir_all(dir).map_err(krabka_log::LogError::Io)?;
+    fs::create_dir_all(dir).map_err(krabka_log::LogError::Io)?;
     let name = checkpoint_name(end_offset, epoch);
     let path = dir.join(name);
     krabka_log::write_file_atomic(&path.with_extension("tmp"), &path, bytes)
@@ -36,20 +40,22 @@ pub fn write_checkpoint(
 }
 
 /// Scan `dir` for `<end_offset>-<epoch>.checkpoint` artifacts, pick the highest
-/// `(end_offset, epoch)`, and return its raw bytes. Returns `None` when the
-/// directory is absent or holds no checkpoint. Unlike `snapshot::load_latest`,
-/// this reads only the `.checkpoint` (the `.meta` sidecar is gone in
-/// this engine — the durable epoch lives in the quorum-state file).
+/// `(end_offset, epoch)`, and return its raw bytes.
+///
+/// Returns `None` when the directory is absent or holds no checkpoint. Unlike
+/// `snapshot::load_latest`, this reads only the `.checkpoint` (the `.meta`
+/// sidecar is gone in this engine — the durable epoch lives in the quorum-state
+/// file).
 ///
 /// # Errors
 ///
 /// Returns an error when the selected checkpoint file cannot be read.
-pub fn load_latest_checkpoint(dir: &std::path::Path) -> Result<Option<Vec<u8>>, RaftError> {
+pub fn load_latest_checkpoint(dir: &Path) -> Result<Option<Vec<u8>>, RaftError> {
     let Some((end_offset, epoch)) = latest_checkpoint_id(dir) else {
         return Ok(None);
     };
-    let bytes = std::fs::read(dir.join(checkpoint_name(end_offset, epoch)))
-        .map_err(krabka_log::LogError::Io)?;
+    let bytes =
+        fs::read(dir.join(checkpoint_name(end_offset, epoch))).map_err(krabka_log::LogError::Io)?;
     Ok(Some(bytes))
 }
 
@@ -71,15 +77,16 @@ pub(crate) fn parse_checkpoint_name(name: &str) -> Option<SnapshotId> {
 /// highest `(end_offset, epoch)` id, or `None` when the directory is absent or
 /// holds no checkpoint.
 #[must_use]
-pub fn latest_checkpoint_id(dir: &std::path::Path) -> Option<SnapshotId> {
+pub fn latest_checkpoint_id(dir: &Path) -> Option<SnapshotId> {
     let ids = checkpoint_ids(dir);
-    krabka_verified::latest_checkpoint_index(&ids).map(|index| ids[index])
+    let index = krabka_verified::latest_checkpoint_index(&ids)?;
+    ids.get(index).copied()
 }
 
 /// Every parseable `(end_offset, epoch)` id in `dir`, in directory order. An
 /// absent directory and one holding no checkpoint are both empty.
-pub(crate) fn checkpoint_ids(dir: &std::path::Path) -> Vec<SnapshotId> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+pub(crate) fn checkpoint_ids(dir: &Path) -> Vec<SnapshotId> {
+    let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
     entries
@@ -98,11 +105,12 @@ struct RecentCheckpointIds {
 /// holding a single checkpoint returns that id twice, which is what
 /// [`krabka_verified::checkpoint_id_retained`] expects for "there is no
 /// runner-up".
-fn recent_checkpoint_ids(dir: &std::path::Path) -> Option<RecentCheckpointIds> {
+fn recent_checkpoint_ids(dir: &Path) -> Option<RecentCheckpointIds> {
     let mut ids = checkpoint_ids(dir);
     let latest = ids.swap_remove(krabka_verified::latest_checkpoint_index(&ids)?);
-    let previous =
-        krabka_verified::latest_checkpoint_index(&ids).map_or(latest, |index| ids[index]);
+    let previous = krabka_verified::latest_checkpoint_index(&ids)
+        .and_then(|index| ids.get(index).copied())
+        .unwrap_or(latest);
     Some(RecentCheckpointIds { latest, previous })
 }
 
@@ -122,7 +130,7 @@ pub fn checkpoint_id_is_newer(candidate: SnapshotId, current: SnapshotId) -> boo
 /// slower than one snapshot interval never escapes. Kafka keeps the previous
 /// snapshot the same way, through retention alone rather than by tracking
 /// in-flight readers.
-pub fn retain_recent_checkpoints(dir: &std::path::Path) {
+pub fn retain_recent_checkpoints(dir: &Path) {
     let Some(RecentCheckpointIds { latest, previous }) = recent_checkpoint_ids(dir) else {
         return;
     };
@@ -135,7 +143,7 @@ pub fn retain_recent_checkpoints(dir: &std::path::Path) {
 /// observer's own resume store, which only its own restart reads — where the
 /// second copy [`retain_recent_checkpoints`] keeps for an in-flight
 /// `FetchSnapshot` reader would buy nothing.
-pub fn retain_latest_checkpoint(dir: &std::path::Path) {
+pub fn retain_latest_checkpoint(dir: &Path) {
     let Some(latest) = latest_checkpoint_id(dir) else {
         return;
     };
@@ -144,8 +152,8 @@ pub fn retain_latest_checkpoint(dir: &std::path::Path) {
 
 /// Delete every `.checkpoint` in `dir` outside the two retained ids. Passing
 /// one id as both keeps exactly that one.
-fn retain_checkpoints(dir: &std::path::Path, latest: SnapshotId, previous: SnapshotId) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+fn retain_checkpoints(dir: &Path, latest: SnapshotId, previous: SnapshotId) {
+    let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
@@ -157,7 +165,7 @@ fn retain_checkpoints(dir: &std::path::Path, latest: SnapshotId, previous: Snaps
         if !krabka_verified::checkpoint_id_retained(
             off, ep, latest.0, latest.1, previous.0, previous.1,
         ) {
-            let _ = std::fs::remove_file(entry.path());
+            let _ = fs::remove_file(entry.path());
         }
     }
 }
@@ -165,12 +173,8 @@ fn retain_checkpoints(dir: &std::path::Path, latest: SnapshotId, previous: Snaps
 /// Read a specific checkpoint `<end_offset>-<epoch>.checkpoint` by id, or `None`
 /// if it is absent (the leader's `FetchSnapshot` serve path).
 #[must_use]
-pub fn load_checkpoint_by_id(
-    dir: &std::path::Path,
-    end_offset: i64,
-    epoch: i32,
-) -> Option<Vec<u8>> {
-    std::fs::read(dir.join(checkpoint_name(end_offset, epoch))).ok()
+pub fn load_checkpoint_by_id(dir: &Path, end_offset: i64, epoch: i32) -> Option<Vec<u8>> {
+    fs::read(dir.join(checkpoint_name(end_offset, epoch))).ok()
 }
 
 /// An open `.checkpoint`, for serving one KIP-630 `FetchSnapshot` chunk
@@ -200,11 +204,11 @@ pub(crate) enum CheckpointChunk {
 /// Open the checkpoint `<end_offset>-<epoch>.checkpoint`, or `None` if it is
 /// absent or cannot be opened (the leader's `FetchSnapshot` serve path).
 pub(crate) fn open_checkpoint(
-    dir: &std::path::Path,
+    dir: &Path,
     end_offset: i64,
     epoch: i32,
-) -> Option<CheckpointFile<std::fs::File>> {
-    let file = std::fs::File::open(dir.join(checkpoint_name(end_offset, epoch))).ok()?;
+) -> Option<CheckpointFile<File>> {
+    let file = File::open(dir.join(checkpoint_name(end_offset, epoch))).ok()?;
     let len = file.metadata().ok()?.len();
     Some(CheckpointFile::new(file, len))
 }
@@ -229,7 +233,7 @@ impl<R: Read + Seek> CheckpointFile<R> {
         &mut self,
         position: i64,
         max_bytes: i32,
-    ) -> std::io::Result<CheckpointChunk> {
+    ) -> io::Result<CheckpointChunk> {
         let Some(start) = u64::try_from(position)
             .ok()
             .filter(|start| *start < self.len)
@@ -237,7 +241,7 @@ impl<R: Read + Seek> CheckpointFile<R> {
             return Ok(CheckpointChunk::OutOfRange);
         };
         let max = u64::try_from(max_bytes).unwrap_or(0);
-        let len = usize::try_from(max.min(self.len - start)).map_err(std::io::Error::other)?;
+        let len = usize::try_from(max.min(self.len - start)).map_err(Error::other)?;
         let mut bytes = vec![0; len];
         self.reader.seek(SeekFrom::Start(start))?;
         self.reader.read_exact(&mut bytes)?;

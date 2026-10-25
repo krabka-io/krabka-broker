@@ -15,6 +15,7 @@ use {
         owned::metadata_response::MetadataResponseTopic, primitives::uuid::Uuid as WireUuid,
     },
     std::{collections::BTreeMap, time::Duration},
+    tokio::time::{sleep, timeout},
 };
 
 fn row(error_code: i16, name: &str, is_internal: bool) -> MetadataResponseTopic {
@@ -64,9 +65,9 @@ async fn a_coordinator_topic_is_created_with_its_configured_shape_unless_in_flig
     let created = missing_topic_rows(&broker, &ctx, &[OFFSETS_TOPIC], true);
     check!(created == vec![row(codes::UNKNOWN_TOPIC_OR_PARTITION, OFFSETS_TOPIC, true)]);
     check!(broker.auto_topic_creation.started() == 1);
-    tokio::time::timeout(Duration::from_secs(30), async {
+    timeout(Duration::from_secs(30), async {
         while broker.auto_topic_creation.is_in_flight(OFFSETS_TOPIC) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await

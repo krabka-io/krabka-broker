@@ -47,7 +47,14 @@ pub(super) fn stable_time_range_preserves_first(
     let (_lower, _upper, _scan, candidate) =
         constructed_time_range_preserves_first(window, (span.0, span.1, w.log_start), targets)?;
     let selected = match candidate {
-        Some(index) if span.0 + i64::from(window.0[index]) < visibility.limit_offset => Some(index),
+        Some(index)
+            if matches!(
+                window.0.get(index),
+                Some(&offset) if span.0 + i64::from(offset) < visibility.limit_offset
+            ) =>
+        {
+            Some(index)
+        }
         _ => None,
     };
     Ok((lso, visibility.limit_offset, selected))

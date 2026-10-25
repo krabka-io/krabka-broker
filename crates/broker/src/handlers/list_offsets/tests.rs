@@ -44,7 +44,7 @@ fn topic_describe_denied_yields_topic_authorization_failed_rows() {
 
     let EmptyAclImage { authorizer, image } = empty_acl_image();
     anonymous_request_identity!(principal, peer, ctx, "client-a", "connection-a",);
-    assert!(crate::handlers::acl_denied(
+    assert!(acl_denied(
         &authorizer,
         &image,
         &ctx,
@@ -94,7 +94,7 @@ async fn answer_request(
 
 #[tokio::test]
 async fn denied_handler_preserves_topic_and_partition_response_fields() {
-    let version = krabka_protocol::owned::list_offsets_response::MAX_VERSION;
+    let version = list_offsets_response::MAX_VERSION;
     krabka_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, ctx);
         boot [start_broker] deny_all;
@@ -137,7 +137,7 @@ async fn denied_handler_preserves_topic_and_partition_response_fields() {
     };
     let expected = krabka_macros::unthrottled_wire!(ListOffsetsResponse {
         topics: vec![krabka_macros::tagged_wire!(ListOffsetsTopicResponse {
-            name: "orders".to_string(),
+            name: "orders".to_owned(),
             partitions: vec![denied_row(0), denied_row(2)],
         })],
     });
@@ -149,6 +149,7 @@ async fn denied_handler_preserves_topic_and_partition_response_fields() {
 /// allows everything else. Drives the mixed authorized/denied scenarios
 /// below without needing real ACL records in the metadata image.
 use crate::handlers::list_offsets::test_support::DenyNamed;
+use {crate::handlers::acl_denied, std::collections::HashSet};
 
 /// Kafka's `handleListOffsetRequest` splits topics into authorized and
 /// unauthorized up front, processes only the authorized ones, and appends
@@ -164,7 +165,7 @@ async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_requ
         denied: &'static str,
     }
 
-    let version = krabka_protocol::owned::list_offsets_response::MAX_VERSION;
+    let version = list_offsets_response::MAX_VERSION;
 
     let cases = [
         Case {
@@ -187,7 +188,7 @@ async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_requ
     for case in cases {
         krabka_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker(Arc::new(DenyNamed(std::collections::HashSet::from([
+            boot [start_broker(Arc::new(DenyNamed(HashSet::from([
                         case.denied
                     ]))))];
             user ["alice"];
@@ -200,7 +201,7 @@ async fn denied_topic_rows_are_appended_after_authorized_rows_regardless_of_requ
                 .request_topics
                 .iter()
                 .map(|name| ListOffsetsTopic {
-                    name: (*name).to_string(),
+                    name: (*name).to_owned(),
                     partitions: vec![ListOffsetsPartition {
                         partition_index: 0,
                         current_leader_epoch: -1,
@@ -278,7 +279,7 @@ async fn duplicate_partitions_get_invalid_request_on_every_row() {
     let request = |partition_indexes: &[i32]| ListOffsetsRequest {
         replica_id: -1,
         topics: vec![ListOffsetsTopic {
-            name: TOPIC.to_string(),
+            name: TOPIC.to_owned(),
             partitions: partition_indexes
                 .iter()
                 .map(|&partition_index| ListOffsetsPartition {

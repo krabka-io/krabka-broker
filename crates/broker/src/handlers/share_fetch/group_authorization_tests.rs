@@ -32,11 +32,12 @@ use {
     krabka_protocol::{
         owned::{
             share_acknowledge_request::{
-                AcknowledgePartition, AcknowledgeTopic, ShareAcknowledgeRequest,
+                API_KEY, AcknowledgePartition, AcknowledgeTopic, ShareAcknowledgeRequest,
             },
             share_acknowledge_response::{
                 self, ShareAcknowledgeResponse, ShareAcknowledgeTopicResponse,
             },
+            share_fetch_request,
             share_fetch_response::{
                 self, PartitionData, ShareFetchResponse, ShareFetchableTopicResponse,
             },
@@ -190,7 +191,7 @@ async fn share_fetch_checks_group_read_before_topic_read() {
                 .call();
             let response = try_dispatch_context(
                 &fixture.shared,
-                krabka_protocol::owned::share_fetch_request::API_KEY,
+                share_fetch_request::API_KEY,
                 version,
                 &encode_request(&request, version),
                 &ctx,
@@ -286,7 +287,7 @@ async fn share_acknowledge_checks_group_read_before_topic_read() {
             };
             let response = try_dispatch_context(
                 &fixture.shared,
-                krabka_protocol::owned::share_acknowledge_request::API_KEY,
+                API_KEY,
                 version,
                 &encode_request(&request, version),
                 &ctx,

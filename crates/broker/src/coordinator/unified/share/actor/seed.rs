@@ -126,6 +126,7 @@ mod tests {
             state::share_partition,
         },
         assert2::{assert, check},
+        std::iter,
     };
 
     #[test]
@@ -138,7 +139,7 @@ mod tests {
             "m1",
             "c1",
             "/127.0.0.1",
-            ["t".to_string()].into_iter().collect(),
+            iter::once("t".to_owned()).collect(),
         );
         m.member_epoch = 3;
         m.assigned_partitions.insert(id, vec![0, 1]);

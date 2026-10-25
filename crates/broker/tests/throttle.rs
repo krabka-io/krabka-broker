@@ -1,10 +1,4 @@
-// rustc 1.95 clippy ICEs on this file in the same places as elect_leaders.rs:
-//
-// 1. `clippy::pedantic` lints — annotate-snippets upstream bug.
-// 2. `clippy::unnecessary_unwrap` — UnwrappableVariablesVisitor ICE.
-//
-// Both are suppressed locally; the rest of the workspace still enforces the
-// full lint gate.
+#![cfg(test)]
 
 //! Broker-side integration tests for KIP-73 replication throttle.
 //!
@@ -46,8 +40,6 @@ mod kafka_wire;
 #[path = "throttle/records.rs"]
 mod records;
 mod support;
-#[path = "throttle/test_support.rs"]
-mod test_support;
 
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-throttle-test";

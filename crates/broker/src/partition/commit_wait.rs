@@ -23,7 +23,7 @@ use {
 
 /// Why an append did not commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Uncommitted {
+pub enum Uncommitted {
     /// The term of the append ended before the high watermark covered it.
     TermEnded,
     /// The deadline passed before the high watermark covered the append.

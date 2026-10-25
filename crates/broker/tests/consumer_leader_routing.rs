@@ -18,6 +18,7 @@
 //!
 //! Windows-gated like the other multi-broker tests, because openraft's
 //! `debug_assert!` races on the hosted Windows scheduler.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -32,9 +33,13 @@ use {
     bytes::Bytes,
     krabka_client_consumer::AutoOffsetReset,
     krabka_client_core::Client,
-    krabka_protocol::records::RecordBatch,
-    std::{collections::HashSet, time::Duration},
+    krabka_protocol::{primitives::uuid::Uuid, records::RecordBatch},
+    std::{
+        collections::{HashMap, HashSet, hash_map::Entry},
+        time::Duration,
+    },
     support::cluster_lock,
+    tokio::time,
 };
 
 mod support;
@@ -43,17 +48,11 @@ mod support;
 ///
 /// The function retries the metadata-apply race, that is,
 /// `UNKNOWN_TOPIC_OR_PARTITION` = 3 and `NOT_LEADER_OR_FOLLOWER` = 6.
-async fn produce_one(
-    client: &Client,
-    topic: &str,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
-    partition: i32,
-    value: &str,
-) {
+async fn produce_one(client: &Client, topic: &str, topic_id: Uuid, partition: i32, value: &str) {
     let mut batch = RecordBatch::default();
     batch
         .records
-        .push(value_record(0, Some(Bytes::from(value.to_string()))));
+        .push(value_record(0, Some(Bytes::from(value.to_owned()))));
     batch.last_offset_delta = 0;
     for attempt in 1..=10 {
         let resp = client
@@ -80,7 +79,7 @@ async fn produce_one(
             // topic's existence / leadership / topic-id mapping fans out across
             // brokers — there is no single broker signal to await here (the
             // target leader varies per partition), so back off and re-send.
-            tokio::time::sleep(Duration::from_millis(150)).await;
+            time::sleep(Duration::from_millis(150)).await;
             continue;
         }
         panic!("produce to {topic}-{partition} failed after {attempt} attempt(s): code {err}");
@@ -120,14 +119,14 @@ async fn consumer_fetches_from_non_bootstrap_leaders() {
             .expect("leader node is in the cluster");
         async move { connect_with_context(addr, None, "producer client").await }
     };
-    let mut producers: std::collections::HashMap<u64, Client> = std::collections::HashMap::new();
+    let mut producers: HashMap<u64, Client> = HashMap::new();
     let mut expected: HashSet<String> = HashSet::new();
     for p in 0..n_partitions {
         let leader = cluster[0]
             .0
             .partition_leader_for_test(topic, p)
             .expect("partition has a leader");
-        if let std::collections::hash_map::Entry::Vacant(e) = producers.entry(leader) {
+        if let Entry::Vacant(e) = producers.entry(leader) {
             e.insert(producer_for(leader).await);
         }
         let v = format!("p{p}");

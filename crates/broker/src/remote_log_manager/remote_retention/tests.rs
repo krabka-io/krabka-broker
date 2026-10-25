@@ -20,7 +20,10 @@ use {
         RemoteLogSegmentMetadataUpdate, RemoteStorageError, RemoteStorageManager,
     },
     krabka_units::{bytes, hours, millis},
-    std::sync::Arc,
+    std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     uuid::Uuid,
 };
 
@@ -64,7 +67,7 @@ fn empty_local_bounds(
 /// with the failure moved from the copy to the delete.
 #[derive(Default)]
 struct RefusesDeleteRsm {
-    deletes_attempted: std::sync::atomic::AtomicUsize,
+    deletes_attempted: AtomicUsize,
 }
 
 #[krabka_macros::missing_remote_reads]
@@ -81,8 +84,7 @@ impl RemoteStorageManager for RefusesDeleteRsm {
         &self,
         metadata: &RemoteLogSegmentMetadata,
     ) -> Result<(), RemoteStorageError> {
-        self.deletes_attempted
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.deletes_attempted.fetch_add(1, Ordering::Relaxed);
         Err(RemoteStorageError::Worm(
             krabka_remote_storage::WormError::DeleteRefused {
                 key: format!("{}.log", metadata.remote_log_segment_id().id),
@@ -244,12 +246,7 @@ async fn scheduled_remote_retention_holds_unreadable_activation_evidence() {
     )
     .await;
     check!(result == RemoteRetentionOutcome::default());
-    check!(
-        rsm_impl
-            .deletes_attempted
-            .load(std::sync::atomic::Ordering::Relaxed)
-            == 0
-    );
+    check!(rsm_impl.deletes_attempted.load(Ordering::Relaxed) == 0);
 }
 
 /// Kafka's `isSegmentBreachedByRetentionTime`: a segment goes when its
@@ -706,10 +703,7 @@ async fn remote_retention_pass_reaches_a_refusing_rsm_only_on_a_mutable_tier() {
 
         check!(outcome == RemoteRetentionOutcome::default(), "case {name}");
         check!(
-            rsm_impl
-                .deletes_attempted
-                .load(std::sync::atomic::Ordering::Relaxed)
-                == expected_attempts,
+            rsm_impl.deletes_attempted.load(Ordering::Relaxed) == expected_attempts,
             "case {name}"
         );
     }

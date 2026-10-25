@@ -17,6 +17,7 @@ use {
         oracle::{SecuredSide, secured_sides},
     },
     assert2::{assert, check},
+    tokio::task,
 };
 
 /// JVM acceptance: `kafka-acls.sh` end-to-end provision flow.
@@ -401,7 +402,7 @@ fn expected_bindings(case: &ShorthandCase) -> BTreeSet<AclBinding> {
 async fn acl_shorthands_expand_as_apache_kafka_expands_them() {
     // Kafka first. Every expectation below is a claim about somebody else's
     // client, and this is where a wrong one is reported as such.
-    let oracle = tokio::task::spawn_blocking(|| {
+    let oracle = task::spawn_blocking(|| {
         Oracle::start_with_env("acls", &[
             "KAFKA_AUTHORIZER_CLASS_NAME=org.apache.kafka.metadata.authorizer.StandardAuthorizer",
             // The tool runs inside the container over the plaintext

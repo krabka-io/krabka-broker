@@ -19,7 +19,8 @@ use {
         time_util::now_ms,
     },
     krabka_units::{Time, convert::TimeExt as _},
-    std::time::Instant,
+    std::{sync::Arc, time::Instant},
+    tokio::{sync::OwnedMutexGuard, time},
 };
 
 /// How long `create_group` waits for the state topic's partition to take a
@@ -32,7 +33,7 @@ const STATE_TOPIC_READY_POLL: Time = krabka_units::millis(20);
 
 /// What one published cut says about its group.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RetainedCut {
+pub struct RetainedCut {
     pub(crate) epoch: i64,
     pub(crate) cut: CutValue,
 }
@@ -42,7 +43,7 @@ pub(crate) struct RetainedCut {
 /// The type is [`PartialEq`] but not [`Eq`], because [`GroupValue`] carries a
 /// [`Time`].
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GroupDescription {
+pub struct GroupDescription {
     pub(crate) group: String,
     pub(crate) definition: GroupValue,
     /// The epochs of the cuts the group retains, in ascending order.
@@ -57,7 +58,7 @@ impl BarrierCoordinator {
             .iter()
             .map(|entry| NamedGroup {
                 name: entry.key().clone(),
-                entry: entry.value().clone(),
+                entry: Arc::clone(entry.value()),
             })
             .collect()
     }
@@ -98,7 +99,7 @@ impl BarrierCoordinator {
                     group: group.to_owned(),
                 });
             }
-            tokio::time::sleep(STATE_TOPIC_READY_POLL.to_std()).await;
+            time::sleep(STATE_TOPIC_READY_POLL.to_std()).await;
         }
     }
 
@@ -182,7 +183,7 @@ impl BarrierCoordinator {
     async fn lock_defined_group(
         &self,
         group: &str,
-    ) -> Result<tokio::sync::OwnedMutexGuard<GroupEntry>, BarrierError> {
+    ) -> Result<OwnedMutexGuard<GroupEntry>, BarrierError> {
         self.require_coordinator(group).await?;
         let entry = self.live_entry(group)?.lock_owned().await;
         ensure_group_defined(group, &entry)?;
@@ -263,7 +264,7 @@ impl BarrierCoordinator {
                 .filter_map(|name| {
                     self.groups.get(name).map(|e| NamedGroup {
                         name: name.clone(),
-                        entry: e.value().clone(),
+                        entry: Arc::clone(e.value()),
                     })
                 })
                 .collect()

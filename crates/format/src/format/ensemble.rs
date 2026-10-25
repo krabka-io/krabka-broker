@@ -23,7 +23,7 @@ use {
         meta_properties::{META_PROPERTIES, META_PROPERTIES_TMP, MetaProperties, verify_ensemble},
     },
     std::{
-        io,
+        fs, io,
         path::{Path, PathBuf},
     },
 };
@@ -121,7 +121,7 @@ impl Ensemble {
 /// Whether `dir` is absent, empty, or holds only what an interrupted run
 /// writes before `meta.properties`.
 fn holds_only_partial_output(dir: &Path) -> io::Result<bool> {
-    let entries = match std::fs::read_dir(dir) {
+    let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
         Err(error) => return Err(error),
@@ -130,7 +130,8 @@ fn holds_only_partial_output(dir: &Path) -> io::Result<bool> {
         let entry = entry?;
         let name = entry.file_name();
         let file_type = entry.file_type()?;
-        let own = if file_type.is_file() {
+        // Neither a directory nor a link: a file this run could have left.
+        let own = if !file_type.is_dir() && !file_type.is_symlink() {
             PARTIAL_FILES.iter().any(|own| name == *own)
         } else if file_type.is_dir() && name == CLUSTER_METADATA {
             holds_only_the_zero_checkpoint(&entry.path())?
@@ -147,9 +148,11 @@ fn holds_only_partial_output(dir: &Path) -> io::Result<bool> {
 /// Whether the metadata partition directory holds nothing but the
 /// offset-zero checkpoint.
 fn holds_only_the_zero_checkpoint(partition_dir: &Path) -> io::Result<bool> {
-    for entry in std::fs::read_dir(partition_dir)? {
+    for entry in fs::read_dir(partition_dir)? {
         let entry = entry?;
-        if entry.file_name() != ZERO_CHECKPOINT_NAME || !entry.file_type()?.is_file() {
+        let file_type = entry.file_type()?;
+        if entry.file_name() != ZERO_CHECKPOINT_NAME || file_type.is_dir() || file_type.is_symlink()
+        {
             return Ok(false);
         }
     }
@@ -162,12 +165,12 @@ fn holds_only_the_zero_checkpoint(partition_dir: &Path) -> io::Result<bool> {
 /// which holds nothing else.
 pub(super) fn remove_partial_output(dir: &Path) -> io::Result<()> {
     for name in PARTIAL_FILES {
-        match std::fs::remove_file(dir.join(name)) {
+        match fs::remove_file(dir.join(name)) {
             Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
             _ => {}
         }
     }
-    match std::fs::remove_dir_all(dir.join(CLUSTER_METADATA)) {
+    match fs::remove_dir_all(dir.join(CLUSTER_METADATA)) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
         _ => Ok(()),
     }
@@ -266,16 +269,16 @@ mod tests {
     fn a_directory_is_empty_only_when_it_holds_partial_output(files: &[&str], empty: bool) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = tmp.path().join("data");
-        std::fs::create_dir_all(&dir).expect("mkdir");
+        fs::create_dir_all(&dir).expect("mkdir");
         for file in files {
             let file = dir.join(file);
-            std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
-            std::fs::write(&file, b"x").expect("write");
+            fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+            fs::write(&file, b"x").expect("write");
         }
         assert2::check!(holds_only_partial_output(&dir).expect("survey") == empty);
         if empty {
             remove_partial_output(&dir).expect("remove");
-            assert2::check!(std::fs::read_dir(&dir).expect("list").next().is_none());
+            assert2::check!(fs::read_dir(&dir).expect("list").next().is_none());
         }
     }
 

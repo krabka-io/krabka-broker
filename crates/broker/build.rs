@@ -21,23 +21,28 @@
 //! never compiles, so a missing file in that position emits nothing rather
 //! than failing the whole build.
 
-use std::path::{Path, PathBuf};
+use std::{
+    env,
+    error::Error,
+    fs,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 
-fn main() {
-    let manifest_dir = PathBuf::from(
-        std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"),
-    );
+fn main() -> Result<(), Box<dyn Error>> {
+    let manifest_dir =
+        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("cargo sets CARGO_MANIFEST_DIR")?);
     let module_file = manifest_dir
         .parent()
         .and_then(Path::parent)
-        .expect("the crate directory is two levels below the workspace root")
+        .ok_or("the crate directory is two levels below the workspace root")?
         .join("MODULE.bazel");
     println!("cargo::rerun-if-changed={}", module_file.display());
 
-    let source = match std::fs::read_to_string(&module_file) {
+    let source = match fs::read_to_string(&module_file) {
         Ok(source) => source,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => panic!("reading {}: {error}", module_file.display()),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("reading {}: {error}", module_file.display()).into()),
     };
 
     let mut emitted = 0_usize;
@@ -60,6 +65,7 @@ fn main() {
             module_file.display()
         );
     }
+    Ok(())
 }
 
 /// The name and digest of one pinned container image.

@@ -95,6 +95,7 @@
 //! The container-driven case is gated `#[ignore = "requires Docker"]`; the
 //! Bazel `docker` lane runs it. The parsing this suite reads the JVM tools
 //! with is covered by ordinary tests that need no daemon.
+#![cfg(test)]
 
 mod jvm_acceptance;
 mod support;
@@ -103,11 +104,13 @@ use {
     assert2::assert,
     jvm_acceptance::{broker0_listen, host_port, start_host_broker_with},
     std::{
+        env, fs,
         path::PathBuf,
         process::{Command, Output, Stdio},
         time::Duration,
     },
     support::bridge_gateway,
+    tokio::{time, time::Instant},
 };
 
 /// The release both clusters and every tool come from: the source broker is
@@ -409,10 +412,9 @@ fn container_excerpt(name: &str) -> String {
 /// where a log too big to print belongs. Under Cargo there is no such
 /// directory; the temporary one still beats losing it.
 fn save_log(name: &str, text: &str) -> String {
-    let dir = std::env::var_os("TEST_UNDECLARED_OUTPUTS_DIR")
-        .map_or_else(std::env::temp_dir, PathBuf::from);
+    let dir = env::var_os("TEST_UNDECLARED_OUTPUTS_DIR").map_or_else(env::temp_dir, PathBuf::from);
     let path = dir.join(format!("{name}.log"));
-    match std::fs::write(&path, text) {
+    match fs::write(&path, text) {
         Ok(()) => format!("whole log at {}", path.display()),
         Err(error) => format!("whole log not written to {}: {error}", path.display()),
     }
@@ -558,7 +560,7 @@ impl SourceKafka {
 
     /// Poll `kafka-topics --list` until the source broker answers it.
     async fn wait_ready(&self) {
-        let start = tokio::time::Instant::now();
+        let start = Instant::now();
         let deadline = start + SOURCE_BUDGET;
         eprintln!(
             "KRABKA[test] waiting for: the source Kafka answers on {} (up to {SOURCE_BUDGET:?})",
@@ -578,13 +580,13 @@ impl SourceKafka {
                 return;
             }
             assert!(
-                tokio::time::Instant::now() < deadline,
+                Instant::now() < deadline,
                 "the source Kafka did not answer within {SOURCE_BUDGET:?}; {}",
                 container_excerpt(&self.container),
             );
             // intentional: a JVM broker's readiness is its own internal state,
             // and asking its tools is the only observation there is.
-            tokio::time::sleep(POLL_GAP).await;
+            time::sleep(POLL_GAP).await;
         }
     }
 }
@@ -717,7 +719,7 @@ async fn poll_until<T>(
     mm2: &MirrorMaker,
     mut probe: impl FnMut() -> Option<T>,
 ) -> T {
-    let start = tokio::time::Instant::now();
+    let start = Instant::now();
     let deadline = start + budget;
     eprintln!("KRABKA[test] waiting for: {what} (up to {budget:?})");
     loop {
@@ -736,13 +738,13 @@ async fn poll_until<T>(
             mm2.diagnostics(),
         );
         assert!(
-            tokio::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "{what} did not happen within {budget:?}; {}",
             mm2.diagnostics(),
         );
         // intentional: every effect below is an MM2 interval expiring inside a
         // JVM, which krabka cannot be awaited on.
-        tokio::time::sleep(POLL_GAP).await;
+        time::sleep(POLL_GAP).await;
     }
 }
 
@@ -952,7 +954,7 @@ async fn commit_source_group(bootstrap: &str) {
 
     let target_offset = i64::try_from(COMMITTED).expect("the committed offset fits an i64");
     let offset = target_offset.to_string();
-    let deadline = tokio::time::Instant::now() + SOURCE_BUDGET;
+    let deadline = Instant::now() + SOURCE_BUDGET;
     loop {
         let out = tool_allowing_failure("kafka-consumer-groups", &[
             "--bootstrap-server",
@@ -971,14 +973,14 @@ async fn commit_source_group(bootstrap: &str) {
             return;
         }
         assert!(
-            tokio::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "the source group's offset could not be pinned to {COMMITTED} within \
              {SOURCE_BUDGET:?}:\n{}",
             both_streams(&out),
         );
         // intentional: a group leaves the emptying state on the source
         // broker's own schedule, which nothing here can be awaited on.
-        tokio::time::sleep(POLL_GAP).await;
+        time::sleep(POLL_GAP).await;
     }
 }
 

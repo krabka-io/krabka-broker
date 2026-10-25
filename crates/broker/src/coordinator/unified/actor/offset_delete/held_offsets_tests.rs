@@ -19,9 +19,10 @@ use {
     assert2::check,
     krabka_protocol::records::RecordBatch,
     std::collections::{HashMap, HashSet},
+    tokio::task::yield_now,
 };
 
-fn key(topic: &str, partition: i32) -> (String, i32) { (topic.to_string(), partition) }
+fn key(topic: &str, partition: i32) -> (String, i32) { (topic.to_owned(), partition) }
 
 fn tombstone(topic: &str, partition: i32) -> OffsetsRecord {
     OffsetsRecord {
@@ -182,7 +183,7 @@ async fn delete_offsets_tombstones_a_commit_that_is_still_replicating() {
     })
     .await;
     while log.batches().await.len() < 2 {
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
 
     log.release_commits();

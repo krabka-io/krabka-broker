@@ -33,6 +33,7 @@ use {
         BrokerRegistrationChangeRecord, FencingChange, MetadataImage, MetadataRecord, NodeId,
     },
     std::{collections::HashSet, sync::Arc, time::Duration},
+    tokio::time,
 };
 
 /// Upper bound on the fencing commit, matching the failover submit the same
@@ -45,7 +46,7 @@ const SUBMIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// `in_controlled_shutdown` enters controlled shutdown. Nothing but a new
 /// registration leaves controlled shutdown, as in Kafka.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct RegistrationChange {
+pub struct RegistrationChange {
     pub(crate) fenced: Option<bool>,
     pub(crate) in_controlled_shutdown: bool,
 }
@@ -72,7 +73,7 @@ impl RegistrationChange {
 /// Kafka's `handleBrokerFenced` and `handleBrokerUnfenced` set only `Fenced`
 /// and `handleBrokerInControlledShutdown` sets only `InControlledShutdown`,
 /// and each names the epoch of the registration it changes.
-pub(crate) fn registration_change(
+pub fn registration_change(
     image: &MetadataImage,
     node_id: NodeId,
     change: RegistrationChange,
@@ -95,14 +96,14 @@ pub(crate) fn registration_change(
 
 /// Whether the registration of `node_id` is fenced. A broker with no
 /// registration is not fenced; it is offline by the registration rule.
-pub(crate) fn is_fenced(image: &MetadataImage, node_id: NodeId) -> bool {
+pub fn is_fenced(image: &MetadataImage, node_id: NodeId) -> bool {
     image.broker(node_id).is_some_and(|broker| broker.fenced)
 }
 
 /// Every registered broker whose registration is fenced: the replicated half
 /// of the offline-replica projection, the same set on every node that holds
 /// the image.
-pub(crate) fn fenced_node_ids(image: &MetadataImage) -> HashSet<u64> {
+pub fn fenced_node_ids(image: &MetadataImage) -> HashSet<u64> {
     image
         .brokers()
         .filter(|broker| broker.fenced)
@@ -137,7 +138,7 @@ fn fencing_changes(image: &MetadataImage, unavailable: &HashSet<u64>) -> Vec<Met
 /// controller leadership, as only the leader holds a populated registry and
 /// only the leader can submit. A submit failure is logged and does not
 /// propagate: the next tick retries.
-pub(crate) async fn publish_fencing_changes(
+pub async fn publish_fencing_changes(
     controller: &Arc<dyn MetadataSource>,
     liveness: &ControllerLivenessState,
 ) {
@@ -146,7 +147,7 @@ pub(crate) async fn publish_fencing_changes(
     if changes.is_empty() {
         return;
     }
-    match tokio::time::timeout(SUBMIT_TIMEOUT, controller.submit_change(changes)).await {
+    match time::timeout(SUBMIT_TIMEOUT, controller.submit_change(changes)).await {
         Ok(Err(error)) => tracing::warn!(%error, "fencing-state submit_change failed"),
         Err(_elapsed) => tracing::warn!(
             timeout = ?SUBMIT_TIMEOUT,
@@ -260,7 +261,7 @@ mod tests {
                 Some(change(1, FencingChange::Fence, false)),
                 BrokerRegistrationRecord {
                     fenced: true,
-                    ..shutting_down.clone()
+                    ..shutting_down
                 },
             ),
         ];

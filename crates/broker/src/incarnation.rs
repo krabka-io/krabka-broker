@@ -26,7 +26,7 @@ use {
 /// the answer to its last `BrokerRegistration`; krabka's registration is a
 /// metadata write, and the newest registration under this incarnation is that
 /// answer. A registration at an epoch older than `registered_at` never wins.
-pub(crate) fn own_broker_epoch(
+pub fn own_broker_epoch(
     image: &MetadataImage,
     node_id: NodeId,
     incarnation_id: Uuid,

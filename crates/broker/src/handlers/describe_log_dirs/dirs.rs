@@ -8,7 +8,13 @@
 
 use {
     crate::{codes, cordoned_log_dirs::CordonedLogDirs},
+    krabka_metadata::metadata_version,
     krabka_protocol::owned::describe_log_dirs_response::DescribeLogDirsResult,
+    rustix::fs,
+    std::{
+        path,
+        path::{Path, PathBuf},
+    },
 };
 
 /// The directories `DescribeLogDirs` reports with `is_cordoned = true`.
@@ -19,10 +25,10 @@ use {
 pub(super) fn cordoned_log_dirs_reported(
     image: &krabka_metadata::MetadataImage,
     cordoned: &CordonedLogDirs,
-) -> Vec<std::path::PathBuf> {
-    let supported = image.finalized_metadata_version().is_some_and(|level| {
-        level >= krabka_metadata::metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL
-    });
+) -> Vec<PathBuf> {
+    let supported = image
+        .finalized_metadata_version()
+        .is_some_and(|level| level >= metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL);
     if supported {
         cordoned.cordoned()
     } else {
@@ -30,7 +36,7 @@ pub(super) fn cordoned_log_dirs_reported(
     }
 }
 
-pub(super) fn offline_result(dir: &std::path::Path) -> DescribeLogDirsResult {
+pub(super) fn offline_result(dir: &Path) -> DescribeLogDirsResult {
     DescribeLogDirsResult {
         error_code: codes::KAFKA_STORAGE_ERROR,
         log_dir: absolute_path(dir),
@@ -45,11 +51,11 @@ pub(super) fn offline_result(dir: &std::path::Path) -> DescribeLogDirsResult {
 /// `Paths.get(logDir).toAbsolutePath` gives it: relative to the working
 /// directory, without resolving symbolic links, and with the redundant
 /// separators `Paths.get` drops.
-pub(super) fn absolute_path(dir: &std::path::Path) -> String {
-    std::path::absolute(dir)
+pub(super) fn absolute_path(dir: &Path) -> String {
+    path::absolute(dir)
         .unwrap_or_else(|_| dir.to_path_buf())
         .components()
-        .collect::<std::path::PathBuf>()
+        .collect::<PathBuf>()
         .display()
         .to_string()
 }
@@ -64,7 +70,7 @@ pub(super) fn absolute_path(dir: &std::path::Path) -> String {
 /// `statvfs`, as on Windows, or when the syscall fails. The syscall fails when
 /// the path vanishes during a reconfigure, or on a permission error. The JVM
 /// admin tools tolerate `-1` and skip the column.
-pub(super) fn log_dir_capacity(dir: &std::path::Path) -> (i64, i64) {
+pub(super) fn log_dir_capacity(dir: &Path) -> (i64, i64) {
     disk_stats(dir).map_or((-1, -1), |stats| (stats.total, stats.usable))
 }
 
@@ -75,8 +81,8 @@ struct DiskStats {
 }
 
 #[cfg(unix)]
-fn disk_stats(dir: &std::path::Path) -> Option<DiskStats> {
-    let stat = rustix::fs::statvfs(dir).ok()?;
+fn disk_stats(dir: &Path) -> Option<DiskStats> {
+    let stat = fs::statvfs(dir).ok()?;
     // `f_frsize` is the fragment size in bytes; multiplying by the
     // block counts yields capacity in bytes. Both fields come back as
     // `u64`; clamp to `i64::MAX` rather than overflow on a hypothetical
@@ -101,6 +107,7 @@ mod tests {
     use {
         super::*,
         assert2::{assert, check},
+        std::{fs, os::unix::fs::symlink, path::Path},
     };
 
     /// On unix, `statvfs` against any tempdir must return sensible positive
@@ -138,7 +145,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn log_dir_capacity_returns_minus_one_for_missing_path() {
-        let phantom = std::path::Path::new("/nonexistent/krabka/test/dir/should/not/exist");
+        let phantom = Path::new("/nonexistent/krabka/test/dir/should/not/exist");
         assert!(log_dir_capacity(phantom) == (-1, -1));
     }
 
@@ -149,14 +156,14 @@ mod tests {
     fn absolute_path_keeps_the_configured_link() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("real");
-        std::fs::create_dir(&target).unwrap();
+        fs::create_dir(&target).unwrap();
         let link = tmp.path().join("link");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
+        symlink(&target, &link).unwrap();
         let with_slash = format!("{}/", link.display());
 
         for configured in [link.display().to_string(), with_slash] {
             check!(
-                absolute_path(std::path::Path::new(&configured)) == link.display().to_string(),
+                absolute_path(Path::new(&configured)) == link.display().to_string(),
                 "{configured}"
             );
         }

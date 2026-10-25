@@ -1,10 +1,12 @@
 //! What `#[derive(RefinedNewtype)]` accepts, refuses, parses and prints.
+#![cfg(test)]
 
 use {
     assert2::assert,
     krabka_macros::RefinedNewtype,
     krabka_units::{
         fmt::Human as _,
+        parse,
         prelude::{
             ByteSize, ByteSizeExt as _, Frequency, FrequencyExt as _, Time, TimeExt as _, bytes,
             kibibytes, mebibytes, millis, per_sec, secs,
@@ -192,8 +194,6 @@ fn quantity_getters_default_display_and_from_str() {
         "4.5B".parse::<FetchMax>()
             == Err("fetch max: must be a whole number of bytes that fits in i32".to_owned())
     );
-    let unparsable = krabka_units::parse::frequency("fast")
-        .unwrap_err()
-        .to_string();
+    let unparsable = parse::frequency("fast").unwrap_err().to_string();
     assert!("fast".parse::<SampleFrequency>() == Err(unparsable));
 }

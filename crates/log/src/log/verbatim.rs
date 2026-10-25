@@ -22,23 +22,23 @@ use {
         crc32c,
     },
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
-    tracing::instrument,
+    std::ops::Range,
+    tracing::{field, instrument},
 };
 
 /// Byte range of the `crc` field in the v2 batch header: the four bytes that
 /// sit immediately before the region the CRC covers.
-const CRC_RANGE: std::ops::Range<usize> = CRC_COVERAGE_START - 4..CRC_COVERAGE_START;
+const CRC_RANGE: Range<usize> = CRC_COVERAGE_START - 4..CRC_COVERAGE_START;
 
 /// Byte range of `attributes` in the v2 batch header. It is the first field
 /// the CRC covers, so it starts at [`CRC_COVERAGE_START`] and is two bytes
 /// wide.
-const ATTRIBUTES_RANGE: std::ops::Range<usize> = CRC_COVERAGE_START..CRC_COVERAGE_START + 2;
+const ATTRIBUTES_RANGE: Range<usize> = CRC_COVERAGE_START..CRC_COVERAGE_START + 2;
 
 /// Byte range of `max_timestamp` in the v2 batch header: `attributes` (2) plus
 /// `last_offset_delta` (4) plus `base_timestamp` (8) after
 /// [`CRC_COVERAGE_START`], and eight bytes wide.
-const MAX_TIMESTAMP_RANGE: std::ops::Range<usize> =
-    CRC_COVERAGE_START + 14..CRC_COVERAGE_START + 22;
+const MAX_TIMESTAMP_RANGE: Range<usize> = CRC_COVERAGE_START + 14..CRC_COVERAGE_START + 22;
 
 /// A batch that the log appends **verbatim**, with no re-encode.
 ///
@@ -107,26 +107,40 @@ impl VerbatimBatch {
     /// header tail and the producer's own body, which never changes. The batch
     /// bytes are copied once, so only a `LogAppendTime` partition pays for the
     /// copy and a `CreateTime` one keeps the zero-copy append whole.
-    #[must_use]
-    fn stamped_with_log_append_time(&self, now: i64) -> Self {
-        let mut bytes = BytesMut::from(&self.bytes[..]);
-        let attributes = Attributes(i16::from_be_bytes([
-            bytes[ATTRIBUTES_RANGE.start],
-            bytes[ATTRIBUTES_RANGE.start + 1],
-        ]))
-        .with_timestamp_type(TimestampType::LogAppendTime);
-        bytes[ATTRIBUTES_RANGE].copy_from_slice(&attributes.0.to_be_bytes());
-        bytes[MAX_TIMESTAMP_RANGE].copy_from_slice(&now.to_be_bytes());
+    ///
+    /// # Errors
+    ///
+    /// [`LogError::Corrupt`] when the batch is shorter than its header.
+    fn stamped_with_log_append_time(&self, now: i64) -> Result<Self, LogError> {
+        let short = || LogError::Corrupt("verbatim batch is shorter than its header".into());
+        let mut bytes = BytesMut::from(self.bytes.as_ref());
+        let attributes = bytes
+            .get(ATTRIBUTES_RANGE)
+            .and_then(|attributes| <[u8; 2]>::try_from(attributes).ok())
+            .ok_or_else(short)?;
+        let attributes = Attributes(i16::from_be_bytes(attributes))
+            .with_timestamp_type(TimestampType::LogAppendTime);
+        bytes
+            .get_mut(ATTRIBUTES_RANGE)
+            .ok_or_else(short)?
+            .copy_from_slice(&attributes.0.to_be_bytes());
+        bytes
+            .get_mut(MAX_TIMESTAMP_RANGE)
+            .ok_or_else(short)?
+            .copy_from_slice(&now.to_be_bytes());
         // The CRC covers the header from `attributes` to the end of the batch,
         // and the body follows the header without a gap, so one pass over the
         // tail of the buffer is the whole covered region.
-        let crc = crc32c(&bytes[CRC_COVERAGE_START..]);
-        bytes[CRC_RANGE].copy_from_slice(&crc.to_be_bytes());
-        Self {
+        let crc = crc32c(bytes.get(CRC_COVERAGE_START..).ok_or_else(short)?);
+        bytes
+            .get_mut(CRC_RANGE)
+            .ok_or_else(short)?
+            .copy_from_slice(&crc.to_be_bytes());
+        Ok(Self {
             bytes: bytes.freeze(),
             max_timestamp: now,
             ..self.clone()
-        }
+        })
     }
 }
 
@@ -148,7 +162,7 @@ impl Log {
         level = "debug",
         skip_all,
         fields(
-            assigned_base = tracing::field::Empty,
+            assigned_base = field::Empty,
             leader_epoch = batch.leader_epoch.0,
             bytes = batch.bytes.len(),
         ),
@@ -175,7 +189,9 @@ impl Log {
         let stamp = self
             .log_append_time_stamp()
             .filter(|_| batch.bytes.len() >= HEADER_LEN);
-        let stamped = stamp.map(|now| batch.stamped_with_log_append_time(now));
+        let stamped = stamp
+            .map(|now| batch.stamped_with_log_append_time(now))
+            .transpose()?;
         let batch = stamped.as_ref().unwrap_or(batch);
         self.append_verbatim_preserving_offset(batch, assigned_base)?;
         self.assign_appended_epoch(leader_epoch, assigned_base)?;
@@ -220,8 +236,9 @@ impl Log {
         let attributes = batch
             .bytes
             .get(ATTRIBUTES_RANGE)
+            .and_then(|attributes| <[u8; 2]>::try_from(attributes).ok())
             .ok_or_else(|| LogError::Corrupt("verbatim batch is missing its attributes".into()))?;
-        if Attributes(i16::from_be_bytes([attributes[0], attributes[1]])).is_control_batch() {
+        if Attributes(i16::from_be_bytes(attributes)).is_control_batch() {
             let mut wire = batch.bytes.as_ref();
             let mut decoded = RecordBatch::decode(&mut wire)?;
             if !wire.is_empty() {
@@ -280,10 +297,7 @@ impl Log {
         )?;
 
         let result = (|| {
-            let active = self
-                .active
-                .as_mut()
-                .expect("active segment must exist after Log::open");
+            let active = self.active.as_mut().ok_or_else(super::no_active_segment)?;
             active.append_verbatim(
                 &batch.bytes,
                 base_offset,

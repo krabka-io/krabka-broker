@@ -58,7 +58,7 @@ pub use {
 use {
     krabka_metadata::{AclOperation, ResourceType},
     krabka_security::Principal,
-    std::{collections::HashMap, net::SocketAddr},
+    std::{collections::HashMap, fmt, net::SocketAddr, time::Duration},
 };
 
 /// What the caller asks `authorize`: which principal wants to do which
@@ -97,7 +97,7 @@ pub enum AuthorizationResult {
 /// The decision consults a [`AclSource`]. The broker passes its
 /// `MetadataImage` and the gateway passes an [`AclCache`]. ACL-free
 /// implementations (`AllowAll`, OPA) ignore it.
-pub trait Authorizer: Send + Sync + std::fmt::Debug {
+pub trait Authorizer: Send + Sync + fmt::Debug {
     /// Decide whether `req.principal` may do `req.operation` on
     /// `(req.resource_type, req.resource_name)` from `req.host`.
     ///
@@ -151,7 +151,7 @@ pub trait Authorizer: Send + Sync + std::fmt::Debug {
     /// keyed on metadata alone cannot outlive it and silently miss a policy
     /// change the metadata log never saw. A decorator MUST forward the
     /// wrapped authorizer's answer, as `is_configured` does.
-    fn decision_ttl(&self) -> Option<std::time::Duration> { None }
+    fn decision_ttl(&self) -> Option<Duration> { None }
 
     /// Whether `principal` holds `operation` on at least one resource pattern
     /// of `resource_type` -- Kafka's `AuthorizerUtils.authorizeByResourceType`,

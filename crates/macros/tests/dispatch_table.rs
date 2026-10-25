@@ -2,17 +2,26 @@
 //! types it names: every section registers its entry under the right kind,
 //! api key and `FLEXIBLE_MIN`, and each adapter hands its handler what that
 //! section promises.
+#![cfg(test)]
 
 use {
+    self::txn::add_partitions_to_txn,
     assert2::assert,
     std::{
         collections::BTreeMap,
-        future::Future,
+        fmt,
+        future::{self, Future},
+        mem,
         pin::Pin,
         sync::{Arc, Mutex},
         task::{Context, Poll, Waker},
     },
-    tracing_subscriber::layer::SubscriberExt as _,
+    tracing::{
+        field::{Field, Visit},
+        span::{Attributes, Id},
+        subscriber,
+    },
+    tracing_subscriber::{layer, layer::SubscriberExt as _, registry::LookupSpan},
 };
 
 // These adapters share tracing callsites. Serialize calls while capture tests install scoped subscribers.
@@ -53,10 +62,8 @@ enum BrokerError {
 }
 
 /// What the adapter's `ERROR` event records as `error`.
-impl std::fmt::Display for BrokerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "broker error: {self:?}")
-    }
+impl fmt::Display for BrokerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "broker error: {self:?}") }
 }
 
 impl From<krabka_protocol::DecodeError> for BrokerError {
@@ -154,6 +161,7 @@ impl DispatchRegistry {
 /// The request schemas the table names: a `FLEXIBLE_MIN` per api, and a
 /// decodable request type for the `typed` sections.
 mod krabka_protocol {
+    use std::str;
     pub struct DecodeError;
 
     pub trait Decode: Sized {
@@ -166,7 +174,7 @@ mod krabka_protocol {
 
     impl Decode for Text {
         fn decode(buf: &mut &[u8], version: i16) -> Result<Self, DecodeError> {
-            let text = std::str::from_utf8(buf).map_err(|_| DecodeError)?;
+            let text = str::from_utf8(buf).map_err(|_| DecodeError)?;
             *buf = &[];
             Ok(Self(format!("v{version}:{text}")))
         }
@@ -213,7 +221,7 @@ mod krabka_protocol {
 
 /// Renders what a handler received, or fails on an empty body so that the
 /// tests can see an error pass through the adapter unchanged.
-fn reply(parts: &[&dyn std::fmt::Display]) -> Result<Bytes, BrokerError> {
+fn reply(parts: &[&dyn fmt::Display]) -> Result<Bytes, BrokerError> {
     let text = parts
         .iter()
         .map(ToString::to_string)
@@ -252,7 +260,7 @@ fn context_bytes_handler<'a, const TRANSACTION: bool>(
     } else {
         "metadata"
     };
-    Box::pin(std::future::ready(reply(&[
+    Box::pin(future::ready(reply(&[
         &name,
         &broker.name,
         &version,
@@ -268,11 +276,15 @@ mod handlers {
             ApiVersion, Broker, BrokerError, Bytes, RequestContext,
             krabka_protocol::{Decode, Text},
         },
+        std::{
+            fmt,
+            future::{self, Ready},
+        },
     };
 
     /// The `typed` adapters' encoder: the response, then the version it was
     /// encoded at. It refuses a response that says `nope`.
-    pub fn encode_response<R: std::fmt::Display>(
+    pub fn encode_response<R: fmt::Display>(
         resp: &R,
         version: ApiVersion,
     ) -> Result<Bytes, BrokerError> {
@@ -297,7 +309,7 @@ mod handlers {
 
     /// Renders what a typed handler received, failing on an empty body like
     /// [`crate::reply`].
-    fn typed_reply(parts: &[&dyn std::fmt::Display]) -> Result<String, BrokerError> {
+    fn typed_reply(parts: &[&dyn fmt::Display]) -> Result<String, BrokerError> {
         reply(parts).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
     }
 
@@ -307,9 +319,9 @@ mod handlers {
         request: Text,
         version: ApiVersion,
         ctx: &RequestContext<'_>,
-    ) -> std::future::Ready<Result<String, BrokerError>> {
+    ) -> Ready<Result<String, BrokerError>> {
         let Text(text) = request;
-        std::future::ready(typed_reply(&[
+        future::ready(typed_reply(&[
             &name,
             &broker.name,
             &version,
@@ -318,9 +330,12 @@ mod handlers {
         ]))
     }
     pub mod list_groups {
-        use crate::{
-            ApiVersion, Broker, BrokerError, RequestContext,
-            krabka_protocol::owned::list_groups_request::ListGroupsRequest,
+        use {
+            crate::{
+                ApiVersion, Broker, BrokerError, RequestContext,
+                krabka_protocol::owned::list_groups_request::ListGroupsRequest,
+            },
+            std::future::Ready,
         };
 
         pub fn handle(
@@ -328,14 +343,17 @@ mod handlers {
             request: ListGroupsRequest,
             version: ApiVersion,
             ctx: &RequestContext<'_>,
-        ) -> std::future::Ready<Result<String, BrokerError>> {
+        ) -> Ready<Result<String, BrokerError>> {
             super::typed_context_reply("list_groups", broker, request, version, ctx)
         }
     }
     pub mod heartbeat {
-        use crate::{
-            ApiVersion, Broker, BrokerError, RequestContext,
-            krabka_protocol::owned::heartbeat_request::HeartbeatRequest,
+        use {
+            crate::{
+                ApiVersion, Broker, BrokerError, RequestContext,
+                krabka_protocol::owned::heartbeat_request::HeartbeatRequest,
+            },
+            std::future::Ready,
         };
 
         pub fn handle(
@@ -343,14 +361,17 @@ mod handlers {
             request: HeartbeatRequest,
             version: ApiVersion,
             ctx: &RequestContext<'_>,
-        ) -> std::future::Ready<Result<String, BrokerError>> {
+        ) -> Ready<Result<String, BrokerError>> {
             super::typed_context_reply("heartbeat", broker, request, version, ctx)
         }
     }
     pub mod update_features {
-        use crate::{
-            ApiVersion, Broker, BrokerError, RequestContext,
-            krabka_protocol::owned::update_features_request::UpdateFeaturesRequest,
+        use {
+            crate::{
+                ApiVersion, Broker, BrokerError, RequestContext,
+                krabka_protocol::owned::update_features_request::UpdateFeaturesRequest,
+            },
+            std::future::Ready,
         };
 
         pub fn handle(
@@ -358,7 +379,7 @@ mod handlers {
             request: UpdateFeaturesRequest,
             version: ApiVersion,
             ctx: &RequestContext<'_>,
-        ) -> std::future::Ready<Result<String, BrokerError>> {
+        ) -> Ready<Result<String, BrokerError>> {
             super::typed_context_reply("update_features", broker, request, version, ctx)
         }
     }
@@ -473,7 +494,7 @@ fn create_delegation_token_adapter<'a>(
     body: &'a [u8],
     principal: &'a str,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-    Box::pin(std::future::ready(reply(&[
+    Box::pin(future::ready(reply(&[
         &"create_delegation_token_adapter",
         &broker.name,
         &version,
@@ -484,7 +505,7 @@ fn create_delegation_token_adapter<'a>(
 }
 
 krabka_macros::dispatch_table! {
-    context: Metadata, AddPartitionsToTxn => crate::txn::add_partitions_to_txn::handle;
+    context: Metadata, AddPartitionsToTxn => add_partitions_to_txn::handle;
     sync_context: DescribeConfigs;
     typed: ListGroups;
     typed_own_span: UpdateFeatures;
@@ -710,12 +731,12 @@ struct Fields {
     values: BTreeMap<&'static str, String>,
 }
 
-impl tracing::field::Visit for Fields {
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+impl Visit for Fields {
+    fn record_str(&mut self, field: &Field, value: &str) {
         self.values.insert(field.name(), value.to_owned());
     }
 
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         self.values.insert(field.name(), format!("{value:?}"));
     }
 }
@@ -728,14 +749,9 @@ struct Capture {
 
 impl<S> tracing_subscriber::Layer<S> for Capture
 where
-    S: tracing::Subscriber + for<'l> tracing_subscriber::registry::LookupSpan<'l>,
+    S: tracing::Subscriber + for<'l> LookupSpan<'l>,
 {
-    fn on_new_span(
-        &self,
-        attrs: &tracing::span::Attributes<'_>,
-        _: &tracing::span::Id,
-        _: tracing_subscriber::layer::Context<'_, S>,
-    ) {
+    fn on_new_span(&self, attrs: &Attributes<'_>, _: &Id, _: layer::Context<'_, S>) {
         let mut fields = Fields::default();
         attrs.record(&mut fields);
         self.traced
@@ -748,7 +764,7 @@ where
             });
     }
 
-    fn on_event(&self, event: &tracing::Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: layer::Context<'_, S>) {
         let mut fields = Fields::default();
         event.record(&mut fields);
         self.traced
@@ -767,8 +783,8 @@ fn trace(registry: &DispatchRegistry, api: ApiKey, body: &[u8]) -> Vec<Traced> {
     let capture = Capture::default();
     let subscriber = tracing_subscriber::registry().with(capture.clone());
     let entry = registry.entries[&(api as i16)];
-    tracing::subscriber::with_default(subscriber, || drop(call(entry, body)));
-    std::mem::take(&mut *capture.traced.lock().expect("capture lock"))
+    subscriber::with_default(subscriber, || drop(call(entry, body)));
+    mem::take(&mut *capture.traced.lock().expect("capture lock"))
 }
 
 #[yare::parameterized(

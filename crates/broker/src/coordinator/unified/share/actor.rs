@@ -20,6 +20,7 @@ use {
     tokio::{
         sync::{mpsc, oneshot},
         task::JoinHandle,
+        time::{MissedTickBehavior, interval},
     },
 };
 
@@ -151,11 +152,11 @@ async fn actor_loop(
     coordinator: Arc<super::super::GroupCoordinator>,
     mut rx: mpsc::Receiver<ShareGroupActorMessage>,
 ) {
-    let offsets_log = coordinator.offsets_log.clone();
+    let offsets_log = Arc::clone(&coordinator.offsets_log);
     let mut state = ShareGroupState::new(group_id);
     let mut tick_period = config.heartbeat_interval;
-    let mut tick = tokio::time::interval(tick_period);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut tick = interval(tick_period);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         // The session-expiry tick follows the group's heartbeat interval, so a
         // `share.heartbeat.interval.ms` override takes effect at the next turn.
@@ -163,8 +164,8 @@ async fn actor_loop(
             effective_config(&config, &coordinator, &state.group_id).heartbeat_interval;
         if heartbeat_interval != tick_period {
             tick_period = heartbeat_interval;
-            tick = tokio::time::interval(tick_period);
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            tick = interval(tick_period);
+            tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         }
         tokio::select! {
             msg = rx.recv() => {

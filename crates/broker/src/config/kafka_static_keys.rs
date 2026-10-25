@@ -36,7 +36,7 @@ use {
 };
 
 /// One `KafkaConfig` key and how this node states its value.
-pub(crate) struct KafkaStaticKey {
+pub struct KafkaStaticKey {
     /// The Kafka key.
     pub(crate) name: &'static str,
     /// The `[runtime]` field that sets it, when there is one.
@@ -58,7 +58,7 @@ fn int(count: usize) -> String { i32::try_from(count).unwrap_or(i32::MAX).to_str
 
 /// Every key this node can state a running value of, other than the ones
 /// [`crate::config::StaticConfigOrigins`] tracks with a flag of their own.
-pub(crate) const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = &[
+pub const KAFKA_STATIC_KEYS: &[KafkaStaticKey] = &[
     KafkaStaticKey::new(
         "group.consumer.session.timeout.ms",
         Some("consumer_group_session_timeout"),

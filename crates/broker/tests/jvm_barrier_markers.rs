@@ -27,6 +27,7 @@
 //! ```text
 //! cargo test -p krabka-broker --test jvm_barrier_markers -- --ignored --nocapture
 //! ```
+#![cfg(test)]
 
 mod jvm_acceptance;
 mod support;
@@ -43,9 +44,14 @@ use {
     krabka_client_producer::{Producer, ProducerRecord},
     krabka_protocol::krabka::barrier::{
         AlterBarrierGroupsRequest, AlterableBarrierGroup, CUT_STATUS_COMPLETE,
-        TriggerBarrierRequest,
+        DescribeBarrierGroupsRequest, TriggerBarrierRequest,
     },
-    std::collections::BTreeMap,
+    std::{
+        collections::BTreeMap,
+        slice,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
 const TOPIC: &str = "barrier-invisibility";
@@ -72,7 +78,7 @@ async fn produce_round(producer: &Producer, round: i32) {
             let value = value_of(partition, round * RECORDS_PER_ROUND + index);
             producer
                 .send(ProducerRecord {
-                    topic: TOPIC.to_string(),
+                    topic: TOPIC.to_owned(),
                     partition: Some(partition),
                     key: None,
                     value: Some(value.into_bytes().into()),
@@ -92,20 +98,20 @@ async fn produce_round(producer: &Producer, round: i32) {
 /// sent too early is refused with `COORDINATOR_NOT_AVAILABLE`. Waiting is what
 /// keeps this suite from depending on that timing.
 async fn wait_for_coordinator(client: &Client) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_mins(1);
+    let deadline = Instant::now() + Duration::from_mins(1);
     loop {
         let answered = client
-            .send(krabka_protocol::krabka::barrier::DescribeBarrierGroupsRequest::default())
+            .send(DescribeBarrierGroupsRequest::default())
             .await
             .is_ok();
         if answered {
             return;
         }
         assert!(
-            std::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "the barrier coordinator never became available"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -114,8 +120,8 @@ async fn create_barrier_group(client: &Client) {
     let response = client
         .send(AlterBarrierGroupsRequest {
             groups: vec![AlterableBarrierGroup {
-                group: BARRIER_GROUP.to_string(),
-                topics: vec![TOPIC.to_string()],
+                group: BARRIER_GROUP.to_owned(),
+                topics: vec![TOPIC.to_owned()],
                 // Manual only. The test drives every injection itself, so a
                 // scheduled one cannot add a marker mid-assertion.
                 interval_ms: -1,
@@ -140,7 +146,7 @@ async fn create_barrier_group(client: &Client) {
 async fn inject_cut(client: &Client) -> BTreeMap<i32, i64> {
     let response = client
         .send(TriggerBarrierRequest {
-            group: BARRIER_GROUP.to_string(),
+            group: BARRIER_GROUP.to_owned(),
             timeout_ms: 30_000,
             ..TriggerBarrierRequest::default()
         })
@@ -240,15 +246,15 @@ async fn a_jvm_consumer_reads_across_barrier_markers_unchanged() {
     .await;
     // Despite the name, this accessor is broker 0 over loopback: the host-side
     // clients use it, and only the containers use the advertised name.
-    let bootstrap = rlmm_broker0_advertised().to_string();
+    let bootstrap = rlmm_broker0_advertised().to_owned();
 
-    let mut admin = AdminClient::connect(std::slice::from_ref(&bootstrap))
+    let mut admin = AdminClient::connect(slice::from_ref(&bootstrap))
         .await
         .expect("admin connect");
     admin
         .create_topics(
             &[CreateTopicSpec {
-                name: TOPIC.to_string(),
+                name: TOPIC.to_owned(),
                 partitions: PARTITIONS,
                 replicas: 1,
                 configs: BTreeMap::default(),

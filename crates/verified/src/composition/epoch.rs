@@ -72,8 +72,9 @@ pub(super) fn validated_epochs_bound_truncated_fetch(
             && entries@[j].start_offset.0@ < entries@[k].start_offset.0@)]
     #[variant(entries@.len() - i@)]
     while i < entries.len() {
-        let epoch = entries[i].epoch.0;
-        let start = entries[i].start_offset.0;
+        let entry = entries.get(i).ok_or(())?;
+        let epoch = entry.epoch.0;
+        let start = entry.start_offset.0;
         if !restore_leader_epoch_entry_valid(previous, epoch, start, segment_base, w.log_end) {
             return Err(());
         }

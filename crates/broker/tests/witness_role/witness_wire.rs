@@ -30,7 +30,7 @@ use {
 };
 
 /// Create `TOPIC` with one partition and rf=3, and return its id.
-pub(crate) async fn create_topic(client: &Client) -> WireUuid {
+pub async fn create_topic(client: &Client) -> WireUuid {
     create_replicated_topic(client, TOPIC).await
 }
 
@@ -49,11 +49,7 @@ fn produce_request(topic_id: WireUuid, n: i32) -> ProduceRequest {
 /// The whole response to an `acks=all` produce of `n` records. The KIP-951
 /// assertions read `node_endpoints` off it, which the partition-level
 /// [`produce_error`] cannot carry.
-pub(crate) async fn produce_response(
-    client: &Client,
-    topic_id: WireUuid,
-    n: i32,
-) -> ProduceResponse {
+pub async fn produce_response(client: &Client, topic_id: WireUuid, n: i32) -> ProduceResponse {
     client
         .send(produce_request(topic_id, n))
         .await
@@ -61,12 +57,12 @@ pub(crate) async fn produce_response(
 }
 
 /// The partition-level error code of an `acks=all` produce of `n` records.
-pub(crate) async fn produce_error(client: &Client, topic_id: WireUuid, n: i32) -> i16 {
+pub async fn produce_error(client: &Client, topic_id: WireUuid, n: i32) -> i16 {
     produce_response(client, topic_id, n).await.responses[0].partition_responses[0].error_code
 }
 
 /// A consumer `Fetch` (`replica_id` = -1) carrying `rack`.
-pub(crate) fn consumer_fetch(topic_id: WireUuid, rack: &str) -> FetchRequest {
+pub fn consumer_fetch(topic_id: WireUuid, rack: &str) -> FetchRequest {
     FetchRequest {
         replica_id: -1,
         max_wait_ms: 800,
@@ -74,7 +70,7 @@ pub(crate) fn consumer_fetch(topic_id: WireUuid, rack: &str) -> FetchRequest {
         max_bytes: 10_485_760,
         session_id: 0,
         session_epoch: -1, // sessionless full fetch
-        rack_id: rack.to_string(),
+        rack_id: rack.to_owned(),
         topics: vec![fetch_topic_row(TOPIC, topic_id, vec![FetchPartition {
             partition: 0,
             fetch_offset: 0,
@@ -88,7 +84,7 @@ pub(crate) fn consumer_fetch(topic_id: WireUuid, rack: &str) -> FetchRequest {
 
 /// The metadata a Kafka admin tool renders for one partition, as one value.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct PartitionView {
+pub struct PartitionView {
     pub(crate) error_code: i16,
     pub(crate) partition_index: i32,
     pub(crate) leader_id: i32,
@@ -97,7 +93,7 @@ pub(crate) struct PartitionView {
     pub(crate) offline_replicas: Vec<i32>,
 }
 
-pub(crate) async fn partition_view(client: &Client) -> PartitionView {
+pub async fn partition_view(client: &Client) -> PartitionView {
     let resp = client
         .send(named_topic_metadata(TOPIC))
         .await

@@ -35,6 +35,7 @@
 //! ```text
 //! cargo test -p krabka-broker --test jvm_deliver_at_time -- --ignored --nocapture
 //! ```
+#![cfg(test)]
 
 mod jvm_acceptance;
 mod support;
@@ -48,6 +49,7 @@ use {
     krabka_broker::BrokerHandle,
     krabka_log::DeliveryPolicy,
     std::{io::Write as _, process::Stdio},
+    tokio::task,
 };
 
 const SCHEDULED_TOPIC: &str = "jvm-deliver-at-time-scheduled";
@@ -290,7 +292,7 @@ async fn a_stock_jvm_client_schedules_and_waits_with_no_change() {
     wait_for_delivery_policy(&broker, SCHEDULED_TOPIC, DeliveryPolicy::Scheduled).await;
     wait_for_delivery_policy(&broker, IMMEDIATE_TOPIC, DeliveryPolicy::Immediate).await;
 
-    let stdout = tokio::task::spawn_blocking(move || run_probe(bootstrap))
+    let stdout = task::spawn_blocking(move || run_probe(bootstrap))
         .await
         .expect("the probe task finishes");
 
@@ -319,7 +321,7 @@ async fn a_stock_jvm_client_schedules_and_waits_with_no_change() {
 
     // The same record, through the tool an operator would reach for, with no
     // property set on it at all.
-    let served = tokio::task::spawn_blocking(move || jvm_console_consume(bootstrap))
+    let served = task::spawn_blocking(move || jvm_console_consume(bootstrap))
         .await
         .expect("the console-consumer task finishes");
     check!(served == vec![PAYLOAD.to_owned()]);

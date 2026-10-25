@@ -224,7 +224,7 @@ async fn offline_dir_empty_isr_defers_offset_aware_strategies_to_urm(
     let plan = scan_offline_dir(&img, 1, bad, &[3]).await;
     assert2::assert!(plan.changes.is_empty(), "{name}: {:?}", plan.changes);
     assert2::assert!(
-        plan.recoveries == vec![("t".to_string(), 0, strategy)],
+        plan.recoveries == vec![("t".to_owned(), 0, strategy)],
         "{name}: {:?}",
         plan.recoveries
     );

@@ -27,12 +27,15 @@ use {
         create_acls_request::CreateAclsRequest,
         create_delegation_token_request::CreateDelegationTokenRequest,
         create_partitions_request::CreatePartitionsRequest,
-        create_topics_request::CreateTopicsRequest, delete_acls_request::DeleteAclsRequest,
-        delete_topics_request::DeleteTopicsRequest, describe_acls_request::DescribeAclsRequest,
+        create_topics_request::CreateTopicsRequest,
+        delete_acls_request::DeleteAclsRequest,
+        delete_topics_request::DeleteTopicsRequest,
+        describe_acls_request::DescribeAclsRequest,
         describe_configs_request::DescribeConfigsRequest,
         describe_delegation_token_request::DescribeDelegationTokenRequest,
         describe_user_scram_credentials_request::DescribeUserScramCredentialsRequest,
-        elect_leaders_request::ElectLeadersRequest, envelope_request::EnvelopeRequest,
+        elect_leaders_request::ElectLeadersRequest,
+        envelope_request::{API_KEY, EnvelopeRequest},
         expire_delegation_token_request::ExpireDelegationTokenRequest,
         incremental_alter_configs_request::IncrementalAlterConfigsRequest,
         list_partition_reassignments_request::ListPartitionReassignmentsRequest,
@@ -45,20 +48,23 @@ use {
         ControllerAdminRequest, ControllerAdminResponse, ControllerAdminRouteFuture,
         ControllerAdminRouter, ControllerApiVersion, RaftError,
     },
-    std::sync::{Arc, Weak},
+    std::{
+        net::SocketAddr,
+        sync::{Arc, Weak},
+    },
     tokio::sync::watch,
 };
 
 /// `Envelope`'s api key. KIP-590 forwarding is the one controller-listener API
 /// whose payload is another API's request, so it does not go through the
 /// registry lookup the rest of [`SUPPORTED_APIS`] shares.
-const ENVELOPE_API_KEY: ApiKeyCode = krabka_protocol::owned::envelope_request::API_KEY;
+const ENVELOPE_API_KEY: ApiKeyCode = API_KEY;
 
 /// The `RequestContext::connection_id` of every request this router hands a
 /// broker handler, whether it arrived on the controller listener directly or
 /// inside an `Envelope`. A handler that answers differently on the controller
 /// listener, as Kafka's `ControllerApis` does, reads it.
-pub(crate) const CONTROLLER_ADMIN_CONNECTION_ID: &str = "controller-admin";
+pub const CONTROLLER_ADMIN_CONNECTION_ID: &str = "controller-admin";
 
 /// The Kafka 4.x controller-listener surface, in `api_key` order.
 ///
@@ -136,7 +142,7 @@ const SUPPORTED_APIS: &[ControllerApiVersion] = &[
 /// Late-bound bridge from the controller, which starts before the broker, to
 /// the broker's single Admin handler registry. The weak pointer avoids a
 /// controller -> router -> broker -> controller ownership cycle.
-pub(crate) struct BrokerControllerAdminRouter {
+pub struct BrokerControllerAdminRouter {
     /// The broker, once bound. A watch rather than a cell, so a task can wait
     /// for the bind without keeping the router alive.
     broker: watch::Sender<Option<Weak<Broker>>>,
@@ -267,7 +273,7 @@ struct Invocation<'a> {
     /// The address the handler authorizes and audits against. For a forwarded
     /// request this is the *client's* address, out of
     /// `EnvelopeRequest.client_host_address`, not the forwarding hop's.
-    peer: &'a std::net::SocketAddr,
+    peer: &'a SocketAddr,
     /// The identity the handler authorizes against. For a forwarded request
     /// this is the *client's* principal, not the forwarding hop's.
     principal: &'a krabka_security::Principal,
@@ -281,7 +287,7 @@ struct Invocation<'a> {
 /// forwarded `IncrementalAlterConfigs` runs the same handler, under the same
 /// `RequestContext`, as one that arrived unwrapped.
 async fn invoke_registered_handler(
-    broker: &std::sync::Arc<Broker>,
+    broker: &Arc<Broker>,
     invocation: Invocation<'_>,
 ) -> Result<Bytes, BrokerError> {
     let Invocation {
@@ -348,7 +354,7 @@ async fn invoke_registered_handler(
 /// is a broker fault, not a protocol one — escapes as a `RaftError`, and that
 /// closes the connection, matching every other controller-admin API here.
 async fn serve_envelope(
-    broker: &std::sync::Arc<Broker>,
+    broker: &Arc<Broker>,
     request: &ControllerAdminRequest,
     outer: &krabka_security::Principal,
 ) -> Result<Bytes, RaftError> {
@@ -412,7 +418,7 @@ struct Unwrapped {
     /// inner `RequestContext` holds an `InetAddress` — so the port is zero
     /// and only [`std::net::SocketAddr::ip`] is meaningful, which is all any
     /// host ACL or audit record reads.
-    client_host: std::net::SocketAddr,
+    client_host: SocketAddr,
     /// Whether that client authenticated with a delegation token.
     token_authenticated: bool,
 }
@@ -488,7 +494,7 @@ fn unwrap_envelope(
             auth_method: outer.auth_method,
             groups: Vec::new(),
         },
-        client_host: std::net::SocketAddr::new(client_host, 0),
+        client_host: SocketAddr::new(client_host, 0),
         token_authenticated: forwarded_principal.token_authenticated,
     })
 }
@@ -496,8 +502,16 @@ fn unwrap_envelope(
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::test_support::start_controller, assert2::check, bytes::Bytes,
+        super::*,
+        crate::test_support::start_controller,
+        assert2::check,
+        bytes::Bytes,
+        krabka_protocol::owned::{
+            assign_replicas_to_dirs_request,
+            assign_replicas_to_dirs_response::AssignReplicasToDirsResponse,
+        },
         std::collections::BTreeSet,
+        tokio::task,
     };
 
     /// The Kafka 4.x controller-listener set, as a live
@@ -581,7 +595,7 @@ mod tests {
         let (handle, _controller_addr, _dir) = start_controller().await;
         let router = BrokerControllerAdminRouter::new();
         let bound = tokio::spawn(router.bound());
-        tokio::task::yield_now().await;
+        task::yield_now().await;
         check!(!bound.is_finished());
 
         check!(router.bind(handle.broker_for_test()).is_ok());
@@ -637,8 +651,8 @@ mod tests {
         let router = BrokerControllerAdminRouter::new();
         router.bind(handle.broker_for_test()).expect("bind once");
 
-        let api_key = krabka_protocol::owned::assign_replicas_to_dirs_request::API_KEY;
-        let api_version = krabka_protocol::owned::assign_replicas_to_dirs_request::MAX_VERSION;
+        let api_key = assign_replicas_to_dirs_request::API_KEY;
+        let api_version = assign_replicas_to_dirs_request::MAX_VERSION;
         let broker_epoch = handle
             .broker_arc_for_test()
             .controller
@@ -646,7 +660,7 @@ mod tests {
             .broker_epoch(krabka_raft::NodeId(1))
             .expect("broker 1 is self-registered");
         let mut body = bytes::BytesMut::new();
-        krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest {
+        AssignReplicasToDirsRequest {
             broker_id: 1,
             broker_epoch,
             directories: Vec::new(),
@@ -665,17 +679,11 @@ mod tests {
             .expect("a routed key answers with a body");
 
         let mut cursor = answer.body.clone();
-        let decoded = krabka_protocol::owned::assign_replicas_to_dirs_response::AssignReplicasToDirsResponse::decode(
-            &mut cursor,
-            api_version,
-        )
-        .expect("decode the routed response");
+        let decoded = AssignReplicasToDirsResponse::decode(&mut cursor, api_version)
+            .expect("decode the routed response");
 
         check!(answer.flexible);
-        check!(
-            decoded
-                == krabka_protocol::owned::assign_replicas_to_dirs_response::AssignReplicasToDirsResponse::default()
-        );
+        check!(decoded == AssignReplicasToDirsResponse::default());
         handle.shutdown().await;
     }
 }

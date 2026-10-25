@@ -67,7 +67,7 @@ pub(super) fn unusable_because(
 /// this count and the list length agree on every record the handler wrote. The
 /// count is over distinct principals anyway, because the rule the feature
 /// promises is a rule about people and not about rows.
-pub(crate) fn distinct_approvers(proposal: &BreakGlassProposalRecord) -> usize {
+pub fn distinct_approvers(proposal: &BreakGlassProposalRecord) -> usize {
     let mut seen: Vec<&str> = Vec::with_capacity(proposal.approvals.len());
     for approval in &proposal.approvals {
         if !seen.contains(&approval.principal.as_str()) {

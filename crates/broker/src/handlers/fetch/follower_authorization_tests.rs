@@ -115,7 +115,7 @@ enum Sender {
     RackAwareConsumer,
 }
 
-use crate::test_support::KafkaErrorCode;
+use {crate::test_support::KafkaErrorCode, krabka_protocol::owned::fetch_request::MAX_VERSION};
 
 #[derive(derive_more::From, derive_more::Into, Debug, Clone, Copy)]
 struct FetchApiVersion(i16);
@@ -354,7 +354,7 @@ fn expected(case: Case, label: String, topic: TopicRef<'_>, batch: RecordBatch) 
 
 #[tokio::test]
 async fn follower_fetch_needs_cluster_action() {
-    let max_version = krabka_protocol::owned::fetch_request::MAX_VERSION;
+    let max_version = MAX_VERSION;
     let mut cases = Vec::new();
     for version in [FetchApiVersion(12), FetchApiVersion(max_version)] {
         cases.extend([

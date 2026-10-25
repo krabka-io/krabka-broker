@@ -9,7 +9,7 @@
 use {
     crate::error::BrokerError,
     krabka_kraft_core::NodeId,
-    std::{fs, io::Write as _},
+    std::{fs, io::Write as _, path::Path},
 };
 
 pub(super) const QUORUM_STATE_FILE: &str = "quorum-state.json";
@@ -76,7 +76,7 @@ fn decode_quorum_membership(
 }
 
 pub(super) fn load_or_prepare_quorum_membership(
-    root: &std::path::Path,
+    root: &Path,
     voter_ids: &[NodeId],
 ) -> Result<bool, BrokerError> {
     fs::create_dir_all(root)?;
@@ -116,7 +116,7 @@ pub(super) fn load_or_prepare_quorum_membership(
 }
 
 pub(super) fn persist_quorum_membership(
-    root: &std::path::Path,
+    root: &Path,
     voter_ids: &[NodeId],
 ) -> Result<(), BrokerError> {
     let path = root.join(QUORUM_STATE_FILE);
@@ -164,8 +164,11 @@ pub(super) fn persist_quorum_membership(
     Ok(())
 }
 
-fn restore_membership_backup(backup: &std::path::Path, path: &std::path::Path) {
-    if let (Ok(true), Ok(false)) = (backup.try_exists(), path.try_exists()) {
+fn restore_membership_backup(backup: &Path, path: &Path) {
+    if matches!(
+        (backup.try_exists(), path.try_exists()),
+        (Ok(true), Ok(false))
+    ) {
         let _ = fs::rename(backup, path);
     }
 }

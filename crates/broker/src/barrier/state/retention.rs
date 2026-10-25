@@ -13,7 +13,7 @@
 /// that reduced `retained_cuts` drops more than one epoch at once. A
 /// `retained_cuts` that is not positive drops nothing, and
 /// [`crate::barrier::coordinator::validate_spec`] rejects such a value.
-pub(crate) fn expired_cut_epochs(published: i64, retained_cuts: i32, held: &[i64]) -> Vec<i64> {
+pub fn expired_cut_epochs(published: i64, retained_cuts: i32, held: &[i64]) -> Vec<i64> {
     held.iter()
         .copied()
         .filter(|epoch| krabka_verified::barrier_cut_expired(published, retained_cuts, *epoch))

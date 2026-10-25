@@ -19,6 +19,11 @@ use {
     assert2::check,
     krabka_ids::Offset,
     krabka_remote_storage::{RlmmCacheDump, TopicIdPartition},
+    std::{
+        fs,
+        io::ErrorKind,
+        path::{Path, PathBuf},
+    },
 };
 
 /// One segment as the snapshot records it.
@@ -87,7 +92,7 @@ fn partition_dump(
 /// Write a snapshot at `path` that holds the one [`partition_dump`].
 #[bon::builder]
 fn snapshot_of(
-    path: &std::path::Path,
+    path: &Path,
     #[builder(default = "orders")] topic: &'_ str,
     #[builder(default = Uuid :: from_u128 (1))] topic_id: Uuid,
     #[builder(default)] segments: &'_ [SnapshotSegmentEntry],
@@ -111,7 +116,7 @@ fn snapshot_of(
 /// A temporary directory and the path of a snapshot file inside it.
 struct SnapshotLocation {
     dir: tempfile::TempDir,
-    path: std::path::PathBuf,
+    path: PathBuf,
 }
 
 fn snapshot_directory() -> SnapshotLocation {
@@ -173,7 +178,7 @@ fn two_segment_archive() -> TwoSegmentArchive {
 struct TwoSegmentSnapshot {
     archive: tempfile::TempDir,
     snapshot_dir: tempfile::TempDir,
-    snapshot: std::path::PathBuf,
+    snapshot: PathBuf,
     first: Uuid,
 }
 
@@ -213,7 +218,7 @@ fn two_segment_snapshot(second_state: RemoteLogSegmentState) -> TwoSegmentSnapsh
 /// A one-segment archive whose snapshot sits inside it, with the arguments that authenticate the restore.
 struct AuthenticatedSnapshot {
     archive: tempfile::TempDir,
-    snapshot: std::path::PathBuf,
+    snapshot: PathBuf,
     args: RestoreArgs,
 }
 
@@ -247,8 +252,8 @@ fn authenticated_snapshot(state: RemoteLogSegmentState) -> AuthenticatedSnapshot
 }
 
 async fn snapshot_inventory(
-    archive: &std::path::Path,
-    snapshot: &std::path::Path,
+    archive: &Path,
+    snapshot: &Path,
 ) -> Result<ArchiveInventory, RestoreError> {
     let args = args_from(archive, &[
         "--rlmm-snapshot",
@@ -258,15 +263,12 @@ async fn snapshot_inventory(
     inventory(&store, &args).await
 }
 
-async fn expect_metadata_disagreement(archive: &std::path::Path, snapshot: &std::path::Path) {
+async fn expect_metadata_disagreement(archive: &Path, snapshot: &Path) {
     let error = snapshot_inventory(archive, snapshot).await.unwrap_err();
     check!(matches!(error, RestoreError::MetadataDisagreement { .. }));
 }
 
-async fn sole_partition_inventory(
-    archive: &std::path::Path,
-    snapshot: &std::path::Path,
-) -> PartitionInventory {
+async fn sole_partition_inventory(archive: &Path, snapshot: &Path) -> PartitionInventory {
     let mut result = snapshot_inventory(archive, snapshot)
         .await
         .expect("inventory");
@@ -333,7 +335,7 @@ async fn authenticated_rlmm_excludes_objects_retained_after_completed_deletion()
     let mut result = inventory(&store, &args).await.expect("inventory");
 
     let authenticated_snapshot = load_snapshot(&snap_path).expect("snapshot");
-    std::fs::write(&snap_path, b"changed after authentication").expect("change source path");
+    fs::write(&snap_path, b"changed after authentication").expect("change source path");
     reconcile_authenticated_snapshot(&mut result.partitions, &args, &authenticated_snapshot)
         .expect("authenticated reconciliation");
     check!(result.partitions.is_empty());
@@ -567,7 +569,7 @@ async fn a_missing_snapshot_file_is_reported_as_io_not_found() {
     let err = inventory_error(&args).await;
     check!(matches!(
         err,
-        RestoreError::Io(io_error) if io_error.kind() == std::io::ErrorKind::NotFound
+        RestoreError::Io(io_error) if io_error.kind() == ErrorKind::NotFound
     ));
 }
 
@@ -657,13 +659,13 @@ async fn maximum_offset_reconciliation_is_stable_across_retry() {
 async fn a_corrupt_snapshot_file_is_reported_as_io_invalid_data() {
     let archive = tempfile::tempdir().expect("temp dir");
     let snap_path = archive.path().join("snapshot");
-    std::fs::write(&snap_path, b"not an RLMM snapshot").expect("write corrupt snapshot");
+    fs::write(&snap_path, b"not an RLMM snapshot").expect("write corrupt snapshot");
 
     let err = snapshot_inventory(archive.path(), &snap_path)
         .await
         .unwrap_err();
     check!(matches!(
         err,
-        RestoreError::Io(io_error) if io_error.kind() == std::io::ErrorKind::InvalidData
+        RestoreError::Io(io_error) if io_error.kind() == ErrorKind::InvalidData
     ));
 }

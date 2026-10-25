@@ -14,13 +14,15 @@ use {
         metrics_server::run,
         profiling_server,
     },
+    krabka_telemetry::profiling::ProfilingError,
     krabka_units::convert::TimeExt as _,
-    std::sync::Arc,
+    std::{net::SocketAddr, sync::Arc},
+    tokio::time,
     tokio_util::sync::CancellationToken,
 };
 
 pub(super) struct ObservabilityStartup {
-    pub(super) metrics_bound_addr: Option<std::net::SocketAddr>,
+    pub(super) metrics_bound_addr: Option<SocketAddr>,
     pub(super) client_metrics: Arc<ClientMetrics>,
 }
 
@@ -58,12 +60,10 @@ pub(super) async fn start_observability(
         )
         .await
         .map_err(|error| match error {
-            krabka_telemetry::profiling::ProfilingError::Io(error) => {
+            ProfilingError::Io(error) => {
                 BrokerError::listener_bind("profiling", address, "--profiling-listen-addr")(error)
             }
-            krabka_telemetry::profiling::ProfilingError::Config(error) => {
-                BrokerError::InvalidRuntimeConfig(error)
-            }
+            ProfilingError::Config(error) => BrokerError::InvalidRuntimeConfig(error),
         })?;
     }
     let client_metrics = Arc::new(ClientMetrics::new(
@@ -82,16 +82,16 @@ pub(super) async fn start_observability(
         .registry
         .lock()
         .await
-        .register_collector(Box::new(SharedClientMetricsCollector(
-            client_metrics.prometheus.clone(),
-        )));
+        .register_collector(Box::new(SharedClientMetricsCollector(Arc::clone(
+            &client_metrics.prometheus,
+        ))));
     let eviction_metrics = Arc::clone(&client_metrics);
     let eviction_shutdown = shutdown.child_token();
     let eviction_tick = config.client_metrics_eviction_tick;
     let stale_push_intervals = config.client_metrics_stale_push_intervals;
     let stale_floor = config.client_metrics_stale_floor;
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(eviction_tick.to_std());
+        let mut tick = time::interval(eviction_tick.to_std());
         loop {
             tokio::select! {
                 () = eviction_shutdown.cancelled() => return,
@@ -108,11 +108,16 @@ pub(super) async fn start_observability(
     })
 }
 
-#[cfg(all(test, not(target_family = "wasm")))]
+#[cfg(test)]
+#[cfg(not(target_family = "wasm"))]
 mod tests {
-    use {super::*, assert2::assert};
+    use {
+        super::*,
+        assert2::assert,
+        std::{fs, path::PathBuf},
+    };
 
-    fn profiling_config(token_file: std::path::PathBuf) -> BrokerConfig {
+    fn profiling_config(token_file: PathBuf) -> BrokerConfig {
         BrokerConfig {
             profiling_listen_addr: Some("127.0.0.1:0".parse().unwrap()),
             profiling_auth_token_file: Some(token_file),
@@ -124,7 +129,7 @@ mod tests {
     async fn an_enabled_profiling_listener_starts_with_observability() {
         let dir = tempfile::tempdir().unwrap();
         let token_file = dir.path().join("token");
-        std::fs::write(&token_file, "secret").unwrap();
+        fs::write(&token_file, "secret").unwrap();
         let shutdown = CancellationToken::new();
         let started = start_observability(
             &profiling_config(token_file),
@@ -140,7 +145,7 @@ mod tests {
     async fn profiling_startup_failures_name_their_cause() {
         let dir = tempfile::tempdir().unwrap();
         let token_file = dir.path().join("token");
-        std::fs::write(&token_file, "secret").unwrap();
+        fs::write(&token_file, "secret").unwrap();
         let mut invalid_policy = profiling_config(token_file);
         invalid_policy.profiling.profiling_cpu_default_duration = krabka_units::secs(61);
         let missing_token = profiling_config(dir.path().join("missing"));

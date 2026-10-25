@@ -16,6 +16,7 @@ use {
         },
     },
     assert2::assert,
+    krabka_broker::codes,
 };
 
 /// A 3-broker PLAINTEXT cluster with an rf=2 topic where `replicas = [1, 2]`.
@@ -121,7 +122,7 @@ async fn preferred_election_via_wire_returns_success() {
         .addr(elect_addr)
         .client_id(CLIENT_ID)
         .election(ElectionSetup {
-            topic: ("foo-preferred").to_string(),
+            topic: ("foo-preferred").to_owned(),
             ..Default::default()
         })
         .call()
@@ -183,13 +184,13 @@ async fn electing_every_partition_omits_the_ones_already_on_their_preferred_lead
         .addr(broker1_addr)
         .client_id(CLIENT_ID)
         .election(ElectionSetup {
-            topic: ("foo-all-partitions").to_string(),
+            topic: ("foo-all-partitions").to_owned(),
             ..Default::default()
         })
         .call()
         .await;
     assert!(
-        named == vec![(0, krabka_broker::codes::ELECTION_NOT_NEEDED)],
+        named == vec![(0, codes::ELECTION_NOT_NEEDED)],
         "a named partition must still report ELECTION_NOT_NEEDED, got {named:?}"
     );
 }

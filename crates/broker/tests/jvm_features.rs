@@ -18,10 +18,21 @@
 //! Gated `#[ignore]` (requires Docker); run with `--ignored`. Binds host port
 //! 9092, so it must not run concurrently with `jvm_acceptance` (single test
 //! here keeps it self-contained).
+#![cfg(test)]
 
 mod support;
 
-use {assert2::assert, krabka_broker::BrokerHandle, std::process::Command};
+use {
+    assert2::assert,
+    krabka_broker::BrokerHandle,
+    std::{
+        fs,
+        process::{Command, Output},
+        sync::OnceLock,
+        time::Duration,
+    },
+    tokio::time,
+};
 
 /// Ports for this test process, allocated once rather than fixed at 9092.
 ///
@@ -37,7 +48,7 @@ fn controller_listen() -> &'static str { &support::jvm_listeners().controller }
 
 /// The controller as the containers address it.
 fn controller_bootstrap() -> &'static str {
-    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    static V: OnceLock<String> = OnceLock::new();
     V.get_or_init(|| controller_listen().replace("0.0.0.0", "host.docker.internal"))
 }
 
@@ -54,7 +65,7 @@ fn controller_port() -> u16 {
 
 /// A second controller port, for the node that joins the quorum.
 fn joiner_controller() -> &'static str {
-    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    static V: OnceLock<String> = OnceLock::new();
     V.get_or_init(|| format!("host.docker.internal:{}", support::free_port()))
 }
 /// Kafka 4.3.1 is the compatibility oracle for KIP-853 and KIP-1186.
@@ -78,7 +89,7 @@ async fn start_host_broker() -> StartedBroker {
     let (handle, dir) = support::start_jvm_single("krabka_broker=info,warn", |config| {
         config.directory_id = DIRECTORY_ID;
         config.controller_quorum_voters =
-            vec![(krabka_broker::NodeId(1), controller_bootstrap().to_string())];
+            vec![(krabka_broker::NodeId(1), controller_bootstrap().to_owned())];
     })
     .await;
     StartedBroker { handle, dir }
@@ -120,7 +131,7 @@ async fn start_host_observer() -> StartedObserver {
 
 /// Run `kafka-features <args>` from the Kafka oracle container that can
 /// reach the host broker via `--add-host=host.docker.internal:host-gateway`.
-fn kafka_features(args: &[&str]) -> std::process::Output {
+fn kafka_features(args: &[&str]) -> Output {
     let mut full: Vec<&str> = vec![
         "run",
         "--rm",
@@ -145,7 +156,7 @@ fn kafka_features(args: &[&str]) -> std::process::Output {
 }
 
 /// Run `kafka-metadata-quorum <args>` against the controller listener.
-fn kafka_metadata_quorum(args: &[&str]) -> std::process::Output {
+fn kafka_metadata_quorum(args: &[&str]) -> Output {
     let mut full: Vec<&str> = vec![
         "run",
         "--rm",
@@ -171,10 +182,10 @@ fn kafka_metadata_quorum(args: &[&str]) -> std::process::Output {
 
 /// Run Kafka 4.3.1's `add-controller` with a real controller properties file
 /// and Kafka-compatible `meta.properties` for node 2.
-fn kafka_add_controller() -> std::process::Output {
+fn kafka_add_controller() -> Output {
     let mount_dir = tempfile::tempdir().expect("controller command config dir");
     let metadata_dir = mount_dir.path().join("metadata");
-    std::fs::create_dir(&metadata_dir).expect("create metadata dir");
+    fs::create_dir(&metadata_dir).expect("create metadata dir");
     let joiner = joiner_controller();
     let quorum = controller_bootstrap();
     let properties = format!(
@@ -187,8 +198,8 @@ fn kafka_add_controller() -> std::process::Output {
          log.dirs=/tmp/kraft-controller-2\n"
     );
     let properties_path = mount_dir.path().join("controller.properties");
-    std::fs::write(&properties_path, properties).expect("write controller properties");
-    std::fs::write(
+    fs::write(&properties_path, properties).expect("write controller properties");
+    fs::write(
         metadata_dir.join("meta.properties"),
         format!(
             "version=1\ncluster.id=AAAAAAAAAAAAAAAAAAAAAA\nnode.id=2\ndirectory.id={JOINER_DIRECTORY_ID_BASE64}\n"
@@ -200,7 +211,7 @@ fn kafka_add_controller() -> std::process::Output {
         properties_path.display()
     );
     let metadata_mount = format!("{}:/tmp/kraft-controller-2", metadata_dir.display());
-    let output = std::process::Command::new("docker")
+    let output = Command::new("docker")
         .args([
             "run",
             "--rm",
@@ -310,8 +321,8 @@ async fn kafka_features_describe_and_round_trip() {
         handle: observer,
         dir: _observer_dir,
     } = start_host_observer().await;
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
+    time::timeout(
+        Duration::from_secs(30),
         observer
             .watch_image()
             .wait_for(|image| image.kraft_version() == 1),
@@ -328,8 +339,8 @@ async fn kafka_features_describe_and_round_trip() {
     handle
         .wait_for_image(|image| image.voters().len() == 2)
         .await;
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
+    time::timeout(
+        Duration::from_secs(30),
         observer
             .watch_image()
             .wait_for(|image| image.voters().len() == 2),

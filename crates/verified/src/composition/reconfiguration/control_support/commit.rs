@@ -35,7 +35,7 @@ use super::*;
             && common_prefix_reported(old@, reports@, next@, common, end@),
     },
 })]
-pub(crate) fn reconfiguration_control_commit_waiter(
+pub fn reconfiguration_control_commit_waiter(
     old: &[u64],
     state: ReconfigurationState,
     request: VoterChangeRequest,
@@ -60,7 +60,7 @@ pub(crate) fn reconfiguration_control_commit_waiter(
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==> offsets@[j]@ == base@ + j)]
     #[variant(deltas@.len() - i@)]
     while i < deltas.len() {
-        offsets.push(base + i64::from(deltas[i]));
+        offsets.push(base + i64::from(*deltas.get(i)?));
         i += 1;
     }
     let prefix = control_history_frontier(&offsets, hwm);
@@ -76,8 +76,9 @@ pub(crate) fn reconfiguration_control_commit_waiter(
         && rows@[j].2 == (j < prefix@) && rows@[j].2 == (rows@[j].0@ < hwm@))]
     #[variant(offsets@.len() - i@)]
     while i < offsets.len() {
-        let committed = in_half_open_window(offsets[i], 0, hwm);
-        rows.push((offsets[i], plan.write_kraft_version && i == 0, committed));
+        let &offset = offsets.get(i)?;
+        let committed = in_half_open_window(offset, 0, hwm);
+        rows.push((offset, plan.write_kraft_version && i == 0, committed));
         i += 1;
     }
     Some((plan, next, rows, Some((end, hwm, prefix, ready, common))))

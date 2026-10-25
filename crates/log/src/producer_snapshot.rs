@@ -1,5 +1,7 @@
 //! Kafka-compatible producer-state snapshot encoding and recovery.
 
+#[cfg(all(test, not(target_os = "wasi")))]
+use std::{cell::RefCell, sync::mpsc};
 use {
     crate::{
         LogError,
@@ -13,6 +15,8 @@ use {
     std::{
         collections::HashMap,
         fs,
+        io::{self, ErrorKind},
+        mem,
         path::{Path, PathBuf},
     },
 };
@@ -26,14 +30,14 @@ type SnapshotState = HashMap<ProducerId, ProducerSnapshotEntry>;
 /// A producer snapshot reloaded from disk: the offset of the file it came from
 /// and the state it held.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct LoadedSnapshot {
+pub struct LoadedSnapshot {
     pub(crate) offset: Offset,
     pub(crate) state: SnapshotState,
 }
 
 /// A `.snapshot` sidecar in a log directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SnapshotFile {
+pub struct SnapshotFile {
     pub(crate) offset: Offset,
     pub(crate) path: PathBuf,
 }
@@ -104,11 +108,9 @@ impl ProducerSnapshotEntry {
     }
 }
 
-pub(crate) fn path(dir: &Path, offset: Offset) -> PathBuf {
-    name::producer_snapshot_path(dir, offset.0)
-}
+pub fn path(dir: &Path, offset: Offset) -> PathBuf { name::producer_snapshot_path(dir, offset.0) }
 
-pub(crate) fn list(dir: &Path) -> Result<Vec<SnapshotFile>, LogError> {
+pub fn list(dir: &Path) -> Result<Vec<SnapshotFile>, LogError> {
     let mut snapshots = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -139,10 +141,7 @@ pub(crate) fn list(dir: &Path) -> Result<Vec<SnapshotFile>, LogError> {
 /// Every snapshot outside `(range.log_start, range.log_end]` is deleted
 /// first. The newest one left is then loaded; a corrupt one is deleted and
 /// the next older one tried, as Kafka's `loadFromSnapshot` does.
-pub(crate) fn reload(
-    dir: &Path,
-    range: ProducerReloadRange,
-) -> Result<Option<LoadedSnapshot>, LogError> {
+pub fn reload(dir: &Path, range: ProducerReloadRange) -> Result<Option<LoadedSnapshot>, LogError> {
     let mut eligible = retain_reload_range(dir, range)?;
     while !eligible.is_empty() {
         let offsets: Vec<i64> = eligible.iter().map(|snapshot| snapshot.offset.0).collect();
@@ -168,7 +167,7 @@ pub(crate) fn reload(
 /// Delete every snapshot Kafka's `truncateAndReload` deletes: those at or
 /// below `range.log_start` and those above `range.log_end`. Returns the
 /// snapshots left, oldest first.
-pub(crate) fn retain_reload_range(
+pub fn retain_reload_range(
     dir: &Path,
     range: ProducerReloadRange,
 ) -> Result<Vec<SnapshotFile>, LogError> {
@@ -186,7 +185,7 @@ pub(crate) fn retain_reload_range(
 /// Delete every snapshot Kafka's `removeStraySnapshots` deletes, given the
 /// base offset of every local segment: each one no segment starts at, except
 /// the newest snapshot when it lies above every segment.
-pub(crate) fn remove_strays(dir: &Path, segment_bases: &[i64]) -> Result<(), LogError> {
+pub fn remove_strays(dir: &Path, segment_bases: &[i64]) -> Result<(), LogError> {
     let snapshots = list(dir)?;
     let offsets: Vec<i64> = snapshots.iter().map(|snapshot| snapshot.offset.0).collect();
     let stray = kernel::producer_snapshot_strays(&offsets, segment_bases);
@@ -200,21 +199,21 @@ pub(crate) fn remove_strays(dir: &Path, segment_bases: &[i64]) -> Result<(), Log
 
 /// Delete the snapshot at a deleted segment's base offset, as Kafka's
 /// `UnifiedLog.deleteProducerSnapshots` does for every segment it deletes.
-pub(crate) fn remove_at(dir: &Path, offset: Offset) -> Result<(), LogError> {
+pub fn remove_at(dir: &Path, offset: Offset) -> Result<(), LogError> {
     match fs::remove_file(path(dir, offset)) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+        Err(error) if error.kind() != ErrorKind::NotFound => Err(error.into()),
         _ => Ok(()),
     }
 }
 
-pub(crate) fn remove_all(dir: &Path) -> Result<(), LogError> {
+pub fn remove_all(dir: &Path) -> Result<(), LogError> {
     for snapshot in list(dir)? {
         fs::remove_file(snapshot.path)?;
     }
     Ok(())
 }
 
-pub(crate) fn write(
+pub fn write(
     io: &dyn LogIo,
     dir: &Path,
     offset: Offset,
@@ -240,7 +239,7 @@ fn write_if_missing(
 
 /// Captured at the roll boundary, before subsequent appends change the state.
 #[derive(Debug)]
-pub(crate) struct PreparedSnapshot {
+pub struct PreparedSnapshot {
     dir: PathBuf,
     offset: Offset,
     bytes: Vec<u8>,
@@ -248,15 +247,13 @@ pub(crate) struct PreparedSnapshot {
 
 #[cfg(all(test, not(target_os = "wasi")))]
 std::thread_local! {
-    static PREPARING: std::cell::RefCell<Option<std::sync::mpsc::Sender<()>>> = const { std::cell::RefCell::new(None) };
+    static PREPARING: RefCell<Option<mpsc::Sender<()>>> = const { RefCell::new(None) };
 }
 
 #[cfg(all(test, not(target_os = "wasi")))]
-pub(crate) fn test_observe_prepare(observer: std::sync::mpsc::Sender<()>) {
-    PREPARING.set(Some(observer));
-}
+pub fn test_observe_prepare(observer: mpsc::Sender<()>) { PREPARING.set(Some(observer)); }
 
-pub(crate) fn prepare(
+pub fn prepare(
     dir: &Path,
     offset: Offset,
     entries: &HashMap<ProducerId, ProducerSnapshotEntry>,
@@ -275,7 +272,7 @@ pub(crate) fn prepare(
 }
 
 impl PreparedSnapshot {
-    pub(crate) fn write(&self, io: &dyn LogIo) -> std::io::Result<PathBuf> {
+    pub(crate) fn write(&self, io: &dyn LogIo) -> io::Result<PathBuf> {
         let destination = path(&self.dir, self.offset);
         if destination.exists() {
             io.sync_dir(&self.dir)?;
@@ -303,11 +300,11 @@ fn encoded_size(entries: usize) -> Result<usize, LogError> {
 }
 
 #[cfg(not(target_os = "wasi"))]
-pub(crate) fn allocation_size(entries: usize) -> Result<usize, LogError> {
+pub fn allocation_size(entries: usize) -> Result<usize, LogError> {
     encoded_size(entries)?
         .checked_add(
             entries
-                .checked_mul(std::mem::size_of::<ProducerSnapshotEntry>())
+                .checked_mul(mem::size_of::<ProducerSnapshotEntry>())
                 .ok_or_else(|| {
                     LogError::InvalidArgument("producer snapshot size overflow".into())
                 })?,
@@ -318,26 +315,28 @@ pub(crate) fn allocation_size(entries: usize) -> Result<usize, LogError> {
 fn encode(entries: &HashMap<ProducerId, ProducerSnapshotEntry>) -> Result<Vec<u8>, LogError> {
     let count = i32::try_from(entries.len())
         .map_err(|_| LogError::InvalidArgument("too many producer snapshot entries".into()))?;
-    let mut buffer = Vec::with_capacity(encoded_size(entries.len())?);
-    buffer.put_i16(VERSION);
-    buffer.put_u32(0);
-    buffer.put_i32(count);
+    let size = encoded_size(entries.len())?;
+    // The count and the entries, which the CRC covers.
+    let mut body = Vec::with_capacity(size - HEADER_LEN);
+    body.put_i32(count);
 
     let mut ordered: Vec<_> = entries.values().copied().collect();
     ordered.sort_unstable_by_key(|entry| entry.producer_id);
     for entry in ordered {
-        buffer.put_i64(entry.producer_id.get());
-        buffer.put_i16(entry.producer_epoch);
-        buffer.put_i32(entry.last_sequence);
-        buffer.put_i64(entry.last_offset.0);
-        buffer.put_i32(entry.offset_delta);
-        buffer.put_i64(entry.timestamp);
-        buffer.put_i32(entry.coordinator_epoch);
-        buffer.put_i64(entry.current_txn_first_offset.map_or(-1, |offset| offset.0));
+        body.put_i64(entry.producer_id.get());
+        body.put_i16(entry.producer_epoch);
+        body.put_i32(entry.last_sequence);
+        body.put_i64(entry.last_offset.0);
+        body.put_i32(entry.offset_delta);
+        body.put_i64(entry.timestamp);
+        body.put_i32(entry.coordinator_epoch);
+        body.put_i64(entry.current_txn_first_offset.map_or(-1, |offset| offset.0));
     }
 
-    let crc = crc32c(&buffer[HEADER_LEN..]);
-    buffer[2..6].copy_from_slice(&crc.to_be_bytes());
+    let mut buffer = Vec::with_capacity(size);
+    buffer.put_i16(VERSION);
+    buffer.put_u32(crc32c(&body));
+    buffer.put_slice(&body);
     Ok(buffer)
 }
 
@@ -406,53 +405,59 @@ pub fn decode(
     bytes: &[u8],
     snapshot_offset: Offset,
 ) -> Result<HashMap<ProducerId, ProducerSnapshotEntry>, SnapshotDecodeError> {
-    let entries_start = HEADER_LEN + 4;
-    if bytes.len() < entries_start {
+    const ENTRIES_START: usize = HEADER_LEN + 4;
+    let Some(&[v0, v1, c0, c1, c2, c3, n0, n1, n2, n3]) = bytes.first_chunk::<ENTRIES_START>()
+    else {
         return Err(SnapshotDecodeError::ShortHeader {
-            required: entries_start,
+            required: ENTRIES_START,
             available: bytes.len(),
         });
-    }
-    let version = i16::from_be_bytes([bytes[0], bytes[1]]);
+    };
+    let version = i16::from_be_bytes([v0, v1]);
     if version != VERSION {
         return Err(SnapshotDecodeError::UnsupportedVersion { version });
     }
 
-    let count = i32::from_be_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]);
+    let count = i32::from_be_bytes([n0, n1, n2, n3]);
     let count =
         usize::try_from(count).map_err(|_| SnapshotDecodeError::NegativeEntryCount { count })?;
-    let expected = entries_start
+    let expected = ENTRIES_START
         .checked_add(
             count
                 .checked_mul(ENTRY_LEN)
                 .ok_or(SnapshotDecodeError::EntryCountOverflow { count })?,
         )
         .ok_or(SnapshotDecodeError::EntryCountOverflow { count })?;
+    let truncated = SnapshotDecodeError::LengthMismatch {
+        expected,
+        available: bytes.len(),
+    };
     if bytes.len() != expected {
-        return Err(SnapshotDecodeError::LengthMismatch {
-            expected,
-            available: bytes.len(),
-        });
+        return Err(truncated);
     }
 
-    let stored = u32::from_be_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]);
-    let computed = crc32c(&bytes[HEADER_LEN..]);
+    let stored = u32::from_be_bytes([c0, c1, c2, c3]);
+    let computed = crc32c(bytes.get(HEADER_LEN..).ok_or(truncated)?);
     if stored != computed {
         return Err(SnapshotDecodeError::ChecksumMismatch { stored, computed });
     }
 
     let mut entries = HashMap::with_capacity(count);
-    let mut cursor = entries_start;
+    let mut cursor = ENTRIES_START;
     for index in 0..count {
         let position = cursor;
-        let producer_id = ProducerId(take_i64(bytes, &mut cursor));
-        let producer_epoch = take_i16(bytes, &mut cursor);
-        let last_sequence = take_i32(bytes, &mut cursor);
-        let last_offset = Offset(take_i64(bytes, &mut cursor));
-        let offset_delta = take_i32(bytes, &mut cursor);
-        let timestamp = take_i64(bytes, &mut cursor);
-        let coordinator_epoch = take_i32(bytes, &mut cursor);
-        let txn_offset = take_i64(bytes, &mut cursor);
+        let producer_id = ProducerId(i64::from_be_bytes(
+            take(bytes, &mut cursor).ok_or(truncated)?,
+        ));
+        let producer_epoch = i16::from_be_bytes(take(bytes, &mut cursor).ok_or(truncated)?);
+        let last_sequence = i32::from_be_bytes(take(bytes, &mut cursor).ok_or(truncated)?);
+        let last_offset = Offset(i64::from_be_bytes(
+            take(bytes, &mut cursor).ok_or(truncated)?,
+        ));
+        let offset_delta = i32::from_be_bytes(take(bytes, &mut cursor).ok_or(truncated)?);
+        let timestamp = i64::from_be_bytes(take(bytes, &mut cursor).ok_or(truncated)?);
+        let coordinator_epoch = i32::from_be_bytes(take(bytes, &mut cursor).ok_or(truncated)?);
+        let txn_offset = i64::from_be_bytes(take(bytes, &mut cursor).ok_or(truncated)?);
         if !kernel::producer_snapshot_entry_valid(
             snapshot_offset.0,
             kernel::ProducerSnapshotEntryFacts {
@@ -498,22 +503,12 @@ fn corrupt(path: &Path, reason: &str) -> LogError {
     LogError::Corrupt(format!("producer snapshot {}: {reason}", path.display()))
 }
 
-fn take_i16(bytes: &[u8], cursor: &mut usize) -> i16 {
-    let value = i16::from_be_bytes([bytes[*cursor], bytes[*cursor + 1]]);
-    *cursor += 2;
-    value
-}
-
-fn take_i32(bytes: &[u8], cursor: &mut usize) -> i32 {
-    let value = i32::from_be_bytes(bytes[*cursor..*cursor + 4].try_into().expect("four bytes"));
-    *cursor += 4;
-    value
-}
-
-fn take_i64(bytes: &[u8], cursor: &mut usize) -> i64 {
-    let value = i64::from_be_bytes(bytes[*cursor..*cursor + 8].try_into().expect("eight bytes"));
-    *cursor += 8;
-    value
+/// The `N` bytes at `cursor`, advancing it past them. `None` when fewer
+/// than `N` remain.
+fn take<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Option<[u8; N]> {
+    let value = *bytes.get(*cursor..)?.first_chunk::<N>()?;
+    *cursor += N;
+    Some(value)
 }
 
 #[cfg(test)]
@@ -521,6 +516,11 @@ mod tests {
     use {
         super::*,
         crate::{io::FileIo, test_support::TempPath},
+        std::{
+            io,
+            io::ErrorKind,
+            sync::atomic::{AtomicBool, AtomicUsize},
+        },
     };
 
     fn sample_entry() -> ProducerSnapshotEntry {
@@ -894,16 +894,16 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct DirectoryDebt {
-        fail: std::sync::atomic::AtomicBool,
-        syncs: std::sync::atomic::AtomicUsize,
+        fail: AtomicBool,
+        syncs: AtomicUsize,
     }
 
     impl LogIo for DirectoryDebt {
-        fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+        fn sync_dir(&self, dir: &Path) -> io::Result<()> {
             use std::sync::atomic::Ordering::SeqCst;
             self.syncs.fetch_add(1, SeqCst);
             if self.fail.load(SeqCst) {
-                Err(std::io::ErrorKind::StorageFull.into())
+                Err(ErrorKind::StorageFull.into())
             } else {
                 FileIo.sync_dir(dir)
             }
@@ -926,12 +926,12 @@ mod tests {
                 }
             };
             assert2::assert!(
-                matches!(attempt(), Err(LogError::Io(e)) if e.kind() == std::io::ErrorKind::StorageFull)
+                matches!(attempt(), Err(LogError::Io(e)) if e.kind() == ErrorKind::StorageFull)
             );
             // The rename succeeded, but this name still owes directory durability.
             assert2::assert!(path(dir.path(), Offset(102)).exists());
             assert2::assert!(
-                matches!(attempt(), Err(LogError::Io(e)) if e.kind() == std::io::ErrorKind::StorageFull)
+                matches!(attempt(), Err(LogError::Io(e)) if e.kind() == ErrorKind::StorageFull)
             );
             io.fail.store(false, SeqCst);
             let destination = attempt().unwrap();

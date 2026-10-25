@@ -17,8 +17,11 @@ use {
     bytes::Bytes,
     krabka_metadata::MetadataImage,
     krabka_protocol::{Decode, Encode},
+    krabka_raft::voter_requests,
     std::{ops::ControlFlow, sync::Arc},
 };
+#[cfg(test)]
+use {krabka_protocol::owned::add_raft_voter_request::AddRaftVoterRequest, std::fmt};
 
 /// A cluster ACL gate: `true` when the authorizer denies `ctx`'s principal.
 pub(super) type ClusterGate = fn(&dyn Authorizer, &MetadataImage, &RequestContext<'_>) -> bool;
@@ -26,14 +29,12 @@ pub(super) type ClusterGate = fn(&dyn Authorizer, &MetadataImage, &RequestContex
 /// The valid `AddRaftVoter` fixture shared by the voter handler tests.
 #[cfg(test)]
 #[bon::builder]
-pub(crate) fn add_voter_request(
-    voter_id: i32,
-) -> krabka_protocol::owned::add_raft_voter_request::AddRaftVoterRequest {
+pub fn add_voter_request(voter_id: i32) -> AddRaftVoterRequest {
     use krabka_protocol::{
         owned::add_raft_voter_request::Listener, primitives::uuid::Uuid as ProtoUuid,
     };
 
-    krabka_protocol::owned::add_raft_voter_request::AddRaftVoterRequest {
+    AddRaftVoterRequest {
         cluster_id: Some("cluster".into()),
         timeout_ms: 1_000,
         voter_id,
@@ -99,7 +100,7 @@ impl VoterCase {
 #[cfg(test)]
 pub(super) async fn check_voter_case<
     Request: Encode,
-    Response: for<'a> Decode<'a> + PartialEq + std::fmt::Debug,
+    Response: for<'a> Decode<'a> + PartialEq + fmt::Debug,
 >(
     case: VoterCase,
     api: i16,
@@ -136,10 +137,7 @@ impl<R: ErrorResponse> Refusals<R> {
     pub(super) fn leader_only(denied: &str) -> Self {
         Self {
             denied: R::error(CLUSTER_AUTHORIZATION_FAILED, Some(denied.into())),
-            not_leader: R::error(
-                krabka_raft::voter_requests::NOT_LEADER_OR_FOLLOWER,
-                Some(String::new()),
-            ),
+            not_leader: R::error(voter_requests::NOT_LEADER_OR_FOLLOWER, Some(String::new())),
         }
     }
 }

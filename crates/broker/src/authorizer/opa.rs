@@ -1,6 +1,8 @@
-//! OPA authorizer. POSTs the Kafka-plugin action and available request context
-//! as JSON to a configurable OPA decision endpoint. It adds a super-user bypass, an
-//! LRU+TTL decision cache, and a fail-open-or-closed policy.
+//! OPA authorizer.
+//!
+//! POSTs the Kafka-plugin action and available request context as JSON to a
+//! configurable OPA decision endpoint. It adds a super-user bypass, an LRU+TTL
+//! decision cache, and a fail-open-or-closed policy.
 //!
 //! The trait method [`Authorizer::authorize`] is synchronous, because sync
 //! handler hot paths call it, but `reqwest` is async. This module bridges the
@@ -31,8 +33,10 @@ use {
     std::{
         collections::HashSet,
         num::NonZeroUsize,
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, PoisonError},
+        time::Duration,
     },
+    tokio::{runtime, runtime::RuntimeFlavor, task},
 };
 
 mod cache;
@@ -42,10 +46,12 @@ mod wire;
 
 use self::cache::{CacheKey, CachedDecision};
 
-/// HTTP-backed pluggable authorizer. Owns its `super_users` bypass set,
-/// HTTP client, decision cache, and a captured `tokio::runtime::Handle`
-/// so the synchronous [`Authorizer::authorize`] entry point can call
-/// `reqwest`'s async API through `block_in_place`.
+/// HTTP-backed pluggable authorizer.
+///
+/// Owns its `super_users` bypass set, HTTP client, decision cache, and a
+/// captured `tokio::runtime::Handle` so the synchronous
+/// [`Authorizer::authorize`] entry point can call `reqwest`'s async API through
+/// `block_in_place`.
 ///
 /// # Security
 ///
@@ -77,7 +83,7 @@ pub struct OpaAuthorizer {
     #[debug("{}", expire_after.human())]
     expire_after: Time,
     #[debug(skip)]
-    runtime: tokio::runtime::Handle,
+    runtime: runtime::Handle,
     /// Monotonic clock backing the decision-cache TTL (the `expires_at_ms`
     /// stamp and its expiry comparison). Production uses
     /// [`qubit_clock::StdMonotonicClock`], so a wall-clock step backwards
@@ -151,9 +157,8 @@ impl OpaAuthorizer {
             return Err(OpaConfigError::InvalidCacheTtl);
         }
         let cache = Mutex::new(LruCache::new(capacity));
-        let runtime =
-            tokio::runtime::Handle::try_current().map_err(|_| OpaConfigError::NoTokioRuntime)?;
-        if runtime.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
+        let runtime = runtime::Handle::try_current().map_err(|_| OpaConfigError::NoTokioRuntime)?;
+        if runtime.runtime_flavor() != RuntimeFlavor::MultiThread {
             return Err(OpaConfigError::UnsupportedRuntime);
         }
         Ok(Self {
@@ -210,7 +215,7 @@ impl Authorizer for OpaAuthorizer {
             principal: format!("User:{}", req.principal.name),
             operation: req.operation,
             resource_type: req.resource_type,
-            resource_name: req.resource_name.to_string(),
+            resource_name: req.resource_name.to_owned(),
             host: req.host.ip(),
         };
         // Cache-freshness timestamp only — read from the injected monotonic
@@ -218,7 +223,7 @@ impl Authorizer for OpaAuthorizer {
         // the decision.
         let now = self.monotonic_millis();
         {
-            let mut cache = self.cache.lock().expect("OPA cache mutex poisoned");
+            let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
             if let Some(cached) = cache.get(&key) {
                 let cached_decision = match cached.decision {
                     AuthorizationResult::Allow => OpaAuthorizationDecision::Allow,
@@ -236,12 +241,12 @@ impl Authorizer for OpaAuthorizer {
         // 3. Sync→async bridge. `block_in_place` releases the current
         //    worker for other tasks; the captured runtime drives the
         //    HTTP call on its own threads.
-        if !tokio::runtime::Handle::try_current().is_ok_and(|runtime| {
-            runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
-        }) {
+        if !runtime::Handle::try_current()
+            .is_ok_and(|runtime| runtime.runtime_flavor() == RuntimeFlavor::MultiThread)
+        {
             return self.error_decision();
         }
-        let decision = tokio::task::block_in_place(|| self.runtime.block_on(self.call_opa(req)));
+        let decision = task::block_in_place(|| self.runtime.block_on(self.call_opa(req)));
         // 4. Cache the decision — both successes AND errors. Negative
         //    caching keeps OPA outages from amplifying broker load;
         //    TTL expiry lets recovery propagate naturally.
@@ -249,7 +254,7 @@ impl Authorizer for OpaAuthorizer {
         if let OpaCacheExpiry::CacheUntil { expires_at_ms } =
             opa_cache_expiry(completed_at_ms, self.expire_after.millis_i64())
         {
-            let mut cache = self.cache.lock().expect("OPA cache mutex poisoned");
+            let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
             cache.put(key, CachedDecision {
                 decision,
                 expires_at_ms,
@@ -265,7 +270,7 @@ impl Authorizer for OpaAuthorizer {
     /// this authorizer's own decision-cache TTL lets such a cache bound
     /// itself to it, matching the staleness window OPA itself already
     /// accepts.
-    fn decision_ttl(&self) -> Option<std::time::Duration> { Some(self.expire_after.to_std()) }
+    fn decision_ttl(&self) -> Option<Duration> { Some(self.expire_after.to_std()) }
 }
 
 /// Constructor-time failures for [`OpaAuthorizer::new`]. They travel

@@ -5,6 +5,7 @@
 //! `auto.offset.reset`. This test proves that the seek wins over the
 //! post-assignment prime, that it drops no pre-seek records, and that it skips
 //! none above the sought offset.
+#![cfg(test)]
 
 mod support;
 
@@ -16,6 +17,7 @@ use {
         topics::{creatable_topic, create_topic_request},
     },
     krabka_client_consumer::{AutoOffsetReset, Consumer},
+    std::time::{Duration, Instant},
 };
 
 async fn produce_n(bootstrap: &str, topic: &str, n: u32) {
@@ -34,6 +36,7 @@ async fn produce_n(bootstrap: &str, topic: &str, n: u32) {
             .unwrap();
     }
     producer.flush().await.unwrap();
+    drop(producer);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -47,7 +50,7 @@ async fn seek_before_first_poll_resumes_from_sought_offset() {
     let mut consumer = Consumer::builder()
         .bootstrap(&bootstrap)
         .group_id("seek-group")
-        .subscribe(vec!["s".to_string()])
+        .subscribe(vec!["s".to_owned()])
         .auto_offset_reset(AutoOffsetReset::Earliest)
         .build()
         .await
@@ -60,8 +63,8 @@ async fn seek_before_first_poll_resumes_from_sought_offset() {
 
     // Collect until we have the 3 expected records (offsets 2,3,4).
     let mut got = Vec::new();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    while got.len() < 3 && std::time::Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while got.len() < 3 && Instant::now() < deadline {
         let recs = consumer.poll(krabka_units::millis(500)).await.unwrap();
         got.extend(recs);
     }
@@ -90,7 +93,7 @@ async fn seek_rejects_negative_offset() {
     let consumer = Consumer::builder()
         .bootstrap(&bootstrap)
         .group_id("neg-group")
-        .subscribe(vec!["n".to_string()])
+        .subscribe(vec!["n".to_owned()])
         .auto_offset_reset(AutoOffsetReset::Earliest)
         .build()
         .await

@@ -45,18 +45,31 @@ macro_rules! once_value {
 }
 
 /// The preferred leader site in the three-site KFC-2 cluster.
-pub(crate) const SITE_A: &str = "site-a";
+pub const SITE_A: &str = "site-a";
 /// The second data site.
-pub(crate) const SITE_B: &str = "site-b";
+pub const SITE_B: &str = "site-b";
 /// The witness site.
-pub(crate) const SITE_C: &str = "site-c";
+pub const SITE_C: &str = "site-c";
 /// `SITES[i]` is the rack of broker `i + 1`.
-pub(crate) const SITES: [&str; 3] = [SITE_A, SITE_B, SITE_C];
+pub const SITES: [&str; 3] = [SITE_A, SITE_B, SITE_C];
 
 use {
     crate::support::{discovery::topic_metadata_request, topics::metadata_topic},
     assert2::assert,
-    std::time::{Duration, Instant},
+    krabka_broker::codes,
+    krabka_protocol::{
+        owned::{
+            create_topics_request,
+            offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
+        },
+        primitives::uuid::Uuid,
+    },
+    std::{
+        path::Path,
+        sync::OnceLock,
+        time::{Duration, Instant},
+    },
+    tokio::{sync::Mutex, time},
 };
 
 pub mod acl;
@@ -117,7 +130,7 @@ pub mod relayed_cluster;
 /// # Panics
 /// Panics if the permissions cannot be set.
 #[cfg(unix)]
-pub fn chmod_for_container(path: &std::path::Path, mode: u32, context: &str) {
+pub fn chmod_for_container(path: &Path, mode: u32, context: &str) {
     containers::chmod_for_container(path, mode, context);
 }
 
@@ -191,8 +204,8 @@ pub fn init_tracing_with(default_filter: &str) {
 /// This is a `tokio::sync::Mutex` and not a `std::sync::Mutex`, so a test can
 /// hold the lock across the `.await` calls in its body without a report from
 /// clippy's `await_holding_lock`.
-pub fn cluster_lock() -> &'static tokio::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+pub fn cluster_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     lazy_mutex(&LOCK)
 }
 
@@ -202,10 +215,7 @@ pub fn cluster_lock() -> &'static tokio::sync::Mutex<()> {
 /// Automatic placement starts at a random broker, as Kafka's
 /// `StripedReplicaPlacer` does, so a test that needs to know which broker
 /// leads or replicates a partition names the brokers itself.
-pub fn topic_on(
-    name: &str,
-    replicas: &[&[i32]],
-) -> krabka_protocol::owned::create_topics_request::CreatableTopic {
+pub fn topic_on(name: &str, replicas: &[&[i32]]) -> create_topics_request::CreatableTopic {
     use krabka_protocol::owned::create_topics_request::{
         CreatableReplicaAssignment, CreatableTopic,
     };
@@ -248,7 +258,7 @@ where
             Instant::now() <= deadline,
             "audit record '{what}' did not appear within 30s; last={records:?}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -266,21 +276,18 @@ pub async fn wait_for_audit_seq_count(
             Instant::now() <= deadline,
             "audit seq count did not reach {min_count} within 30s; last={seqs:?}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
 /// Round-trip a Metadata request to learn the topic's assigned UUID.
 /// Produce / Fetch at v ≥ 13 carry only `topic_id` on the wire, so the
 /// caller must plumb the real UUID through.
-pub async fn topic_id_for(
-    client: &krabka_client_core::Client,
-    name: &str,
-) -> krabka_protocol::primitives::uuid::Uuid {
+pub async fn topic_id_for(client: &krabka_client_core::Client, name: &str) -> Uuid {
     let resp = client
         .send(topic_metadata_request(Some(vec![metadata_topic(
             Some(name.into()),
-            krabka_protocol::primitives::uuid::Uuid::default(),
+            Uuid::default(),
         )])))
         .await
         .expect("Metadata for topic_id");
@@ -296,10 +303,7 @@ pub async fn topic_id_for(
 ///
 /// # Panics
 /// Panics if the topic cannot be created.
-pub async fn create_topic_for_commits(
-    client: &krabka_client_core::Client,
-    topic: &str,
-) -> krabka_protocol::primitives::uuid::Uuid {
+pub async fn create_topic_for_commits(client: &krabka_client_core::Client, topic: &str) -> Uuid {
     let created = client
         .send(
             topics::create_topic_request_with_setup()
@@ -309,7 +313,7 @@ pub async fn create_topic_for_commits(
         )
         .await
         .expect("CreateTopics");
-    assert2::assert!(created.topics[0].error_code == krabka_broker::codes::NONE);
+    assert2::assert!(created.topics[0].error_code == codes::NONE);
     topic_id_for(client, topic).await
 }
 
@@ -321,30 +325,26 @@ pub async fn create_topic_for_commits(
 pub async fn commit_partition_zero(
     client: &krabka_client_core::Client,
     group: &str,
-    (topic, topic_id): (&str, krabka_protocol::primitives::uuid::Uuid),
+    (topic, topic_id): (&str, Uuid),
     committed_offset: i64,
 ) {
     let committed = client
-        .send(
-            krabka_protocol::owned::offset_commit_request::OffsetCommitRequest {
-                group_id: group.to_owned(),
-                generation_id_or_member_epoch: -1,
-                topics: vec![offsets::offset_commit_topic(topic, topic_id, vec![
-                    krabka_protocol::owned::offset_commit_request::OffsetCommitRequestPartition {
-                        partition_index: 0,
-                        committed_offset,
-                        committed_leader_epoch: -1,
-                        ..Default::default()
-                    },
-                ])],
-                ..Default::default()
-            },
-        )
+        .send(OffsetCommitRequest {
+            group_id: group.to_owned(),
+            generation_id_or_member_epoch: -1,
+            topics: vec![offsets::offset_commit_topic(topic, topic_id, vec![
+                OffsetCommitRequestPartition {
+                    partition_index: 0,
+                    committed_offset,
+                    committed_leader_epoch: -1,
+                    ..Default::default()
+                },
+            ])],
+            ..Default::default()
+        })
         .await
         .expect("OffsetCommit");
-    assert2::assert!(committed.topics[0].partitions[0].error_code == krabka_broker::codes::NONE);
+    assert2::assert!(committed.topics[0].partitions[0].error_code == codes::NONE);
 }
 
-pub fn lazy_mutex(lock: &std::sync::OnceLock<tokio::sync::Mutex<()>>) -> &tokio::sync::Mutex<()> {
-    lock.get_or_init(|| tokio::sync::Mutex::new(()))
-}
+pub fn lazy_mutex(lock: &OnceLock<Mutex<()>>) -> &Mutex<()> { lock.get_or_init(|| Mutex::new(())) }

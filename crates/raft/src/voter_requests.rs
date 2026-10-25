@@ -20,6 +20,7 @@ use {
         },
         primitives::uuid::Uuid as WireUuid,
     },
+    std::collections::BTreeSet,
 };
 
 /// Kafka's `NOT_LEADER_OR_FOLLOWER`.
@@ -122,7 +123,7 @@ pub struct ListenerAddress<'a> {
 /// port, no name repeats, and there is at least one.
 #[must_use]
 pub fn valid_wire_listeners<'a>(listeners: impl IntoIterator<Item = ListenerAddress<'a>>) -> bool {
-    let mut names = std::collections::BTreeSet::new();
+    let mut names = BTreeSet::new();
     let mut count = 0usize;
     for ListenerAddress { name, host, port } in listeners {
         count += 1;
@@ -303,7 +304,9 @@ pub fn update_voter_refusal(
 }
 
 /// `UpdateRaftVoterResponse.CurrentLeader`, as `RaftUtil.updateVoterResponse`
-/// fills it in every answer: the leader id or -1, the epoch, and the leader's
+/// fills it in every answer.
+///
+/// It holds the leader id or -1, the epoch, and the leader's
 /// host and port on the controller listener when this node knows them.
 #[must_use]
 pub fn update_voter_current_leader(quorum: &QuorumStateSnapshot) -> CurrentLeader {

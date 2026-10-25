@@ -35,20 +35,21 @@ use {
         BrokerRegistrationChangeRecord, BrokerRegistrationRecord, MetadataImage, NodeId,
     },
     std::{
-        collections::BTreeSet,
+        collections::{BTreeSet, HashSet},
         path::{Path, PathBuf},
         sync::Arc,
     },
+    tokio_util::sync::CancellationToken,
 };
 
 /// Kafka's `ServerLogConfigs.CORDONED_LOG_DIRS_CONFIG`.
-pub(crate) const CORDONED_LOG_DIRS: &str = "cordoned.log.dirs";
+pub const CORDONED_LOG_DIRS: &str = "cordoned.log.dirs";
 
 /// Kafka's `ServerLogConfigs.CORDONED_LOG_DIRS_ALL`: cordon every directory.
-pub(crate) const CORDONED_LOG_DIRS_ALL: &str = "*";
+pub const CORDONED_LOG_DIRS_ALL: &str = "*";
 
 /// Kafka's `ServerLogConfigs.CORDONED_LOG_DIRS_DOC`.
-pub(crate) const CORDONED_LOG_DIRS_DOC: &str = "A comma-separated list of the directories that \
+pub const CORDONED_LOG_DIRS_DOC: &str = "A comma-separated list of the directories that \
                                                 are cordoned. Entries in this list must be \
                                                 entries in log.dirs or log.dir configuration. \
                                                 This can also be set to * to cordon all log \
@@ -76,7 +77,7 @@ fn parse_list(value: &str) -> Vec<&str> {
 ///
 /// # Errors
 /// Returns Kafka's message when an entry is empty.
-pub(crate) fn validate_value_type(value: &str) -> Result<(), String> {
+pub fn validate_value_type(value: &str) -> Result<(), String> {
     if parse_list(value).iter().any(|entry| entry.is_empty()) {
         return Err(format!(
             "Configuration '{CORDONED_LOG_DIRS}' values must not be empty."
@@ -103,7 +104,7 @@ fn configured_names(log_dirs: &[PathBuf]) -> Vec<String> {
 /// entry that names no directory in `log_dirs`. The last two carry the
 /// `requirement failed: ` prefix of Scala's `require`, which is what
 /// `kafka-configs` prints.
-pub(crate) fn resolve(value: &str, log_dirs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+pub fn resolve(value: &str, log_dirs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     validate_value_type(value)?;
     let entries = parse_list(value);
     if entries.contains(&CORDONED_LOG_DIRS_ALL) {
@@ -139,7 +140,7 @@ pub(crate) fn resolve(value: &str, log_dirs: &[PathBuf]) -> Result<Vec<PathBuf>,
 /// Kafka's `BrokerRegistration.hasUncordonedDirs`: whether automatic replica
 /// placement may use the broker. A broker that has not reported its cordoned
 /// directories yet, or that registered no directory ids, counts as usable.
-pub(crate) fn has_uncordoned_dirs(registration: &BrokerRegistrationRecord) -> bool {
+pub fn has_uncordoned_dirs(registration: &BrokerRegistrationRecord) -> bool {
     let Some(cordoned) = &registration.cordoned_log_dirs else {
         return true;
     };
@@ -152,7 +153,7 @@ pub(crate) fn has_uncordoned_dirs(registration: &BrokerRegistrationRecord) -> bo
 
 /// The registered brokers whose directories are all cordoned, which the
 /// automatic placement of `CreateTopics` and `CreatePartitions` leaves out.
-pub(crate) fn fully_cordoned_brokers(image: &MetadataImage) -> std::collections::HashSet<u64> {
+pub fn fully_cordoned_brokers(image: &MetadataImage) -> HashSet<u64> {
     image
         .brokers()
         .filter(|registration| !has_uncordoned_dirs(registration))
@@ -169,7 +170,7 @@ pub(crate) fn fully_cordoned_brokers(image: &MetadataImage) -> std::collections:
 /// changes nothing. A registration that holds none yet always takes the
 /// reported set, and otherwise the two are compared as sets
 /// (`BrokerRegistration.cordonedDirChanged`).
-pub(crate) fn registration_change(
+pub fn registration_change(
     image: &MetadataImage,
     node_id: NodeId,
     reported: Option<&[uuid::Uuid]>,
@@ -196,7 +197,7 @@ pub(crate) fn registration_change(
 /// [`CordonedLogDirs::apply_image`], and the placement, `AlterReplicaLogDirs`,
 /// `DescribeLogDirs` and the heartbeat all read the same set.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct CordonedLogDirs {
+pub struct CordonedLogDirs {
     inner: Arc<Inner>,
 }
 
@@ -299,11 +300,11 @@ impl CordonedLogDirs {
 }
 
 /// Keep `cordoned` in step with the metadata image until `shutdown`.
-pub(crate) fn spawn_watcher(
+pub fn spawn_watcher(
     controller: &Arc<dyn MetadataSource>,
     node_id: NodeId,
     cordoned: CordonedLogDirs,
-    shutdown: tokio_util::sync::CancellationToken,
+    shutdown: CancellationToken,
 ) {
     tokio::spawn(watch_image_loop(
         controller.watch_image(),

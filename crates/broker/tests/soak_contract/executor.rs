@@ -37,14 +37,14 @@ use {
         sync::Arc,
         time::Duration,
     },
-    tokio::task::JoinHandle,
+    tokio::{task, task::JoinHandle, time},
 };
 
 /// How often a recovery is polled.
 const POLL: Duration = Duration::from_millis(250);
 
 /// Whether `check` is measured from the injection rather than the cleanup.
-pub(crate) fn measured_from_injection(check: RecoveryCheck) -> bool {
+pub fn measured_from_injection(check: RecoveryCheck) -> bool {
     matches!(
         check,
         RecoveryCheck::LeaderFailover
@@ -55,14 +55,14 @@ pub(crate) fn measured_from_injection(check: RecoveryCheck) -> bool {
 }
 
 /// Everything one fault produced for the evidence.
-pub(crate) struct FaultOutcome {
+pub struct FaultOutcome {
     pub(crate) record: FaultRecord,
     pub(crate) recoveries: Vec<RecoveryRecord>,
     pub(crate) commits: Vec<CommitCheck>,
 }
 
 /// What every fault is executed against.
-pub(crate) struct Executor {
+pub struct Executor {
     pub(crate) contract: Contract,
     pub(crate) nodes: Arc<Nodes>,
     pub(crate) windows: Arc<Windows>,
@@ -202,9 +202,9 @@ impl Executor {
         let hold_until = injected + fault.duration.millis_i64();
         let hold = hold_until - now_ms();
         if hold > 0 {
-            tokio::time::sleep(Time::from_millis(hold).to_std()).await;
+            time::sleep(Time::from_millis(hold).to_std()).await;
         }
-        let cleanup = tokio::task::spawn_blocking(move || guard.clear())
+        let cleanup = task::spawn_blocking(move || guard.clear())
             .await
             .unwrap_or_else(|error| Err(format!("cleanup task: {error}")));
         let cleared = now_ms();
@@ -296,7 +296,7 @@ impl Executor {
         let host = self.contract.host.clone();
         let (container, root) = (node.container.clone(), node.root.clone());
         let injected =
-            tokio::task::spawn_blocking(move || inject(&kind, &container, &root, &host, relaunch))
+            task::spawn_blocking(move || inject(&kind, &container, &root, &host, relaunch))
                 .await
                 .unwrap_or_else(|error| Err(format!("injection task: {error}")));
         (injected, None)
@@ -339,7 +339,7 @@ impl Executor {
                     eprintln!("soak-contract: {fault} {check}: gave up; last seen: {waiting}");
                     break None;
                 }
-                tokio::time::sleep(POLL).await;
+                time::sleep(POLL).await;
             };
             RecoveryRecord {
                 fault,
@@ -452,7 +452,7 @@ async fn recovered(
 
 /// Wait until every partition of `topics` has its full ISR, as a boot does
 /// before the load starts.
-pub(crate) async fn await_full_isr(
+pub async fn await_full_isr(
     nodes: &Nodes,
     topics: &[(String, i32)],
     limit: Time,
@@ -469,7 +469,7 @@ pub(crate) async fn await_full_isr(
                 "the ISR of {topics:?} was not complete within {limit:?}"
             ));
         }
-        tokio::time::sleep(POLL).await;
+        time::sleep(POLL).await;
     }
 }
 

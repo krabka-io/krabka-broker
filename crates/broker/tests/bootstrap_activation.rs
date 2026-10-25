@@ -17,6 +17,7 @@
 //! checkpoint, and its brokers hold none. A controller that kept those records
 //! in its image and out of the log left the brokers without a
 //! `metadata.version`, and each broker then wrote its own copy.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -27,7 +28,9 @@ use {
     },
     assert2::{assert, check},
     futures_util::future::join_all,
-    krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, config::NodeRole},
+    krabka_broker::{
+        BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, bootstrap, config::NodeRole,
+    },
     krabka_metadata::{
         BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord,
         metadata_version::ELR_VERSION_FEATURE,
@@ -38,9 +41,15 @@ use {
             DescribeConfigsResourceResult, DescribeConfigsResult, DescribeConfigsSynonym,
         },
     },
-    std::{net::SocketAddr, path::PathBuf, time::Duration},
+    std::{
+        collections::BTreeMap,
+        net::SocketAddr,
+        path::{Path, PathBuf},
+        slice,
+        time::Duration,
+    },
     tempfile::TempDir,
-    tokio::net::TcpListener,
+    tokio::{net::TcpListener, time},
 };
 
 mod support;
@@ -112,7 +121,7 @@ struct Node {
 
 /// Formats `log_dir` for node `id` with `krabka-format` and the quorum and
 /// feature flags in `flags`, in process.
-async fn format(log_dir: &std::path::Path, id: NodeId, flags: &[String]) {
+async fn format(log_dir: &Path, id: NodeId, flags: &[String]) {
     let node_id = id.to_string();
     let mut argv = vec![
         "krabka-format".to_owned(),
@@ -145,9 +154,9 @@ struct ActivationSetup<'a> {
 }
 
 fn config(node: &Node, setup: ActivationSetup<'_>) -> BrokerConfig {
-    let meta = krabka_broker::bootstrap::initialize_log_dirs(
+    let meta = bootstrap::initialize_log_dirs(
         &node.log_dir,
-        std::slice::from_ref(&node.log_dir),
+        slice::from_ref(&node.log_dir),
         node.id,
         None,
     )
@@ -201,7 +210,7 @@ async fn start_all(
     join_all(nodes.into_iter().map(|node| async move {
         let config = config(&node, setup);
         let id = node.id;
-        let handle = tokio::time::timeout(
+        let handle = time::timeout(
             DEADLINE,
             Broker::start_with_listeners(config, Some(node.controller), Some(node.client)),
         )
@@ -463,9 +472,9 @@ async fn run_case(case: Case) {
     // A default format finalizes every feature at the default level of the
     // latest production release, `metadata.version` first. That enables ELR.
     // `--feature eligible.leader.replicas.version=0` leaves it out.
-    let disabled: std::collections::BTreeMap<String, i16> =
+    let disabled: BTreeMap<String, i16> =
         if matches!(eligible_leader_replicas, EligibleLeaderReplicas::Enabled) {
-            std::collections::BTreeMap::new()
+            BTreeMap::new()
         } else {
             [(ELR_VERSION_FEATURE.to_owned(), 0)].into()
         };
@@ -483,7 +492,7 @@ async fn run_case(case: Case) {
             config_value: Some(value.to_string()),
         })
     }));
-    let expected_levels: std::collections::BTreeMap<String, i16> = bootstrap
+    let expected_levels: BTreeMap<String, i16> = bootstrap
         .iter()
         .filter_map(|record| match record {
             MetadataRecord::V1FeatureLevel(feature) => Some((feature.name.clone(), feature.level)),

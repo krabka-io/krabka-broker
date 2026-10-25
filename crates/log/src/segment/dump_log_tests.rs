@@ -21,13 +21,13 @@ use {
     krabka_ids::{LeaderEpoch, Offset},
     krabka_protocol::records::RecordBatch,
     krabka_units::prelude::{ByteSize, bytes},
-    std::path::Path,
+    std::{fs, path::Path},
     tempfile::tempdir,
 };
 
 /// The entries of a `.index` file.
 fn offset_entries(dir: &Path, base: i64) -> Vec<OffsetIndexEntry> {
-    let bytes = std::fs::read(name::index_path(dir, base)).unwrap();
+    let bytes = fs::read(name::index_path(dir, base)).unwrap();
     bytes
         .as_chunks::<8>()
         .0
@@ -41,7 +41,7 @@ fn offset_entries(dir: &Path, base: i64) -> Vec<OffsetIndexEntry> {
 
 /// The entries of a `.timeindex` file.
 fn time_entries(dir: &Path, base: i64) -> Vec<TimeIndexEntry> {
-    let bytes = std::fs::read(name::timeindex_path(dir, base)).unwrap();
+    let bytes = fs::read(name::timeindex_path(dir, base)).unwrap();
     bytes
         .as_chunks::<12>()
         .0
@@ -73,7 +73,7 @@ struct BatchAtPosition {
 /// whose newest record carries the entry's timestamp; and the timestamps must
 /// strictly increase.
 fn dump_log_problems(dir: &Path, base: i64) -> Vec<String> {
-    let log = std::fs::read(name::log_path(dir, base)).unwrap();
+    let log = fs::read(name::log_path(dir, base)).unwrap();
     let mut batches: Vec<BatchAtPosition> = Vec::new();
     let mut cursor: &[u8] = &log;
     while !cursor.is_empty() {
@@ -305,14 +305,14 @@ fn recovery_rebuilds_the_indexes_the_append_wrote() {
         let mut segment = Segment::create(dir.path(), Offset(0)).unwrap();
         write_all_encoded(&mut segment, DENSE_INDEX);
     }
-    let index = std::fs::read(name::index_path(dir.path(), 0)).unwrap();
-    let time_index = std::fs::read(name::timeindex_path(dir.path(), 0)).unwrap();
+    let index = fs::read(name::index_path(dir.path(), 0)).unwrap();
+    let time_index = fs::read(name::timeindex_path(dir.path(), 0)).unwrap();
 
     let recovered =
         Segment::open_active_with_index_interval(dir.path(), Offset(0), true, DENSE_INDEX).unwrap();
 
-    assert2::assert!(std::fs::read(name::index_path(dir.path(), 0)).unwrap() == index);
-    assert2::assert!(std::fs::read(name::timeindex_path(dir.path(), 0)).unwrap() == time_index);
+    assert2::assert!(fs::read(name::index_path(dir.path(), 0)).unwrap() == index);
+    assert2::assert!(fs::read(name::timeindex_path(dir.path(), 0)).unwrap() == time_index);
     assert2::assert!(dump_log_problems(dir.path(), 0) == Vec::<String>::new());
     assert2::assert!(recovered.max_timestamp() == 300);
 }
@@ -392,7 +392,7 @@ fn the_index_takes_an_entry_only_once_more_than_the_interval_was_written() {
         assert2::assert!(entries(dir.path()) == expected, "append: {label}");
 
         // The reopen rebuilds the index from the log.
-        std::fs::write(name::index_path(dir.path(), 0), []).unwrap();
+        fs::write(name::index_path(dir.path(), 0), []).unwrap();
         Segment::open_active_with_index_interval(dir.path(), Offset(0), true, interval).unwrap();
         assert2::assert!(entries(dir.path()) == expected, "recovery: {label}");
     }

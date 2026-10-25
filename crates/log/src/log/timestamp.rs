@@ -22,7 +22,7 @@ use {
     krabka_ids::Offset,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
     krabka_verified::timestamp::first_timestamp_index,
-    std::time::SystemTime,
+    std::{fs, sync::PoisonError, time::SystemTime},
 };
 
 /// How far a by-timestamp search goes.
@@ -85,8 +85,8 @@ impl Log {
         let log_start = self.log_start_offset();
         let mut offset_times = Vec::with_capacity(segments.len() + 1);
         for segment in &segments {
-            let modified = std::fs::metadata(name::log_path(&self.dir, segment.base_offset().0))?
-                .modified()?;
+            let modified =
+                fs::metadata(name::log_path(&self.dir, segment.base_offset().0))?.modified()?;
             offset_times.push((
                 segment.base_offset().max(log_start),
                 retention::now_ms(modified),
@@ -109,8 +109,9 @@ impl Log {
         let Some(start) = start else {
             return Ok(Vec::new());
         };
-        Ok(offset_times[..=start]
+        Ok(offset_times
             .iter()
+            .take(start + 1)
             .rev()
             .take(max_num_offsets)
             .map(|(offset, _)| *offset)
@@ -130,13 +131,13 @@ impl Log {
     /// `max.decompressed.message.bytes`. A `ListOffsets` answer goes through
     /// [`Self::offset_for_timestamp_checked`], which does, and which stops at
     /// the first candidate segment as Kafka does.
-    ///
-    /// # Panics
-    ///
-    /// Panics when another thread poisoned the log configuration lock.
     #[must_use]
     pub fn offset_for_timestamp(&self, target_ts: i64) -> Option<(Offset, i64)> {
-        let scan_window = self.config.read().unwrap().timestamp_scan_window;
+        let scan_window = self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .timestamp_scan_window;
         // With no limit the scan has nothing to refuse.
         self.scan_offset_for_timestamp(
             target_ts,
@@ -169,10 +170,6 @@ impl Log {
     /// # Errors
     ///
     /// Returns [`LogError::RecordTooLarge`] for such a record.
-    ///
-    /// # Panics
-    ///
-    /// Panics when another thread poisoned the log configuration lock.
     pub fn offset_for_timestamp_checked(
         &self,
         target_ts: i64,
@@ -191,10 +188,6 @@ impl Log {
     ///
     /// Returns [`LogError::RecordTooLarge`] when a compressed record the scan
     /// reads exceeds the configured decompressed-record limit.
-    ///
-    /// # Panics
-    ///
-    /// Panics when another thread poisoned the log configuration lock.
     pub fn offset_for_timestamp_checked_from(
         &self,
         target_ts: i64,
@@ -206,7 +199,7 @@ impl Log {
 
     /// The scan window and the record limit of the log's current configuration.
     fn timestamp_scan_settings(&self) -> TimestampScanSettings {
-        let config = self.config.read().unwrap();
+        let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
         TimestampScanSettings {
             scan_window: config.timestamp_scan_window,
             limit: config.max_decompressed_record,
@@ -233,7 +226,10 @@ impl Log {
                 let Some(candidate) = first_timestamp_index(&largest, target_ts) else {
                     return Ok(None);
                 };
-                segments[candidate].offset_for_timestamp_with_window_from(
+                let Some(segment) = segments.get(candidate) else {
+                    return Ok(None);
+                };
+                segment.offset_for_timestamp_with_window_from(
                     target_ts,
                     scan_window,
                     limit,
@@ -289,10 +285,6 @@ impl Log {
     ///
     /// Returns [`LogError::RecordTooLarge`] for a record of that batch above the
     /// limit.
-    ///
-    /// # Panics
-    ///
-    /// Panics when another thread poisoned the log configuration lock.
     pub fn max_timestamp_offset_and_ts(&self) -> Result<Option<(Offset, i64)>, LogError> {
         let TimestampScanSettings { scan_window, limit } = self.timestamp_scan_settings();
         self.scan_max_timestamp(scan_window, limit)
@@ -344,6 +336,7 @@ mod tests {
             segment::Segment,
         },
         assert2::check,
+        krabka_protocol::records::RecordBatch,
         krabka_units::prelude::{bytes, kibibytes},
         tempfile::tempdir,
     };
@@ -634,7 +627,7 @@ mod tests {
     }
 
     /// A gzip batch of one record stamped `ts` with a `value_len`-byte value.
-    fn gzip_batch(ts: i64, value_len: usize) -> krabka_protocol::records::RecordBatch {
+    fn gzip_batch(ts: i64, value_len: usize) -> RecordBatch {
         let mut batch = ts_batch(ts);
         gzip_value(&mut batch, value_len);
         batch

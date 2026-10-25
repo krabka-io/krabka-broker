@@ -5,23 +5,24 @@ use {
     std::time::Duration,
     tokio::{
         sync::{mpsc, oneshot},
-        time::{Interval, MissedTickBehavior},
+        task::{JoinError, JoinHandle},
+        time::{self, Interval, MissedTickBehavior},
     },
     tokio_util::sync::CancellationToken,
 };
 
 /// Start an actor over a bounded mailbox and retain its task handle.
-pub(crate) fn spawn_mailbox<M, F: Future<Output = ()> + Send + 'static>(
+pub fn spawn_mailbox<M, F: Future<Output = ()> + Send + 'static>(
     capacity: usize,
     run: impl FnOnce(mpsc::Receiver<M>) -> F,
-) -> (mpsc::Sender<M>, tokio::task::JoinHandle<()>) {
+) -> (mpsc::Sender<M>, JoinHandle<()>) {
     let (tx, rx) = mpsc::channel(capacity);
     (tx, tokio::spawn(run(rx)))
 }
 
 /// Why an [`ask`] got no reply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AskError {
+pub enum AskError {
     /// The actor's mailbox is closed, so the request was never delivered.
     Closed,
     /// The actor took the request but dropped the reply sender unanswered.
@@ -35,7 +36,7 @@ pub(crate) enum AskError {
 ///
 /// Returns [`AskError::Closed`] when the mailbox is closed and
 /// [`AskError::Dropped`] when the actor drops the reply sender.
-pub(crate) async fn ask<M, T>(
+pub async fn ask<M, T>(
     tx: &mpsc::Sender<M>,
     make: impl FnOnce(oneshot::Sender<T>) -> M,
 ) -> Result<T, AskError> {
@@ -45,20 +46,20 @@ pub(crate) async fn ask<M, T>(
 }
 
 /// Send shutdown without a send timeout, then bound only the reply wait.
-pub(crate) async fn shutdown_actor<M>(
+pub async fn shutdown_actor<M>(
     tx: &mpsc::Sender<M>,
     shutdown: impl FnOnce(oneshot::Sender<()>) -> M,
     timeout: Duration,
 ) {
     let (reply, ack) = oneshot::channel();
     if tx.send(shutdown(reply)).await.is_ok() {
-        let _ = tokio::time::timeout(timeout, ack).await;
+        let _ = time::timeout(timeout, ack).await;
     }
 }
 
 /// Clone every registry value before callers perform work that can await.
 #[must_use]
-pub(crate) fn cloned_registry_values<V: Clone>(registry: &dashmap::DashMap<String, V>) -> Vec<V> {
+pub fn cloned_registry_values<V: Clone>(registry: &dashmap::DashMap<String, V>) -> Vec<V> {
     registry.iter().map(|entry| entry.value().clone()).collect()
 }
 
@@ -72,7 +73,7 @@ pub(crate) fn cloned_registry_values<V: Clone>(registry: &dashmap::DashMap<Strin
 /// `body` is a closure returning a future rather than an `AsyncFnMut`: rustc
 /// cannot yet prove an `AsyncFnMut` body's future `Send` for every lifetime,
 /// and these loops run under `tokio::spawn`.
-pub(crate) async fn run_every<F: Future<Output = ()>>(
+pub async fn run_every<F: Future<Output = ()>>(
     mut tick: Interval,
     shutdown: &CancellationToken,
     mut body: impl FnMut() -> F,
@@ -88,10 +89,7 @@ pub(crate) async fn run_every<F: Future<Output = ()>>(
 
 /// Await already spawned tasks in order, reporting each failed join to its caller.
 /// Dropping the handles without calling this function leaves their tasks running.
-pub(crate) async fn finish_tasks(
-    tasks: Vec<tokio::task::JoinHandle<()>>,
-    mut on_error: impl FnMut(tokio::task::JoinError),
-) {
+pub async fn finish_tasks(tasks: Vec<JoinHandle<()>>, mut on_error: impl FnMut(JoinError)) {
     for handle in tasks {
         if let Err(error) = handle.await {
             on_error(error);
@@ -119,7 +117,14 @@ mod tests {
     use {
         super::*,
         assert2::assert,
-        std::{future::pending, time::Duration},
+        std::{
+            future::{pending, ready},
+            time::Duration,
+        },
+        tokio::{
+            task,
+            time::{Instant, interval, interval_at, sleep},
+        },
     };
 
     #[tokio::test]
@@ -139,7 +144,7 @@ mod tests {
             tokio::pin!(finished);
             tokio::select! {
                 () = &mut finished => panic!("must await the final load after earlier failures"),
-                () = tokio::task::yield_now() => {}
+                () = task::yield_now() => {}
             }
             release.send(()).unwrap();
             finished.await;
@@ -172,9 +177,9 @@ mod tests {
     async fn run_every_ticks_until_shutdown_and_skips_missed_ticks() {
         let shutdown = CancellationToken::new();
         let period = Duration::from_secs(1);
-        let start = tokio::time::Instant::now();
+        let start = Instant::now();
         let mut fired_at = Vec::new();
-        run_every(tokio::time::interval(period), &shutdown, || {
+        run_every(interval(period), &shutdown, || {
             fired_at.push(start.elapsed());
             let runs = fired_at.len();
             if runs == 3 {
@@ -183,7 +188,7 @@ mod tests {
             async move {
                 if runs == 1 {
                     // Overrun two and a half periods.
-                    tokio::time::sleep(period * 5 / 2).await;
+                    sleep(period * 5 / 2).await;
                 }
             }
         })
@@ -197,14 +202,14 @@ mod tests {
     async fn run_every_returns_at_once_when_already_cancelled() {
         let shutdown = CancellationToken::new();
         shutdown.cancel();
-        let start = tokio::time::Instant::now() + Duration::from_secs(3_600);
+        let start = Instant::now() + Duration::from_secs(3_600);
         let mut runs = 0_u32;
         run_every(
-            tokio::time::interval_at(start, Duration::from_secs(1)),
+            interval_at(start, Duration::from_secs(1)),
             &shutdown,
             || {
                 runs += 1;
-                std::future::ready(())
+                ready(())
             },
         )
         .await;

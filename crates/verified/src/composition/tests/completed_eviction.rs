@@ -4,7 +4,8 @@ use {
         recovered_window_row,
     },
     assert2::assert,
-    proptest::prelude::*,
+    proptest::{collection, prelude::*},
+    std::collections::BTreeSet,
 };
 
 #[test]
@@ -101,7 +102,7 @@ fn maximum_frontiers_preserve_the_strict_ack_boundary(hwm: i64, expected_ready: 
 proptest! {
     #[test]
     fn eviction_and_waiter_order_agree_with_a_distinct_offset_oracle(
-        gaps in proptest::collection::vec((1_i64..8, 0_i32..4), 1..=5),
+        gaps in collection::vec((1_i64..8, 0_i32..4), 1..=5),
         new_base in 0_i64..64, new_delta in 0_i32..4, older in any::<bool>(),
         hwm in 0_i64..=70, origin_seed in any::<usize>(),
     ) {
@@ -114,7 +115,7 @@ proptest! {
         let mut incoming = recovered_window_row(new_base, new_delta, 0);
         incoming.producer_epoch = if older { 6 } else { 7 };
         let origin = origin_seed % old.len();
-        let mut offsets: std::collections::BTreeSet<_> = old.iter().map(|row| row.last_offset).collect();
+        let mut offsets: BTreeSet<_> = old.iter().map(|row| row.last_offset).collect();
         if !older { offsets.insert(incoming.last_offset); }
         let expected: Vec<_> = offsets.into_iter().rev().take(5).collect();
         let evicted = !expected.contains(&old[origin].last_offset);

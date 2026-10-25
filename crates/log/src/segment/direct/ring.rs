@@ -14,13 +14,14 @@ use {
     compio::{
         buf::{IntoInner as _, IoBuf as _},
         driver::{ProactorBuilder, SharedFd, op::WriteAt},
-        runtime::{Runtime, RuntimeBuilder},
+        runtime::{Runtime, RuntimeBuilder, spawn, submit},
     },
     std::{
         fs::File,
-        io::{Error, ErrorKind},
+        io::{self, Error, ErrorKind},
         rc::Rc,
-        sync::Arc,
+        sync::{Arc, mpsc},
+        thread,
     },
     tokio::sync::{
         Semaphore,
@@ -47,8 +48,8 @@ impl Ring {
     /// write threads do every write.
     pub(super) fn start(entries: u32) -> Option<Self> {
         let (segments, receiver) = unbounded_channel();
-        let (started, outcome) = std::sync::mpsc::channel();
-        let spawned = std::thread::Builder::new()
+        let (started, outcome) = mpsc::channel();
+        let spawned = thread::Builder::new()
             .name("log-direct-uring".to_owned())
             .spawn(move || match runtime(entries) {
                 Ok(runtime) => {
@@ -82,7 +83,7 @@ impl Ring {
 /// A compio runtime on an `io_uring` of `entries`. The crate is built
 /// without compio's `polling` driver, so a kernel that refuses the ring
 /// fails here rather than falling back to readiness polling.
-fn runtime(entries: u32) -> std::io::Result<Runtime> {
+fn runtime(entries: u32) -> io::Result<Runtime> {
     RuntimeBuilder::new()
         .with_proactor(ProactorBuilder::new().capacity(entries).to_owned())
         .build()
@@ -92,7 +93,7 @@ fn runtime(entries: u32) -> std::io::Result<Runtime> {
 async fn serve(mut segments: UnboundedReceiver<Arc<Shared>>) {
     let started = Rc::new(Semaphore::new(ENTRIES as usize));
     while let Some(segment) = segments.recv().await {
-        compio::runtime::spawn(write_one(segment, Rc::clone(&started))).detach();
+        spawn(write_one(segment, Rc::clone(&started))).detach();
     }
 }
 
@@ -124,10 +125,10 @@ async fn write_one(segment: Arc<Shared>, started: Rc<Semaphore>) {
     };
     let mut pending = Pending {
         segment: Arc::clone(&segment),
-        work: Some(work),
+        work: None,
     };
     let step = segment.align.step();
-    let (buf, at) = pending.work.as_mut().expect("set just above").buf_mut();
+    let (buf, at) = pending.work.insert(work).buf_mut();
     let result = write_owned(&segment.file, buf, at, step).await;
     if let Some(work) = pending.work.take() {
         segment.complete(work, result);
@@ -143,7 +144,7 @@ async fn write_owned(
     buf: &mut AlignedBuf,
     offset: u64,
     step: usize,
-) -> std::io::Result<()> {
+) -> io::Result<()> {
     let (mut storage, start, len) = buf.lend();
     let mut done = 0;
     let result = loop {
@@ -155,7 +156,7 @@ async fn write_owned(
             offset + to_u64(done),
             storage.slice(start + done..start + len),
         );
-        let compio::BufResult(written, slice) = compio::runtime::submit(write).await.into_inner();
+        let compio::BufResult(written, slice) = submit(write).await.into_inner();
         storage = slice.into_inner();
         match written {
             Ok(written) => match aligned_progress(done, written, len, offset, step) {
@@ -179,6 +180,7 @@ mod tests {
             segment::direct::{DioAlign, DirectWriter, Job},
         },
         assert2::check,
+        std::fs,
     };
 
     /// A ring the kernel refuses, here one of no entries, starts no
@@ -204,7 +206,7 @@ mod tests {
 
         check!(result.is_err());
         check!(buf.as_slice() == [7; 1024]);
-        check!(std::fs::read(file.path()).unwrap().is_empty());
+        check!(fs::read(file.path()).unwrap().is_empty());
     }
 
     /// A write task that ends without recording its write, as a panicking

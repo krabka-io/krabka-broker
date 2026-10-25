@@ -23,7 +23,12 @@ use {
         owned::produce_response::{PartitionProduceResponse, TopicProduceResponse},
         records::{Record, RecordBatch},
     },
-    std::{sync::Arc, time::Duration},
+    std::{
+        future, iter,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::time::{sleep, timeout},
 };
 
 /// Long enough that a test which waits this long has failed, not raced.
@@ -156,7 +161,7 @@ async fn until_appended(partitions: &[Arc<Partition>]) {
         .iter()
         .any(|partition| partition.log_end_offset().0 == 0)
     {
-        tokio::time::sleep(Duration::from_millis(1)).await;
+        sleep(Duration::from_millis(1)).await;
     }
 }
 
@@ -252,7 +257,7 @@ async fn one_admitted_partition_keeps_its_response_slot_and_ack_gate(acks: i16, 
         ),
         async {
             if busy {
-                tokio::time::sleep(Duration::from_millis(20)).await;
+                sleep(Duration::from_millis(20)).await;
                 check!(part.log_end_offset() == Offset(0));
             }
             drop(busy_guard);
@@ -273,18 +278,19 @@ async fn one_admitted_partition_keeps_its_response_slot_and_ack_gate(acks: i16, 
     }
     if acks == -1 {
         assert2::assert!(awaiting.len() == 1);
-        let pending = awaiting.pop().unwrap();
-        assert2::assert!((pending.topic_row, pending.partition_row) == (1, 0));
-        topic_results[1].partition_responses[0] = pending
-            .ack
-            .finish(
-                std::time::Instant::now() + PATIENCE,
-                |_, _| Ok(1),
-                std::future::pending(),
-            )
+        let PendingPartition {
+            topic_row,
+            partition_row,
+            ack,
+            ..
+        } = awaiting.pop().unwrap();
+        assert2::assert!((topic_row, partition_row) == (1, 0));
+        topic_results[1].partition_responses[0] = ack
+            .finish(Instant::now() + PATIENCE, |_, _| Ok(1), future::pending())
             .await;
     }
     assert2::assert!(awaiting.is_empty());
+    drop(awaiting);
     assert2::assert!(
         topic_results == expected_rows(&["refused", "orders"], vec![refused, appended(0)])
     );
@@ -321,20 +327,23 @@ async fn a_busy_writer_holds_back_only_its_own_partition() {
             finished = &mut completing => {
                 panic!("the request finished under a busy writer: {finished:?}");
             }
-            waited = tokio::time::timeout(PATIENCE, until_appended(&partitions[1..])) => {
+            waited = timeout(PATIENCE, until_appended(&partitions[1..])) => {
                 waited.expect("every partition behind the busy writer appends while it is busy");
             }
         }
         check!(partitions[0].log_end_offset().0 == 0);
         drop(busy);
-        tokio::time::timeout(PATIENCE, completing)
+        timeout(PATIENCE, completing)
             .await
             .expect("the request finishes once the writer is free")
             .expect("append");
     }
 
     check!(awaiting.is_empty(), "acks=1 answers without a wait");
-    let rows = (0..topics.len()).map(|_| appended(0)).collect();
+    drop(awaiting);
+    let rows = iter::repeat_with(|| appended(0))
+        .take(topics.len())
+        .collect();
     assert!(topic_results == expected_rows(&topics, rows));
 }
 
@@ -360,7 +369,7 @@ async fn overlapping_waits_share_the_handler_time_they_spent_together() {
     for partition in &partitions {
         busy.push(partition.writer_gate.writer_busy().await);
     }
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let (completed, ()) = tokio::join!(
         complete_admitted(
             admitted,
@@ -370,11 +379,12 @@ async fn overlapping_waits_share_the_handler_time_they_spent_together() {
             &mut awaiting,
         ),
         async {
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            sleep(Duration::from_millis(50)).await;
             drop(busy);
         },
     );
     let wall = started.elapsed();
+    drop(awaiting);
     completed.expect("append");
 
     let charged: u64 = topics
@@ -449,7 +459,7 @@ async fn a_partition_named_twice_appends_in_request_order_beside_a_refusal() {
     } = admit(&fixture, &image, &entries, -1).await;
     let mut awaiting: Vec<PendingPartition> = Vec::new();
 
-    tokio::time::timeout(
+    timeout(
         PATIENCE,
         complete_admitted(
             admitted,
@@ -469,11 +479,7 @@ async fn a_partition_named_twice_appends_in_request_order_beside_a_refusal() {
     for pending in awaiting {
         let row = pending
             .ack
-            .finish(
-                std::time::Instant::now() + PATIENCE,
-                |_, _| Ok(1),
-                std::future::pending(),
-            )
+            .finish(Instant::now() + PATIENCE, |_, _| Ok(1), future::pending())
             .await;
         waited.push((pending.topic_row, pending.partition_row, row));
     }

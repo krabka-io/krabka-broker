@@ -1,4 +1,5 @@
 //! Public batch authorization keeps dispatch mode and input ownership.
+#![cfg(test)]
 
 use {
     assert2::assert,
@@ -8,7 +9,7 @@ use {
     },
     krabka_metadata::{AclOperation, MetadataImage, ResourceType},
     krabka_security::{AuthMethod, Principal},
-    std::sync::Mutex,
+    std::{ptr, sync::Mutex},
     uuid::Uuid,
 };
 
@@ -69,25 +70,29 @@ fn batch_dispatch_keeps_quiet_checks_borrowed_keys_and_repeated_names(
     let topics = ["first".to_owned(), "second".to_owned()];
     let names = [topics[0].as_str(), topics[0].as_str(), topics[1].as_str()];
     let probe = DispatchProbe::default();
-    let decisions = match log_denied {
-        Some(flag) => authorize_topics_logged(
-            &probe,
-            &source,
-            &principal,
-            &host,
-            AclOperation::Write,
-            names,
-            flag,
-        ),
-        None => authorize_topics(
-            &probe,
-            &source,
-            &principal,
-            &host,
-            AclOperation::Write,
-            names,
-        ),
-    };
+    let decisions = log_denied.map_or_else(
+        || {
+            authorize_topics(
+                &probe,
+                &source,
+                &principal,
+                &host,
+                AclOperation::Write,
+                names,
+            )
+        },
+        |flag| {
+            authorize_topics_logged(
+                &probe,
+                &source,
+                &principal,
+                &host,
+                AclOperation::Write,
+                names,
+                flag,
+            )
+        },
+    );
     let logged = log_denied.unwrap_or(true);
     assert2::assert!(
         decisions.len() == 2
@@ -102,6 +107,6 @@ fn batch_dispatch_keeps_quiet_checks_borrowed_keys_and_repeated_names(
     assert2::assert!(probe.calls.lock().unwrap().as_slice() == expected.as_slice());
     for original in &topics {
         let (borrowed, _) = decisions.get_key_value(original.as_str()).unwrap();
-        assert2::assert!(std::ptr::eq(borrowed.as_ptr(), original.as_ptr()));
+        assert2::assert!(ptr::eq(borrowed.as_ptr(), original.as_ptr()));
     }
 }

@@ -24,7 +24,7 @@ pub(super) fn resolve_owner(
         None | Some("") => Some(requester.clone()),
         Some(name) => Some(KafkaPrincipal {
             principal_type: req.owner_principal_type.clone()?,
-            name: name.to_string(),
+            name: name.to_owned(),
         }),
     }
 }

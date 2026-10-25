@@ -29,6 +29,10 @@ use {
     assert2::{assert, check},
     bytes::{BufMut, BytesMut},
     futures_util::StreamExt,
+    krabka_protocol::owned::{
+        api_versions_response, sasl_authenticate_response::SaslAuthenticateResponse,
+        sasl_handshake_response::SaslHandshakeResponse,
+    },
     tokio::net::TcpStream,
 };
 
@@ -129,7 +133,7 @@ async fn raft_voter_registry_routes_to_real_handlers() {
         broker: handle,
         dir: _dir,
     } = start_broker_with(|cfg| {
-        cfg.authorizer = std::sync::Arc::new(DenyAll);
+        cfg.authorizer = Arc::new(DenyAll);
     })
     .await;
     let broker = handle.broker_arc_for_test();
@@ -220,7 +224,7 @@ enum Outcome {
     Closed,
     /// An `ApiVersions` v0 body carrying `UNSUPPORTED_VERSION` and the one
     /// `ApiVersions` range.
-    ApiVersionsV0(krabka_protocol::owned::api_versions_response::ApiVersionsResponse),
+    ApiVersionsV0(api_versions_response::ApiVersionsResponse),
 }
 
 /// A request frame to send: an api key at a version.
@@ -278,22 +282,18 @@ async fn drive_one_frame_per_connection(
             .call();
         framed.send(frame.freeze()).await.expect("send request");
 
-        outcomes.push(match framed.next().await {
-            None => Outcome::Closed,
-            Some(response) => {
-                let response = response.expect("response frame decode");
-                check!(
-                    i32::from_be_bytes(response[..4].try_into().expect("correlation id"))
-                        == correlation_id
-                );
-                // `ApiVersions`' response header is always v0: the
-                // correlation id alone.
-                Outcome::ApiVersionsV0(
-                    ApiVersionsResponse::decode(&mut &response[4..], 0)
-                        .expect("v0 ApiVersions body"),
-                )
-            }
-        });
+        outcomes.push(framed.next().await.map_or(Outcome::Closed, |response| {
+            let response = response.expect("response frame decode");
+            check!(
+                i32::from_be_bytes(response[..4].try_into().expect("correlation id"))
+                    == correlation_id
+            );
+            // `ApiVersions`' response header is always v0: the
+            // correlation id alone.
+            Outcome::ApiVersionsV0(
+                ApiVersionsResponse::decode(&mut &response[4..], 0).expect("v0 ApiVersions body"),
+            )
+        }));
     }
 
     server
@@ -685,7 +685,7 @@ async fn a_gated_pre_auth_request_counts_a_failed_authentication_under_its_mecha
         .await;
 
         let label = SaslMechanismLabel {
-            mechanism: mechanism.to_string(),
+            mechanism: mechanism.to_owned(),
         };
         check!(
             metrics.failed_authentication.get_or_create(&label).get() == 1,
@@ -778,8 +778,8 @@ fn encoded_request_frame<T: krabka_protocol::Encode>(
 /// The response of one SASL frame that a non-SASL listener received.
 #[derive(Debug, PartialEq)]
 enum SaslAnswer {
-    Handshake(krabka_protocol::owned::sasl_handshake_response::SaslHandshakeResponse),
-    Authenticate(krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse),
+    Handshake(SaslHandshakeResponse),
+    Authenticate(SaslAuthenticateResponse),
 }
 
 /// A `PLAINTEXT` or `SSL` listener decides the principal when it accepts the
@@ -800,9 +800,7 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
             metadata_request::{MetadataRequest, MetadataRequestTopic},
             metadata_response::{MetadataResponse, MetadataResponseTopic},
             sasl_authenticate_request::SaslAuthenticateRequest,
-            sasl_authenticate_response::SaslAuthenticateResponse,
             sasl_handshake_request::SaslHandshakeRequest,
-            sasl_handshake_response::SaslHandshakeResponse,
         },
     };
 
@@ -814,7 +812,7 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
     let handshake = |mechanism: &str| {
         encoded_request_frame()
             .body(&SaslHandshakeRequest {
-                mechanism: mechanism.to_string(),
+                mechanism: mechanism.to_owned(),
                 ..Default::default()
             })
             .api_key(HANDSHAKE)
@@ -840,12 +838,12 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
     let refused_authenticate = SaslAnswer::Authenticate(SaslAuthenticateResponse {
         error_code: codes::ILLEGAL_SASL_STATE,
         error_message: Some(
-            "SaslAuthenticate request received after successful authentication".to_string(),
+            "SaslAuthenticate request received after successful authentication".to_owned(),
         ),
         ..Default::default()
     });
     let certificate = krabka_security::Principal {
-        name: DENIED_CERTIFICATE_PRINCIPAL.to_string(),
+        name: DENIED_CERTIFICATE_PRINCIPAL.to_owned(),
         auth_method: krabka_security::AuthMethod::MTls,
         groups: vec![],
     };
@@ -897,9 +895,9 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
         broker: handle,
         dir: _dir,
     } = start_broker_with(|cfg| {
-        cfg.authorizer = std::sync::Arc::new(DenyCertificatePrincipal);
+        cfg.authorizer = Arc::new(DenyCertificatePrincipal);
         cfg.plain_credentials
-            .insert("alice".to_string(), "wonderland".to_string());
+            .insert("alice".to_owned(), "wonderland".to_owned());
     })
     .await;
 
@@ -937,7 +935,7 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
                 encoded_request_frame()
                     .body(&MetadataRequest {
                         topics: Some(vec![MetadataRequestTopic {
-                            name: Some(TOPIC.to_string()),
+                            name: Some(TOPIC.to_owned()),
                             ..Default::default()
                         }]),
                         allow_auto_topic_creation: false,
@@ -962,7 +960,7 @@ async fn a_sasl_frame_on_a_non_sasl_listener_keeps_the_principal() {
             metadata.topics
                 == vec![MetadataResponseTopic {
                     error_code: expected_topic_error,
-                    name: Some(TOPIC.to_string()),
+                    name: Some(TOPIC.to_owned()),
                     topic_authorized_operations: i32::MIN,
                     ..Default::default()
                 }],
@@ -991,16 +989,23 @@ mod request_budget {
         },
         assert2::{assert, check},
         futures_util::{SinkExt as _, StreamExt as _},
+        std::{io, sync::Arc, time::Duration},
+        tokio::{
+            net::TcpStream,
+            task::{self, JoinHandle},
+            time,
+        },
+        tokio_util::codec::Framed,
     };
 
     /// One connection served by the loop, and the client end already framed.
     struct Served {
-        client: tokio_util::codec::Framed<tokio::net::TcpStream, KafkaCodec>,
-        loop_task: tokio::task::JoinHandle<()>,
+        client: Framed<TcpStream, KafkaCodec>,
+        loop_task: JoinHandle<()>,
     }
 
-    async fn serve(broker: &std::sync::Arc<Broker>) -> Served {
-        let (loop_task, client) = plaintext_loop(std::sync::Arc::clone(broker)).await;
+    async fn serve(broker: &Arc<Broker>) -> Served {
+        let (loop_task, client) = plaintext_loop(Arc::clone(broker)).await;
         Served { client, loop_task }
     }
 
@@ -1056,7 +1061,7 @@ mod request_budget {
         } = broker_with(|cfg| cfg.queued_max_requests = 1).await;
         let broker = handle.broker_arc_for_test();
 
-        let held = std::sync::Arc::clone(&broker.queued_requests_sem)
+        let held = Arc::clone(&broker.queued_requests_sem)
             .acquire_owned()
             .await
             .expect("the only permit");
@@ -1070,8 +1075,7 @@ mod request_budget {
 
         // The frame is on the wire and the loop has read it; what it cannot do
         // is handle it. A response now would mean the budget bounds nothing.
-        let early =
-            tokio::time::timeout(std::time::Duration::from_millis(200), served.client.next()).await;
+        let early = time::timeout(Duration::from_millis(200), served.client.next()).await;
         assert!(
             early.is_err(),
             "a request must not be served past the budget"
@@ -1079,12 +1083,11 @@ mod request_budget {
         check!(broker.metrics.queued_requests.get() == 0);
 
         drop(held);
-        let response =
-            tokio::time::timeout(std::time::Duration::from_secs(5), served.client.next())
-                .await
-                .expect("the freed permit admits the waiting request")
-                .expect("a response frame")
-                .expect("response decode");
+        let response = time::timeout(Duration::from_secs(5), served.client.next())
+            .await
+            .expect("the freed permit admits the waiting request")
+            .expect("a response frame")
+            .expect("response decode");
         check!(i32::from_be_bytes(response[..4].try_into().expect("correlation id")) == 1);
 
         drop(served.client);
@@ -1134,7 +1137,7 @@ mod request_budget {
                 check!(
                     matches!(
                         error.kind(),
-                        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                        io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted
                     ),
                     "the unread oversized body must close the connection: {error}"
                 );
@@ -1158,7 +1161,7 @@ mod request_budget {
             dir: _dir,
         } = byte_budget_broker().await;
         let broker = handle.broker_arc_for_test();
-        let broker_for_budget = std::sync::Arc::clone(&broker);
+        let broker_for_budget = Arc::clone(&broker);
         let available = move || {
             broker_for_budget
                 .queued_request_bytes
@@ -1188,9 +1191,9 @@ mod request_budget {
             .expect("serve loop joins on client EOF");
         // The broker's own connections draw on the same budget, so the wait
         // is for it to come back whole rather than for one instant of it.
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        time::timeout(Duration::from_secs(5), async {
             while available() != BUDGET_BYTES {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
@@ -1220,7 +1223,9 @@ mod log_levels {
         },
         assert2::assert,
         futures_util::{SinkExt as _, StreamExt as _},
-        tracing::{Instrument as _, Level},
+        std::time::Duration,
+        tokio::{net::TcpStream, time},
+        tracing::{Instrument as _, Level, dispatcher},
     };
 
     // What the client end of the one connection does.
@@ -1245,7 +1250,7 @@ mod log_levels {
     fn logged(level: Level, message: &str) -> LoggedLine {
         LoggedLine {
             level,
-            message: message.to_string(),
+            message: message.to_owned(),
         }
     }
 
@@ -1260,7 +1265,7 @@ mod log_levels {
         let broker = handle.broker_arc_for_test();
 
         let capture = LogCapture::default();
-        let _capturing = tracing::dispatcher::set_default(&capture.dispatch());
+        let _capturing = dispatcher::set_default(&capture.dispatch());
         let ServeLoop { addr, serve } = serve_loop(
             broker,
             "PLAINTEXT",
@@ -1271,7 +1276,7 @@ mod log_levels {
         )
         .await;
         let loop_task = tokio::spawn(serve.instrument(LogCapture::span()));
-        let client = tokio::net::TcpStream::connect(addr)
+        let client = TcpStream::connect(addr)
             .await
             .expect("connect to the serve loop");
         let mut client = codec::frame(client, DEFAULT_MAX_FRAME_BYTES);
@@ -1299,7 +1304,7 @@ mod log_levels {
             }
             Peer::Idle => Some(client),
         };
-        tokio::time::timeout(std::time::Duration::from_secs(30), loop_task)
+        time::timeout(Duration::from_secs(30), loop_task)
             .await
             .expect("the serve loop ends within 30s")
             .expect("the serve loop does not panic");
@@ -1369,6 +1374,8 @@ mod request_limit {
             Encode as _,
             owned::describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
         },
+        std::time::Duration,
+        tokio::time,
     };
 
     /// The limit of the broker under test: well over its own requests to
@@ -1383,7 +1390,7 @@ mod request_limit {
         DescribeConfigsRequest {
             resources: vec![DescribeConfigsResource {
                 resource_type: 4,
-                resource_name: "1".to_string(),
+                resource_name: "1".to_owned(),
                 ..Default::default()
             }],
             include_synonyms: false,
@@ -1418,7 +1425,7 @@ mod request_limit {
             .expect("send the request");
         let answer = client.next().await.and_then(Result::ok);
         drop(client);
-        tokio::time::timeout(std::time::Duration::from_secs(30), loop_task)
+        time::timeout(Duration::from_secs(30), loop_task)
             .await
             .expect("the serve loop ends within 30s")
             .expect("the serve loop does not panic");

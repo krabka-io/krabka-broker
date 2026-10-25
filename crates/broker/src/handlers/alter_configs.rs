@@ -59,6 +59,11 @@ use {
             response_encoding::{ErrorRow as _, ResourceErrorRow},
         },
     },
+    krabka_protocol::owned::incremental_alter_configs_request,
+    std::{
+        collections::{BTreeMap, BTreeSet, HashMap},
+        mem,
+    },
 };
 
 pub(super) trait ResourceErrorRequestResource {
@@ -72,9 +77,7 @@ impl ResourceErrorRequestResource for AlterConfigsResource {
     fn resource_name(&self) -> &str { &self.resource_name }
 }
 
-impl ResourceErrorRequestResource
-    for krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource
-{
+impl ResourceErrorRequestResource for incremental_alter_configs_request::AlterConfigsResource {
     fn resource_type(&self) -> i8 { self.resource_type }
 
     fn resource_name(&self) -> &str { &self.resource_name }
@@ -93,7 +96,7 @@ where
 
 krabka_macros::decoded_dispatch! {
     /// Validate broker-local values before sending replacement resources to the controller.
-    pub(crate) async fn dispatch(
+    pub async fn dispatch(
         broker: &Broker,
         version: ApiVersion,
         req_bytes: &[u8],
@@ -105,18 +108,22 @@ krabka_macros::decoded_dispatch! {
         let duplicates = duplicate_resource_flags(req.resources.iter());
         let mut indexed_responses = Vec::new();
         let mut forwarded_indices = Vec::new();
-        req.resources = std::mem::take(&mut req.resources)
+        req.resources = mem::take(&mut req.resources)
             .into_iter()
             .zip(duplicates)
             .enumerate()
             .filter_map(|(index, (resource, duplicate))| {
-                if let Some(refusal) = preprocess_resource(broker, ctx, &resource, duplicate) {
-                    indexed_responses.push((index, refusal));
-                    None
-                } else {
-                    forwarded_indices.push(index);
-                    Some(resource)
-                }
+                let refusal = preprocess_resource(broker, ctx, &resource, duplicate);
+                refusal.map_or_else(
+                    || {
+                        forwarded_indices.push(index);
+                        Some(resource)
+                    },
+                    |refusal| {
+                        indexed_responses.push((index, refusal));
+                        None
+                    },
+                )
             })
             .collect();
         let mut response = if req.resources.is_empty() {
@@ -232,10 +239,10 @@ krabka_macros::config_alter_handler! { request = AlterConfigsRequest, response =
 /// The values never reach the audit record. A config value can be a password
 /// or a key store path, and the record only has to say who changed what.
 fn audit_resources_for(
-    resource: &krabka_protocol::owned::alter_configs_request::AlterConfigsResource,
+    resource: &AlterConfigsResource,
     image: &krabka_metadata::MetadataImage,
 ) -> Vec<krabka_audit::AuditResource> {
-    let mut out = vec![crate::handlers::audit_resource(
+    let mut out = vec![audit_resource(
         config_resource_type(resource.resource_type),
         resource.resource_name.clone(),
     )];
@@ -282,16 +289,16 @@ fn audit_resources_for(
 /// deletion. Only Topic resources have such keys; Group and `ClientMetrics`
 /// pass a predicate that always returns `false`.
 fn changed_config_keys(
-    resource: &krabka_protocol::owned::alter_configs_request::AlterConfigsResource,
-    stored: Option<&std::collections::BTreeMap<String, String>>,
+    resource: &AlterConfigsResource,
+    stored: Option<&BTreeMap<String, String>>,
     is_controller_managed: impl Fn(&str) -> bool,
 ) -> Vec<String> {
-    let replacement: std::collections::BTreeMap<&str, &str> = resource
+    let replacement: BTreeMap<&str, &str> = resource
         .configs
         .iter()
         .map(|config| (config.name.as_str(), config.value.as_deref().unwrap_or("")))
         .collect();
-    let mut changed: std::collections::BTreeSet<String> = replacement
+    let mut changed: BTreeSet<String> = replacement
         .iter()
         .filter(|(key, value)| {
             stored
@@ -340,12 +347,13 @@ where
             resource_name: resource.resource_name(),
         })
         .collect();
-    let mut counts: std::collections::HashMap<ConfigResourceIdentity<'_>, usize> =
-        std::collections::HashMap::new();
+    let mut counts: HashMap<ConfigResourceIdentity<'_>, usize> = HashMap::new();
     for key in &keys {
         *counts.entry(*key).or_insert(0) += 1;
     }
-    keys.iter().map(|key| counts[key] > 1).collect()
+    keys.iter()
+        .map(|key| counts.get(key).is_some_and(|&count| count > 1))
+        .collect()
 }
 
 /// Kafka's `ConfigAdminManager.preprocess` shape checks, which run before
@@ -368,7 +376,7 @@ pub(super) fn validate_resource_shape<'a>(
         ));
     }
     let configs: Vec<(&str, bool)> = configs.into_iter().collect();
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = BTreeSet::new();
     if configs.iter().any(|(name, _)| !seen.insert(*name)) {
         return Err((INVALID_REQUEST, "Error due to duplicate config keys".into()));
     }

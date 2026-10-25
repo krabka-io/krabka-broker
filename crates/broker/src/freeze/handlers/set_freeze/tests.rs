@@ -15,7 +15,7 @@ use {
         },
     },
     krabka_metadata::{MetadataImage, PatternType, TopicFreezeRecord},
-    krabka_protocol::krabka::freeze::SetTopicFreezeRequest,
+    krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, SetTopicFreezeRequest},
     krabka_security::Principal,
     ring::signature::Ed25519KeyPair,
     std::net::SocketAddr,
@@ -193,10 +193,7 @@ async fn handle_processes_request_and_encodes_response() {
     let p = principal(ALICE_NAME);
     let s = peer();
     let ctx = context(&p, &s);
-    let req = freeze_request(
-        "test-topic",
-        krabka_protocol::krabka::freeze::PATTERN_TYPE_LITERAL,
-    );
+    let req = freeze_request("test-topic", PATTERN_TYPE_LITERAL);
     let mut req_bytes = bytes::BytesMut::new();
     req.encode(&mut req_bytes, 0).unwrap();
 

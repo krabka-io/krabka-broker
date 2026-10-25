@@ -55,14 +55,14 @@ async fn first_record(
 
 /// Whether `seq` is one acknowledged send and nothing else: never failed and
 /// never resent, so deleting its one copy is exactly one lost record.
-pub(crate) fn deletable(ledger: &ProducerLedger, seq: u64) -> bool {
+pub fn deletable(ledger: &ProducerLedger, seq: u64) -> bool {
     ledger.acked.contains(seq) && !ledger.failed.contains(seq) && !ledger.retried.contains(seq)
 }
 
 /// Delete one acknowledged record of `path` from the cluster: the record at
 /// the log-start offset of the first partition whose first record is
 /// [`deletable`], deleted with `DeleteRecords` up to its offset plus one.
-pub(crate) async fn delete_one_record(
+pub async fn delete_one_record(
     endpoint: &Endpoint,
     nodes: &Nodes,
     path: &LoadPath,
@@ -139,6 +139,7 @@ mod tests {
         krabka_bench_driver::soak::{
             contract::Semantics, evidence::ProducerLedger, ledger::SeqSet,
         },
+        std::iter,
     };
 
     #[yare::parameterized(
@@ -154,8 +155,8 @@ mod tests {
             semantics: Semantics::Idempotent,
             attempted: 13,
             acked: SeqSet::range(0, 10),
-            failed: [5].into_iter().collect(),
-            retried: [6].into_iter().collect(),
+            failed: iter::once(5).collect(),
+            retried: iter::once(6).collect(),
             transactions: Vec::new(),
         };
         check!(deletable(&ledger, seq) == expected);

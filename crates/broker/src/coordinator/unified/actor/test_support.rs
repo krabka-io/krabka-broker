@@ -12,13 +12,21 @@ use {
     assert2::assert,
     bytes::Bytes,
     krabka_protocol::{
-        owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+        owned::{
+            consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+            consumer_protocol_assignment,
+        },
         primitives::uuid::Uuid,
     },
-    std::{collections::HashMap, sync::Arc, time::Duration},
+    std::{
+        collections::HashMap,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::sync::{oneshot, oneshot::Receiver},
 };
 
-pub(crate) mod rpc;
+pub mod rpc;
 
 #[bon::builder]
 pub(super) fn consumer_native_join_request(member_id: &str) -> ConsumerGroupHeartbeatRequest {
@@ -52,23 +60,19 @@ pub(super) struct StaticMetadata {
     pub(super) input: ReconcileInput,
 }
 impl MetadataProvider for StaticMetadata {
-    fn snapshot(&self) -> std::sync::Arc<ReconcileInput> { std::sync::Arc::new(self.input.clone()) }
+    fn snapshot(&self) -> Arc<ReconcileInput> { Arc::new(self.input.clone()) }
 }
 
 /// A reconciler image containing one named topic with the supplied wire id.
-pub(crate) fn topic_reconcile_input(
-    topic: &str,
-    topic_id: Uuid,
-    partitions: i32,
-) -> ReconcileInput {
+pub fn topic_reconcile_input(topic: &str, topic_id: Uuid, partitions: i32) -> ReconcileInput {
     ReconcileInput {
-        topic_id_by_name: [(topic.to_string(), topic_id)].into(),
+        topic_id_by_name: [(topic.to_owned(), topic_id)].into(),
         partitions_per_topic: [(topic_id, partitions)].into(),
         ..ReconcileInput::default()
     }
 }
 
-pub(crate) fn empty_metadata() -> Arc<dyn MetadataProvider> {
+pub fn empty_metadata() -> Arc<dyn MetadataProvider> {
     Arc::new(StaticMetadata {
         input: ReconcileInput::default(),
     })
@@ -100,7 +104,7 @@ pub(super) fn make_coordinator_with_config(
     config: NextGenConfig,
 ) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
     let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = coordinator_with_log(config, empty_metadata(), log.clone());
+    let coord = coordinator_with_log(config, empty_metadata(), Arc::clone(&log));
     (coord, log)
 }
 
@@ -135,8 +139,8 @@ pub(super) struct ConsumerMemberSetup<'a> {
     pub topics: &'a [&'a str],
     #[default(crate::coordinator::unified::ClientIdentity { id: "client", host: "host" })]
     pub client: ClientIdentity<'a>,
-    #[default(std::time::Instant::now())]
-    pub now: std::time::Instant,
+    #[default(Instant::now())]
+    pub now: Instant,
 }
 
 #[bon::builder]
@@ -145,7 +149,7 @@ pub(super) fn subscribed_member(
     #[builder(default = & ["t"])] topics: &'_ [&'_ str],
     #[builder(default = crate :: coordinator :: unified :: ClientIdentity { id : "client" , host : "host" })]
     client: ClientIdentity<'_>,
-    #[builder(default = std :: time :: Instant :: now ())] now: std::time::Instant,
+    #[builder(default = Instant :: now ())] now: Instant,
 ) -> MemberState {
     let setup = ConsumerMemberSetup {
         member_id,
@@ -280,7 +284,7 @@ pub(super) fn bidirectional_coordinator() -> (Arc<GroupCoordinator>, Arc<InMemor
 }
 
 /// One classic member using the common retention/dispatch test identity.
-pub(crate) fn classic_member(member_id: &str) -> Member {
+pub fn classic_member(member_id: &str) -> Member {
     classic_member_with_subscription(member_id, Bytes::new())
 }
 
@@ -298,11 +302,8 @@ fn classic_member_with_subscription(member_id: impl Into<String>, subscription: 
 /// One follower already parked for a classic sync reply.
 pub(super) fn parked_follower(
     member_id: &str,
-) -> (
-    super::ParkedWaiters,
-    tokio::sync::oneshot::Receiver<super::SyncResult>,
-) {
-    let (reply, response) = tokio::sync::oneshot::channel();
+) -> (super::ParkedWaiters, Receiver<super::SyncResult>) {
+    let (reply, response) = oneshot::channel();
     let mut parked = super::ParkedWaiters::default();
     parked.followers.insert(member_id.into(), reply);
     (parked, response)
@@ -334,13 +335,13 @@ pub(super) fn make_coordinator_with_topic_config(
 ) -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
     let topic_id = Uuid([7; 16]);
     let input = ReconcileInput {
-        topic_id_by_name: [(topic.to_string(), topic_id)].into(),
+        topic_id_by_name: [(topic.to_owned(), topic_id)].into(),
         partitions_per_topic: [(topic_id, partitions)].into(),
         ..Default::default()
     };
     let metadata: Arc<dyn MetadataProvider> = Arc::new(StaticMetadata { input });
     let log = Arc::new(InMemoryOffsetsLog::default());
-    let coord = coordinator_with_log(config, metadata, log.clone());
+    let coord = coordinator_with_log(config, metadata, Arc::clone(&log));
     (coord, log)
 }
 
@@ -349,10 +350,10 @@ pub(super) fn make_coordinator_with_topic_config(
 /// A real classic consumer client's `JoinGroup` protocol metadata: a
 /// `ConsumerProtocolSubscription` with the leading version-negotiation
 /// prefix.
-pub(crate) fn subscription_blob(topics: &[&str]) -> Bytes { subscription_blob_at(0, topics) }
+pub fn subscription_blob(topics: &[&str]) -> Bytes { subscription_blob_at(0, topics) }
 
 /// Classic subscription metadata with its negotiated version prefix and body.
-pub(crate) fn subscription_blob_at(version: i16, topics: &[&str]) -> Bytes {
+pub fn subscription_blob_at(version: i16, topics: &[&str]) -> Bytes {
     use {
         bytes::{BufMut, BytesMut},
         krabka_protocol::{
@@ -360,7 +361,7 @@ pub(crate) fn subscription_blob_at(version: i16, topics: &[&str]) -> Bytes {
         },
     };
     let sub = ConsumerProtocolSubscription {
-        topics: topics.iter().map(|s| (*s).to_string()).collect(),
+        topics: topics.iter().map(|s| (*s).to_owned()).collect(),
         ..Default::default()
     };
     let mut out = BytesMut::new();
@@ -373,7 +374,7 @@ pub(crate) fn subscription_blob_at(version: i16, topics: &[&str]) -> Bytes {
 /// `ConsumerProtocolAssignment`.
 pub(super) fn decode_assignment(
     blob: &Bytes,
-) -> krabka_protocol::owned::consumer_protocol_assignment::ConsumerProtocolAssignment {
+) -> consumer_protocol_assignment::ConsumerProtocolAssignment {
     use {
         bytes::Buf,
         krabka_protocol::{
@@ -505,8 +506,7 @@ pub(super) fn seed_classic_member(
     cs.protocol_type = Some("consumer".into());
     cs.generation_id = 1;
     cs.add_member(
-        classic_member_for_topic(member_id, topic)
-            .with_instance_id(instance_id.map(str::to_string)),
+        classic_member_for_topic(member_id, topic).with_instance_id(instance_id.map(str::to_owned)),
     );
     let group = Box::new(CoordinatorGroup::seeded(
         "g",

@@ -38,6 +38,7 @@
 
 use {
     crate::model_check::run_bfs,
+    krabka_verified::{consensus, diskless::diskless_trim_decision, offset_allocator},
     stateright::{Checker, Model, Property},
 };
 
@@ -152,7 +153,7 @@ impl Model for CrashModel {
                     s.index_frontier = s.object_frontier;
                 }
                 Act::Trim => {
-                    let decision = krabka_verified::diskless::diskless_trim_decision(
+                    let decision = diskless_trim_decision(
                         s.index_frontier,
                         s.wal_acked,
                         0,
@@ -313,7 +314,7 @@ fn quorum_frontier(s: &CrashState) -> i64 {
     live.sort_unstable();
     let leader_end = live.pop().unwrap_or(0);
     let followers = live;
-    krabka_verified::consensus::majority_watermark(leader_end, &followers, WAL_MAJORITY, 0)
+    consensus::majority_watermark(leader_end, &followers, WAL_MAJORITY, 0)
 }
 
 /// The controller's reservation for one appender's one-record batch: the
@@ -325,10 +326,10 @@ fn reserve_via_controller(s: &CrashState) -> Reservation {
         .reservations
         .iter()
         .try_fold(0, |frontier, &Reservation { base, end }| {
-            krabka_verified::offset_allocator::wal_reservation_frontier(frontier, base, end - base)
+            offset_allocator::wal_reservation_frontier(frontier, base, end - base)
         })
         .expect("the controller's pending reservation chain stays exact");
-    let (base, end) = krabka_verified::offset_allocator::reserve_offsets(pending_frontier, 1)
+    let (base, end) = offset_allocator::reserve_offsets(pending_frontier, 1)
         .expect("a bounded reservation is representable");
     Reservation { base, end }
 }

@@ -7,7 +7,10 @@
 //! must reach that leader, so every test starts from this address.
 
 use {
-    crate::support, assert2::assert, krabka_broker::BrokerHandle, std::net::SocketAddr,
+    crate::support,
+    assert2::assert,
+    krabka_broker::BrokerHandle,
+    std::{net::SocketAddr, path::PathBuf},
     tempfile::TempDir,
 };
 
@@ -45,7 +48,7 @@ pub async fn start_three_broker_plaintext_cluster() -> ThreeBrokerCluster {
 }
 
 pub async fn start_three_broker_plaintext_cluster_with_log_dirs(
-    extra_log_dirs: &[std::path::PathBuf; 3],
+    extra_log_dirs: &[PathBuf; 3],
 ) -> ThreeBrokerCluster {
     let cluster = support::start_n_node_with(3, |index, config| {
         config.extra_log_dirs = vec![extra_log_dirs[index].clone()];

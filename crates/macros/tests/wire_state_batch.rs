@@ -1,4 +1,5 @@
 //! Compile and exercise each owned/borrowed share-batch conversion direction.
+#![cfg(test)]
 
 use {assert2::assert, krabka_macros::WireStateBatch};
 

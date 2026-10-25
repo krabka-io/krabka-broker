@@ -39,13 +39,14 @@
 use {
     assert2::assert,
     bytes::{Bytes, BytesMut},
-    criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main},
+    criterion::{BatchSize, Criterion, Throughput, abs_file, criterion_main},
     krabka_broker::{
         Broker, BrokerConfig, BrokerHandle,
         metrics::BrokerMetrics,
         produce_hot_path::{
             HotPathSettings, PathChoice, ProducePath, TimestampPolicy, append_one_batch,
         },
+        testing,
     },
     krabka_client_core::Client,
     krabka_compression::RecordDecompressionPolicy,
@@ -58,20 +59,23 @@ use {
             produce_request::PartitionProduceData,
         },
         primitives::uuid::Uuid as WireUuid,
-        records::{Record, RecordBatch},
+        records::{Record, RecordBatch, RecordsPayload},
     },
     krabka_records_legacy::Magic,
     std::{
         cell::RefCell,
+        env, mem, process,
         sync::Arc,
         time::{Duration, Instant},
     },
     tempfile::TempDir,
+    tokio::runtime::Builder,
 };
 
 mod support;
 use support::{
-    BatchShape, BoundedResource, LEADER_EPOCH, LOG_BUDGET, SHAPES, WARMUP, bounded_resource,
+    BatchShape, BenchError, BoundedResource, FirstError, LEADER_EPOCH, LOG_BUDGET, SHAPES, WARMUP,
+    bounded_resource,
 };
 
 fn settings(metrics: &BrokerMetrics) -> HotPathSettings<'_> {
@@ -104,9 +108,7 @@ fn make_batch(records: i32, payload: usize) -> RecordBatch {
             // A repeating non-uniform pattern, so a compressed variant of this
             // suite would not measure an unrealistically compressible payload.
             value: Some(Bytes::from(
-                (0..payload)
-                    .map(|b| u8::try_from(b % 251).expect("b % 251 fits in a byte"))
-                    .collect::<Vec<u8>>(),
+                (0..=250_u8).cycle().take(payload).collect::<Vec<u8>>(),
             )),
             ..Record::default()
         });
@@ -115,18 +117,20 @@ fn make_batch(records: i32, payload: usize) -> RecordBatch {
 }
 
 /// The wire bytes of one partition's records field, as a producer sends it.
-fn v2_records(records: i32, payload: usize) -> Bytes {
+fn v2_records(records: i32, payload: usize) -> Result<Bytes, BenchError> {
     let batch = make_batch(records, payload);
     let mut buf = BytesMut::with_capacity(batch.encoded_len());
-    batch.encode(&mut buf).expect("encode v2 batch");
-    buf.freeze()
+    batch.encode(&mut buf)?;
+    Ok(buf.freeze())
 }
 
 /// The same records as a v1 `MessageSet`, which an older-message-format client
 /// still sends over a v≥3 produce.
-fn legacy_v1_records(records: i32, payload: usize) -> Bytes {
-    krabka_records_legacy::v2_to_legacy(&make_batch(records, payload), Magic::V1)
-        .expect("down-convert to a v1 message set")
+fn legacy_v1_records(records: i32, payload: usize) -> Result<Bytes, BenchError> {
+    Ok(krabka_records_legacy::v2_to_legacy(
+        &make_batch(records, payload),
+        Magic::V1,
+    )?)
 }
 
 /// A log that starts over once it has taken [`LOG_BUDGET`] bytes.
@@ -140,10 +144,10 @@ struct ProduceLog {
 }
 
 impl ProduceLog {
-    fn new() -> Self {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let log = Log::open(dir.path(), LogConfig::default()).expect("open log");
-        Self { _dir: dir, log }
+    fn new() -> Result<Self, BenchError> {
+        let dir = tempfile::tempdir()?;
+        let log = Log::open(dir.path(), LogConfig::default())?;
+        Ok(Self { _dir: dir, log })
     }
 }
 
@@ -164,10 +168,11 @@ fn append(
     choice: PathChoice,
     expected: ProducePath,
     settings: &HotPathSettings<'_>,
-) {
+) -> Result<(), BenchError> {
     let path = append_one_batch(payload, choice, settings, &mut store.get_mut().log)
-        .expect("the bench shapes are all valid produce payloads");
+        .map_err(|code| format!("the append was refused with error code {code}"))?;
     assert!(path == expected, "{choice:?} took the {path:?} path");
+    Ok(())
 }
 
 /// Append `records` once, returning only the time the append took.
@@ -184,12 +189,12 @@ fn append_once(
     choice: PathChoice,
     expected: ProducePath,
     settings: &HotPathSettings<'_>,
-) -> Duration {
-    store.rotate_if_full(records.len());
+) -> Result<Duration, BenchError> {
+    store.rotate_if_full(records.len())?;
     let payload = records.clone();
     let start = Instant::now();
-    append(store, payload, choice, expected, settings);
-    start.elapsed()
+    append(store, payload, choice, expected, settings)?;
+    Ok(start.elapsed())
 }
 
 /// Append `records` `iters` times, returning only the time the appends took.
@@ -198,21 +203,21 @@ fn timed_appends(
     choice: PathChoice,
     expected: ProducePath,
     iters: u64,
-) -> Duration {
+) -> Result<Duration, BenchError> {
     let metrics = BrokerMetrics::new();
     let settings = settings(&metrics);
     let mut store = bounded_resource()
         .budget(LOG_BUDGET)
         .factory(ProduceLog::new)
-        .call();
+        .call()?;
     for _ in 0..WARMUP {
-        append_once(&mut store, records, choice, expected, &settings);
+        append_once(&mut store, records, choice, expected, &settings)?;
     }
     let mut elapsed = Duration::ZERO;
     for _ in 0..iters {
-        elapsed += append_once(&mut store, records, choice, expected, &settings);
+        elapsed += append_once(&mut store, records, choice, expected, &settings)?;
     }
-    elapsed
+    Ok(elapsed)
 }
 
 /// One path a shape is measured on: its report name, the wire bytes it
@@ -226,9 +231,9 @@ struct MeasuredPath {
 }
 
 /// The three paths a shape is measured on, in report order.
-fn paths(records: i32, payload: usize) -> [MeasuredPath; 3] {
-    let v2 = v2_records(records, payload);
-    [
+fn paths(records: i32, payload: usize) -> Result<[MeasuredPath; 3], BenchError> {
+    let v2 = v2_records(records, payload)?;
+    Ok([
         MeasuredPath {
             name: "verbatim",
             wire: v2.clone(),
@@ -243,11 +248,11 @@ fn paths(records: i32, payload: usize) -> [MeasuredPath; 3] {
         },
         MeasuredPath {
             name: "legacy_v1",
-            wire: legacy_v1_records(records, payload),
+            wire: legacy_v1_records(records, payload)?,
             choice: PathChoice::Dispatch,
             expected: ProducePath::Owned,
         },
-    ]
+    ])
 }
 
 /// Time one append per iteration, with everything around it left untimed.
@@ -260,55 +265,62 @@ fn paths(records: i32, payload: usize) -> [MeasuredPath; 3] {
 /// suite exists to catch would go unmeasured. `iter_batched` is instrumented,
 /// and it keeps the same split — the log rotation and the `Bytes` clone run in
 /// the setup closure, outside the measurement, and only the append is timed.
-fn bench_produce_hot_path(c: &mut Criterion) {
-    let mut group = c.benchmark_group("broker/produce");
-
-    for BatchShape {
-        label: shape,
-        records,
-        payload,
-    } in SHAPES
+fn bench_produce_hot_path(c: &mut Criterion) -> Result<(), BenchError> {
+    let failure = FirstError::default();
     {
-        for MeasuredPath {
-            name: path,
-            wire,
-            choice,
-            expected,
-        } in paths(records, payload)
-        {
-            group.throughput(Throughput::Bytes(wire.len() as u64));
-            group.bench_function(format!("{shape}/{path}"), |b| {
-                let metrics = BrokerMetrics::new();
-                let settings = settings(&metrics);
-                // Both closures reach the log: the setup rotates it, the
-                // routine appends into it.
-                let store = RefCell::new(
-                    bounded_resource()
-                        .budget(LOG_BUDGET)
-                        .factory(ProduceLog::new)
-                        .call(),
-                );
-                b.iter_batched(
-                    || {
-                        store.borrow_mut().rotate_if_full(wire.len());
-                        wire.clone()
-                    },
-                    |payload| {
-                        append(
-                            &mut store.borrow_mut(),
-                            payload,
-                            choice,
-                            expected,
-                            &settings,
-                        );
-                    },
-                    BatchSize::PerIteration,
-                );
-            });
-        }
-    }
+        let mut group = c.benchmark_group("broker/produce");
 
-    group.finish();
+        for BatchShape {
+            label: shape,
+            records,
+            payload,
+        } in SHAPES
+        {
+            for MeasuredPath {
+                name: path,
+                wire,
+                choice,
+                expected,
+            } in paths(records, payload)?
+            {
+                group.throughput(Throughput::Bytes(wire.len() as u64));
+                group.bench_function(format!("{shape}/{path}"), |b| {
+                    let metrics = BrokerMetrics::new();
+                    let settings = settings(&metrics);
+                    // Both closures reach the log: the setup rotates it, the
+                    // routine appends into it.
+                    let store = RefCell::new(
+                        failure.keep(
+                            bounded_resource()
+                                .budget(LOG_BUDGET)
+                                .factory(ProduceLog::new)
+                                .call(),
+                        ),
+                    );
+                    b.iter_batched(
+                        || {
+                            let mut store = store.borrow_mut();
+                            let rotated = store
+                                .as_mut()
+                                .map(|store| store.rotate_if_full(wire.len()).map(|_| ()));
+                            drop(store);
+                            failure.keep(rotated?).map(|()| wire.clone())
+                        },
+                        |payload| {
+                            let mut store = store.borrow_mut();
+                            if let (Some(payload), Some(store)) = (payload, store.as_mut()) {
+                                failure.keep(append(store, payload, choice, expected, &settings));
+                            }
+                        },
+                        BatchSize::PerIteration,
+                    );
+                });
+            }
+        }
+
+        group.finish();
+    }
+    failure.into_result()
 }
 
 /// Print the owned-over-verbatim and legacy-over-verbatim ratios per shape.
@@ -316,7 +328,7 @@ fn bench_produce_hot_path(c: &mut Criterion) {
 /// Criterion compares a benchmark against its own previous run, not against a
 /// sibling, so the one number this suite exists for — what the fallback costs
 /// against the pass-through — has to be computed here.
-fn bench_ratio(_c: &mut Criterion) {
+fn bench_ratio(_c: &mut Criterion) -> Result<(), BenchError> {
     /// Appends per measurement run.
     const SAMPLES: u32 = 100;
     /// Measurement runs per case, of which the fastest is the one reported.
@@ -340,26 +352,22 @@ fn bench_ratio(_c: &mut Criterion) {
         payload,
     } in SHAPES
     {
-        let means: Vec<f64> = paths(records, payload)
-            .into_iter()
-            .map(
-                |MeasuredPath {
-                     wire,
-                     choice,
-                     expected,
-                     ..
-                 }| {
-                    (0..RUNS)
-                        .map(|_| {
-                            timed_appends(&wire, choice, expected, u64::from(SAMPLES)).as_secs_f64()
-                                * 1.0e9
-                                / f64::from(SAMPLES)
-                        })
-                        .fold(f64::INFINITY, f64::min)
-                },
-            )
-            .collect();
-        let (verbatim, owned, legacy) = (means[0], means[1], means[2]);
+        let [verbatim, owned, legacy] = paths(records, payload)?.map(
+            |MeasuredPath {
+                 wire,
+                 choice,
+                 expected,
+                 ..
+             }| {
+                let mut fastest = f64::INFINITY;
+                for _ in 0..RUNS {
+                    let elapsed = timed_appends(&wire, choice, expected, u64::from(SAMPLES))?;
+                    fastest = fastest.min(elapsed.as_secs_f64() * 1.0e9 / f64::from(SAMPLES));
+                }
+                Ok::<f64, BenchError>(fastest)
+            },
+        );
+        let (verbatim, owned, legacy) = (verbatim?, owned?, legacy?);
         println!(
             "{shape:<14} {verbatim:>12.0} {owned:>12.0} {legacy:>12.0} {:>15.2}x {:>15.2}x",
             owned / verbatim,
@@ -367,6 +375,7 @@ fn bench_ratio(_c: &mut Criterion) {
         );
     }
     println!();
+    Ok(())
 }
 
 /// Partition counts one `acks=-1` request covers: a single partition, a
@@ -394,19 +403,24 @@ struct BenchBroker {
 /// per partition around the gate, not how long a follower takes. On rf=1 the
 /// high watermark is already at the log end when the gate reads it, so what
 /// the `acks=-1` arm times is the gate machinery itself.
-async fn boot_bench_broker() -> BenchBroker {
+async fn boot_bench_broker() -> Result<BenchBroker, BenchError> {
     let widest = *ACKS_ALL_PARTITIONS
         .iter()
         .max()
-        .expect("the partition counts are not empty");
+        .ok_or("the partition counts are empty")?;
     let (mut fixture, topic_ids) = boot_with_topics(&[BenchTopic {
         name: ACKS_ALL_TOPIC,
         partitions: widest,
         configs: &[],
     }])
-    .await;
-    fixture.topic_id = topic_ids[0];
-    fixture
+    .await?;
+    fixture.topic_id = first_topic_id(&topic_ids)?;
+    Ok(fixture)
+}
+
+/// The first of `topic_ids`, which a fixture is created with.
+fn first_topic_id(topic_ids: &[WireUuid]) -> Result<WireUuid, BenchError> {
+    Ok(*topic_ids.first().ok_or("no topic was created")?)
 }
 
 /// One single-replica topic a bench broker boots with.
@@ -421,27 +435,23 @@ struct BenchTopic<'a> {
 /// same order.
 ///
 /// The fixture's own `topic_id` is the first topic's.
-async fn boot_with_topics(topics: &[BenchTopic<'_>]) -> (BenchBroker, Vec<WireUuid>) {
-    let dir = TempDir::new().expect("temp dir for the broker log directory");
-    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf()))
-        .await
-        .expect("boot a broker");
+async fn boot_with_topics(
+    topics: &[BenchTopic<'_>],
+) -> Result<(BenchBroker, Vec<WireUuid>), BenchError> {
+    let dir = TempDir::new()?;
+    let broker = Broker::start(BrokerConfig::for_tests(dir.path().to_path_buf())).await?;
     let bootstrap = broker.listen_addr().to_string();
-    let client = Client::builder()
-        .bootstrap(bootstrap)
-        .build()
-        .await
-        .expect("connect to the broker");
-    let topic_ids = create_topics(&broker, &client, topics).await;
-    (
+    let client = Client::builder().bootstrap(bootstrap).build().await?;
+    let topic_ids = create_topics(&broker, &client, topics).await?;
+    Ok((
         BenchBroker {
             broker,
             client,
-            topic_id: topic_ids[0],
+            topic_id: first_topic_id(&topic_ids)?,
             _dir: dir,
         },
         topic_ids,
-    )
+    ))
 }
 
 /// Create each of `topics`, wait for its partitions to exist locally, and
@@ -450,7 +460,7 @@ async fn create_topics(
     broker: &BrokerHandle,
     client: &Client,
     topics: &[BenchTopic<'_>],
-) -> Vec<WireUuid> {
+) -> Result<Vec<WireUuid>, BenchError> {
     let created = client
         .send(CreateTopicsRequest {
             topics: topics
@@ -474,8 +484,7 @@ async fn create_topics(
             timeout_ms: 5_000,
             ..Default::default()
         })
-        .await
-        .expect("CreateTopics");
+        .await?;
     for topic in &created.topics {
         assert!(topic.error_code == 0, "{topic:?}");
     }
@@ -498,8 +507,7 @@ async fn create_topics(
             ),
             ..Default::default()
         })
-        .await
-        .expect("Metadata for the topic ids");
+        .await?;
     topics
         .iter()
         .map(|wanted| {
@@ -508,7 +516,7 @@ async fn create_topics(
                 .iter()
                 .find(|topic| topic.name.as_deref() == Some(wanted.name))
                 .map(|topic| topic.topic_id)
-                .expect("the created topic is in the metadata")
+                .ok_or_else(|| format!("{} is not in the metadata", wanted.name).into())
         })
         .collect()
 }
@@ -519,11 +527,11 @@ async fn produce_across_partitions(
     partitions: i32,
     acks: i16,
     wire: &Bytes,
-) {
+) -> Result<(), BenchError> {
     let response = fixture
         .client
         .send(
-            krabka_broker::testing::produce_partitions_request()
+            testing::produce_partitions_request()
                 .acks(acks)
                 .timeout_ms(5_000)
                 .topic(ACKS_ALL_TOPIC.into())
@@ -532,53 +540,57 @@ async fn produce_across_partitions(
                     (0..partitions)
                         .map(|index| PartitionProduceData {
                             index,
-                            records: Some(krabka_protocol::records::RecordsPayload::Raw(
-                                wire.clone(),
-                            )),
+                            records: Some(RecordsPayload::Raw(wire.clone())),
                             ..Default::default()
                         })
                         .collect(),
                 )
                 .call(),
         )
-        .await
-        .expect("Produce");
-    for row in &response.responses[0].partition_responses {
+        .await?;
+    let topic = response
+        .responses
+        .first()
+        .ok_or("Produce answered no topic")?;
+    for row in &topic.partition_responses {
         assert!(row.error_code == 0);
     }
+    Ok(())
 }
 
 /// One Produce request across a sweep of partition counts, at `acks=1` and at
 /// `acks=-1`.
-fn bench_produce_acks_all(c: &mut Criterion) {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("build a multi-threaded runtime");
-    let fixture = runtime.block_on(boot_bench_broker());
+fn bench_produce_acks_all(c: &mut Criterion) -> Result<(), BenchError> {
+    let runtime = Builder::new_multi_thread().enable_all().build()?;
+    let fixture = runtime.block_on(boot_bench_broker())?;
     // One modest batch per partition: the request's partition count is the
     // variable, so the bytes per partition stay small and constant.
-    let wire = v2_records(10, 128);
+    let wire = v2_records(10, 128)?;
+    let failure = FirstError::default();
 
-    let mut group = c.benchmark_group("broker/produce_acks");
-    for partitions in ACKS_ALL_PARTITIONS {
-        for (label, acks) in [("acks1", 1_i16), ("acks_all", -1_i16)] {
-            let per_request = u64::try_from(wire.len()).expect("batch fits u64")
-                * u64::try_from(partitions).expect("the partition count is positive");
-            group.throughput(Throughput::Bytes(per_request));
-            group.bench_function(format!("{partitions}part/{label}"), |b| {
-                // `block_on` rather than criterion's `to_async`, which needs
-                // its `async_tokio` feature: the request is one await, and the
-                // runtime is the same one the fixture booted on.
-                b.iter(|| {
-                    runtime.block_on(produce_across_partitions(&fixture, partitions, acks, &wire));
+    {
+        let mut group = c.benchmark_group("broker/produce_acks");
+        for partitions in ACKS_ALL_PARTITIONS {
+            for (label, acks) in [("acks1", 1_i16), ("acks_all", -1_i16)] {
+                let per_request = u64::try_from(wire.len())? * u64::try_from(partitions)?;
+                group.throughput(Throughput::Bytes(per_request));
+                group.bench_function(format!("{partitions}part/{label}"), |b| {
+                    // `block_on` rather than criterion's `to_async`, which needs
+                    // its `async_tokio` feature: the request is one await, and the
+                    // runtime is the same one the fixture booted on.
+                    b.iter(|| {
+                        failure.keep(runtime.block_on(produce_across_partitions(
+                            &fixture, partitions, acks, &wire,
+                        )));
+                    });
                 });
-            });
+            }
         }
+        group.finish();
     }
-    group.finish();
 
     runtime.block_on(fixture.broker.shutdown());
+    failure.into_result()
 }
 
 /// One converting topic the full-handler arm produces to: its report label,
@@ -588,7 +600,7 @@ struct ConversionCase {
     label: &'static str,
     topic: &'static str,
     compression_type: &'static str,
-    wire: fn(i32, usize) -> Bytes,
+    wire: fn(i32, usize) -> Result<Bytes, BenchError>,
 }
 
 /// The produce shapes that reach the owned path through the handler: a topic
@@ -617,26 +629,35 @@ const CONVERSION_CASES: [ConversionCase; 3] = [
 ];
 
 /// Send one single-partition Produce and check its row.
-async fn produce_one(fixture: &BenchBroker, topic: &str, topic_id: WireUuid, wire: &Bytes) {
+async fn produce_one(
+    fixture: &BenchBroker,
+    topic: &str,
+    topic_id: WireUuid,
+    wire: &Bytes,
+) -> Result<(), BenchError> {
     let response = fixture
         .client
         .send(
-            krabka_broker::testing::produce_partitions_request()
+            testing::produce_partitions_request()
                 .acks(1)
                 .timeout_ms(5_000)
                 .topic(topic.into())
                 .topic_id(topic_id)
                 .partitions(vec![PartitionProduceData {
                     index: 0,
-                    records: Some(krabka_protocol::records::RecordsPayload::Raw(wire.clone())),
+                    records: Some(RecordsPayload::Raw(wire.clone())),
                     ..Default::default()
                 }])
                 .call(),
         )
-        .await
-        .expect("Produce");
-    let row = &response.responses[0].partition_responses[0];
+        .await?;
+    let row = response
+        .responses
+        .first()
+        .and_then(|topic| topic.partition_responses.first())
+        .ok_or("Produce answered no partition")?;
     assert!(row.error_code == 0, "{row:?}");
+    Ok(())
 }
 
 /// The owned produce path end to end, through the handler and its size gates.
@@ -647,47 +668,56 @@ async fn produce_one(fixture: &BenchBroker, topic: &str, topic_id: WireUuid, wir
 /// and only an encode can measure a compressed one. This arm times one
 /// single-partition `acks=1` Produce per iteration against a booted broker, so
 /// what it reports includes every encode the request pays for.
-fn bench_produce_conversion(c: &mut Criterion) {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("build a multi-threaded runtime");
+fn bench_produce_conversion(c: &mut Criterion) -> Result<(), BenchError> {
+    let runtime = Builder::new_multi_thread().enable_all().build()?;
     let (fixture, _) = runtime.block_on(boot_with_topics(&[BenchTopic {
         name: "bench-conversion-boot",
         partitions: 1,
         configs: &[],
-    }]));
+    }]))?;
+    let failure = FirstError::default();
 
-    let mut group = c.benchmark_group("broker/produce_conversion");
-    for BatchShape {
-        label: shape,
-        records,
-        payload,
-    } in SHAPES
     {
-        for case in &CONVERSION_CASES {
-            let wire = (case.wire)(records, payload);
-            let topic = RefCell::new(runtime.block_on(RotatingTopic::create(&fixture, case, 0)));
-            group.throughput(Throughput::Bytes(wire.len() as u64));
-            group.bench_function(format!("{shape}/{}", case.label), |b| {
-                b.iter_batched(
-                    || {
-                        let mut topic = topic.borrow_mut();
-                        runtime.block_on(topic.rotate_if_full(&fixture, case, wire.len()));
-                        (topic.name.clone(), topic.topic_id)
-                    },
-                    |(name, topic_id)| {
-                        runtime.block_on(produce_one(&fixture, &name, topic_id, &wire));
-                    },
-                    BatchSize::PerIteration,
-                );
-            });
-            runtime.block_on(topic.into_inner().delete(&fixture));
+        let mut group = c.benchmark_group("broker/produce_conversion");
+        for BatchShape {
+            label: shape,
+            records,
+            payload,
+        } in SHAPES
+        {
+            for case in &CONVERSION_CASES {
+                let wire = (case.wire)(records, payload)?;
+                let topic =
+                    RefCell::new(runtime.block_on(RotatingTopic::create(&fixture, case, 0))?);
+                group.throughput(Throughput::Bytes(wire.len() as u64));
+                group.bench_function(format!("{shape}/{}", case.label), |b| {
+                    b.iter_batched(
+                        || {
+                            let mut topic = topic.borrow_mut();
+                            let rotated =
+                                runtime.block_on(topic.rotate_if_full(&fixture, case, wire.len()));
+                            let target = (topic.name.clone(), topic.topic_id);
+                            drop(topic);
+                            failure.keep(rotated).map(|()| target)
+                        },
+                        |target| {
+                            if let Some((name, topic_id)) = target {
+                                failure.keep(
+                                    runtime.block_on(produce_one(&fixture, &name, topic_id, &wire)),
+                                );
+                            }
+                        },
+                        BatchSize::PerIteration,
+                    );
+                });
+                runtime.block_on(topic.into_inner().delete(&fixture))?;
+            }
         }
+        group.finish();
     }
-    group.finish();
 
     runtime.block_on(fixture.broker.shutdown());
+    failure.into_result()
 }
 
 /// The topic one conversion case produces to, replaced by a fresh one once it
@@ -705,20 +735,24 @@ struct RotatingTopic {
 }
 
 impl RotatingTopic {
-    async fn create(fixture: &BenchBroker, case: &ConversionCase, generation: u32) -> Self {
+    async fn create(
+        fixture: &BenchBroker,
+        case: &ConversionCase,
+        generation: u32,
+    ) -> Result<Self, BenchError> {
         let name = format!("{}-{generation}", case.topic);
         let topic_ids = create_topics(&fixture.broker, &fixture.client, &[BenchTopic {
             name: &name,
             partitions: 1,
             configs: &[("compression.type", case.compression_type)],
         }])
-        .await;
-        Self {
+        .await?;
+        Ok(Self {
             name,
-            topic_id: topic_ids[0],
+            topic_id: first_topic_id(&topic_ids)?,
             generation,
             written: 0,
-        }
+        })
     }
 
     /// Replace the topic when `incoming` more bytes would take it past the
@@ -728,15 +762,16 @@ impl RotatingTopic {
         fixture: &BenchBroker,
         case: &ConversionCase,
         incoming: usize,
-    ) {
+    ) -> Result<(), BenchError> {
         if self.written + incoming > LOG_BUDGET {
-            let next = Self::create(fixture, case, self.generation + 1).await;
-            std::mem::replace(self, next).delete(fixture).await;
+            let next = Self::create(fixture, case, self.generation + 1).await?;
+            mem::replace(self, next).delete(fixture).await?;
         }
         self.written += incoming;
+        Ok(())
     }
 
-    async fn delete(self, fixture: &BenchBroker) {
+    async fn delete(self, fixture: &BenchBroker) -> Result<(), BenchError> {
         let response = fixture
             .client
             .send(DeleteTopicsRequest {
@@ -747,19 +782,45 @@ impl RotatingTopic {
                 timeout_ms: 5_000,
                 ..Default::default()
             })
-            .await
-            .expect("DeleteTopics");
+            .await?;
         for topic in &response.responses {
             assert!(topic.error_code == 0, "{topic:?}");
         }
+        Ok(())
     }
 }
 
-criterion_group!(
-    benches,
-    bench_produce_hot_path,
-    bench_produce_acks_all,
-    bench_produce_conversion,
-    bench_ratio
-);
+/// A benchmark target, under the name `criterion_group!` would give it.
+type Target = (&'static str, fn(&mut Criterion) -> Result<(), BenchError>);
+
+/// Every benchmark target, in run order.
+const TARGETS: [Target; 4] = [
+    ("bench_produce_hot_path", bench_produce_hot_path),
+    ("bench_produce_acks_all", bench_produce_acks_all),
+    ("bench_produce_conversion", bench_produce_conversion),
+    ("bench_ratio", bench_ratio),
+];
+
+/// Runs every target in [`TARGETS`], stopping at the first one that fails.
+fn run_targets(criterion: &mut Criterion) -> Result<(), (&'static str, BenchError)> {
+    for (name, target) in TARGETS {
+        if env::var("CODSPEED_ENV").is_ok() {
+            criterion.set_current_file(abs_file!());
+            criterion.set_macro_group(format!("benches::{name}"));
+        }
+        target(criterion).map_err(|error| (name, error))?;
+    }
+    Ok(())
+}
+
+/// The benchmark group, written out by hand where `criterion_group!` would
+/// generate it, so that a failing target reports its error and stops the run.
+fn benches() {
+    let result = run_targets(&mut Criterion::default().configure_from_args());
+    if let Err((name, error)) = result {
+        eprintln!("{name}: {error}");
+        process::exit(1);
+    }
+}
+
 criterion_main!(benches);

@@ -22,8 +22,10 @@ use {
         Active, LoadStatus, ShareCoordinator, ShareStateKey3, Term, state_machine::StateRecord,
     },
     crate::{
-        coordinator::topic_deletion::deleted_topics, features::share_groups_enabled,
-        time_util::duration_millis,
+        coordinator::topic_deletion::deleted_topics,
+        features::share_groups_enabled,
+        metadata_source::next_image_until_shutdown,
+        time_util::{duration_millis, sleep_until_opt},
     },
     krabka_ids::PartitionIndex,
     krabka_metadata::MetadataImage,
@@ -107,8 +109,10 @@ impl ShareCoordinator {
         &self,
         filter: impl Fn(&uuid::Uuid) -> bool,
     ) -> Vec<PartitionKeys> {
-        let led = self.leader_partitions.read().await;
-        let mut partitions: HashMap<PartitionIndex, PartitionKeys> = led
+        let mut partitions: HashMap<PartitionIndex, PartitionKeys> = self
+            .leader_partitions
+            .read()
+            .await
             .iter()
             .filter(|(_, led)| led.status == LoadStatus::Active)
             .map(|(&partition, led)| {
@@ -269,7 +273,7 @@ impl ShareCoordinator {
                     continue;
                 }
                 let snapshot = st.to_snapshot(st.snapshot_epoch.wrapping_add(1), now);
-                match self
+                let result = self
                     .append_state_record(
                         active.term,
                         &mut st,
@@ -278,8 +282,9 @@ impl ShareCoordinator {
                         partition,
                         StateRecord::Snapshot(snapshot),
                     )
-                    .await
-                {
+                    .await;
+                drop(st);
+                match result {
                     Ok(()) => appended += 1,
                     Err(error) => warn!(
                         group,
@@ -308,7 +313,7 @@ impl ShareCoordinator {
 
 /// Whether the timers run for `image`: a finalized `share.version` of 1 or
 /// more.
-pub(crate) fn periodic_jobs_enabled(image: &MetadataImage) -> bool { share_groups_enabled(image) }
+pub fn periodic_jobs_enabled(image: &MetadataImage) -> bool { share_groups_enabled(image) }
 
 /// The topic ids of `previous` that `next` does not hold.
 fn deleted_topic_ids(previous: &MetadataImage, next: &MetadataImage) -> HashSet<uuid::Uuid> {
@@ -328,7 +333,7 @@ struct ImageWatch {
 ///
 /// The image that `images` holds now is the baseline: a topic that a later
 /// image drops is a deleted topic.
-pub(crate) fn spawn(
+pub fn spawn(
     coordinator: Arc<ShareCoordinator>,
     mut images: watch::Receiver<Arc<MetadataImage>>,
     shutdown: CancellationToken,
@@ -362,7 +367,7 @@ async fn run(
     let mut next_cold = schedule(enabled, cold_interval);
     loop {
         tokio::select! {
-            image = crate::metadata_source::next_image_until_shutdown(&mut images, &shutdown) => {
+            image = next_image_until_shutdown(&mut images, &shutdown) => {
                     let Some(image) = image else { return; };
                 let deleted = deleted_topic_ids(&previous, &image);
                 coordinator.cleanup_deleted_topics(&deleted).await;
@@ -374,11 +379,11 @@ async fn run(
                 }
                 previous = image;
             }
-            () = crate::time_util::sleep_until_opt(next_prune) => {
+            () = sleep_until_opt(next_prune) => {
                 coordinator.prune_state_partitions().await;
                 next_prune = schedule(enabled, prune_interval);
             }
-            () = crate::time_util::sleep_until_opt(next_cold) => {
+            () = sleep_until_opt(next_cold) => {
                 coordinator.snapshot_cold_partitions().await;
                 next_cold = schedule(enabled, cold_interval);
             }

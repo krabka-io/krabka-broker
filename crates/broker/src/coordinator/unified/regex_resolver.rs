@@ -10,6 +10,8 @@
 //! triggered the refresh decides which of the matching topics the group keeps.
 
 pub use super::consumer_state::ResolvedRegularExpression;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use {
     crate::{
         authorizer::{AuthorizationResult, Authorizer, authorize_topics_logged},
@@ -246,7 +248,7 @@ pub(crate) const TEST_NOW_MS: i64 = 1_000_000_000_000;
 pub(crate) struct FixedRegexResolver {
     topics: HashMap<String, BTreeSet<String>>,
     timestamp_ms: i64,
-    calls: std::sync::atomic::AtomicUsize,
+    calls: AtomicUsize,
 }
 
 #[cfg(test)]
@@ -264,18 +266,18 @@ impl FixedRegexResolver {
                 })
                 .collect(),
             timestamp_ms: TEST_NOW_MS,
-            calls: std::sync::atomic::AtomicUsize::default(),
+            calls: AtomicUsize::default(),
         }
     }
 
     /// How many times the resolver was asked.
-    pub(crate) fn calls(&self) -> usize { self.calls.load(std::sync::atomic::Ordering::SeqCst) }
+    pub(crate) fn calls(&self) -> usize { self.calls.load(Ordering::SeqCst) }
 }
 
 #[cfg(test)]
 impl TopicRegexResolver for FixedRegexResolver {
     fn resolve(&self, regexes: &BTreeSet<String>) -> HashMap<String, ResolvedRegularExpression> {
-        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.calls.fetch_add(1, Ordering::SeqCst);
         regexes
             .iter()
             .map(|regex| {
@@ -528,7 +530,10 @@ mod tests {
             AuthorizationResult::Allow
         }}
         let counting = Arc::new(Counting::default());
-        let resolver = resolver(image_with_topics(&["a", "b"]), counting.clone());
+        let resolver = resolver(
+            image_with_topics(&["a", "b"]),
+            Arc::<Counting>::clone(&counting),
+        );
         let got = resolved(&resolver, &["a", ".*", "[ab]"]);
         assert!(got["a"] == ["a"]);
         assert!(got[".*"] == ["a", "b"]);

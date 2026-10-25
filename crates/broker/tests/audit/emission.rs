@@ -33,6 +33,7 @@ use {
             },
             metadata_request::MetadataRequest,
         },
+        primitives::uuid::Uuid,
         records::RecordBatch,
     },
 };
@@ -44,11 +45,7 @@ const OP_SET: i8 = 0;
 
 /// Append one record to partition 0, so that a later `DeleteRecords` has
 /// something below the high watermark to delete.
-async fn produce_one(
-    p: &support::InProcess,
-    topic: &str,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
-) {
+async fn produce_one(p: &support::InProcess, topic: &str, topic_id: Uuid) {
     let batch = RecordBatch {
         last_offset_delta: 0,
         ..batch_from_records(vec![value_record(
@@ -333,14 +330,14 @@ async fn every_admin_mutation_is_audited() {
     // One row per audited api: the OCSF operation name, and the resource the
     // record has to name first.
     let expected = [
-        ("CreateTopics", topic.to_string()),
-        ("CreatePartitions", topic.to_string()),
-        ("AlterConfigs", topic.to_string()),
-        ("IncrementalAlterConfigs", topic.to_string()),
+        ("CreateTopics", topic.to_owned()),
+        ("CreatePartitions", topic.to_owned()),
+        ("AlterConfigs", topic.to_owned()),
+        ("IncrementalAlterConfigs", topic.to_owned()),
         ("AlterClientQuotas", format!("user={user}")),
-        ("AlterUserScramCredentials", user.to_string()),
+        ("AlterUserScramCredentials", user.to_owned()),
         ("DeleteRecords", format!("{topic}-0")),
-        ("DeleteTopics", topic.to_string()),
+        ("DeleteTopics", topic.to_owned()),
     ];
     for (operation, resource) in expected {
         support::wait_for_audit_record(&p.client, operation, |j| {

@@ -44,29 +44,29 @@ pub fn base() -> BrokerConfig {
     BrokerConfig {
         listeners: vec![
             ListenerSpec {
-                name: "INTERNAL".to_string(),
+                name: "INTERNAL".to_owned(),
                 bind_addr: "127.0.0.1:9093".parse().unwrap(),
-                advertised: "127.0.0.1:9093".to_string(),
+                advertised: "127.0.0.1:9093".to_owned(),
                 protocol: ListenerProtocol::Plaintext,
                 tls_config: None,
                 sasl_mechanisms: None,
                 principal_mapper: crate::SslPrincipalMapper::default(),
             },
             ListenerSpec {
-                name: "EXTERNAL".to_string(),
+                name: "EXTERNAL".to_owned(),
                 bind_addr: "0.0.0.0:9092".parse().unwrap(),
-                advertised: "host.docker.internal:9092".to_string(),
+                advertised: "host.docker.internal:9092".to_owned(),
                 protocol: ListenerProtocol::SaslSsl,
                 tls_config: None,
                 sasl_mechanisms: None,
                 principal_mapper: crate::SslPrincipalMapper::default(),
             },
         ],
-        inter_broker_listener_name: "INTERNAL".to_string(),
+        inter_broker_listener_name: "INTERNAL".to_owned(),
         enabled_sasl_mechanisms: vec![SaslMechanism::Plain, SaslMechanism::ScramSha512],
         // PLAIN is enabled above, and `validate` refuses that with an empty
         // credential table.
-        plain_credentials: [("admin".to_string(), "admin-secret".to_string())]
+        plain_credentials: [("admin".to_owned(), "admin-secret".to_owned())]
             .into_iter()
             .collect(),
         ..BrokerConfig::default()

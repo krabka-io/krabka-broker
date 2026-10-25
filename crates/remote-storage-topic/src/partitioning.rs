@@ -22,7 +22,9 @@ pub fn metadata_partition_for(tp: &TopicIdPartition, partition_count: i32) -> i3
 
 /// Deduped, sorted set of `__remote_log_metadata` partitions that carry
 /// metadata for the given user-topic-partitions, for the metadata topic's
-/// `partition_count`. This is the set a broker must consume to serve remote
+/// `partition_count`.
+///
+/// This is the set a broker must consume to serve remote
 /// reads for the partitions it leads or follows.
 ///
 /// # Panics
@@ -46,7 +48,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert, uuid::Uuid};
+    use {
+        super::*,
+        assert2::assert,
+        std::{collections::HashSet, panic},
+        uuid::Uuid,
+    };
 
     fn tp(name: &str, partition: i32) -> TopicIdPartition {
         TopicIdPartition::new(
@@ -91,7 +98,7 @@ mod tests {
 
     #[test]
     fn different_partitions_distribute() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         for p in 0..200 {
             seen.insert(metadata_partition_for(&tp("orders", p), 50));
         }
@@ -122,7 +129,7 @@ mod tests {
         let b = tp("orders", 1);
         let pa = metadata_partition_for(&a, 50);
         let pb = metadata_partition_for(&b, 50);
-        let got = metadata_partitions_for([a.clone(), b.clone(), a.clone()].iter(), 50);
+        let got = metadata_partitions_for([a.clone(), b, a].iter(), 50);
         let mut expected: Vec<i32> = vec![pa, pb];
         expected.sort_unstable();
         expected.dedup();
@@ -142,7 +149,7 @@ mod tests {
     )]
     fn metadata_partitions_for_empty_rejects_nonpositive_count(count: i32) {
         let none: [TopicIdPartition; 0] = [];
-        let result = std::panic::catch_unwind(|| metadata_partitions_for(none.iter(), count));
+        let result = panic::catch_unwind(|| metadata_partitions_for(none.iter(), count));
         assert2::assert!(result.is_err(), "count {count} must panic before iteration");
     }
 }

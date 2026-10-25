@@ -15,6 +15,8 @@ use {
             version::TxnVersion,
         },
     },
+    std::sync::Arc,
+    tokio::sync::Mutex,
 };
 
 /// `client_version` is the transaction version of the `EndTxn` request, which
@@ -23,7 +25,7 @@ use {
 /// `__transaction_state` value format.
 pub(super) async fn prepare_transaction(
     coordinator: &TxnCoordinator,
-    entry: &std::sync::Arc<tokio::sync::Mutex<TxnEntry>>,
+    entry: &Arc<Mutex<TxnEntry>>,
     (committed, no_partition_added): (bool, bool),
     (client_version, format_version): (TxnVersion, TxnVersion),
     transactional_id: &str,
@@ -94,5 +96,6 @@ pub(super) async fn prepare_transaction(
     // The append published a new handle. A caller that already waits on this
     // one sees the durable Prepare state too.
     *state = staged.clone();
+    drop(state);
     Ok((marker_type, prepare, complete, staged))
 }

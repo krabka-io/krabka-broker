@@ -27,7 +27,7 @@ use {
 };
 
 /// What one archived batch becomes when it is appended to the target log: the exact bytes the log's zero-copy path needs, or an owned batch for the log's decode-and-append path.
-pub(crate) enum PreparedBatch {
+pub enum PreparedBatch {
     Verbatim(VerbatimBatch),
     Owned {
         batch: RecordBatch,
@@ -53,14 +53,14 @@ impl PreparedBatch {
 
 /// How [`prepare_batch`]'s outcome folds into
 /// [`SegmentOutcome`](super::SegmentOutcome)'s counts.
-pub(crate) enum BatchTally {
+pub enum BatchTally {
     Kept,
     Rewritten { kept: u64, dropped: u64 },
     Emptied,
 }
 
 #[derive(bon::Builder)]
-pub(crate) struct PrepareBatchSetup<'record, 'bytes> {
+pub struct PrepareBatchSetup<'record, 'bytes> {
     partition_ref: &'record PartitionRef,
     predicates: &'record Predicates,
     batch: &'record RecordBatchBorrowed<'bytes>,
@@ -69,7 +69,7 @@ pub(crate) struct PrepareBatchSetup<'record, 'bytes> {
 }
 
 /// Decide one archived batch's fate under `predicates`, and prepare what gets appended to the target log without touching the log itself, so `--dry-run` can share this exact path with a real run.
-pub(crate) fn prepare_batch(
+pub fn prepare_batch(
     setup: PrepareBatchSetup<'_, '_>,
 ) -> Result<(PreparedBatch, BatchTally), RestoreError> {
     let header = setup.batch.header();
@@ -125,13 +125,22 @@ fn prepare_filtered_batch(
     }
 
     let owned = setup.batch.to_owned()?;
+    // `filter_batch` calls `keep` once per record, matching the per-record
+    // walk that built `keep_flags`. A batch that yields more records than that
+    // walk saw is refused rather than filtered on a guess.
     let mut flags = keep_flags.into_iter();
+    let mut unmatched = false;
     let filtered = filter_batch(&owned, |_record| {
-        flags.next().expect(
-            "filter_batch calls keep exactly once per record, matching the per-record walk \
-             that built keep_flags",
-        )
+        flags.next().unwrap_or_else(|| {
+            unmatched = true;
+            true
+        })
     });
+    if unmatched {
+        return Err(RestoreError::Integrity(
+            "a batch yielded more records when filtered than when read".to_owned(),
+        ));
+    }
 
     Ok(match filtered {
         FilteredBatch::Unchanged => {

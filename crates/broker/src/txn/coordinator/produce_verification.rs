@@ -23,6 +23,7 @@ use {
         },
     },
     krabka_log::ProducerId,
+    std::sync::Arc,
 };
 
 /// The `AddPartitionsToTxn` request version to use for a registration that
@@ -33,11 +34,11 @@ use {
 /// latest version, which is above 3, so the coordinator records `TV_2` for the
 /// transition (`transactionVersionForAddPartitionsToTxn`) and no answer needs
 /// the legacy `INVALID_PRODUCER_EPOCH` downgrade.
-pub(crate) const INTERNAL_REGISTRATION_VERSION: i16 = 4;
+pub const INTERNAL_REGISTRATION_VERSION: i16 = 4;
 
 /// Kafka's `TransactionLogConfig.TRANSACTION_PARTITION_VERIFICATION_ENABLE_CONFIG`,
 /// a dynamic broker config that defaults to `true`.
-pub(crate) const PARTITION_VERIFICATION_ENABLE: &str = "transaction.partition.verification.enable";
+pub const PARTITION_VERIFICATION_ENABLE: &str = "transaction.partition.verification.enable";
 
 /// Whether the broker `config` describes verifies that a transaction contains
 /// a partition before it appends transactional records to it, as of `image`.
@@ -50,7 +51,7 @@ pub(crate) const PARTITION_VERIFICATION_ENABLE: &str = "transaction.partition.ve
 ///
 /// This is read for each request, so a dynamic change takes effect for the
 /// next one.
-pub(crate) fn partition_verification_enabled(
+pub fn partition_verification_enabled(
     image: &krabka_metadata::MetadataImage,
     config: &BrokerConfig,
 ) -> bool {
@@ -79,7 +80,7 @@ pub(crate) fn partition_verification_enabled(
 /// the add is what registers the partition, not a check on top of it. With no
 /// call, `UnifiedLog.batchMissingRequiredVerification` does not refuse the
 /// append either, whatever the log holds.
-pub(crate) fn skips_coordinator_verification(
+pub fn skips_coordinator_verification(
     supports_epoch_bump: bool,
     verification_enabled: bool,
 ) -> bool {
@@ -89,7 +90,7 @@ pub(crate) fn skips_coordinator_verification(
 /// The partitions one transactional producer asks its coordinator to add or
 /// verify: Kafka's `AddPartitionsToTxnTransaction`.
 #[derive(Debug, Clone)]
-pub(crate) struct TransactionCheck<'a> {
+pub struct TransactionCheck<'a> {
     pub(crate) transactional_id: &'a str,
     pub(crate) producer_id: ProducerId,
     pub(crate) producer_epoch: i16,
@@ -111,7 +112,7 @@ impl TxnCoordinator {
     /// broker cannot find answers `COORDINATOR_NOT_AVAILABLE`, and a call that
     /// does not complete answers `NETWORK_EXCEPTION`, for every partition.
     pub(crate) async fn add_or_verify_partitions(
-        self: &std::sync::Arc<Self>,
+        self: &Arc<Self>,
         check: TransactionCheck<'_>,
         txnv: TxnVersion,
         version: i16,
@@ -129,10 +130,7 @@ impl TxnCoordinator {
     }
 
     /// The remote half of [`Self::add_or_verify_partitions`].
-    async fn add_or_verify_remote(
-        self: &std::sync::Arc<Self>,
-        check: &TransactionCheck<'_>,
-    ) -> Remote {
+    async fn add_or_verify_remote(self: &Arc<Self>, check: &TransactionCheck<'_>) -> Remote {
         let Some(transport) = &self.marker_transport else {
             return Remote::Local;
         };
@@ -241,7 +239,7 @@ enum Remote {
 /// The producer identity and state of the transaction a verify-only check
 /// compares against.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct HeldTransaction {
+pub struct HeldTransaction {
     pub(crate) identity: ProducerIdentity,
     pub(crate) state: TxnState,
 }
@@ -249,7 +247,7 @@ pub(crate) struct HeldTransaction {
 /// The verify-only answer for one partition, from the transaction's identity,
 /// state and partition set. Kafka's
 /// `TransactionCoordinator.handleVerifyPartitionsInTransaction`.
-pub(crate) fn verification_code(
+pub fn verification_code(
     held: HeldTransaction,
     contains_partition: bool,
     requested: ProducerIdentity,

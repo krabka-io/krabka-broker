@@ -11,10 +11,13 @@ use {
     krabka_log::{Log, LogError, Offset},
     krabka_protocol::{
         owned::fetch_response::{AbortedTransaction, PartitionData},
-        records::RecordsPayload,
+        records::{FileRegion, RecordsPayload},
     },
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
-    std::sync::{Arc, Mutex},
+    std::{
+        fmt, io,
+        sync::{Arc, Mutex, PoisonError},
+    },
 };
 
 /// Hold the partition's log mutex for a short time to read the offsets, and
@@ -335,8 +338,8 @@ async fn run_blocking_read(
     Ok(ServedRecords { records, aborted })
 }
 
-fn read_task_panicked(cause: &impl std::fmt::Display) -> BrokerError {
-    BrokerError::Io(std::io::Error::other(format!(
+fn read_task_panicked(cause: &impl fmt::Display) -> BrokerError {
+    BrokerError::Io(io::Error::other(format!(
         "fetch read task panicked: {cause}"
     )))
 }
@@ -468,24 +471,16 @@ fn read_records(log: &Log, read: &BlockingRead) -> Result<RawServed, BrokerError
     let aborted = if read_committed_aborts {
         let upper_bound =
             served_upper_bound.map_or(fetch_offset, |served| served.min(effective_lso));
-        let mut it = log.aborted_in_range(fetch_offset, upper_bound).into_iter();
-        if let Some(first) = it.next() {
-            let mut v = vec![AbortedTransaction {
+        log.aborted_in_range(fetch_offset, upper_bound)
+            .into_iter()
+            .map(|e| AbortedTransaction {
                 // Unwrap the log-layer `ProducerId` into the wire `i64` field.
-                producer_id: first.producer_id.get(),
-                // Unwrap the log-layer `Offset` into the wire `i64` field.
-                first_offset: first.start_offset.0,
-                ..Default::default()
-            }];
-            v.extend(it.map(|e| AbortedTransaction {
                 producer_id: e.producer_id.get(),
+                // Unwrap the log-layer `Offset` into the wire `i64` field.
                 first_offset: e.start_offset.0,
                 ..Default::default()
-            }));
-            v
-        } else {
-            Vec::new()
-        }
+            })
+            .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
@@ -523,17 +518,17 @@ fn finish_read(
 /// offset capped at it. Kafka's `ReplicaManager.handleOffsetOutOfRangeError`
 /// reads the same three off the `UnifiedLog` for the remote band.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct LiveOffsets {
-    pub(crate) log_start: Offset,
-    pub(crate) high_watermark: Offset,
-    pub(crate) last_stable_offset: Offset,
+pub struct LiveOffsets {
+    pub log_start: Offset,
+    pub high_watermark: Offset,
+    pub last_stable_offset: Offset,
 }
 
 impl LiveOffsets {
     /// Reads the bounds off `part` now.
-    pub(crate) async fn of(part: &Partition) -> Self {
+    pub async fn of(part: &Partition) -> Self {
         let high_watermark = part.high_watermark().await;
-        let mut log = part.log.lock().expect("log mutex poisoned");
+        let mut log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
         Self {
             log_start: log.reported_log_start(),
             high_watermark,
@@ -542,7 +537,7 @@ impl LiveOffsets {
     }
 
     /// Writes all three bounds into `response`.
-    pub(crate) fn report(self, response: &mut PartitionData) {
+    pub fn report(self, response: &mut PartitionData) {
         response.log_start_offset = self.log_start.0;
         response.high_watermark = self.high_watermark.0;
         response.last_stable_offset = self.last_stable_offset.0;
@@ -606,7 +601,7 @@ fn plan_read(
     follower_fetch: bool,
     response: &mut PartitionData,
 ) -> PlannedWindow {
-    let mut log = partition.log.lock().expect("log mutex poisoned");
+    let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
     // The global floor as Kafka reports it, which a follower raises its own
     // start to: see `Log::reported_log_start`.
     let log_start = log.reported_log_start();
@@ -636,6 +631,7 @@ fn plan_read(
         },
         fetch_offset,
     );
+    drop(log);
     let plan = if window.out_of_range {
         // Kafka's `Partition.readRecords` throws `OffsetOutOfRangeException`
         // here, and outside the remote band the non-tiered branch of
@@ -673,19 +669,17 @@ fn plan_read(
     target_os = "freebsd",
     target_os = "dragonfly",
 ))]
-fn read_regions(
-    regions: &[krabka_protocol::records::FileRegion],
-    total: usize,
-) -> std::io::Result<bytes::Bytes> {
+fn read_regions(regions: &[FileRegion], total: usize) -> io::Result<bytes::Bytes> {
     use std::os::unix::fs::FileExt as _;
 
     let mut bytes = vec![0_u8; total];
-    let mut at = 0;
+    let mut rest = bytes.as_mut_slice();
     for region in regions {
-        region
-            .file
-            .read_exact_at(&mut bytes[at..at + region.len], region.offset)?;
-        at += region.len;
+        let (chunk, tail) = rest
+            .split_at_mut_checked(region.len)
+            .ok_or_else(|| io::Error::other("file regions run past their total length"))?;
+        region.file.read_exact_at(chunk, region.offset)?;
+        rest = tail;
     }
     Ok(bytes.into())
 }
@@ -721,7 +715,14 @@ mod tests {
             records::{Attributes, Record, RecordBatch, RecordsPayload},
         },
         krabka_units::prelude::{ByteSizeExt as _, mebibytes},
-        std::sync::{Arc, Mutex},
+        std::{
+            io,
+            sync::{Arc, Mutex, MutexGuard},
+        },
+        tokio::{
+            runtime::{Builder, Runtime},
+            sync::Notify,
+        },
     };
 
     /// The read budget for the hand-off test: larger than the log it reads, so
@@ -830,18 +831,18 @@ mod tests {
             aborted: Vec::new(),
         };
 
-        let served = |runtime: tokio::runtime::Runtime| {
+        let served = |runtime: Runtime| {
             runtime
                 .block_on(super::run_blocking_read(&log, &read))
                 .expect("the blocking read succeeds")
         };
         let current_thread = served(
-            tokio::runtime::Builder::new_current_thread()
+            Builder::new_current_thread()
                 .build()
                 .expect("build a current-thread runtime"),
         );
         let multi_thread = served(
-            tokio::runtime::Builder::new_multi_thread()
+            Builder::new_multi_thread()
                 .worker_threads(2)
                 .build()
                 .expect("build a multi-threaded runtime"),
@@ -849,7 +850,7 @@ mod tests {
         let inline = {
             let _inline = inline_blocking_on_this_thread();
             served(
-                tokio::runtime::Builder::new_current_thread()
+                Builder::new_current_thread()
                     .build()
                     .expect("build a current-thread runtime"),
             )
@@ -1102,7 +1103,7 @@ mod tests {
     /// log, which reports `OFFSET_OUT_OF_RANGE` and serves nothing.
     #[tokio::test]
     async fn do_read_serves_the_window_its_plan_decided() {
-        let (partition, _dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
         let (limit, records) = {
             let mut log = partition.log.lock().expect("log mutex poisoned");
             log.append(&mut default_records_batch(&[b"first", b"second"]))
@@ -1112,6 +1113,7 @@ mod tests {
                 .read_raw(Offset(0), limit, UNBOUNDED)
                 .expect("the test log holds the range it is asked for")
                 .bytes;
+            drop(log);
             (limit, records)
         };
         partition.replica_state.lock().await.hw = limit;
@@ -1160,7 +1162,7 @@ mod tests {
 
     #[tokio::test]
     async fn do_read_distinguishes_log_end_from_offsets_above_it_for_every_fetcher() {
-        let (partition, _dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
         {
             let mut log = partition.log.lock().expect("log mutex poisoned");
             log.append(&mut default_records_batch(&[b"first", b"second"]))
@@ -1206,7 +1208,7 @@ mod tests {
     fn before_and_transaction<'a>(
         partition: &'a Partition,
         transaction_label: &str,
-    ) -> std::sync::MutexGuard<'a, Log> {
+    ) -> MutexGuard<'a, Log> {
         let mut log = partition.log.lock().expect("log mutex poisoned");
         log.append(&mut default_records_batch(&[b"before"]))
             .expect("append the record before the transaction"); // offset 0
@@ -1222,7 +1224,7 @@ mod tests {
     /// truncate the marker away and decide the outcome again.
     #[tokio::test]
     async fn read_committed_waits_for_the_high_watermark_to_pass_the_commit_marker() {
-        let (partition, _dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
         let transaction = {
             let mut log = before_and_transaction(&partition, "append the transaction's data");
             let mut commit = abort_marker(ProducerId(PID));
@@ -1317,7 +1319,7 @@ mod tests {
             refused
                 == PartitionData {
                     partition_index: 3,
-                    error_code: crate::codes::OFFSET_OUT_OF_RANGE,
+                    error_code: OFFSET_OUT_OF_RANGE,
                     high_watermark: -1,
                     last_stable_offset: -1,
                     log_start_offset: -1,
@@ -1337,7 +1339,7 @@ mod tests {
     /// transaction.
     #[tokio::test]
     async fn live_offsets_report_the_bounds_a_local_read_reports() {
-        let (partition, _dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
         {
             let _log = before_and_transaction(&partition, "append the open transaction");
         }
@@ -1409,7 +1411,7 @@ mod tests {
         let cases = [
             Case {
                 name: "an I/O failure",
-                error: BrokerError::Log(LogError::Io(std::io::Error::other("EIO"))),
+                error: BrokerError::Log(LogError::Io(io::Error::other("EIO"))),
                 error_code: KAFKA_STORAGE_ERROR,
                 dir_offline: true,
             },
@@ -1445,7 +1447,7 @@ mod tests {
             },
         ];
         for case in cases {
-            let (partition, dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+            let (partition, dir) = test_partition(Arc::new(Notify::new()));
             let log_dirs = LogDirRegistry::probe(&[dir.path().to_path_buf()]);
 
             let row = super::settle_failed_read(&partition, 4, &case.error, &log_dirs);
@@ -1483,7 +1485,7 @@ mod tests {
         .expect_err("the fetch offset is below the log start");
         let row = super::settle_failed_read(&partition, 0, &error, &log_dirs);
 
-        assert!(row == super::refused_read(0, crate::codes::OFFSET_OUT_OF_RANGE));
+        assert!(row == super::refused_read(0, OFFSET_OUT_OF_RANGE));
         assert!(!log_dirs.is_offline(dir.path()));
     }
 
@@ -1523,7 +1525,7 @@ mod tests {
     }
 
     fn retained_partition() -> RetainedPartition {
-        let (partition, dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+        let (partition, dir) = test_partition(Arc::new(Notify::new()));
         let limit = {
             let mut log = partition.log.lock().expect("log mutex poisoned");
             log.append(&mut RecordBatch {

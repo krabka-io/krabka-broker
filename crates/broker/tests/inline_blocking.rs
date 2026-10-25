@@ -10,6 +10,7 @@
 //! node boots, creates a topic, takes a produce, serves it back to a fetch and
 //! shuts down without starting one. The control case, the same run without
 //! the guard, shows that the count does see the blocking pool.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -23,10 +24,14 @@ use {
         owned::create_topics_request::{CreatableTopic, CreateTopicsRequest},
         records::RecordBatch,
     },
-    std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
     },
+    tokio::runtime::Builder,
 };
 
 mod support;
@@ -115,8 +120,8 @@ struct NodeRun {
 fn run_node(inline: bool) -> NodeRun {
     let started = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&started);
-    let served = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
+    let served = thread::spawn(move || {
+        let runtime = Builder::new_current_thread()
             .enable_all()
             .on_thread_start(move || {
                 counter.fetch_add(1, Ordering::SeqCst);

@@ -43,7 +43,7 @@ fn object_entry(
         });
     }
     Ok(ObjectEntry {
-        suffix: suffix.to_string(),
+        suffix: suffix.to_owned(),
         key: key.to_string(),
         size_bytes: outcome.size_bytes,
         sha256: Sha256Digest(sha256),

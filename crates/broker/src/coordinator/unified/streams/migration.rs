@@ -26,7 +26,7 @@ use {
 
 /// Result of inspecting a `group_id` for classic→streams conversion.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ConvertOutcome {
+pub enum ConvertOutcome {
     /// Not a classic group (fresh streams group or already streams). Serve normally.
     NotClassic,
     /// Was a drained classic group. The coordinator converted it in place to streams.
@@ -38,7 +38,7 @@ pub(crate) enum ConvertOutcome {
 /// Result of inspecting a `group_id` for a streams→classic cold downgrade.
 /// The mirror of [`ConvertOutcome`] for the opposite direction.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum DowngradeOutcome {
+pub enum DowngradeOutcome {
     /// Not a streams group. Serve the classic `JoinGroup` normally.
     NotStreams,
     /// Was a drained streams group, and the join names no member. The
@@ -62,7 +62,7 @@ pub(crate) enum DowngradeOutcome {
 ///
 /// Returns [`BrokerError::Protocol`] when `group_id` is longer than 32767
 /// bytes.
-pub(crate) fn classic_group_metadata_tombstone_batch(
+pub fn classic_group_metadata_tombstone_batch(
     group_id: &str,
     now_ms: i64,
 ) -> Result<RecordBatch, BrokerError> {
@@ -94,7 +94,7 @@ pub(crate) fn classic_group_metadata_tombstone_batch(
 ///
 /// Returns [`BrokerError::Protocol`] when `group_id` or a member id is longer
 /// than 32767 bytes.
-pub(crate) fn streams_records_tombstone_batch(
+pub fn streams_records_tombstone_batch(
     group_id: &str,
     member_ids: &[String],
     now_ms: i64,
@@ -124,10 +124,7 @@ pub(crate) fn streams_records_tombstone_batch(
 ///
 /// Returns [`BrokerError::Protocol`] when `group_id` is longer than 32767
 /// bytes.
-pub(crate) fn streams_to_classic_batch(
-    group_id: &str,
-    now_ms: i64,
-) -> Result<RecordBatch, BrokerError> {
+pub fn streams_to_classic_batch(group_id: &str, now_ms: i64) -> Result<RecordBatch, BrokerError> {
     use crate::coordinator::unified::persistence::GroupMetadataValue;
 
     let mut batch = OffsetRecordBatchBuilder::default();
@@ -209,7 +206,7 @@ mod tests {
                 encode_group_metadata_key(g).unwrap(),
                 encode_topology_key(g).unwrap(),
             ]),
-            ("one member", vec!["m1".to_string()], vec![
+            ("one member", vec!["m1".to_owned()], vec![
                 encode_current_member_assignment_key(g, "m1").unwrap(),
                 encode_target_assignment_member_key(g, "m1").unwrap(),
                 encode_target_assignment_metadata_key(g).unwrap(),

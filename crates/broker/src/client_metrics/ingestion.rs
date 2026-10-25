@@ -16,7 +16,7 @@ mod prometheus;
 
 /// Payload failures independent of Kafka's version-specific error mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IngestionError {
+pub enum IngestionError {
     InvalidRecord,
     TooLarge,
 }
@@ -86,7 +86,7 @@ mod tests {
         opentelemetry_proto::tonic::{
             collector::metrics::v1::ExportMetricsServiceRequest, metrics::v1::number_data_point,
         },
-        prometheus_client::{metrics::counter::Counter, registry::Registry},
+        prometheus_client::{encoding::text, metrics::counter::Counter, registry::Registry},
         std::{sync::Arc, time::Duration},
         wiremock::{Mock, MockServer, ResponseTemplate, matchers::path},
     };
@@ -111,7 +111,7 @@ mod tests {
             &metrics.prometheus,
         ))));
         let mut output = String::new();
-        prometheus_client::encoding::text::encode(&mut output, &registry).unwrap();
+        text::encode(&mut output, &registry).unwrap();
         output
     }
 

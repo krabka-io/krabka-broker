@@ -1,16 +1,17 @@
 //! The generated timing methods preserve borrowing, bounds and unrelated fields.
+#![cfg(test)]
 
-use std::{borrow::Cow, collections::BTreeMap, time::Duration};
+use std::{borrow::Cow, collections::BTreeMap, ptr, time::Duration};
 
 mod coordinator {
-    pub(crate) mod unified {
-        pub(crate) mod config {
+    pub mod unified {
+        pub mod config {
             use std::{collections::BTreeMap, time::Duration};
 
-            pub(crate) const MIN_ASSIGNMENT_INTERVAL: Duration = Duration::ZERO;
-            pub(crate) const MAX_ASSIGNMENT_INTERVAL: Duration = Duration::from_secs(15);
+            pub const MIN_ASSIGNMENT_INTERVAL: Duration = Duration::ZERO;
+            pub const MAX_ASSIGNMENT_INTERVAL: Duration = Duration::from_secs(15);
 
-            pub(crate) fn group_millis(
+            pub fn group_millis(
                 overrides: Option<&BTreeMap<String, String>>,
                 key: &str,
                 min: Duration,
@@ -83,7 +84,7 @@ fn absent_invalid_and_other_protocol_timings_borrow_the_original(kind: &str) {
     let Cow::Borrowed(actual) = config.for_group(values) else {
         panic!("no valid timing overrides must borrow the broker defaults")
     };
-    assert2::assert!(std::ptr::eq(actual, &raw const config));
+    assert2::assert!(ptr::eq(actual, &raw const config));
 }
 
 #[yare::parameterized(
@@ -128,7 +129,7 @@ fn applies_each_timing_and_keeps_unrelated_configuration(
                 session_timeout: Duration::from_secs(session),
                 heartbeat_interval: Duration::from_secs(heartbeat),
                 assignment_interval: Duration::from_secs(assignment),
-                ..config.clone()
+                ..config
             }
     );
     assert2::assert!(config == Config::default());
@@ -153,7 +154,7 @@ fn with_assignment_interval_replaces_only_the_assignment_interval(millis: u64, o
     let actual = config.with_assignment_interval(Duration::from_millis(millis));
     match owned {
         None => assert2::assert!(
-            matches!(actual, Cow::Borrowed(borrowed) if std::ptr::eq(borrowed, &raw const config))
+            matches!(actual, Cow::Borrowed(borrowed) if ptr::eq(borrowed, &raw const config))
         ),
         Some(want) => assert2::assert!(
             actual.into_owned()

@@ -1,5 +1,6 @@
-//! The async `KraftController` consensus engine: a single owning tokio task
-//! holds all consensus state (the [`QuorumStateMachine`] core, the
+//! The async `KraftController` consensus engine.
+//!
+//! A single owning tokio task holds all consensus state (the [`QuorumStateMachine`] core, the
 //! [`KraftLog`], and the published [`MetadataImage`]) and turns inbound
 //! commands/RPCs into core [`Event`]s whose [`Action`]s it executes.
 //!
@@ -78,9 +79,15 @@ use {
         fmt::Human as _,
         prelude::{ByteSize, Time, TimeExt as _},
     },
-    std::{collections::BTreeMap, path::PathBuf, sync::Arc},
+    std::{
+        collections::BTreeMap,
+        path::PathBuf,
+        sync::{Arc, OnceLock},
+        time::SystemTime,
+    },
     tokio::{
         sync::{mpsc, oneshot, watch},
+        task::JoinHandle,
         time::{Duration, Instant},
     },
     uuid::Uuid,
@@ -89,8 +96,9 @@ use {
 mod activation;
 mod applied_image;
 mod apply;
-/// The KIP-630 `.checkpoint` artifacts under a node's metadata directory. It
-/// is public because a broker-only observer keeps its `__cluster_metadata`
+/// The KIP-630 `.checkpoint` artifacts under a node's metadata directory.
+///
+/// It is public because a broker-only observer keeps its `__cluster_metadata`
 /// snapshot in the same on-disk layout, and reads and writes it with these
 /// helpers rather than with a second file format of its own.
 pub mod checkpoint;
@@ -305,8 +313,9 @@ struct Engine {
     bytes_since_snapshot: u64,
     /// The sole regular snapshot serializer/checkpoint writer. Its captured
     /// image and boundary are immutable while the engine continues polling.
-    snapshot_job: Option<tokio::task::JoinHandle<snapshotting::SnapshotJobCompletion>>,
-    #[cfg(test)]
+    snapshot_job: Option<JoinHandle<snapshotting::SnapshotJobCompletion>>,
+    /// A pause before each regular snapshot write: zero, but for tests that
+    /// hold a write open.
     snapshot_write_delay: Duration,
     /// The first committed metadata-version downgrade whose mandatory exact
     /// checkpoint, reload, and prune has not completed locally yet. Capturing
@@ -337,7 +346,7 @@ struct Engine {
     /// not the leader, as a fresh `LeaderState` starts with none.
     observers: BTreeMap<ReplicaKey, ReplicaProgress>,
     /// Base system time for mapping `SimInstant` to wall-clock time.
-    wall_clock_base: std::time::SystemTime,
+    wall_clock_base: SystemTime,
     /// Highest high watermark any leader has reported to this node in a Fetch
     /// response. A follower clamps its own HWM to its log end, so this is the
     /// only place the quorum's committed offset survives while the follower is
@@ -417,7 +426,7 @@ pub struct KraftController {
     me: NodeId,
     /// The broker crate's hook for batches that register a broker anew, once
     /// it is installed. Every clone of the handle shares it.
-    registration_admission: Arc<std::sync::OnceLock<Arc<dyn RegistrationAdmission>>>,
+    registration_admission: Arc<OnceLock<Arc<dyn RegistrationAdmission>>>,
 }
 
 /// Configuration to build a [`KraftController`].

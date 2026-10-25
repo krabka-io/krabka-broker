@@ -68,7 +68,8 @@ impl WalObjectBuilder {
         last_offset: i64,
         run: &[u8],
     ) {
-        let byte_start = u64::try_from(HEADER_LEN + self.body.len()).expect("object size fits u64");
+        // No supported target has a `usize` wider than a `u64`.
+        let byte_start = (HEADER_LEN + self.body.len()) as u64;
         let byte_len = u32::try_from(run.len()).expect("run size fits u32");
         self.body.extend_from_slice(run);
         self.entries.push(WalObjectEntry {
@@ -128,20 +129,22 @@ pub fn parse_wal_object(object: &Bytes) -> Result<Vec<WalObjectEntry>, WalObject
     if object.len() < HEADER_LEN + TRAILER_LEN {
         return Err(WalObjectError::TooShort);
     }
-    if object[..4] != MAGIC || object[object.len() - 4..] != MAGIC {
+    let (Some(&[m0, m1, m2, m3, v0, v1]), Some(&[l0, l1, l2, l3, t0, t1, t2, t3])) = (
+        object.first_chunk::<HEADER_LEN>(),
+        object.last_chunk::<TRAILER_LEN>(),
+    ) else {
+        return Err(WalObjectError::TooShort);
+    };
+    if [m0, m1, m2, m3] != MAGIC || [t0, t1, t2, t3] != MAGIC {
         return Err(WalObjectError::BadMagic);
     }
-    let version = u16::from_le_bytes([object[4], object[5]]);
+    let version = u16::from_le_bytes([v0, v1]);
     if version != OBJECT_VERSION {
         return Err(WalObjectError::BadVersion(version));
     }
     let trailer = object.len() - TRAILER_LEN;
-    let footer_len = usize::try_from(u32::from_le_bytes(
-        object[trailer..trailer + 4]
-            .try_into()
-            .map_err(|_| WalObjectError::BadManifest)?,
-    ))
-    .map_err(|_| WalObjectError::BadManifest)?;
+    let footer_len = usize::try_from(u32::from_le_bytes([l0, l1, l2, l3]))
+        .map_err(|_| WalObjectError::BadManifest)?;
     if footer_len % OBJECT_ENTRY_LEN != 0 {
         return Err(WalObjectError::BadManifest);
     }
@@ -150,7 +153,10 @@ pub fn parse_wal_object(object: &Bytes) -> Result<Vec<WalObjectEntry>, WalObject
         .filter(|start| *start >= HEADER_LEN)
         .ok_or(WalObjectError::BadManifest)?;
     let mut entries = Vec::with_capacity(footer_len / OBJECT_ENTRY_LEN);
-    for raw in object[footer..trailer].as_chunks::<OBJECT_ENTRY_LEN>().0 {
+    let footer_bytes = object
+        .get(footer..trailer)
+        .ok_or(WalObjectError::BadManifest)?;
+    for raw in footer_bytes.as_chunks::<OBJECT_ENTRY_LEN>().0 {
         let entry = WalObjectEntry {
             topic_id: Uuid::from_slice(&raw[..16]).map_err(|_| WalObjectError::BadManifest)?,
             partition: i32::from_le_bytes(

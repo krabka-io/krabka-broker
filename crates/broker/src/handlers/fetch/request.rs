@@ -11,7 +11,7 @@ use {
     },
     krabka_metadata::AclOperation,
     krabka_protocol::{owned::fetch_request::FetchRequest, primitives::uuid::Uuid as WireUuid},
-    std::sync::Arc,
+    std::{collections::HashSet, sync::Arc},
 };
 
 /// Projection of `FetchRequest::topics` or of the cached session partitions.
@@ -54,9 +54,7 @@ pub(super) enum FetchAuthorization {
     FollowerDenied,
     /// A consumer fetch, with the names of the topics whose `Read` the
     /// authorizer denied.
-    Consumer {
-        denied_topics: std::collections::HashSet<String>,
-    },
+    Consumer { denied_topics: HashSet<String> },
 }
 
 impl FetchAuthorization {
@@ -166,7 +164,7 @@ fn consumer_denied_topics(
     image: &krabka_metadata::MetadataImage,
     effective_topics: &[EffectiveTopic],
     context: &RequestContext<'_>,
-) -> std::collections::HashSet<String> {
+) -> HashSet<String> {
     let names: Vec<String> = effective_topics
         .iter()
         .map(|topic| requested_topic_name(image, &topic.topic, topic.topic_id))

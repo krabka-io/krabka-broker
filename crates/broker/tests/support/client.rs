@@ -1,7 +1,7 @@
 //! Client connections and topic creation shared by coordinator suites.
 use {
     crate::support::{
-        heartbeat_config,
+        heartbeat_config, listeners,
         produce::{
             ProduceAcknowledgements, ProduceTimeoutMillis, SinglePartitionProduceSetup, send_batch,
         },
@@ -17,7 +17,10 @@ use {
     krabka_client_core::{Client, Connection, ConnectionOptions},
     krabka_protocol::{
         owned::{
-            list_groups_request::ListGroupsRequest, list_groups_response::ListGroupsResponse,
+            create_topics_request::{CreatableTopic, CreateTopicsRequest},
+            create_topics_response::CreateTopicsResponse,
+            list_groups_request::ListGroupsRequest,
+            list_groups_response::ListGroupsResponse,
             produce_response::PartitionProduceResponse,
         },
         primitives::uuid::Uuid as WireUuid,
@@ -124,8 +127,9 @@ pub async fn create_led_topic(broker: &BrokerHandle, client: &Client, setup: Cre
 pub async fn scrape_metrics(addr: SocketAddr) -> String {
     let s = http_get(addr, "/metrics", true).await;
     // Strip the HTTP head, keep the body so we can inspect metric names.
-    let body_start = s.find("\r\n\r\n").map_or(0, |i| i + 4);
-    s[body_start..].to_string()
+    s.split_once("\r\n\r\n")
+        .map_or(s.as_str(), |(_, body)| body)
+        .to_owned()
 }
 
 pub async fn http_get(addr: SocketAddr, path: &str, flush: bool) -> String {
@@ -163,7 +167,7 @@ pub async fn create_replicated_topic(client: &Client, topic: &str) -> WireUuid {
 /// Create the caller's complete topic specification and return its wire identity.
 pub async fn create_topic_spec(
     client: &Client,
-    topic: krabka_protocol::owned::create_topics_request::CreatableTopic,
+    topic: CreatableTopic,
     setup: CreateTopicRequestSetup,
 ) -> WireUuid {
     let resp = client
@@ -264,7 +268,7 @@ pub async fn metric_value(handle: &BrokerHandle, series: &str) -> f64 {
 
 pub fn metrics_config(log_dir: PathBuf) -> BrokerConfig {
     let mut cfg = heartbeat_config(log_dir);
-    cfg.listeners = vec![crate::support::listeners::loopback_listener(
+    cfg.listeners = vec![listeners::loopback_listener(
         "PLAINTEXT",
         ListenerProtocol::Plaintext,
     )];
@@ -417,10 +421,7 @@ pub async fn create_topic_named(client: &Client, setup: CreateTopicSetup<'_>) {
 }
 
 /// Connect through the fixture broker and send a configured topic request.
-pub async fn create_topic_for_broker(
-    broker: &BrokerHandle,
-    request: krabka_protocol::owned::create_topics_request::CreateTopicsRequest,
-) {
+pub async fn create_topic_for_broker(broker: &BrokerHandle, request: CreateTopicsRequest) {
     let client = connect_with_context(broker.listen_addr().to_string(), None, "client").await;
     let response = send_topic_creation(&client, request).await;
     assert!(response.topics[0].error_code == 0, "{response:?}");
@@ -428,13 +429,11 @@ pub async fn create_topic_for_broker(
 
 pub async fn send_topic_creation(
     client: &Client,
-    request: krabka_protocol::owned::create_topics_request::CreateTopicsRequest,
-) -> krabka_protocol::owned::create_topics_response::CreateTopicsResponse {
+    request: CreateTopicsRequest,
+) -> CreateTopicsResponse {
     client.send(request).await.expect("CreateTopics")
 }
 
-fn configured_request(
-    setup: CreateTopicSetup<'_>,
-) -> krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+fn configured_request(setup: CreateTopicSetup<'_>) -> CreateTopicsRequest {
     configured_topic_request_from(setup)
 }

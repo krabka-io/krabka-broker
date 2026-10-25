@@ -34,7 +34,7 @@ pub(super) fn request_error(
     let invalid = |message: &str| {
         Some(RequestError {
             code: codes::INVALID_REQUEST,
-            message: message.to_string(),
+            message: message.to_owned(),
         })
     };
 
@@ -197,7 +197,7 @@ mod tests {
     fn invalid(message: &str) -> RequestError {
         RequestError {
             code: codes::INVALID_REQUEST,
-            message: message.to_string(),
+            message: message.to_owned(),
         }
     }
 
@@ -421,7 +421,7 @@ mod tests {
                 ..Default::default()
             }])
         };
-        let instance = Some("i1".to_string());
+        let instance = Some("i1".to_owned());
         // (name, request, the answer of 4.3.1 and the answer of trunk)
         let rows = [
             (

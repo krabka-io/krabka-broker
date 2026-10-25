@@ -8,7 +8,11 @@ use {
     crate::client_metrics::config::{self, ALL_METRICS, MatchRule},
     krabka_metadata::MetadataImage,
     krabka_protocol::records::crc32c,
-    std::collections::{BTreeMap, HashMap},
+    std::{
+        borrow::Cow,
+        collections::{BTreeMap, HashMap},
+        mem,
+    },
     uuid::Uuid,
 };
 
@@ -49,7 +53,7 @@ impl CompiledSubscription {
 /// a `java.util.regex.Pattern` is compiled once per subscription change, not
 /// once per new client instance.
 #[derive(Debug, Default)]
-pub(crate) struct Subscriptions {
+pub struct Subscriptions {
     entries: Vec<CompiledSubscription>,
     by_name: HashMap<String, usize>,
     /// How many subscriptions have been compiled, for the tests that pin the
@@ -78,7 +82,7 @@ impl Subscriptions {
         if unchanged {
             return false;
         }
-        let mut previous: HashMap<String, CompiledSubscription> = std::mem::take(&mut self.entries)
+        let mut previous: HashMap<String, CompiledSubscription> = mem::take(&mut self.entries)
             .into_iter()
             .map(|compiled| (compiled.name.clone(), compiled))
             .collect();
@@ -105,9 +109,8 @@ impl Subscriptions {
     }
 
     fn get(&self, name: &str) -> Option<&CompiledSubscription> {
-        self.by_name
-            .get(name)
-            .and_then(|&position| self.entries.get(position))
+        let &position = self.by_name.get(name)?;
+        self.entries.get(position)
     }
 
     /// Kafka's `ClientMetricsManager.createClientInstance`: the push interval
@@ -145,7 +148,7 @@ impl Subscriptions {
         }
 
         let metrics = if any_star {
-            vec![ALL_METRICS.to_string()]
+            vec![ALL_METRICS.to_owned()]
         } else {
             matched_metrics
         };
@@ -162,7 +165,7 @@ impl Subscriptions {
 /// [`Subscriptions::compute`] over the subscriptions of `image`, compiled for
 /// this one call.
 #[cfg(test)]
-pub(crate) fn compute_subscription(
+pub fn compute_subscription(
     image: &MetadataImage,
     attrs: &ClientAttributes,
     default_interval_ms: i32,
@@ -174,7 +177,7 @@ fn selector_matches(rule: &config::MatchRule, attrs: &ClientAttributes) -> bool 
     use config::MatchSelector::{
         Id, InstanceId, SoftwareName, SoftwareVersion, SourceAddress, SourcePort,
     };
-    let target: std::borrow::Cow<'_, str> = match rule.selector {
+    let target: Cow<'_, str> = match rule.selector {
         InstanceId => attrs.client_instance_id.to_string().into(),
         Id => (&attrs.client_id).into(),
         SoftwareName => (&attrs.software_name).into(),
@@ -193,7 +196,7 @@ fn selector_matches(rule: &config::MatchRule, attrs: &ClientAttributes) -> bool 
 /// the push interval, XOR-ed with the instance-id hash. It stays consistent
 /// across a re-fetch. It is not byte-identical to the JVM broker's id, and it
 /// does not need to be.
-pub(crate) fn subscription_id(sub: &ComputedSubscription, client_instance_id: Uuid) -> i32 {
+pub fn subscription_id(sub: &ComputedSubscription, client_instance_id: Uuid) -> i32 {
     let mut sorted = sub.metrics.clone();
     sorted.sort();
     let rendered = format!("[{}]{}", sorted.join(", "), sub.push_interval_ms);
@@ -205,13 +208,10 @@ pub(crate) fn subscription_id(sub: &ComputedSubscription, client_instance_id: Uu
 
 /// Reproduces `java.util.UUID.hashCode()`, so the shape matches.
 fn uuid_hashcode(id: Uuid) -> i32 {
-    let bytes = id.as_bytes();
-    let msb = i64::from_be_bytes(bytes[0..8].try_into().unwrap());
-    let lsb = i64::from_be_bytes(bytes[8..16].try_into().unwrap());
-    let hilo = msb ^ lsb;
-    let hilo_bytes = hilo.to_be_bytes();
-    let high = i32::from_be_bytes(hilo_bytes[..4].try_into().expect("four-byte high half"));
-    let low = i32::from_be_bytes(hilo_bytes[4..].try_into().expect("four-byte low half"));
+    let (msb, lsb) = id.as_u64_pair();
+    let [h0, h1, h2, h3, l0, l1, l2, l3] = (msb ^ lsb).to_be_bytes();
+    let high = i32::from_be_bytes([h0, h1, h2, h3]);
+    let low = i32::from_be_bytes([l0, l1, l2, l3]);
     high ^ low
 }
 
@@ -312,7 +312,7 @@ mod tests {
             },
         ]);
         let m = compute_subscription(&img, &attrs());
-        check!(m.metrics == vec!["*".to_string()]);
+        check!(m.metrics == vec!["*".to_owned()]);
         check!(m.push_interval_ms == 60_000);
     }
 
@@ -329,7 +329,7 @@ mod tests {
             },
         ]);
         let m = compute_subscription(&img, &attrs());
-        check!(m.metrics == vec!["a.".to_string()]);
+        check!(m.metrics == vec!["a.".to_owned()]);
 
         let img2 = img_with("py-only", &[
             ConfigEntry {
@@ -373,7 +373,7 @@ mod tests {
         let m = compute_subscription(&img, &attrs());
         let mut got = m.metrics.clone();
         got.sort();
-        check!(got == vec!["a.".to_string(), "b.".to_string()]);
+        check!(got == vec!["a.".to_owned(), "b.".to_owned()]);
         check!(m.push_interval_ms == 30_000);
     }
 
@@ -416,7 +416,7 @@ mod tests {
             value: "*",
         }]);
         let m = compute_subscription(&img, &attrs());
-        check!(m.metrics == vec!["*".to_string()]);
+        check!(m.metrics == vec!["*".to_owned()]);
     }
 
     /// Kafka's `createClientInstance` caps the interval at 300000, lets every

@@ -53,7 +53,10 @@ use {
         },
         primitives::uuid::Uuid,
     },
-    std::collections::{HashMap, HashSet},
+    std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    },
 };
 
 /// `member_type` of a member that speaks the classic protocol inside a
@@ -62,13 +65,13 @@ const MEMBER_TYPE_CLASSIC: i8 = 0;
 /// `member_type` of a member that speaks the consumer protocol.
 const MEMBER_TYPE_CONSUMER: i8 = 1;
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ConsumerGroupDescribeRequest,
     _version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<ConsumerGroupDescribeResponse, BrokerError> {
-    let coordinator = broker.group_coordinator.clone();
+    let coordinator = Arc::clone(&broker.group_coordinator);
     let image = broker.controller.current_image();
 
     // Kafka's `isConsumerGroupProtocolEnabled` gate, checked before any
@@ -236,7 +239,7 @@ fn described_group(
         assignment_epoch: view.assignment_epoch,
         assignor_name: view
             .preferred_server_assignor
-            .unwrap_or_else(|| default_assignor.to_string()),
+            .unwrap_or_else(|| default_assignor.to_owned()),
         members,
         ..Default::default()
     }
@@ -280,7 +283,7 @@ fn assignment(partitions: HashMap<Uuid, Vec<i32>>, image: &MetadataImage) -> Ass
             partitions.sort_unstable();
             Some(TopicPartitions {
                 topic_id,
-                topic_name: topic_name.to_string(),
+                topic_name: topic_name.to_owned(),
                 partitions,
                 ..Default::default()
             })
@@ -319,9 +322,11 @@ mod tests {
         },
         assert2::assert,
         krabka_metadata::MetadataRecord,
+        krabka_protocol::owned::consumer_group_describe_request,
+        std::sync::Arc,
     };
 
-    const VERSION: i16 = krabka_protocol::owned::consumer_group_describe_request::MAX_VERSION;
+    const VERSION: i16 = consumer_group_describe_request::MAX_VERSION;
 
     fn request(group_ids: Vec<&str>) -> ConsumerGroupDescribeRequest {
         ConsumerGroupDescribeRequest {
@@ -363,10 +368,10 @@ mod tests {
         // (finalized group.version level; None = fresh image) → disabled?
         let cases = [(None, true), (Some(1), false), (Some(0), true)];
         for (level, want_disabled) in cases {
-            let image = match level {
-                None => MetadataImage::new(uuid::Uuid::nil()),
-                Some(level) => image_with_group_version(GroupFeatureLevel(level)),
-            };
+            let image = level.map_or_else(
+                || MetadataImage::new(uuid::Uuid::nil()),
+                |level| image_with_group_version(GroupFeatureLevel(level)),
+            );
             assert!(
                 group_version_disabled(&image) == want_disabled,
                 "level {level:?}"
@@ -584,8 +589,8 @@ mod tests {
     fn error_group_row(group_id: &str, error_code: i16, message: Option<&str>) -> DescribedGroup {
         krabka_macros::tagged_wire!(DescribedGroup {
             error_code,
-            error_message: message.map(str::to_string),
-            group_id: group_id.to_string(),
+            error_message: message.map(str::to_owned),
+            group_id: group_id.to_owned(),
             group_state: String::new(),
             group_epoch: 0,
             assignment_epoch: 0,
@@ -804,7 +809,7 @@ mod tests {
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-                crate::test_support::allow_acl()
+                allow_acl()
                     .resource_type(krabka_metadata::ResourceType::Group)
                     .resource_name("allowed")
                     .operation(krabka_metadata::AclOperation::Describe)
@@ -847,11 +852,11 @@ mod tests {
     /// an errored row) keeps the wire-default `i32::MIN` sentinel.
     #[tokio::test]
     async fn handle_fills_authorized_operations_only_on_opt_in_for_clean_rows() {
-        let authorizer = std::sync::Arc::new(AllowAllAuthorizer);
+        let authorizer = Arc::new(AllowAllAuthorizer);
         let HandlerStartedBroker {
             broker: broker_handle,
             dir: _dir,
-        } = start_group_broker_no_audit(std::sync::Arc::clone(&authorizer) as _).await;
+        } = start_group_broker_no_audit(Arc::<AllowAllAuthorizer>::clone(&authorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker
             .group_coordinator

@@ -2,6 +2,7 @@
 //! schemas: each entry is keyed by its response module's `API_KEY`, a
 //! `throttled` probe sets the sentinel, an `unthrottled` one cannot, and a
 //! `legacy_split` probe switches schema at its canonical version.
+#![cfg(test)]
 
 use {assert2::assert, std::collections::BTreeMap};
 

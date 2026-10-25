@@ -3,10 +3,11 @@
 use {
     super::bootstrap::{OFFSETS_NUM_PARTITIONS, OFFSETS_TOPIC},
     krabka_metadata::MetadataImage,
+    krabka_verified::broker::java_string_hash_partition,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GroupRoutingError {
+pub enum GroupRoutingError {
     Unavailable,
     NotCoordinator,
 }
@@ -23,16 +24,16 @@ pub(crate) enum GroupRoutingError {
 /// Panics when `partition_count` is not positive. The offsets topic always
 /// has at least one partition, and the bootstrap default is positive.
 #[must_use]
-pub(crate) fn partition_for_group_with_count(group_id: &str, partition_count: i32) -> i32 {
+pub fn partition_for_group_with_count(group_id: &str, partition_count: i32) -> i32 {
     let utf16: Vec<u16> = group_id.encode_utf16().collect();
-    krabka_verified::broker::java_string_hash_partition(&utf16, partition_count)
+    java_string_hash_partition(&utf16, partition_count)
         .expect("offsets topic partition count must be positive")
 }
 
 /// Select from the live offsets-topic partition count, falling back to the
 /// bootstrap default while metadata is not available yet.
 #[must_use]
-pub(crate) fn partition_for_group(image: &MetadataImage, group_id: &str) -> i32 {
+pub fn partition_for_group(image: &MetadataImage, group_id: &str) -> i32 {
     let count = image.topic_partition_count(OFFSETS_TOPIC);
     partition_for_group_with_count(
         group_id,
@@ -46,7 +47,7 @@ pub(crate) fn partition_for_group(image: &MetadataImage, group_id: &str) -> i32 
 
 /// Resolve the group partition and verify that `node_id` is its current
 /// leader. Group RPC handlers use this before they create or access actors.
-pub(crate) fn local_partition_for_group(
+pub fn local_partition_for_group(
     image: &MetadataImage,
     node_id: krabka_raft::NodeId,
     group_id: &str,

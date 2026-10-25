@@ -16,10 +16,13 @@ use {
         CustomMetadata, LogSegmentData, RemoteLogSegmentMetadata, RemoteStorageError,
     },
     std::{
+        io,
+        path::Path,
         sync::{
-            Condvar, Mutex,
+            Condvar, Mutex, PoisonError,
             atomic::{AtomicBool, AtomicUsize},
         },
+        thread,
         time::Instant,
     },
 };
@@ -104,32 +107,31 @@ impl RemoteStorageManager for TestRsm {
                     .partition
                     == BLOCKED_PARTITION
                 {
-                    let open = self.gate.lock().expect("gate mutex poisoned");
+                    let open = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
                     let (_open, wait) = self
                         .opened
                         .wait_timeout_while(open, GATE_WAIT, |open| !*open)
                         .expect("gate mutex poisoned");
                     if wait.timed_out() {
                         self.gave_up.store(true, Ordering::Relaxed);
-                        return Err(RemoteStorageError::Io(std::io::Error::other(
+                        return Err(RemoteStorageError::Io(io::Error::other(
                             "no other partition copied while this one was parked",
                         )));
                     }
-                    return Ok(None);
+                } else {
+                    self.unblocked_copies.fetch_add(1, Ordering::Relaxed);
+                    *self.gate.lock().unwrap_or_else(PoisonError::into_inner) = true;
+                    self.opened.notify_all();
                 }
-                self.unblocked_copies.fetch_add(1, Ordering::Relaxed);
-                *self.gate.lock().expect("gate mutex poisoned") = true;
-                self.opened.notify_all();
-                Ok(None)
             }
             CopyBehaviour::Dwell => {
                 let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
                 self.peak_in_flight.fetch_max(now, Ordering::SeqCst);
-                std::thread::sleep(COPY_DWELL);
+                thread::sleep(COPY_DWELL);
                 self.in_flight.fetch_sub(1, Ordering::SeqCst);
-                Ok(None)
             }
         }
+        Ok(None)
     }
 }
 
@@ -138,7 +140,7 @@ impl RemoteStorageManager for TestRsm {
 use fixtures::orders_image as image_with_orders_partitions;
 
 /// `orders-index`, led by this broker, with sealed segments the tier lacks.
-fn tiered_partition_at(index: i32, log_dir: &std::path::Path) -> Arc<Partition> {
+fn tiered_partition_at(index: i32, log_dir: &Path) -> Arc<Partition> {
     rolled_tiered_partition_at(PartitionIndex(index), log_dir, LogConfig {
         segment_size: bytes(256),
         remote_storage_enable: true,

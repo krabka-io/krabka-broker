@@ -14,7 +14,7 @@ use {
         support::{ContainerInput, init_jvm_tracing, jvm_docker_command, jvm_stdin_output},
     },
     assert2::assert,
-    krabka_broker::{Broker, BrokerConfig},
+    krabka_broker::{Broker, BrokerConfig, metrics::PartitionLabel},
 };
 
 /// `kafka-console-consumer` sees a compacted topic with only
@@ -234,7 +234,7 @@ async fn jvm_kafka_console_consumer_sees_compacted_topic_end_to_end() {
         broker
             .metrics()
             .log_compactions_total
-            .get_or_create(&krabka_broker::metrics::PartitionLabel {
+            .get_or_create(&PartitionLabel {
                 topic: TOPIC.into(),
                 partition: 0,
             })

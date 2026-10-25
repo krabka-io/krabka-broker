@@ -46,14 +46,10 @@ fn first_candidate_record(
     minimum: i64,
     target: i64,
 ) -> Option<(usize, usize)> {
-    match first_timestamp_index(tier.1, target) {
-        None => None,
-        Some(segment) => {
-            proof_assert!(forall<c: Int> first_candidate(tier.1@, target@, c) ==> c == segment@);
-            first_timestamp_record_index(tier.0[segment], minimum, target)
-                .map(|record| (segment, record))
-        }
-    }
+    let segment = first_timestamp_index(tier.1, target)?;
+    proof_assert!(forall<c: Int> first_candidate(tier.1@, target@, c) ==> c == segment@);
+    first_timestamp_record_index(tier.0.get(segment)?, minimum, target)
+        .map(|record| (segment, record))
 }
 
 /// Each tier answers from its first candidate segment only, as Kafka 4.3.1's
@@ -101,9 +97,9 @@ pub(super) fn tiered_timestamp_lookup_answers_first_candidate(
     epoch: i32,
 ) -> ListOffsetsSelectionDecision {
     let remote_hit = first_candidate_record(remote, minimum, target)
-        .map(|(segment, record)| remote.0[segment][record]);
+        .and_then(|(segment, record)| remote.0.get(segment)?.get(record).copied());
     let local_hit = first_candidate_record(local, minimum, target)
-        .map(|(segment, record)| local.0[segment][record]);
+        .and_then(|(segment, record)| local.0.get(segment)?.get(record).copied());
     let (offset, timestamp) =
         earliest_timestamp_candidate(remote_hit, local_hit).unwrap_or((-1, -1));
     list_offsets_selection_decision(ListOffsetsSelectionFacts {

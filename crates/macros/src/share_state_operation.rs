@@ -42,7 +42,7 @@ fn boundaries(meta: &TokenStream, signature: &Signature) -> Result<Boundaries, P
     })
 }
 
-pub(crate) fn expand(
+pub fn expand(
     meta: &TokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {

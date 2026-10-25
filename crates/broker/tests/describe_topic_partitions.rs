@@ -11,6 +11,7 @@
 //!   * Pagination through `response_partition_limit` and the `cursor` /
 //!     `next_cursor` round-trip
 //!   * Stable sort order on fetch-all (alphabetical)
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -18,6 +19,12 @@ use {
         topics::{TopicPartitionCount, configured_topic_request},
     },
     assert2::{assert, check},
+    krabka_protocol::owned::{
+        create_topics_request::CreateTopicsRequest,
+        describe_topic_partitions_response::DescribeTopicPartitionsResponse,
+    },
+    std::time::{Duration, Instant},
+    tokio::task,
 };
 mod support;
 
@@ -50,8 +57,7 @@ fn describe_topics_request(
 /// A started broker and the `DescribeTopicPartitions` response for its topic.
 struct DescribedTopic {
     p: support::InProcess,
-    response:
-        krabka_protocol::owned::describe_topic_partitions_response::DescribeTopicPartitionsResponse,
+    response: DescribeTopicPartitionsResponse,
 }
 
 async fn described_topic(name: &str, partitions: i32) -> DescribedTopic {
@@ -74,10 +80,7 @@ async fn described_topic(name: &str, partitions: i32) -> DescribedTopic {
 
 // Bit positions (subset; cross-check'd with the KIP-430 unit tests).
 
-async fn create_topic(
-    p: &support::InProcess,
-    request: krabka_protocol::owned::create_topics_request::CreateTopicsRequest,
-) {
+async fn create_topic(p: &support::InProcess, request: CreateTopicsRequest) {
     let response = support::client::send_topic_creation(&p.client, request).await;
     assert!(response.topics[0].error_code == 0, "{response:?}");
 }
@@ -283,7 +286,7 @@ async fn a_feature_downgrade_empties_the_reported_elr() {
     //
     // intentional poll: the only signal that the batch applied is the state
     // it changes, which is what is being asserted.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     let after = loop {
         let resp = p
             .client
@@ -294,10 +297,10 @@ async fn a_feature_downgrade_empties_the_reported_elr() {
             .eligible_leader_replicas
             .as_deref()
             == Some(&[][..]);
-        if cleared || std::time::Instant::now() > deadline {
+        if cleared || Instant::now() > deadline {
             break resp;
         }
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     };
     let part = &after.topics[0].partitions[0];
     check!(
@@ -396,7 +399,7 @@ async fn pagination_caps_response_at_partition_limit_and_returns_next_cursor() {
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 struct AlphaBetaTopicsSetup {
-    #[default(crate::support::topics::TopicPartitionCount(1))]
+    #[default(TopicPartitionCount(1))]
     alpha_partitions: TopicPartitionCount,
 }
 
@@ -404,8 +407,7 @@ struct AlphaBetaTopicsSetup {
 #[bon::builder]
 async fn create_alpha_beta(
     p: &support::InProcess,
-    #[builder(into, default = crate :: support :: topics :: TopicPartitionCount (1))]
-    alpha_partitions: TopicPartitionCount,
+    #[builder(into, default = TopicPartitionCount(1))] alpha_partitions: TopicPartitionCount,
 ) {
     let setup = AlphaBetaTopicsSetup { alpha_partitions };
     create_topic(

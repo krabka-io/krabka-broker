@@ -28,14 +28,14 @@
 //! a top-level field, and never as a transport failure, so a caller reads one
 //! response shape whatever the outcome.
 
-pub(crate) mod alter_groups;
-pub(crate) mod describe_groups;
-pub(crate) mod list_cuts;
+pub mod alter_groups;
+pub mod describe_groups;
+pub mod list_cuts;
 #[cfg(test)]
 mod string_bounds_tests;
-pub(crate) mod transport;
-pub(crate) mod trigger;
-pub(crate) mod write_markers;
+pub mod transport;
+pub mod trigger;
+pub mod write_markers;
 
 // The `Describe` gate that `describe_groups` and `list_cuts` apply, and the
 // `ClusterAction` gate that `write_markers` applies. Both live in
@@ -43,11 +43,11 @@ pub(crate) mod write_markers;
 // break-glass control planes read the cluster through the same gates. Kafka
 // applies `ClusterAction` to `WriteTxnMarkers`, and `WriteBarrierMarkers` is
 // the same kind of inter-broker traffic.
-pub(crate) use crate::handlers::{cluster_action_denied, cluster_describe_image};
 use {
     crate::{
         barrier::{error::BarrierError, persistence::CutValue},
         codes,
+        handlers::{cluster_action_denied, cluster_describe_image},
     },
     krabka_protocol::krabka::barrier::{
         BarrierCutPartition, BarrierCutTopic, BarrierMissingPartition,
@@ -56,10 +56,10 @@ use {
 };
 
 /// The `interval_ms` value that turns periodic injection off.
-pub(crate) const INTERVAL_OFF: i64 = -1;
+pub const INTERVAL_OFF: i64 = -1;
 
 /// The `epoch` value of a response that carries no cut.
-pub(crate) const NO_EPOCH: i64 = -1;
+pub const NO_EPOCH: i64 = -1;
 
 /// The Kafka error code that a [`BarrierError`] takes on the wire.
 ///
@@ -80,7 +80,7 @@ pub(crate) const NO_EPOCH: i64 = -1;
 /// interval that is out of range, because [`alter_groups`] rejects a malformed
 /// topic list, and a group or topic name over 32767 bytes, with
 /// `INVALID_REQUEST` before the coordinator sees the entry.
-pub(crate) fn error_code(error: &BarrierError) -> i16 {
+pub fn error_code(error: &BarrierError) -> i16 {
     match error {
         BarrierError::InjectionInProgress { .. } => codes::BARRIER_INJECTION_IN_PROGRESS,
         BarrierError::EpochExhausted { .. } => codes::INVALID_REQUEST,
@@ -97,10 +97,10 @@ pub(crate) fn error_code(error: &BarrierError) -> i16 {
 }
 
 /// The text that a response carries beside a non-zero error code.
-pub(crate) fn error_text(error: &BarrierError) -> String { error.to_string() }
+pub fn error_text(error: &BarrierError) -> String { error.to_string() }
 
 /// The cut offsets of one published cut, grouped by topic.
-pub(crate) fn cut_topics(cut: &CutValue) -> Vec<BarrierCutTopic> {
+pub fn cut_topics(cut: &CutValue) -> Vec<BarrierCutTopic> {
     cut.topics
         .iter()
         .map(|topic| BarrierCutTopic {
@@ -120,7 +120,7 @@ pub(crate) fn cut_topics(cut: &CutValue) -> Vec<BarrierCutTopic> {
 }
 
 /// The partitions of one published cut that took no marker.
-pub(crate) fn cut_missing(cut: &CutValue) -> Vec<BarrierMissingPartition> {
+pub fn cut_missing(cut: &CutValue) -> Vec<BarrierMissingPartition> {
     cut.missing
         .iter()
         .map(|missing| BarrierMissingPartition {
@@ -132,7 +132,7 @@ pub(crate) fn cut_missing(cut: &CutValue) -> Vec<BarrierMissingPartition> {
 }
 
 /// The `interval_ms` field of a group definition.
-pub(crate) fn interval_to_wire(interval: Option<Time>) -> i64 {
+pub fn interval_to_wire(interval: Option<Time>) -> i64 {
     interval.map_or(INTERVAL_OFF, Time::millis_i64)
 }
 
@@ -140,7 +140,7 @@ pub(crate) fn interval_to_wire(interval: Option<Time>) -> i64 {
 ///
 /// [`INTERVAL_OFF`] turns periodic injection off. Every other value becomes an
 /// interval, and `validate_spec` rejects the ones at or below zero.
-pub(crate) fn interval_from_wire(interval_ms: i64) -> Option<Time> {
+pub fn interval_from_wire(interval_ms: i64) -> Option<Time> {
     if interval_ms == INTERVAL_OFF {
         None
     } else {

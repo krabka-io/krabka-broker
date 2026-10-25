@@ -14,6 +14,10 @@ use {
         BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, RemoteStorageBackend,
         RlmmKind,
     },
+    std::{
+        array, fs, iter,
+        path::{Path, PathBuf},
+    },
     tempfile::TempDir,
 };
 
@@ -26,18 +30,17 @@ use {
 /// Returns `(broker1, broker2, broker3, dirs[], shared_remote_dir)`. All
 /// brokers share the remote dir, so they write to and read from the same object
 /// store.
-pub(crate) async fn start_three_tiered_brokers() -> (
+pub async fn start_three_tiered_brokers() -> (
     BrokerHandle,
     BrokerHandle,
     BrokerHandle,
     Vec<TempDir>,
     TempDir,
 ) {
-    let default_segment_size = krabka_broker::BrokerConfig::for_tests(std::path::PathBuf::from(
-        "/nonexistent-log-dir-for-defaults",
-    ))
-    .log_config
-    .segment_size;
+    let default_segment_size =
+        krabka_broker::BrokerConfig::for_tests(PathBuf::from("/nonexistent-log-dir-for-defaults"))
+            .log_config
+            .segment_size;
     start_three_tiered_brokers_with_segment_sizes([default_segment_size; 3]).await
 }
 
@@ -49,7 +52,7 @@ pub(crate) async fn start_three_tiered_brokers() -> (
 /// brokers different broker-level defaults and creating a topic that overrides
 /// neither. The offsets are the same on every replica; only the boundaries
 /// differ, which is exactly the condition a base-offset skip set mishandles.
-pub(crate) async fn start_three_tiered_brokers_with_segment_sizes(
+pub async fn start_three_tiered_brokers_with_segment_sizes(
     segment_sizes: [krabka_units::ByteSize; 3],
 ) -> (
     BrokerHandle,
@@ -70,7 +73,7 @@ pub(crate) async fn start_three_tiered_brokers_with_segment_sizes(
 /// The three brokers of [`start_three_tiered_brokers_with_segment_sizes`], with
 /// the configuration each one booted from, so a test can stop one and start it
 /// again on the same log directory and addresses.
-pub(crate) struct TieredCluster {
+pub struct TieredCluster {
     pub(crate) brokers: [BrokerHandle; 3],
     pub(crate) configs: [BrokerConfig; 3],
     pub(crate) log_dirs: Vec<TempDir>,
@@ -79,15 +82,13 @@ pub(crate) struct TieredCluster {
 
 /// Boots the three brokers of [`start_three_tiered_brokers_with_segment_sizes`]
 /// and keeps their configurations.
-pub(crate) async fn start_tiered_cluster(
-    segment_sizes: [krabka_units::ByteSize; 3],
-) -> TieredCluster {
+pub async fn start_tiered_cluster(segment_sizes: [krabka_units::ByteSize; 3]) -> TieredCluster {
     start_tiered_cluster_with(segment_sizes, |_, _| {}).await
 }
 
 /// [`start_tiered_cluster`], with `configure` applied to broker `i`'s
 /// configuration last, so a case can change what the suite's defaults set.
-pub(crate) async fn start_tiered_cluster_with(
+pub async fn start_tiered_cluster_with(
     segment_sizes: [krabka_units::ByteSize; 3],
     configure: impl Fn(usize, &mut BrokerConfig),
 ) -> TieredCluster {
@@ -101,7 +102,9 @@ pub(crate) async fn start_tiered_cluster_with(
     let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
         support::bind_and_hold_ports(3).await;
 
-    let log_dirs: Vec<TempDir> = (0..3).map(|_| TempDir::new().expect("log dir")).collect();
+    let log_dirs: Vec<TempDir> = iter::repeat_with(|| TempDir::new().expect("log dir"))
+        .take(3)
+        .collect();
     // **Shared** remote dir: all brokers point at the same Local object store.
     let remote_dir = TempDir::new().expect("shared remote dir");
 
@@ -111,7 +114,7 @@ pub(crate) async fn start_tiered_cluster_with(
         .collect();
 
     // Build a config for broker `i` (1-indexed broker_id/node_id).
-    let configs: [BrokerConfig; 3] = std::array::from_fn(|i| {
+    let configs: [BrokerConfig; 3] = array::from_fn(|i| {
         let mut cfg = node_config(NodeIndex(i), log_dirs[i].path());
         cfg.log_config.segment_size = segment_sizes[i];
         cfg.directory_id = uuid::Uuid::from_u128(u128::try_from(i + 1).unwrap());
@@ -138,7 +141,7 @@ pub(crate) async fn start_tiered_cluster_with(
             num_partitions: 1,
             replication: 3,
             snapshot_interval: krabka_units::hours(1),
-            snapshot_dir: std::path::PathBuf::new(), // derived from log_dir
+            snapshot_dir: PathBuf::new(), // derived from log_dir
             security: None,
             ..KafkaRlmmConfig::default()
         });
@@ -189,11 +192,7 @@ pub(crate) async fn start_tiered_cluster_with(
 
 /// Waits until all three brokers see each other registered, that is, until
 /// `broker_count` >= 3.
-pub(crate) async fn await_all_brokers_registered(
-    b1: &BrokerHandle,
-    b2: &BrokerHandle,
-    b3: &BrokerHandle,
-) {
+pub async fn await_all_brokers_registered(b1: &BrokerHandle, b2: &BrokerHandle, b3: &BrokerHandle) {
     // Each broker's own metadata image must show all 3 brokers registered.
     b1.wait_until_brokers_registered(3).await;
     b2.wait_until_brokers_registered(3).await;
@@ -201,7 +200,7 @@ pub(crate) async fn await_all_brokers_registered(
 }
 
 /// Waits until the topic-backed RLMM is active on all three brokers.
-pub(crate) async fn await_all_rlmm_active(b1: &BrokerHandle, b2: &BrokerHandle, b3: &BrokerHandle) {
+pub async fn await_all_rlmm_active(b1: &BrokerHandle, b2: &BrokerHandle, b3: &BrokerHandle) {
     // Topic-backed RLMM going live flips the tiered_storage_rlmm_topic_backed
     // gauge to 1 on each broker (the same signal rlmm_topic_backed_active_for_test
     // reads directly).
@@ -219,7 +218,7 @@ pub(crate) async fn await_all_rlmm_active(b1: &BrokerHandle, b2: &BrokerHandle, 
     .await;
 }
 
-pub(crate) async fn await_pair_leader(
+pub async fn await_pair_leader(
     b1: &BrokerHandle,
     b2: &BrokerHandle,
     topic: &str,
@@ -235,7 +234,7 @@ pub(crate) async fn await_pair_leader(
 }
 
 /// Connect the admin only once registration and the topic-backed RLMM are ready.
-pub(crate) async fn ready_admin(
+pub async fn ready_admin(
     brokers: [&BrokerHandle; 3],
     client_id: &str,
 ) -> krabka_client_core::Client {
@@ -249,8 +248,8 @@ pub(crate) async fn ready_admin(
 /// The base offset and size of every `*.log` file in one replica's partition
 /// directory, by ascending base offset. The highest is the active segment's;
 /// everything below it is sealed.
-pub(crate) fn local_log_files(partition_dir: &std::path::Path) -> Vec<(i64, u64)> {
-    let Ok(entries) = std::fs::read_dir(partition_dir) else {
+pub fn local_log_files(partition_dir: &Path) -> Vec<(i64, u64)> {
+    let Ok(entries) = fs::read_dir(partition_dir) else {
         return Vec::new();
     };
     let mut files: Vec<(i64, u64)> = entries
@@ -270,7 +269,7 @@ pub(crate) fn local_log_files(partition_dir: &std::path::Path) -> Vec<(i64, u64)
 
 /// The client address of the controller leader among `brokers`, where
 /// `kafka-reassign-partitions` sends a reassignment.
-pub(crate) async fn controller_leader_addr(brokers: [&BrokerHandle; 3]) -> String {
+pub async fn controller_leader_addr(brokers: [&BrokerHandle; 3]) -> String {
     let controller_leader = brokers[0].wait_until_controller_leader().await;
     brokers
         .iter()

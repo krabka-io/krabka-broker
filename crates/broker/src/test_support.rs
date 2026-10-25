@@ -21,9 +21,39 @@
 //! `LogCapture` records what one piece of work logs, for the tests that check
 //! the level of a log line.
 
-pub(crate) use crate::handlers::test_support::StartedBroker;
+pub use crate::handlers::test_support::StartedBroker;
+use {
+    krabka_metadata::metadata_version::SHARE_VERSION_FEATURE,
+    krabka_protocol::owned::{
+        api_versions_request::API_KEY,
+        broker_registration_request::Feature,
+        create_topics_response::CreatableTopicConfigs,
+        describe_topic_partitions_request::DescribeTopicPartitionsRequest,
+        streams_group_heartbeat_request::{StreamsGroupHeartbeatRequest, Subtopology, Topology},
+    },
+    ring::{
+        rand::SystemRandom,
+        signature::{EcdsaKeyPair, Ed25519KeyPair},
+    },
+    rustls::crypto::aws_lc_rs,
+    std::{
+        collections::{BTreeMap, HashSet},
+        fmt, fs,
+        future::{self, Future},
+        path::{Path, PathBuf},
+        sync::PoisonError,
+        time::Instant,
+    },
+    tokio::{
+        net::{TcpListener, TcpStream},
+        task, time,
+    },
+    tokio_rustls::server::TlsStream,
+    tokio_util::sync::CancellationToken,
+    tracing::field::{Field, Visit},
+};
 
-pub(crate) mod paused_audit;
+pub mod paused_audit;
 
 use {
     crate::config::BreakGlassConfig,
@@ -41,7 +71,7 @@ use {
 
 /// A break-glass test config that requires approval from the two named users.
 #[cfg(test)]
-pub(crate) fn gated_break_glass_config() -> BreakGlassConfig {
+pub fn gated_break_glass_config() -> BreakGlassConfig {
     BreakGlassConfig {
         approvers: ["User:alice", "User:bob"].map(str::to_owned).to_vec(),
         ..BreakGlassConfig::default()
@@ -123,48 +153,44 @@ use {
 };
 
 /// The localhost ECDSA pair used by reload and socket-drain tests.
-pub(crate) fn localhost_ecdsa_pair() -> (rcgen::Certificate, rcgen::KeyPair) {
+pub fn localhost_ecdsa_pair() -> (rcgen::Certificate, rcgen::KeyPair) {
     let EcdsaPair { cert, key } = ecdsa_pair_for_host("localhost");
     (cert, key)
 }
 
 /// A self-signed certificate and the key that signed it.
-pub(crate) struct EcdsaPair {
+pub struct EcdsaPair {
     pub(crate) cert: rcgen::Certificate,
     pub(crate) key: rcgen::KeyPair,
 }
 
 /// A fresh self-signed ECDSA fixture with the caller's exact host SAN.
-pub(crate) fn ecdsa_pair_for_host(host: &str) -> EcdsaPair {
-    let params = rcgen::CertificateParams::new(vec![host.to_string()]).unwrap();
+pub fn ecdsa_pair_for_host(host: &str) -> EcdsaPair {
+    let params = rcgen::CertificateParams::new(vec![host.to_owned()]).unwrap();
     let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
     let cert = params.self_signed(&key).unwrap();
     EcdsaPair { cert, key }
 }
 
 /// Advertise every finalized feature from zero through its finalized level.
-pub(crate) fn finalized_broker_features(
-    image: &krabka_metadata::MetadataImage,
-) -> Vec<krabka_protocol::owned::broker_registration_request::Feature> {
+pub fn finalized_broker_features(image: &krabka_metadata::MetadataImage) -> Vec<Feature> {
     image
         .finalized_features()
         .iter()
-        .map(
-            |(name, level)| krabka_protocol::owned::broker_registration_request::Feature {
-                name: name.clone(),
-                min_supported_version: 0,
-                max_supported_version: *level,
-                ..Default::default()
-            },
-        )
+        .map(|(name, level)| Feature {
+            name: name.clone(),
+            min_supported_version: 0,
+            max_supported_version: *level,
+            ..Default::default()
+        })
         .collect()
 }
 
 /// An ES256 key, the one-key JWKS that publishes it, and the tokens it signs,
 /// for the signed-OAUTHBEARER validator tests.
-pub(crate) struct Es256SigningKey {
-    key: ring::signature::EcdsaKeyPair,
-    rng: ring::rand::SystemRandom,
+pub struct Es256SigningKey {
+    key: EcdsaKeyPair,
+    rng: SystemRandom,
     kid: &'static str,
 }
 
@@ -172,7 +198,7 @@ impl Es256SigningKey {
     /// A fresh P-256 key published under `kid`.
     pub(crate) fn generate(kid: &'static str) -> Self {
         use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair};
-        let rng = ring::rand::SystemRandom::new();
+        let rng = SystemRandom::new();
         let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
         let key = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
             .unwrap();
@@ -202,15 +228,15 @@ impl Es256SigningKey {
 }
 
 /// Generate a real Ed25519 pair for signing and trust-set fixtures.
-pub(crate) fn fresh_ed25519_key() -> ring::signature::Ed25519KeyPair {
+pub fn fresh_ed25519_key() -> Ed25519KeyPair {
     use ring::signature::Ed25519KeyPair;
-    let rng = ring::rand::SystemRandom::new();
+    let rng = SystemRandom::new();
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("generate pkcs8");
     Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse pkcs8")
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct OperatorKeyFileSetup<'a> {
+pub struct OperatorKeyFileSetup<'a> {
     #[default("alice.pub")]
     pub name: &'a str,
     #[default("write public key")]
@@ -219,37 +245,37 @@ pub(crate) struct OperatorKeyFileSetup<'a> {
 
 /// Stage an operator public key while returning the private signing pair to its owner.
 #[bon::builder]
-pub(crate) fn ed25519_public_key_file(
-    dir: &std::path::Path,
+pub fn ed25519_public_key_file(
+    dir: &Path,
     #[builder(default = "alice.pub")] name: &'_ str,
     #[builder(default = "write public key")] context: &'_ str,
-) -> (ring::signature::Ed25519KeyPair, std::path::PathBuf) {
+) -> (Ed25519KeyPair, PathBuf) {
     use ring::signature::KeyPair as _;
 
     let setup = OperatorKeyFileSetup { name, context };
     let pair = fresh_ed25519_key();
     let path = dir.join(setup.name);
-    std::fs::write(&path, pair.public_key().as_ref()).expect(setup.context);
+    fs::write(&path, pair.public_key().as_ref()).expect(setup.context);
     (pair, path)
 }
 
 /// A bound TLS listener, its acceptor and the path of its trust bundle.
-pub(crate) struct LoopbackTlsListener {
-    pub(crate) listener: tokio::net::TcpListener,
+pub struct LoopbackTlsListener {
+    pub(crate) listener: TcpListener,
     pub(crate) acceptor: TlsAcceptor,
-    pub(crate) cert_path: std::path::PathBuf,
+    pub(crate) cert_path: PathBuf,
 }
 
 /// Binds an HTTPS fixture with a fresh loopback certificate and returns the
 /// trust bundle path. The directory stays alive for background client requests.
-pub(crate) async fn loopback_tls_listener() -> LoopbackTlsListener {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+pub async fn loopback_tls_listener() -> LoopbackTlsListener {
+    let _ = aws_lc_rs::default_provider().install_default();
     let EcdsaPair { cert, key } = ecdsa_pair_for_host("127.0.0.1");
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let cert_path = dir.path().join("cert.pem");
-    std::fs::write(&cert_path, cert.pem()).unwrap();
+    fs::write(&cert_path, cert.pem()).unwrap();
     let key_path = dir.path().join("key.pem");
-    std::fs::write(&key_path, key.serialize_pem()).unwrap();
+    fs::write(&key_path, key.serialize_pem()).unwrap();
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(&cert_path)
         .unwrap()
         .collect::<Result<_, _>>()
@@ -259,7 +285,7 @@ pub(crate) async fn loopback_tls_listener() -> LoopbackTlsListener {
         .with_no_client_auth()
         .with_single_cert(certs, priv_key)
         .unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     LoopbackTlsListener {
         listener,
         acceptor: TlsAcceptor::from(Arc::new(server_cfg)),
@@ -269,17 +295,17 @@ pub(crate) async fn loopback_tls_listener() -> LoopbackTlsListener {
 
 /// A running TLS server: where it listens, how to stop it and the path of its
 /// trust bundle.
-pub(crate) struct LoopbackTlsServer {
-    pub(crate) addr: std::net::SocketAddr,
-    pub(crate) shutdown: tokio_util::sync::CancellationToken,
-    pub(crate) cert_path: std::path::PathBuf,
+pub struct LoopbackTlsServer {
+    pub(crate) addr: SocketAddr,
+    pub(crate) shutdown: CancellationToken,
+    pub(crate) cert_path: PathBuf,
 }
 
 /// Serve concurrent TLS connections with the caller's protocol handler until shutdown.
-pub(crate) async fn serve_loopback_tls<F, Fut>(handler: F) -> LoopbackTlsServer
+pub async fn serve_loopback_tls<F, Fut>(handler: F) -> LoopbackTlsServer
 where
-    F: Fn(tokio_rustls::server::TlsStream<tokio::net::TcpStream>) -> Fut + Clone + Send + 'static,
-    Fut: std::future::Future<Output = ()> + Send + 'static,
+    F: Fn(TlsStream<TcpStream>) -> Fut + Clone + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
 {
     let LoopbackTlsListener {
         listener,
@@ -287,7 +313,7 @@ where
         cert_path,
     } = loopback_tls_listener().await;
     let addr = listener.local_addr().unwrap();
-    let shutdown = tokio_util::sync::CancellationToken::new();
+    let shutdown = CancellationToken::new();
     let srv_shutdown = shutdown.clone();
     tokio::spawn(async move {
         loop {
@@ -311,7 +337,7 @@ where
     }
 }
 
-pub(crate) struct TemporaryPartition {
+pub struct TemporaryPartition {
     pub(crate) dir: tempfile::TempDir,
     pub(crate) partition: Arc<Partition>,
 }
@@ -335,13 +361,13 @@ fn temporary_partition_impl(
 }
 
 fn open_partition_impl(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     topic: &str,
     partition: krabka_ids::PartitionIndex,
     storage: StorageMode,
 ) -> Arc<Partition> {
     let path = partition_dir(log_dir, topic, partition.0);
-    std::fs::create_dir_all(&path).expect("create partition directory");
+    fs::create_dir_all(&path).expect("create partition directory");
     let log = krabka_log::Log::open(&path, krabka_log::LogConfig::default()).expect("open log");
     spawn_standalone_partition()
         .log_dir(log_dir)
@@ -365,7 +391,7 @@ krabka_macros::fixture_constructors! { open_partition:
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum StorageMode {
+pub enum StorageMode {
     #[default]
     Local,
     Diskless,
@@ -382,40 +408,40 @@ impl StorageMode {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum FreezeState {
+pub enum FreezeState {
     #[default]
     Frozen,
     Thawed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::From, derive_more::Into)]
-pub(crate) struct PartitionCount(pub i32);
+pub struct PartitionCount(pub i32);
 
 impl Default for PartitionCount {
     fn default() -> Self { Self(1) }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::From, derive_more::Into)]
-pub(crate) struct ReplicationFactor(pub i16);
+pub struct ReplicationFactor(pub i16);
 
 impl Default for ReplicationFactor {
     fn default() -> Self { Self(3) }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, derive_more::From, derive_more::Into)]
-pub(crate) struct PartitionEpoch(pub i32);
+pub struct PartitionEpoch(pub i32);
 
 /// An expected Kafka response code, including deliberately invalid fixture values.
 #[krabka_macros::test_scalar]
-pub(crate) struct KafkaErrorCode(pub i16);
+pub struct KafkaErrorCode(pub i16);
 
 /// A wall-clock coordinate, distinct from a record offset or a duration.
 #[krabka_macros::test_scalar]
-pub(crate) struct UnixMillis(pub i64);
+pub struct UnixMillis(pub i64);
 
 /// Start a standalone writer over the caller's already-opened log.
 #[derive(Clone, Copy)]
-pub(crate) struct StandalonePartitionSetup<'a> {
+pub struct StandalonePartitionSetup<'a> {
     pub topic: &'a str,
     pub partition: krabka_ids::PartitionIndex,
     pub storage: StorageMode,
@@ -432,8 +458,8 @@ impl Default for StandalonePartitionSetup<'_> {
 }
 
 #[bon::builder]
-pub(crate) fn spawn_standalone_partition(
-    log_dir: &std::path::Path,
+pub fn spawn_standalone_partition(
+    log_dir: &Path,
     log: krabka_log::Log,
     #[builder(default = StandalonePartitionSetup::default().topic)] topic: &'_ str,
     #[builder(into, default = StandalonePartitionSetup::default().partition)]
@@ -462,19 +488,19 @@ pub(crate) fn spawn_standalone_partition(
 }
 
 /// Block an artifact rewrite or deletion using a real filesystem directory collision.
-pub(crate) fn block_log_artifact_paths(
-    root: &std::path::Path,
+pub fn block_log_artifact_paths(
+    root: &Path,
     topic: &str,
     extension: &str,
     expectation: &str,
-) -> Vec<std::path::PathBuf> {
+) -> Vec<PathBuf> {
     let directory = partition_dir(root, topic, 0);
     let mut blocked = Vec::new();
-    for entry in std::fs::read_dir(&directory).expect("read partition dir") {
+    for entry in fs::read_dir(&directory).expect("read partition dir") {
         let path = entry.expect("partition dir entry").path();
         if path.extension().is_some_and(|extension| extension == "log") {
             let artifact = path.with_extension(extension);
-            std::fs::create_dir(&artifact).expect(expectation);
+            fs::create_dir(&artifact).expect(expectation);
             blocked.push(artifact);
         }
     }
@@ -495,7 +521,7 @@ krabka_macros::bound_start_fixture!(
 );
 
 /// Boot a broker leading a single-voter quorum with separate loopback listeners.
-pub(crate) async fn start_controller() -> (BrokerHandle, SocketAddr, tempfile::TempDir) {
+pub async fn start_controller() -> (BrokerHandle, SocketAddr, tempfile::TempDir) {
     let StartedBoundBroker {
         broker: controller,
         controller_addr,
@@ -508,10 +534,7 @@ pub(crate) async fn start_controller() -> (BrokerHandle, SocketAddr, tempfile::T
 }
 
 /// Builds non-transactional records with explicit values and a shared timestamp.
-pub(crate) fn static_records_batch(
-    values: &[&'static [u8]],
-    timestamp_ms: UnixMillis,
-) -> RecordBatch {
+pub fn static_records_batch(values: &[&'static [u8]], timestamp_ms: UnixMillis) -> RecordBatch {
     let records = record_values(values);
     fixture_records_batch(
         records,
@@ -520,7 +543,7 @@ pub(crate) fn static_records_batch(
     )
 }
 
-pub(crate) fn record_values(values: &[&'static [u8]]) -> Vec<Record> {
+pub fn record_values(values: &[&'static [u8]]) -> Vec<Record> {
     values
         .iter()
         .enumerate()
@@ -533,14 +556,14 @@ pub(crate) fn record_values(values: &[&'static [u8]]) -> Vec<Record> {
 }
 
 #[derive(derive_more::From, derive_more::Into, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RecordCount(pub i32);
+pub struct RecordCount(pub i32);
 
 impl Default for RecordCount {
     fn default() -> Self { Self(1) }
 }
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct RepeatedRecordsSetup {
+pub struct RepeatedRecordsSetup {
     pub count: RecordCount,
     pub timestamp: UnixMillis,
 }
@@ -550,14 +573,14 @@ struct RecordOffsetDelta(i32);
 
 /// Partition fixtures append records with a deterministic wall-clock timestamp.
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct PartitionRecordsSetup {
+pub struct PartitionRecordsSetup {
     pub count: RecordCount,
     #[default(UnixMillis(1_700_000_000))]
     pub timestamp: UnixMillis,
 }
 
 #[bon::builder]
-pub(crate) fn partition_records_batch(
+pub fn partition_records_batch(
     #[builder(into, default)] count: RecordCount,
     #[builder(into, default = UnixMillis (1_700_000_000))] timestamp: UnixMillis,
 ) -> RecordBatch {
@@ -570,7 +593,7 @@ pub(crate) fn partition_records_batch(
 
 /// Builds a batch of identical values, preserving the explicit count header.
 #[bon::builder]
-pub(crate) fn repeated_records_batch(
+pub fn repeated_records_batch(
     #[builder(into, default)] count: RecordCount,
     #[builder(into, default)] timestamp: UnixMillis,
 ) -> RecordBatch {
@@ -613,13 +636,13 @@ fn fixture_records_batch(
 }
 
 /// A mock broker serving the caller's version handshake and one request kind.
-pub(crate) async fn mock_request_broker(
+pub async fn mock_request_broker(
     request_key: i16,
     mut response: impl FnMut() -> Vec<u8> + Send + 'static,
     versions: fn() -> Vec<u8>,
 ) -> krabka_client_core::MockBroker {
     krabka_client_core::MockBroker::start(move |api_key, _version, _corr_id, _body| {
-        if api_key == krabka_protocol::owned::api_versions_request::API_KEY {
+        if api_key == API_KEY {
             return Some(versions());
         }
         if api_key == request_key {
@@ -631,7 +654,7 @@ pub(crate) async fn mock_request_broker(
 }
 
 /// Owned configuration pairs, preserving the input's duplicate-key policy.
-pub(crate) fn string_pairs(values: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+pub fn string_pairs(values: &[(&str, &str)]) -> BTreeMap<String, String> {
     values
         .iter()
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
@@ -640,7 +663,7 @@ pub(crate) fn string_pairs(values: &[(&str, &str)]) -> std::collections::BTreeMa
 
 /// The signed-action placeholder metadata used by retention freeze fixtures.
 #[derive(Clone, Copy)]
-pub(crate) struct FreezeSetup<'a> {
+pub struct FreezeSetup<'a> {
     pub scope: &'a str,
     pub pattern_type: krabka_metadata::PatternType,
     pub state: FreezeState,
@@ -659,7 +682,7 @@ impl Default for FreezeSetup<'_> {
 }
 
 #[bon::builder]
-pub(crate) fn topic_freeze_record(
+pub fn topic_freeze_record(
     #[builder(default = FreezeSetup::default().scope)] scope: &'_ str,
     #[builder(default = FreezeSetup::default().pattern_type)]
     pattern_type: krabka_metadata::PatternType,
@@ -692,14 +715,14 @@ pub(crate) fn topic_freeze_record(
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct FrozenTopicsImageSetup {
+pub struct FrozenTopicsImageSetup {
     #[default(uuid::Uuid::from_u128(0x5150))]
     pub cluster: uuid::Uuid,
 }
 
 /// One live DR-cutover freeze per scope, in the requested cluster image.
 #[bon::builder]
-pub(crate) fn frozen_topics_image(
+pub fn frozen_topics_image(
     scopes: &[(&str, krabka_metadata::PatternType)],
     #[builder(default = uuid :: Uuid :: from_u128 (0x5150))] cluster: uuid::Uuid,
 ) -> MetadataImage {
@@ -716,7 +739,7 @@ pub(crate) fn frozen_topics_image(
     image
 }
 
-pub(crate) fn topic_thaw_record(
+pub fn topic_thaw_record(
     scope: &str,
     pattern_type: krabka_metadata::PatternType,
 ) -> krabka_metadata::TopicFreezeRecord {
@@ -735,7 +758,7 @@ pub(crate) fn topic_thaw_record(
 
 /// A topic-only image for policy tests, before any partitions are installed.
 #[derive(Clone, Copy)]
-pub(crate) struct TopicSetup<'a> {
+pub struct TopicSetup<'a> {
     pub topic: &'a str,
     pub topic_id: uuid::Uuid,
     pub partitions: PartitionCount,
@@ -764,7 +787,7 @@ impl TopicSetup<'_> {
 }
 
 #[bon::builder]
-pub(crate) fn topic_image(
+pub fn topic_image(
     #[builder(default = TopicSetup::default().topic)] topic: &'_ str,
     #[builder(default = TopicSetup::default().topic_id)] topic_id: uuid::Uuid,
     #[builder(into, default = TopicSetup::default().partitions)] partitions: PartitionCount,
@@ -794,7 +817,7 @@ pub(crate) fn topic_image(
 }
 
 /// Apply one topic before constructing its partition fixture.
-pub(crate) fn topic_partition_image(
+pub fn topic_partition_image(
     topic: &str,
     replication_factor: i16,
     partition: impl FnOnce() -> PartitionRecord,
@@ -814,7 +837,7 @@ krabka_macros::topic_record_fixture!(single_partition_topic);
 
 /// Seeds the one-partition reassignment fixtures with the fixed leader epoch.
 #[derive(Clone)]
-pub(crate) struct ReassignmentSetup<'a> {
+pub struct ReassignmentSetup<'a> {
     pub replicas: Vec<NodeId>,
     pub isr: Vec<NodeId>,
     pub adding: Vec<NodeId>,
@@ -836,12 +859,10 @@ impl Default for ReassignmentSetup<'_> {
     }
 }
 
-pub(crate) fn replica_nodes(ids: &[u64]) -> Vec<NodeId> {
-    ids.iter().copied().map(NodeId).collect()
-}
+pub fn replica_nodes(ids: &[u64]) -> Vec<NodeId> { ids.iter().copied().map(NodeId).collect() }
 
 #[bon::builder]
-pub(crate) fn reassignment_partition(
+pub fn reassignment_partition(
     #[builder(default = ReassignmentSetup::default().replicas)] replicas: Vec<NodeId>,
     #[builder(default = ReassignmentSetup::default().isr)] isr: Vec<NodeId>,
     #[builder(default = ReassignmentSetup::default().adding)] adding: Vec<NodeId>,
@@ -880,34 +901,30 @@ pub(crate) fn reassignment_partition(
 }
 
 /// Metadata defaults used by both ELR models, without finalizing a feature version.
-pub(crate) fn elr_model_image(
-    topic: &str,
-    replication_factor: i16,
-    min_isr: usize,
-) -> MetadataImage {
+pub fn elr_model_image(topic: &str, replication_factor: i16, min_isr: usize) -> MetadataImage {
     let mut image = MetadataImage::new(uuid::Uuid::nil());
     image.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: topic.to_string(),
+        name: topic.to_owned(),
         topic_id: uuid::Uuid::from_u128(1),
         partitions: 1,
         replication_factor,
     }));
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
-        topic: topic.to_string(),
-        overrides: [(MIN_INSYNC_REPLICAS.to_string(), min_isr.to_string())]
+        topic: topic.to_owned(),
+        overrides: [(MIN_INSYNC_REPLICAS.to_owned(), min_isr.to_string())]
             .into_iter()
             .collect(),
     }));
     image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
         node_id: DEFAULT_BROKER_CONFIG_NODE_ID,
-        config_name: MIN_INSYNC_REPLICAS.to_string(),
+        config_name: MIN_INSYNC_REPLICAS.to_owned(),
         config_value: Some(min_isr.to_string()),
     }));
     image
 }
 
-pub(crate) mod elr_model_prelude {
-    pub(crate) use {
+pub mod elr_model_prelude {
+    pub use {
         super::elr_model_image,
         crate::{
             config_keys::effective_min_insync_replicas,
@@ -920,26 +937,26 @@ pub(crate) mod elr_model_prelude {
 
 /// A single-partition ISR proposal with epochs read explicitly by its caller.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct WireBrokerId(pub i32);
+pub struct WireBrokerId(pub i32);
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
-pub(crate) struct BrokerEpoch(pub i64);
+pub struct BrokerEpoch(pub i64);
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct IsrBrokerIdentity {
+pub struct IsrBrokerIdentity {
     #[default(WireBrokerId(1))]
     pub id: WireBrokerId,
     pub epoch: BrokerEpoch,
 }
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct IsrPartitionEpochs {
+pub struct IsrPartitionEpochs {
     pub leader: krabka_metadata::LeaderEpoch,
     pub partition: PartitionEpoch,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct IsrProposalSetup<'a> {
+pub struct IsrProposalSetup<'a> {
     pub topic_id: WireUuid,
     pub broker: IsrBrokerIdentity,
     pub partition: IsrPartitionEpochs,
@@ -958,7 +975,7 @@ impl Default for IsrProposalSetup<'_> {
 }
 
 #[bon::builder]
-pub(crate) fn alter_partition_request(
+pub fn alter_partition_request(
     #[builder(default = IsrProposalSetup::default().topic_id)] topic_id: WireUuid,
     #[builder(default = IsrProposalSetup::default().broker)] broker: IsrBrokerIdentity,
     #[builder(default = IsrProposalSetup::default().partition)] partition: IsrPartitionEpochs,
@@ -996,7 +1013,7 @@ pub(crate) fn alter_partition_request(
 
 /// Identity of the seeded ELR partition; epochs still come from separate live snapshots.
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct LiveIsrSetup<'a> {
+pub struct LiveIsrSetup<'a> {
     #[default("orders")]
     pub topic: &'a str,
     #[default(WireUuid([9; 16]))]
@@ -1011,7 +1028,7 @@ pub(crate) struct LiveIsrSetup<'a> {
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum IsrResponseCheck {
+pub enum IsrResponseCheck {
     #[default]
     None,
     EnvelopeAndPartition,
@@ -1020,7 +1037,7 @@ pub(crate) enum IsrResponseCheck {
 
 /// Send a real ISR proposal using the caller's wire identity and separate epoch snapshots.
 #[bon::builder]
-pub(crate) async fn propose_isr(
+pub async fn propose_isr(
     broker: &Arc<Broker>,
     #[builder(default = "orders")] topic: &'_ str,
     #[builder(default = WireUuid ([9 ; 16]))] topic_id: WireUuid,
@@ -1087,7 +1104,7 @@ pub(crate) async fn propose_isr(
 /// Authorizer that denies every request. It drives the authorization-failure
 /// path in every handler that consults the cluster authorizer.
 #[derive(Debug)]
-pub(crate) struct DenyAll;
+pub struct DenyAll;
 
 impl Authorizer for DenyAll {
     fn authorize(
@@ -1113,7 +1130,7 @@ impl Authorizer for DenyAll {
 /// requests wrap it in this, so the broker still unfences and still creates
 /// its coordinator topics.
 #[derive(Debug)]
-pub(crate) struct ControllerPeerAllowed<A>(pub(crate) A);
+pub struct ControllerPeerAllowed<A>(pub(crate) A);
 
 // Wrappers customize individual authorization while forwarding metadata and scans.
 
@@ -1142,7 +1159,7 @@ impl<A: Authorizer> Authorizer for ControllerPeerAllowed<A> {
 /// An authorizer that a fixture holds as a trait object, so that it can go
 /// inside [`ControllerPeerAllowed`].
 #[derive(Debug)]
-struct SharedAuthorizer(std::sync::Arc<dyn Authorizer>);
+struct SharedAuthorizer(Arc<dyn Authorizer>);
 
 #[krabka_macros::delegate_authorizer]
 impl Authorizer for SharedAuthorizer {
@@ -1160,10 +1177,8 @@ impl Authorizer for SharedAuthorizer {
 /// A fixture that waits for a coordinator needs this: the broker places a
 /// coordinator topic only on an unfenced broker, as Kafka's
 /// `ReplicaPlacer` does.
-pub(crate) fn controller_peer_allowed(
-    authorizer: std::sync::Arc<dyn Authorizer>,
-) -> std::sync::Arc<dyn Authorizer> {
-    std::sync::Arc::new(ControllerPeerAllowed(SharedAuthorizer(authorizer)))
+pub fn controller_peer_allowed(authorizer: Arc<dyn Authorizer>) -> Arc<dyn Authorizer> {
+    Arc::new(ControllerPeerAllowed(SharedAuthorizer(authorizer)))
 }
 
 /// Finalize `eligible.leader.replicas.version` at 1 in `image`.
@@ -1173,7 +1188,7 @@ pub(crate) fn controller_peer_allowed(
 /// controller to publish an ELR has to finalize it the way an operator's
 /// `kafka-features upgrade` would. The tests that assert the feature is *off*
 /// build their image without calling this.
-pub(crate) fn finalize_elr_version(image: &mut MetadataImage) {
+pub fn finalize_elr_version(image: &mut MetadataImage) {
     image.apply(&MetadataRecord::V1FeatureLevel(
         krabka_metadata::FeatureLevelRecord {
             name: ELR_VERSION.into(),
@@ -1189,7 +1204,7 @@ pub(crate) fn finalize_elr_version(image: &mut MetadataImage) {
 /// broker: the level has to arrive as a committed record, the way an
 /// operator's `kafka-features upgrade --feature
 /// eligible.leader.replicas.version=1` delivers it.
-pub(crate) async fn finalize_elr_version_on(broker: &Broker) {
+pub async fn finalize_elr_version_on(broker: &Broker) {
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(
@@ -1201,7 +1216,7 @@ pub(crate) async fn finalize_elr_version_on(broker: &Broker) {
         .await
         .expect("submit eligible.leader.replicas.version");
 
-    tokio::time::timeout(Duration::from_secs(5), async {
+    time::timeout(Duration::from_secs(5), async {
         loop {
             if broker
                 .controller
@@ -1211,7 +1226,7 @@ pub(crate) async fn finalize_elr_version_on(broker: &Broker) {
             {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -1221,7 +1236,7 @@ pub(crate) async fn finalize_elr_version_on(broker: &Broker) {
 /// The record that finalizes `metadata.version` 33 (`4.4-IV2`), one of trunk's
 /// unstable levels. Kafka 4.3 supports levels up to 30, so a controller with
 /// the unstable flag off that replays this record stops over a fatal fault.
-pub(crate) fn finalize_unstable_metadata_version() -> MetadataRecord {
+pub fn finalize_unstable_metadata_version() -> MetadataRecord {
     MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
         name: "metadata.version".into(),
         level: 33,
@@ -1229,15 +1244,15 @@ pub(crate) fn finalize_unstable_metadata_version() -> MetadataRecord {
 }
 
 /// The fault that replaying [`finalize_unstable_metadata_version`] raises.
-pub(crate) const UNSUPPORTED_LEVEL_FAULT: &str = "Tried to apply FeatureLevelRecord \
+pub const UNSUPPORTED_LEVEL_FAULT: &str = "Tried to apply FeatureLevelRecord \
     FeatureLevelRecord(name='metadata.version', featureLevel=33), \
     but this controller only supports versions 7-30";
 
 /// Writes `records` as the length-prefixed frames of `bootstrap.records.bin`,
 /// the file `krabka format` leaves for the first start to submit.
-pub(crate) fn write_bootstrap_records(log_dir: &std::path::Path, records: &[MetadataRecord]) {
+pub fn write_bootstrap_records(log_dir: &Path, records: &[MetadataRecord]) {
     let bytes = encode_bootstrap_records(records).expect("encode bootstrap records");
-    std::fs::write(log_dir.join("bootstrap.records.bin"), bytes).expect("write bootstrap records");
+    fs::write(log_dir.join("bootstrap.records.bin"), bytes).expect("write bootstrap records");
 }
 
 /// Initialize the share state of `(group, topic_id, partition)` at state
@@ -1246,7 +1261,7 @@ pub(crate) fn write_bootstrap_records(log_dir: &std::path::Path, records: &[Meta
 /// share coordinator refuses a read of a key with no state, so a handler test
 /// that fetches or acknowledges without a share group heartbeat calls this
 /// first.
-pub(crate) async fn initialize_share_state(
+pub async fn initialize_share_state(
     broker: &BrokerHandle,
     group: &str,
     topic_id: uuid::Uuid,
@@ -1274,11 +1289,11 @@ pub(crate) async fn initialize_share_state(
 /// It first waits for a liveness tick of the current controller term to
 /// finish. The first tick of a term seeds every registered broker with a
 /// session, so a session ended before that tick would be opened again.
-pub(crate) async fn end_heartbeat_session(broker: &Broker, broker_id: u64) {
+pub async fn end_heartbeat_session(broker: &Broker, broker_id: u64) {
     let ticks = broker.metrics.controller_fencing_publications_total.get();
-    tokio::time::timeout(Duration::from_secs(10), async {
+    time::timeout(Duration::from_secs(10), async {
         while broker.metrics.controller_fencing_publications_total.get() <= ticks {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -1291,7 +1306,7 @@ pub(crate) async fn end_heartbeat_session(broker: &Broker, broker_id: u64) {
 /// The name matters. Authorization decisions and audit records key on this
 /// subject, so each handler passes the identity its scenario expects, such as
 /// `"alice"`, `"admin"`, or `"ANONYMOUS"`.
-pub(crate) fn principal(name: &str) -> Principal {
+pub fn principal(name: &str) -> Principal {
     Principal {
         name: name.into(),
         auth_method: AuthMethod::Anonymous,
@@ -1301,7 +1316,7 @@ pub(crate) fn principal(name: &str) -> Principal {
 
 /// Build a SASL/PLAIN-authenticated [`Principal`] with the given name and no
 /// groups, as a client that logged in over a `SASL_PLAINTEXT` listener is.
-pub(crate) fn sasl_principal(name: &str) -> Principal {
+pub fn sasl_principal(name: &str) -> Principal {
     Principal {
         name: name.into(),
         auth_method: AuthMethod::SaslPlain,
@@ -1311,17 +1326,17 @@ pub(crate) fn sasl_principal(name: &str) -> Principal {
 
 /// The loopback peer address (`127.0.0.1:9092`) that handler tests attribute
 /// requests to.
-pub(crate) fn peer() -> SocketAddr { "127.0.0.1:9092".parse().unwrap() }
+pub fn peer() -> SocketAddr { "127.0.0.1:9092".parse().unwrap() }
 
 /// Empty ACL and metadata authorities for pure refusal checks.
-pub(crate) struct EmptyAclImage {
+pub struct EmptyAclImage {
     pub(crate) authorizer: SimpleAclAuthorizer,
     pub(crate) image: MetadataImage,
 }
 
-pub(crate) fn empty_acl_image() -> EmptyAclImage {
+pub fn empty_acl_image() -> EmptyAclImage {
     EmptyAclImage {
-        authorizer: SimpleAclAuthorizer::new(std::collections::HashSet::new()),
+        authorizer: SimpleAclAuthorizer::new(HashSet::new()),
         image: MetadataImage::new(uuid::Uuid::nil()),
     }
 }
@@ -1335,7 +1350,7 @@ pub(crate) fn empty_acl_image() -> EmptyAclImage {
 /// partition and installs its leadership, and the coordinator loads it, as in
 /// production. A `__transaction_state` write then passes the leadership and
 /// ISR checks of its commit rule.
-pub(crate) async fn lead_transaction_state_partitions(
+pub async fn lead_transaction_state_partitions(
     handle: &BrokerHandle,
     partitions: &[krabka_ids::PartitionIndex],
 ) {
@@ -1375,7 +1390,7 @@ pub(crate) async fn lead_transaction_state_partitions(
         )
         .await
         .expect("lead the __transaction_state partitions");
-    let loaded = tokio::time::timeout(Duration::from_secs(30), async {
+    let loaded = time::timeout(Duration::from_secs(30), async {
         for &partition in &led {
             while broker
                 .txn_coordinator
@@ -1384,7 +1399,7 @@ pub(crate) async fn lead_transaction_state_partitions(
                 != Some(LoadStatus::Loaded)
             {
                 // intentional: a load has no awaiter that a test can reach.
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                time::sleep(Duration::from_millis(10)).await;
             }
         }
     })
@@ -1402,7 +1417,7 @@ pub(crate) async fn lead_transaction_state_partitions(
 /// A test spells out each field its scenario depends on and takes the rest
 /// from here: `BrokerRegistrationRecord { fenced: true,
 /// ..broker_registration(NodeId(2)) }`.
-pub(crate) fn broker_registration(node_id: NodeId) -> krabka_metadata::BrokerRegistrationRecord {
+pub fn broker_registration(node_id: NodeId) -> krabka_metadata::BrokerRegistrationRecord {
     krabka_metadata::BrokerRegistrationRecord {
         fenced: false,
         in_controlled_shutdown: false,
@@ -1415,12 +1430,12 @@ pub(crate) fn broker_registration(node_id: NodeId) -> krabka_metadata::BrokerReg
         rack: None,
         log_dirs: vec![],
         endpoints: vec![],
-        features: std::collections::BTreeMap::new(),
+        features: BTreeMap::new(),
     }
 }
 
 /// A named plaintext endpoint using the caller's host and port.
-pub(crate) fn plaintext_broker_endpoint(host: &str, port: u16) -> krabka_metadata::BrokerEndpoint {
+pub fn plaintext_broker_endpoint(host: &str, port: u16) -> krabka_metadata::BrokerEndpoint {
     krabka_metadata::BrokerEndpoint {
         name: "PLAINTEXT".into(),
         host: host.into(),
@@ -1430,8 +1445,8 @@ pub(crate) fn plaintext_broker_endpoint(host: &str, port: u16) -> krabka_metadat
 }
 
 /// Wait up to five seconds for `broker` to become the controller leader.
-pub(crate) async fn wait_for_controller_leader(broker: &Broker) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+pub async fn wait_for_controller_leader(broker: &Broker) {
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !broker
         .controller
         .watch_leader()
@@ -1439,15 +1454,15 @@ pub(crate) async fn wait_for_controller_leader(broker: &Broker) {
         .is_some_and(|node| node == broker.config.node_id)
     {
         assert2::assert!(
-            std::time::Instant::now() <= deadline,
+            Instant::now() <= deadline,
             "broker did not become controller leader"
         );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        time::sleep(Duration::from_millis(25)).await;
     }
 }
 
 /// Register `node_id` as a remote broker in the controller's image.
-pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: NodeId) {
+pub async fn seed_remote_broker(handle: &BrokerHandle, node_id: NodeId) {
     handle
         .broker_arc_for_test()
         .controller
@@ -1463,7 +1478,7 @@ pub(crate) async fn seed_remote_broker(handle: &BrokerHandle, node_id: NodeId) {
 
 /// Fence `node_id` the way the controller does: its heartbeat session is
 /// fenced, and its registration says so, which is what every node reads.
-pub(crate) async fn fence_remote_broker(handle: &BrokerHandle, node_id: u64) {
+pub async fn fence_remote_broker(handle: &BrokerHandle, node_id: u64) {
     let broker = handle.broker_arc_for_test();
     broker.liveness.record_fenced_heartbeat(node_id).await;
     let fence = registration_change(
@@ -1480,15 +1495,15 @@ pub(crate) async fn fence_remote_broker(handle: &BrokerHandle, node_id: u64) {
 
 /// Give `node_id` the witness role, as the controller-managed
 /// `broker.witness` broker config does.
-pub(crate) async fn make_witness(handle: &BrokerHandle, node_id: u64) {
+pub async fn make_witness(handle: &BrokerHandle, node_id: u64) {
     handle
         .broker_arc_for_test()
         .controller
         .submit_change(vec![MetadataRecord::V1BrokerConfig(
             krabka_metadata::BrokerConfigRecord {
                 node_id: krabka_raft::NodeId(node_id),
-                config_name: BROKER_WITNESS.to_string(),
-                config_value: Some(WITNESS_TRUE.to_string()),
+                config_name: BROKER_WITNESS.to_owned(),
+                config_value: Some(WITNESS_TRUE.to_owned()),
             },
         )])
         .await
@@ -1497,7 +1512,7 @@ pub(crate) async fn make_witness(handle: &BrokerHandle, node_id: u64) {
 
 /// Put `node_id` in controlled shutdown, the way the controller's heartbeat
 /// state machine does: its registration says so, and it stays unfenced.
-pub(crate) async fn begin_controlled_shutdown(handle: &BrokerHandle, node_id: u64) {
+pub async fn begin_controlled_shutdown(handle: &BrokerHandle, node_id: u64) {
     let broker = handle.broker_arc_for_test();
     let change = registration_change(
         &broker.controller.current_image(),
@@ -1516,7 +1531,7 @@ pub(crate) async fn begin_controlled_shutdown(handle: &BrokerHandle, node_id: u6
 /// The remaining fields are the plaintext, non-sendfile defaults that every
 /// handler test shares. `client_id` is a parameter because it feeds
 /// client-quota lookups and therefore varies per handler.
-pub(crate) fn request_context<'a>(
+pub fn request_context<'a>(
     principal: &'a Principal,
     peer: &'a SocketAddr,
     client_id: &'a str,
@@ -1532,7 +1547,7 @@ pub(crate) fn request_context<'a>(
 }
 
 /// Encode a request to wire bytes at `version`.
-pub(crate) fn encode_request<T: Encode>(req: &T, version: i16) -> Bytes {
+pub fn encode_request<T: Encode>(req: &T, version: i16) -> Bytes {
     let mut buf = BytesMut::with_capacity(req.encoded_len(version));
     req.encode(&mut buf, version).expect("encode request");
     buf.freeze()
@@ -1540,7 +1555,7 @@ pub(crate) fn encode_request<T: Encode>(req: &T, version: i16) -> Bytes {
 
 /// Decode a response from `bytes` at `version`, and assert that the decoder
 /// consumed every byte.
-pub(crate) fn decode_response<T: Decode<'static>>(bytes: &Bytes, version: i16) -> T {
+pub fn decode_response<T: Decode<'static>>(bytes: &Bytes, version: i16) -> T {
     let mut cur: &[u8] = bytes.as_ref();
     let resp = T::decode(&mut cur, version).expect("decode response");
     assert2::assert!(cur.is_empty(), "response decoder consumed all bytes");
@@ -1548,7 +1563,7 @@ pub(crate) fn decode_response<T: Decode<'static>>(bytes: &Bytes, version: i16) -
 }
 
 /// Encode and decode a response while returning the decoder's consumption result.
-pub(crate) fn round_trip_response<T: Encode + Decode<'static>>(
+pub fn round_trip_response<T: Encode + Decode<'static>>(
     response: &T,
     version: krabka_ids::ApiVersion,
 ) -> (T, bool) {
@@ -1565,7 +1580,7 @@ pub(crate) fn round_trip_response<T: Encode + Decode<'static>>(
 /// grant allows the operation on every resource of that type. Every other
 /// request is denied, so the name `none` holds no grant.
 #[derive(Debug)]
-pub(crate) struct GrantsInPrincipalName;
+pub struct GrantsInPrincipalName;
 
 impl Authorizer for GrantsInPrincipalName {
     fn authorize(
@@ -1590,7 +1605,7 @@ impl Authorizer for GrantsInPrincipalName {
 /// A literal `Allow` ACL for `principal` (such as `User:alice`) from any host,
 /// to `operation` on the `resource_type` resource named `resource_name`.
 #[derive(Clone, Copy)]
-pub(crate) struct AllowAclSetup<'a> {
+pub struct AllowAclSetup<'a> {
     pub resource_type: krabka_metadata::ResourceType,
     pub resource_name: &'a str,
     pub principal: &'a str,
@@ -1609,7 +1624,7 @@ impl Default for AllowAclSetup<'_> {
 }
 
 #[bon::builder]
-pub(crate) fn allow_acl(
+pub fn allow_acl(
     #[builder(default = AllowAclSetup::default().resource_type)]
     resource_type: krabka_metadata::ResourceType,
     #[builder(default = AllowAclSetup::default().resource_name)] resource_name: &'_ str,
@@ -1631,17 +1646,17 @@ pub(crate) fn allow_acl(
     } = setup;
     krabka_metadata::AclEntry {
         resource_type,
-        resource_name: resource_name.to_string(),
+        resource_name: resource_name.to_owned(),
         pattern_type: krabka_metadata::PatternType::Literal,
-        principal: principal.to_string(),
-        host: "*".to_string(),
+        principal: principal.to_owned(),
+        host: "*".to_owned(),
         operation,
         permission_type: krabka_metadata::PermissionType::Allow,
     }
 }
 
 /// Independent cluster `DescribeConfigs` implication cases shared by configuration APIs.
-pub(crate) fn describe_configs_acl_cases<'a, R>(
+pub fn describe_configs_acl_cases<'a, R>(
     allowed: &'a R,
     denied: &'a R,
 ) -> Vec<(&'static str, Option<krabka_metadata::AclOperation>, &'a R)> {
@@ -1665,7 +1680,7 @@ pub(crate) fn describe_configs_acl_cases<'a, R>(
 /// A test that starts its broker with a [`crate::authorizer::SimpleAclAuthorizer`]
 /// uses it to check a handler against Kafka's operation-implication table
 /// (for example, `AlterConfigs` implies `DescribeConfigs`, `Alter` does not).
-pub(crate) async fn grant_cluster_operation(
+pub async fn grant_cluster_operation(
     handle: &BrokerHandle,
     user: &str,
     operation: krabka_metadata::AclOperation,
@@ -1686,7 +1701,7 @@ pub(crate) async fn grant_cluster_operation(
 }
 
 /// Apply the optional grant selected by an authorization table row.
-pub(crate) async fn grant_optional_cluster_operation(
+pub async fn grant_optional_cluster_operation(
     handle: &BrokerHandle,
     user: &str,
     operation: Option<krabka_metadata::AclOperation>,
@@ -1703,7 +1718,7 @@ pub(crate) async fn grant_optional_cluster_operation(
 /// [`crate::authorizer::SimpleAclAuthorizer`] uses it to check a handler
 /// against Kafka's per-topic ACL filtering, including the operation-implication
 /// table (for example, `Read` implies `Describe`).
-pub(crate) async fn grant_topic_operation(
+pub async fn grant_topic_operation(
     handle: &BrokerHandle,
     user: &str,
     topic: &str,
@@ -1729,7 +1744,7 @@ pub(crate) async fn grant_topic_operation(
 /// It panics when `api_key` is not registered as a context dispatch. An
 /// authorization test that calls it therefore also fails when its api goes
 /// back to a dispatch kind that gets no principal.
-pub(crate) async fn dispatch_context(
+pub async fn dispatch_context(
     broker: &Broker,
     api_key: i16,
     version: i16,
@@ -1743,7 +1758,7 @@ pub(crate) async fn dispatch_context(
 
 /// [`dispatch_context`], returning the handler's error instead of panicking
 /// on it: a test of a request the adapter or the handler refuses.
-pub(crate) async fn try_dispatch_context(
+pub async fn try_dispatch_context(
     broker: &Broker,
     api_key: i16,
     version: i16,
@@ -1766,7 +1781,7 @@ pub(crate) async fn try_dispatch_context(
 /// A `typed` handler takes and returns structs, so its unit tests call it
 /// directly. This is the path for a test about the wire itself: a field that
 /// an older version drops, or the encoding of the response.
-pub(crate) async fn dispatch_wire<Resp: Decode<'static>>(
+pub async fn dispatch_wire<Resp: Decode<'static>>(
     broker: &Broker,
     api_key: i16,
     version: i16,
@@ -1780,7 +1795,7 @@ pub(crate) async fn dispatch_wire<Resp: Decode<'static>>(
 
 /// Configure one transaction-state partition with the supplied authorizer.
 /// Readiness waits remain the caller's responsibility.
-pub(crate) fn configure_single_partition_transactions(
+pub fn configure_single_partition_transactions(
     config: &mut BrokerConfig,
     authorizer: Arc<dyn Authorizer>,
 ) {
@@ -1797,9 +1812,9 @@ pub(crate) fn configure_single_partition_transactions(
 /// as an authorizer to install, an `audit_enabled` toggle, or share and streams
 /// groups to enable. A test that wants a different session sets it there. The
 /// returned [`tempfile::TempDir`] must outlive the broker.
-pub(crate) fn start_broker_with(
+pub fn start_broker_with(
     configure: impl FnOnce(&mut BrokerConfig),
-) -> impl std::future::Future<Output = StartedBroker> {
+) -> impl Future<Output = StartedBroker> {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
     tolerate_starved_heartbeats(&mut cfg);
@@ -1816,12 +1831,12 @@ pub(crate) fn start_broker_with(
 /// Finalizes `share.version` at `level` on a started broker: the feature that
 /// turns the share-group APIs on (1) or off (0), as Kafka's
 /// `isShareGroupProtocolEnabled` reads it.
-pub(crate) async fn finalize_share_version(broker: &Broker, level: i16) {
+pub async fn finalize_share_version(broker: &Broker, level: i16) {
     broker
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(
             krabka_metadata::FeatureLevelRecord {
-                name: krabka_metadata::metadata_version::SHARE_VERSION_FEATURE.into(),
+                name: SHARE_VERSION_FEATURE.into(),
                 level,
             },
         )])
@@ -1835,9 +1850,7 @@ pub(crate) async fn finalize_share_version(broker: &Broker, level: i16) {
 /// see [`krabka_macros::wire_codec_helpers`]. A handler test drives an authorization-failure
 /// path with [`DenyAll`] or a custom authorizer, and it otherwise takes
 /// the `for_tests` defaults.
-pub(crate) async fn start_broker_with_authorizer(
-    authorizer: std::sync::Arc<dyn Authorizer>,
-) -> StartedBroker {
+pub async fn start_broker_with_authorizer(authorizer: Arc<dyn Authorizer>) -> StartedBroker {
     start_broker_with(|cfg| cfg.authorizer = authorizer).await
 }
 
@@ -1846,9 +1859,9 @@ pub(crate) async fn start_broker_with_authorizer(
 ///
 /// Most handler tests do not exercise the audit path and turn it off, so that
 /// audit-log assertions elsewhere in the suite stay stable.
-pub(crate) fn start_broker_no_audit_with(
+pub fn start_broker_no_audit_with(
     configure: impl FnOnce(&mut BrokerConfig),
-) -> impl std::future::Future<Output = StartedBroker> {
+) -> impl Future<Output = StartedBroker> {
     start_broker_with(|cfg| {
         cfg.audit_enabled = false;
         configure(cfg);
@@ -1857,7 +1870,7 @@ pub(crate) fn start_broker_no_audit_with(
 
 /// Start an in-process broker on the [`BrokerConfig::for_tests`] baseline with
 /// audit logging off.
-pub(crate) fn start_broker_no_audit() -> impl std::future::Future<Output = StartedBroker> {
+pub fn start_broker_no_audit() -> impl Future<Output = StartedBroker> {
     start_broker_no_audit_with(|_| {})
 }
 
@@ -1867,8 +1880,8 @@ pub(crate) fn start_broker_no_audit() -> impl std::future::Future<Output = Start
 /// that do not exercise the audit path swap the authorizer and turn
 /// `audit_enabled` off, so that audit-log assertions elsewhere in the suite
 /// stay stable.
-pub(crate) async fn start_broker_with_authorizer_no_audit(
-    authorizer: std::sync::Arc<dyn Authorizer>,
+pub async fn start_broker_with_authorizer_no_audit(
+    authorizer: Arc<dyn Authorizer>,
 ) -> StartedBroker {
     start_broker_no_audit_with(|cfg| cfg.authorizer = authorizer).await
 }
@@ -1878,9 +1891,7 @@ pub(crate) async fn start_broker_with_authorizer_no_audit(
 ///
 /// A group-handler test that needs more than an authorizer, such as streams
 /// groups turned on, passes its config tweaks here.
-pub(crate) async fn start_group_broker_with(
-    configure: impl FnOnce(&mut BrokerConfig),
-) -> StartedBroker {
+pub async fn start_group_broker_with(configure: impl FnOnce(&mut BrokerConfig)) -> StartedBroker {
     let StartedBroker {
         broker: handle,
         dir,
@@ -1898,16 +1909,12 @@ pub(crate) async fn start_group_broker_with(
 /// The broker installs `authorizer` wrapped in [`controller_peer_allowed`],
 /// so a restrictive authorizer still lets the broker unfence and create the
 /// coordinator topic that this waits for.
-pub(crate) async fn start_group_broker(
-    authorizer: std::sync::Arc<dyn Authorizer>,
-) -> StartedBroker {
+pub async fn start_group_broker(authorizer: Arc<dyn Authorizer>) -> StartedBroker {
     start_group_broker_with(|cfg| cfg.authorizer = controller_peer_allowed(authorizer)).await
 }
 
 /// Like [`start_group_broker`], but it also disables audit logging.
-pub(crate) async fn start_group_broker_no_audit(
-    authorizer: std::sync::Arc<dyn Authorizer>,
-) -> StartedBroker {
+pub async fn start_group_broker_no_audit(authorizer: Arc<dyn Authorizer>) -> StartedBroker {
     start_group_broker_with(|cfg| {
         cfg.audit_enabled = false;
         cfg.authorizer = controller_peer_allowed(authorizer);
@@ -1916,14 +1923,14 @@ pub(crate) async fn start_group_broker_no_audit(
 }
 
 #[derive(Clone, Copy, Default)]
-pub(crate) enum ShareApiSupport {
+pub enum ShareApiSupport {
     #[default]
     Enabled,
     Disabled,
 }
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct ShareBrokerSetup {
+pub struct ShareBrokerSetup {
     pub support: ShareApiSupport,
 }
 
@@ -1937,12 +1944,12 @@ pub(crate) struct ShareBrokerSetup {
 /// broker to place a replica on and answers `INVALID_REPLICATION_FACTOR`, a
 /// wait for the next metadata image times out, and a coordinator write in
 /// flight ends with `NOT_COORDINATOR`.
-pub(crate) const SINGLE_BROKER_HEARTBEAT_TIMEOUT: krabka_units::Time = krabka_units::secs(30);
+pub const SINGLE_BROKER_HEARTBEAT_TIMEOUT: krabka_units::Time = krabka_units::secs(30);
 
 /// Gives a broker the [`SINGLE_BROKER_HEARTBEAT_TIMEOUT`] session.
 /// [`start_broker_with`] already applies it; this restates it for a caller
 /// that builds its configuration another way.
-pub(crate) fn tolerate_starved_heartbeats(cfg: &mut BrokerConfig) {
+pub fn tolerate_starved_heartbeats(cfg: &mut BrokerConfig) {
     cfg.heartbeat_timeout = SINGLE_BROKER_HEARTBEAT_TIMEOUT;
 }
 
@@ -1951,8 +1958,8 @@ pub(crate) fn tolerate_starved_heartbeats(cfg: &mut BrokerConfig) {
 /// [`SINGLE_BROKER_HEARTBEAT_TIMEOUT`] session. Disabled support then finalizes
 /// `share.version` at 0, which turns the share-group APIs off.
 #[bon::builder]
-pub(crate) async fn start_share_broker(
-    authorizer: std::sync::Arc<dyn Authorizer>,
+pub async fn start_share_broker(
+    authorizer: Arc<dyn Authorizer>,
     #[builder(default)] support: ShareApiSupport,
 ) -> StartedBroker {
     let setup = ShareBrokerSetup { support };
@@ -2007,7 +2014,7 @@ type BeforeGuardedSubmit = Box<dyn FnOnce(&FakeMetadataSource) + Send>;
 /// [`FakeMetadataSourceBuilder::term`] with
 /// [`FakeMetadataSourceBuilder::without_controller_epoch`] set the controller
 /// epoch a caller fences its writes against.
-pub(crate) struct FakeMetadataSource {
+pub struct FakeMetadataSource {
     image_tx: watch::Sender<Arc<MetadataImage>>,
     leader_tx: watch::Sender<Option<NodeId>>,
     fatal_tx: watch::Sender<Option<String>>,
@@ -2024,23 +2031,23 @@ pub(crate) struct FakeMetadataSource {
 }
 
 /// Yield-poll a condition with a bounded guard against a stalled test.
-pub(crate) async fn await_until(what: &str, mut cond: impl FnMut() -> bool) {
+pub async fn await_until(what: &str, mut cond: impl FnMut() -> bool) {
     for _ in 0..200_000 {
         if cond() {
             return;
         }
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
     panic!("condition never held: {what}");
 }
 
 /// Plaintext controller transport for fixtures with no configured voters.
-pub(crate) fn plaintext_controller_dialer() -> ControllerDialer {
+pub fn plaintext_controller_dialer() -> ControllerDialer {
     plaintext_controller_dialer_with_voters(Vec::new())
 }
 
 /// The same transport with a statically configured controller quorum.
-pub(crate) fn plaintext_controller_dialer_with_voters(
+pub fn plaintext_controller_dialer_with_voters(
     voters: Vec<(krabka_raft::NodeId, String)>,
 ) -> ControllerDialer {
     ControllerDialer {
@@ -2120,7 +2127,7 @@ impl FakeMetadataSource {
     pub(crate) fn submitted(&self) -> Vec<Vec<MetadataRecord>> {
         self.submitted
             .lock()
-            .expect("the submitted batches are not poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 
@@ -2142,7 +2149,7 @@ impl FakeMetadataSource {
 
 /// Builder for [`FakeMetadataSource`]; see that type for what each seam is
 /// for.
-pub(crate) struct FakeMetadataSourceBuilder {
+pub struct FakeMetadataSourceBuilder {
     image: Arc<MetadataImage>,
     leader: Option<NodeId>,
     controller_node_id: Option<NodeId>,
@@ -2303,12 +2310,12 @@ impl MetadataSource for FakeMetadataSource {
         records: Vec<MetadataRecord>,
     ) -> Result<SubmitChangeResult, RaftError> {
         if self.stall_submits {
-            std::future::pending::<()>().await;
+            future::pending::<()>().await;
         }
         let outcome = (self.on_submit)(&records);
         self.submitted
             .lock()
-            .expect("the submitted batches are not poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .push(records);
         outcome
     }
@@ -2321,7 +2328,7 @@ impl MetadataSource for FakeMetadataSource {
         let change = self
             .before_guarded_submit
             .lock()
-            .expect("guarded submit hook is not poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .take();
         if let Some(change) = change {
             change(self);
@@ -2391,7 +2398,7 @@ impl MetadataSource for FakeMetadataSource {
 /// — and so do [`crate::time_util::arm`] and [`crate::time_util::fired`], which
 /// is why a cadence loop has two ways to lose its ticker rather than one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TimerFailure {
+pub enum TimerFailure {
     /// The registration is refused outright, so `arm` reports `None`.
     Registration,
     /// The registration is accepted and the deadline it yields then resolves
@@ -2412,7 +2419,7 @@ pub(crate) enum TimerFailure {
 /// a deadline that is already due, and the start-up deadline of every cadence
 /// loop here but the group actor's is `Duration::ZERO` — exactly the
 /// registration these tests need to see refused.
-pub(crate) struct BrokenTimer {
+pub struct BrokenTimer {
     /// The domain every deadline handed to [`Self::at`] is validated against.
     /// Nothing here reads the time; the clock exists to give the timer a
     /// domain, as the [`Timer`] contract requires.
@@ -2459,7 +2466,7 @@ impl Timer for BrokenTimer {
     fn at(&self, _deadline: MonotonicInstant) -> Result<TimerFuture, TimeError> {
         let nth = self.registrations.fetch_add(1, Ordering::Relaxed);
         if nth < self.healthy {
-            return Ok(Box::pin(std::future::ready(Ok(()))));
+            return Ok(Box::pin(future::ready(Ok(()))));
         }
         let error = TimeError::TimerUnavailable {
             source: TimerUnavailableError::BackendUnavailable {
@@ -2469,14 +2476,14 @@ impl Timer for BrokenTimer {
         };
         match self.failure {
             TimerFailure::Registration => Err(error),
-            TimerFailure::Completion => Ok(Box::pin(std::future::ready(Err(error)))),
+            TimerFailure::Completion => Ok(Box::pin(future::ready(Err(error)))),
         }
     }
 }
 
 // One `tracing` event that a `LogCapture` recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LoggedEvent {
+pub struct LoggedEvent {
     pub(crate) level: tracing::Level,
     pub(crate) target: String,
     pub(crate) message: String,
@@ -2486,7 +2493,7 @@ pub(crate) struct LoggedEvent {
 // sees what one piece of work logged and not what the rest of a running broker
 // logged at the same time.
 #[derive(Clone, Default)]
-pub(crate) struct LogCapture {
+pub struct LogCapture {
     events: Arc<Mutex<Vec<LoggedEvent>>>,
 }
 
@@ -2509,7 +2516,7 @@ impl LogCapture {
     pub(crate) fn events(&self) -> Vec<LoggedEvent> {
         self.events
             .lock()
-            .expect("the captured events are not poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 }
@@ -2529,7 +2536,7 @@ where
         event.record(&mut message);
         self.events
             .lock()
-            .expect("the captured events are not poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .push(LoggedEvent {
                 level: *event.metadata().level(),
                 target: event.metadata().target().to_owned(),
@@ -2542,8 +2549,8 @@ where
 #[derive(Default)]
 struct MessageField(String);
 
-impl tracing::field::Visit for MessageField {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+impl Visit for MessageField {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         if field.name() == "message" {
             self.0 = format!("{value:?}");
         }
@@ -2570,7 +2577,7 @@ mod tests {
             AddVoter, Node, NodeId, QuorumState, RaftError, RemoveVoter, SnapshotRange,
             SubmitChangeResult, UpdateVoter,
         },
-        std::collections::BTreeSet,
+        std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration},
     };
 
     /// An authorizer with a decision cache of its own and a real
@@ -2587,15 +2594,13 @@ mod tests {
             AuthorizationResult::Deny
         }
 
-        fn decision_ttl(&self) -> Option<std::time::Duration> {
-            Some(std::time::Duration::from_secs(7))
-        }
+        fn decision_ttl(&self) -> Option<Duration> { Some(Duration::from_secs(7)) }
 
         fn authorize_by_resource_type(
             &self,
             src: &dyn AclSource,
             p: &krabka_security::Principal,
-            h: &std::net::SocketAddr,
+            h: &SocketAddr,
             r: krabka_metadata::ResourceType,
             o: krabka_metadata::AclOperation,
         ) -> AuthorizationResult {
@@ -2611,7 +2616,7 @@ mod tests {
         let image = MetadataImage::new(uuid::Uuid::nil());
         let peer = super::peer();
         let alice = super::principal("alice");
-        let authorizer = super::controller_peer_allowed(std::sync::Arc::new(Cached));
+        let authorizer = super::controller_peer_allowed(Arc::new(Cached));
         let cases = [
             (
                 "ANONYMOUS",
@@ -2671,9 +2676,9 @@ mod tests {
                     ResourceType::Topic,
                     AclOperation::Write,
                 ),
-            ) == (true, Some(std::time::Duration::from_secs(7)), Allow)
+            ) == (true, Some(Duration::from_secs(7)), Allow)
         );
-        let unconfigured = super::controller_peer_allowed(std::sync::Arc::new(AllowAllAuthorizer));
+        let unconfigured = super::controller_peer_allowed(Arc::new(AllowAllAuthorizer));
         assert!(!unconfigured.is_configured());
     }
 
@@ -2789,7 +2794,7 @@ mod tests {
 }
 
 /// Independent published ELR fixture; both lists retain the caller's order.
-pub(crate) fn partition_elr(eligible: &[i32], last_known: &[i32]) -> PartitionElr {
+pub fn partition_elr(eligible: &[i32], last_known: &[i32]) -> PartitionElr {
     PartitionElr {
         eligible_leader_replicas: eligible.to_vec(),
         last_known_elr: last_known.to_vec(),
@@ -2798,7 +2803,7 @@ pub(crate) fn partition_elr(eligible: &[i32], last_known: &[i32]) -> PartitionEl
 
 /// A plaintext dialer that records each connection's client ID before dialing.
 #[derive(Clone)]
-pub(crate) struct RecordingDialer {
+pub struct RecordingDialer {
     pub(crate) client_ids: Arc<Mutex<Vec<String>>>,
 }
 
@@ -2821,13 +2826,13 @@ impl krabka_raft::OutboundDialer for RecordingDialer {
 krabka_macros::keyed_record_batch_fixture!(keyed_records_batch);
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct EmptyPayloadBatchSetup {
+pub struct EmptyPayloadBatchSetup {
     pub count: RecordCount,
 }
 
 /// An empty-payload fixture batch with the protocol's original default headers.
 #[bon::builder]
-pub(crate) fn default_records_batch(#[builder(into, default)] count: RecordCount) -> RecordBatch {
+pub fn default_records_batch(#[builder(into, default)] count: RecordCount) -> RecordBatch {
     let setup = EmptyPayloadBatchSetup { count };
     let n = setup.count.0;
     let mut batch = RecordBatch {
@@ -2844,21 +2849,21 @@ pub(crate) fn default_records_batch(#[builder(into, default)] count: RecordCount
 }
 
 /// Explicit values with the protocol's default batch header and leader epoch zero.
-pub(crate) fn default_value_records_batch(values: &[&'static [u8]]) -> RecordBatch {
+pub fn default_value_records_batch(values: &[&'static [u8]]) -> RecordBatch {
     RecordBatch {
         partition_leader_epoch: 0,
         ..static_records_batch(values, UnixMillis(0))
     }
 }
 
-pub(crate) fn single_value_batch(value: &'static [u8]) -> RecordBatch {
+pub fn single_value_batch(value: &'static [u8]) -> RecordBatch {
     default_value_records_batch(&[value])
 }
 
 /// Spawn a caught-up replica whose entire local log is committed.
 /// Cleaner and retention fixtures must advance the high watermark through
 /// the follower path, which clamps it to the local log end.
-pub(crate) struct CommittedPartitionSetup<'a> {
+pub struct CommittedPartitionSetup<'a> {
     pub topic: &'a str,
     pub partition: krabka_ids::PartitionIndex,
     pub leader: krabka_metadata::NodeId,
@@ -2877,8 +2882,8 @@ impl Default for CommittedPartitionSetup<'_> {
 }
 
 #[bon::builder]
-pub(crate) async fn committed_partition(
-    root: &std::path::Path,
+pub async fn committed_partition(
+    root: &Path,
     log: krabka_log::Log,
     #[builder(default = CommittedPartitionSetup::default().topic)] topic: &'_ str,
     #[builder(into, default = CommittedPartitionSetup::default().partition)]
@@ -2915,7 +2920,7 @@ pub(crate) async fn committed_partition(
 
 /// Finalize ELR and seed a topic, its partition and minimum ISR together.
 #[bon::builder]
-pub(crate) fn metadata_partition_record(
+pub fn metadata_partition_record(
     topic: String,
     replica_ids: Vec<u64>,
     isr_ids: Vec<u64>,
@@ -2942,7 +2947,7 @@ pub(crate) fn metadata_partition_record(
     }
 }
 
-pub(crate) fn elr_topic_records(
+pub fn elr_topic_records(
     partition: PartitionRecord,
     topic_id: uuid::Uuid,
     min_isr: &str,
@@ -2970,11 +2975,7 @@ pub(crate) fn elr_topic_records(
 }
 
 /// Keep both temporary directories alive while callers use their paths.
-pub(crate) fn two_log_dirs() -> (
-    tempfile::TempDir,
-    tempfile::TempDir,
-    Vec<std::path::PathBuf>,
-) {
+pub fn two_log_dirs() -> (tempfile::TempDir, tempfile::TempDir, Vec<PathBuf>) {
     let a = tempfile::tempdir().unwrap();
     let b = tempfile::tempdir().unwrap();
     let paths = vec![a.path().to_path_buf(), b.path().to_path_buf()];
@@ -2982,9 +2983,8 @@ pub(crate) fn two_log_dirs() -> (
 }
 
 /// Wire topology edge shared by authorization and actor cases.
-pub(crate) fn source_to_repartition()
--> krabka_protocol::owned::streams_group_heartbeat_request::Subtopology {
-    krabka_protocol::owned::streams_group_heartbeat_request::Subtopology {
+pub fn source_to_repartition() -> Subtopology {
+    Subtopology {
         subtopology_id: "0".into(),
         source_topics: vec!["orders".into()],
         repartition_sink_topics: vec!["rp".into()],
@@ -2993,11 +2993,11 @@ pub(crate) fn source_to_repartition()
 }
 
 /// Describe a topic independently of the create response's config conversion.
-type TopicConfigOverrides = std::collections::BTreeMap<String, String>;
+type TopicConfigOverrides = BTreeMap<String, String>;
 static NO_TOPIC_OVERRIDES: TopicConfigOverrides = TopicConfigOverrides::new();
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct DescribedCreationSetup<'a> {
+pub struct DescribedCreationSetup<'a> {
     #[default(krabka_metadata::NodeId(1))]
     pub node: krabka_metadata::NodeId,
     #[default("t")]
@@ -3007,12 +3007,12 @@ pub(crate) struct DescribedCreationSetup<'a> {
 }
 
 #[bon::builder]
-pub(crate) fn described_creation_configs(
+pub fn described_creation_configs(
     image: &krabka_metadata::MetadataImage,
     #[builder(into, default = krabka_metadata :: NodeId (1))] node: krabka_metadata::NodeId,
     #[builder(default = "t")] topic: &'_ str,
     #[builder(default = & NO_TOPIC_OVERRIDES)] overrides: &'_ TopicConfigOverrides,
-) -> Vec<krabka_protocol::owned::create_topics_response::CreatableTopicConfigs> {
+) -> Vec<CreatableTopicConfigs> {
     let setup = DescribedCreationSetup {
         node,
         topic,
@@ -3024,24 +3024,22 @@ pub(crate) fn described_creation_configs(
         setup.topic,
         setup.overrides,
         UnstableApiVersions::Disabled,
-        &std::collections::BTreeMap::new(),
+        &BTreeMap::new(),
     )
     .into_iter()
-    .map(
-        |entry| krabka_protocol::owned::create_topics_response::CreatableTopicConfigs {
-            name: entry.name,
-            value: entry.value,
-            read_only: entry.read_only,
-            config_source: entry.config_source,
-            is_sensitive: entry.is_sensitive,
-            ..Default::default()
-        },
-    )
+    .map(|entry| CreatableTopicConfigs {
+        name: entry.name,
+        value: entry.value,
+        read_only: entry.read_only,
+        config_source: entry.config_source,
+        is_sensitive: entry.is_sensitive,
+        ..Default::default()
+    })
     .collect()
 }
 
 /// A fresh log and deterministic timestamps bracketing its segment age limit.
-pub(crate) struct SegmentAgeFixture {
+pub struct SegmentAgeFixture {
     pub(crate) log: krabka_log::Log,
     pub(crate) config: krabka_log::LogConfig,
     pub(crate) dir: tempfile::TempDir,
@@ -3049,7 +3047,7 @@ pub(crate) struct SegmentAgeFixture {
     pub(crate) first_ms: i64,
 }
 
-pub(crate) fn segment_age_fixture() -> SegmentAgeFixture {
+pub fn segment_age_fixture() -> SegmentAgeFixture {
     use krabka_units::convert::TimeExt as _;
     let dir = tempfile::tempdir().unwrap();
     let config = krabka_log::LogConfig::default();
@@ -3065,7 +3063,7 @@ pub(crate) fn segment_age_fixture() -> SegmentAgeFixture {
 }
 
 /// Owned configuration values from the same key/value table used by each test.
-pub(crate) fn config_map(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+pub fn config_map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
         .iter()
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
@@ -3073,10 +3071,10 @@ pub(crate) fn config_map(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<S
 }
 
 /// Wait for spawned tasks to enter their bodies before testing their cleanup.
-pub(crate) async fn wait_tasks_started(ready: impl Fn() -> bool, context: &str) {
-    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+pub async fn wait_tasks_started(ready: impl Fn() -> bool, context: &str) {
+    time::timeout(Duration::from_secs(1), async {
         while !ready() {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
@@ -3084,9 +3082,7 @@ pub(crate) async fn wait_tasks_started(ready: impl Fn() -> bool, context: &str) 
 }
 
 /// Describe the partitions of a single topic with the standard fixture page limit.
-pub(crate) fn topic_partitions_request(
-    topic: &str,
-) -> krabka_protocol::owned::describe_topic_partitions_request::DescribeTopicPartitionsRequest {
+pub fn topic_partitions_request(topic: &str) -> DescribeTopicPartitionsRequest {
     use krabka_protocol::owned::describe_topic_partitions_request::{
         DescribeTopicPartitionsRequest, TopicRequest,
     };
@@ -3101,7 +3097,7 @@ pub(crate) fn topic_partitions_request(
 }
 
 /// Start the one-partition transaction fixture with grants encoded in principal names.
-pub(crate) async fn start_transaction_grant_broker() -> StartedBroker {
+pub async fn start_transaction_grant_broker() -> StartedBroker {
     start_broker_no_audit_with(|cfg| {
         configure_single_partition_transactions(
             cfg,
@@ -3112,7 +3108,7 @@ pub(crate) async fn start_transaction_grant_broker() -> StartedBroker {
 }
 
 /// A scripted wire response after its correlation id, including flexible header tags.
-pub(crate) fn scripted_response_body(body: &impl Encode, version: i16, flexible: bool) -> Vec<u8> {
+pub fn scripted_response_body(body: &impl Encode, version: i16, flexible: bool) -> Vec<u8> {
     let mut out = bytes::BytesMut::new();
     if flexible {
         bytes::BufMut::put_u8(&mut out, 0);
@@ -3123,7 +3119,7 @@ pub(crate) fn scripted_response_body(body: &impl Encode, version: i16, flexible:
 }
 
 /// Kafka's common offset/transaction append-error translations, independent of either mapper.
-pub(crate) const COORDINATOR_WRITE_ERROR_CASES: [(i16, i16); 7] = [
+pub const COORDINATOR_WRITE_ERROR_CASES: [(i16, i16); 7] = [
     (NOT_ENOUGH_REPLICAS, COORDINATOR_NOT_AVAILABLE),
     (REQUEST_TIMED_OUT, COORDINATOR_NOT_AVAILABLE),
     (NOT_LEADER_OR_FOLLOWER, NOT_COORDINATOR),
@@ -3134,21 +3130,20 @@ pub(crate) const COORDINATOR_WRITE_ERROR_CASES: [(i16, i16); 7] = [
 ];
 
 /// One heartbeat expiring after the fixed ten-millisecond test window.
-pub(crate) async fn expired_broker_fixture(
+pub async fn expired_broker_fixture(
     broker: u64,
 ) -> (TestClock, ControllerLivenessState, Vec<LivenessTransition>) {
     use crate::heartbeat::controller_state::{ControllerLivenessState, TestClock};
     let clock = TestClock::new();
-    let liveness =
-        ControllerLivenessState::with_test_clock(std::time::Duration::from_millis(10), &clock);
+    let liveness = ControllerLivenessState::with_test_clock(Duration::from_millis(10), &clock);
     liveness.record_heartbeat(broker).await;
-    clock.advance(std::time::Duration::from_millis(11));
+    clock.advance(Duration::from_millis(11));
     let transitions = liveness.tick().await;
     (clock, liveness, transitions)
 }
 
 /// A controller voter, independent of broker registrations.
-pub(crate) struct VoterImageSetup {
+pub struct VoterImageSetup {
     pub node: krabka_ids::NodeId,
     pub endpoints: Vec<krabka_metadata::VoterEndpoint>,
 }
@@ -3167,7 +3162,7 @@ impl Default for VoterImageSetup {
 }
 
 #[bon::builder]
-pub(crate) fn voter_image(
+pub fn voter_image(
     #[builder(into, default = VoterImageSetup::default().node)] node: krabka_ids::NodeId,
     #[builder(default = VoterImageSetup::default().endpoints)] endpoints: Vec<
         krabka_metadata::VoterEndpoint,
@@ -3189,7 +3184,7 @@ pub(crate) fn voter_image(
 }
 
 /// Start the allow-all fixture and wait for its local controller to lead.
-pub(crate) async fn started_controller_broker() -> (BrokerHandle, tempfile::TempDir, Arc<Broker>) {
+pub async fn started_controller_broker() -> (BrokerHandle, tempfile::TempDir, Arc<Broker>) {
     let StartedBroker {
         broker: handle,
         dir,
@@ -3200,7 +3195,7 @@ pub(crate) async fn started_controller_broker() -> (BrokerHandle, tempfile::Temp
 }
 
 /// Append a fixture batch through the partition's real log.
-pub(crate) fn append_partition_batch(partition: &Partition, batch: &mut RecordBatch) {
+pub fn append_partition_batch(partition: &Partition, batch: &mut RecordBatch) {
     partition
         .log
         .lock()
@@ -3210,36 +3205,34 @@ pub(crate) fn append_partition_batch(partition: &Partition, batch: &mut RecordBa
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum OAuthTokenContents {
+pub enum OAuthTokenContents {
     Nonempty,
     Empty,
 }
 
 /// Keep the token file's directory alive while callers exercise config parsing or validation.
-pub(crate) fn oauth_token_file(
-    contents: OAuthTokenContents,
-) -> (tempfile::TempDir, std::path::PathBuf) {
+pub fn oauth_token_file(contents: OAuthTokenContents) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let token_path = dir.path().join("token");
     let bytes = match contents {
         OAuthTokenContents::Nonempty => "header.payload.\n",
         OAuthTokenContents::Empty => "\n",
     };
-    std::fs::write(&token_path, bytes).unwrap();
+    fs::write(&token_path, bytes).unwrap();
     (dir, token_path)
 }
 
-pub(crate) fn listener_time_overrides(
+pub fn listener_time_overrides(
     overrides: &[(&str, krabka_units::Time)],
-) -> std::collections::BTreeMap<String, krabka_units::Time> {
+) -> BTreeMap<String, krabka_units::Time> {
     overrides
         .iter()
-        .map(|(name, value)| ((*name).to_string(), *value))
+        .map(|(name, value)| ((*name).to_owned(), *value))
         .collect()
 }
 
 /// Keep a sweep's log root alive alongside its initially empty registry.
-pub(crate) fn sweep_registry_fixture() -> (tempfile::TempDir, Arc<PartitionRegistry>) {
+pub fn sweep_registry_fixture() -> (tempfile::TempDir, Arc<PartitionRegistry>) {
     (
         tempfile::tempdir().expect("log root"),
         Arc::new(PartitionRegistry::new()),
@@ -3251,9 +3244,9 @@ pub(crate) fn sweep_registry_fixture() -> (tempfile::TempDir, Arc<PartitionRegis
 /// The bound is a hang guard only. The sweep before the timer runs on real
 /// threads, and a compaction sweep on a loaded runner has taken more than
 /// five seconds.
-pub(crate) async fn park_manual_timer(clock: &Arc<qubit_clock::ManualMonotonicClock>) -> bool {
+pub async fn park_manual_timer(clock: &Arc<qubit_clock::ManualMonotonicClock>) -> bool {
     let waiters = Arc::clone(clock);
-    tokio::task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(30)))
+    task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(30)))
         .await
         .unwrap()
 }
@@ -3261,7 +3254,7 @@ pub(crate) async fn park_manual_timer(clock: &Arc<qubit_clock::ManualMonotonicCl
 use {krabka_metadata::NodeId as InSyncReplicaId, uuid::Uuid as ReplicaDirectory};
 
 #[derive(krabka_macros::FieldDefaults)]
-pub(crate) struct InSyncPartitionSetup<'a> {
+pub struct InSyncPartitionSetup<'a> {
     #[default("t")]
     pub topic: &'a str,
     pub partition: krabka_ids::PartitionIndex,
@@ -3274,7 +3267,7 @@ pub(crate) struct InSyncPartitionSetup<'a> {
 
 /// A fully in-sync assignment whose first replica leads, retaining exact directory slots.
 #[bon::builder]
-pub(crate) fn in_sync_partition(
+pub fn in_sync_partition(
     #[builder(default = "t")] topic: &'_ str,
     #[builder(into, default)] partition: krabka_ids::PartitionIndex,
     #[builder(into, default = krabka_metadata :: LeaderEpoch (0))]
@@ -3292,7 +3285,7 @@ pub(crate) fn in_sync_partition(
         directories,
     };
     PartitionRecord {
-        topic: setup.topic.to_string(),
+        topic: setup.topic.to_owned(),
         partition: setup.partition.0,
         leader: setup.replicas[0],
         isr: setup.replicas.clone(),
@@ -3306,7 +3299,7 @@ pub(crate) fn in_sync_partition(
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct StreamsJoinSetup<'a> {
+pub struct StreamsJoinSetup<'a> {
     #[default("g")]
     pub group_id: &'a str,
     #[default("m1")]
@@ -3315,16 +3308,16 @@ pub(crate) struct StreamsJoinSetup<'a> {
 
 /// A streams join reporting empty owned task sets and its complete topology.
 #[bon::builder]
-pub(crate) fn streams_join_request(
-    topology: krabka_protocol::owned::streams_group_heartbeat_request::Topology,
+pub fn streams_join_request(
+    topology: Topology,
     #[builder(default = "g")] group_id: &'_ str,
     #[builder(default = "m1")] member_id: &'_ str,
-) -> krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest {
+) -> StreamsGroupHeartbeatRequest {
     let setup = StreamsJoinSetup {
         group_id,
         member_id,
     };
-    krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest {
+    StreamsGroupHeartbeatRequest {
         group_id: setup.group_id.into(),
         member_id: setup.member_id.into(),
         member_epoch: 0,
@@ -3339,7 +3332,7 @@ pub(crate) fn streams_join_request(
 
 /// Every record-batch codec Kafka defines, for the tests that run once per
 /// codec.
-pub(crate) const EVERY_CODEC: [krabka_compression::CompressionType; 5] = [
+pub const EVERY_CODEC: [krabka_compression::CompressionType; 5] = [
     krabka_compression::CompressionType::None,
     krabka_compression::CompressionType::Gzip,
     krabka_compression::CompressionType::Snappy,

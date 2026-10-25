@@ -15,4 +15,4 @@ mod refresher;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::{fetch::fetch_jwks, refresher::JwksRefresher};
+pub use self::{fetch::fetch_jwks, refresher::JwksRefresher};

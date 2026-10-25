@@ -3,7 +3,7 @@
 use {
     crate::meta::{field_ident, impl_block, named_fields},
     moxy::{
-        ast::{Attributed, Field, ItemStruct, ParseError},
+        ast::{Attributed, Field, FromMeta, ItemStruct, Meta, MetaContent, ParseError},
         token::{Spanner, TokenStream},
     },
 };
@@ -11,12 +11,10 @@ use {
 /// The expression inside a field's `#[default(...)]`.
 struct DefaultExpr(TokenStream);
 
-impl moxy::ast::FromMeta for DefaultExpr {
-    fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
+impl FromMeta for DefaultExpr {
+    fn from_meta(meta: &Meta) -> Result<Self, ParseError> {
         match &meta.content {
-            moxy::ast::MetaContent::List(group) if !group.tokens.is_empty() => {
-                Ok(Self(group.tokens.clone()))
-            }
+            MetaContent::List(group) if !group.tokens.is_empty() => Ok(Self(group.tokens.clone())),
             _ => Err(ParseError::new(
                 meta.span(),
                 "expected `#[default(<expression>)]`",
@@ -37,7 +35,7 @@ fn initializer(field: &Field) -> Result<TokenStream, ParseError> {
 }
 
 /// Expands `#[derive(FieldDefaults)]` on `item`.
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let initializers = named_fields(&item, "FieldDefaults")?
         .iter()
         .map(initializer)

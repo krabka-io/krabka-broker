@@ -1,9 +1,12 @@
 //! Restart recovery: a follower that snapshots, dies, and is reopened over its
 //! own data dir rebuilds its metadata image from the checkpoint plus the log.
 
-use crate::harness::{
-    self as fixture, await_single_leader, await_until, reopen_controller, shutdown_nodes,
-    start_cluster, three_voter_network, topic_record,
+use {
+    crate::harness::{
+        self as fixture, await_single_leader, await_until, reopen_controller, shutdown_nodes,
+        start_cluster, three_voter_network, topic_record,
+    },
+    tokio::time,
 };
 
 /// 4. Restart recovery: commit, snapshot, drop one engine, reopen it over its
@@ -20,7 +23,7 @@ async fn restart_recovers_image() {
     let (leader, _epoch) = await_single_leader(&net, &ids, fixture::Duration::from_secs(10)).await;
 
     // Commit a topic and ensure it is replicated everywhere.
-    tokio::time::timeout(
+    time::timeout(
         fixture::Duration::from_secs(10),
         net.get(leader)
             .unwrap()
@@ -49,9 +52,9 @@ async fn restart_recovers_image() {
     // KraftLog before we reopen the same data dir. `shutdown()` only sends
     // `Command::Shutdown`; the loop is spawned fire-and-forget with no JoinHandle,
     // so there is no accessor to await loop teardown / log-handle release.
-    tokio::time::sleep(fixture::Duration::from_millis(50)).await;
+    time::sleep(fixture::Duration::from_millis(50)).await;
 
-    let victim_dir = dirs.get(&victim).unwrap().path().to_path_buf();
+    let victim_dir = dirs[&victim].path().to_path_buf();
     let reopened = reopen_controller(&net, victim_dir, victim, cid, &ids);
     // The recovered image must contain the committed topic.
     assert2::assert!(reopened.current_image().topic("persistent").is_some());

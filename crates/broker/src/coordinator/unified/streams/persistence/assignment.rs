@@ -42,10 +42,12 @@ use {
 };
 
 /// The member state as `org.apache.kafka.coordinator.group.streams.MemberState`
-/// numbers it. Kafka's streams enum does not start at zero the way the consumer
-/// one does: `STABLE` is 1, `UNREVOKED_TASKS` is 2 and `UNRELEASED_TASKS` is 3.
-/// The broker's own [`StreamsMemberAssignmentState`] counts from zero, so the
-/// two meet here rather than anywhere a reader of the group state could confuse
+/// numbers it.
+///
+/// Kafka's streams enum does not start at zero the way the consumer one does:
+/// `STABLE` is 1, `UNREVOKED_TASKS` is 2 and `UNRELEASED_TASKS` is 3. The
+/// broker's own [`StreamsMemberAssignmentState`] counts from zero, so the two
+/// meet here rather than anywhere a reader of the group state could confuse
 /// them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamsMemberWireState {
@@ -204,7 +206,7 @@ mod tests {
     };
 
     fn active_tasks(partitions: &[i32]) -> BTreeMap<String, Vec<i32>> {
-        BTreeMap::from([("0".to_string(), partitions.to_vec())])
+        BTreeMap::from([("0".to_owned(), partitions.to_vec())])
     }
 
     #[test]
@@ -240,9 +242,9 @@ mod tests {
         );
 
         let mut active = active_tasks(&[0, 1, 2]);
-        active.insert("1".to_string(), vec![]);
+        active.insert("1".to_owned(), vec![]);
         let mut standby = BTreeMap::new();
-        standby.insert("0".to_string(), vec![3]);
+        standby.insert("0".to_owned(), vec![3]);
         let v = StreamsGroupTargetAssignmentMemberValue {
             active,
             standby,
@@ -285,7 +287,7 @@ mod tests {
 
         let active = active_tasks(&[0, 1]);
         let mut pending = BTreeMap::new();
-        pending.insert("0".to_string(), vec![2]);
+        pending.insert("0".to_owned(), vec![2]);
         let v = StreamsGroupCurrentMemberAssignmentValue {
             member_epoch: 5,
             previous_member_epoch: 4,
@@ -294,10 +296,10 @@ mod tests {
             standby: BTreeMap::new(),
             warmup: BTreeMap::new(),
             active_pending_revocation: pending,
-            standby_pending_revocation: maplit::btreemap! {"1".to_string() => vec![0]},
-            warmup_pending_revocation: maplit::btreemap! {"2".to_string() => vec![4]},
-            active_epochs: maplit::btreemap! {"0".to_string() => vec![3, 5]},
-            active_pending_revocation_epochs: maplit::btreemap! {"0".to_string() => vec![2]},
+            standby_pending_revocation: maplit::btreemap! {"1".to_owned() => vec![0]},
+            warmup_pending_revocation: maplit::btreemap! {"2".to_owned() => vec![4]},
+            active_epochs: maplit::btreemap! {"0".to_owned() => vec![3, 5]},
+            active_pending_revocation_epochs: maplit::btreemap! {"0".to_owned() => vec![2]},
         };
         assert!(StreamsGroupCurrentMemberAssignmentValue::decode(&v.encode()).unwrap() == v);
     }
@@ -312,11 +314,11 @@ mod tests {
             member_epoch: 5,
             previous_member_epoch: 4,
             state: StreamsMemberWireState::UnrevokedTasks,
-            active: maplit::btreemap! {"0".to_string() => vec![1, 2]},
-            standby: maplit::btreemap! {"1".to_string() => vec![0]},
-            active_pending_revocation: maplit::btreemap! {"0".to_string() => vec![3]},
-            active_epochs: maplit::btreemap! {"0".to_string() => vec![4, 5]},
-            active_pending_revocation_epochs: maplit::btreemap! {"0".to_string() => vec![3]},
+            active: maplit::btreemap! {"0".to_owned() => vec![1, 2]},
+            standby: maplit::btreemap! {"1".to_owned() => vec![0]},
+            active_pending_revocation: maplit::btreemap! {"0".to_owned() => vec![3]},
+            active_epochs: maplit::btreemap! {"0".to_owned() => vec![4, 5]},
+            active_pending_revocation_epochs: maplit::btreemap! {"0".to_owned() => vec![3]},
             ..Default::default()
         };
         let mut want: Vec<u8> = vec![0x00, 0x00];
@@ -371,9 +373,9 @@ mod tests {
         // A task map with several subtopologies, some carrying no partitions,
         // must survive encode/decode unchanged.
         let mut active = BTreeMap::new();
-        active.insert("0".to_string(), vec![0, 1, 2, 3]);
-        active.insert("1".to_string(), vec![]);
-        active.insert("2".to_string(), vec![7]);
+        active.insert("0".to_owned(), vec![0, 1, 2, 3]);
+        active.insert("1".to_owned(), vec![]);
+        active.insert("2".to_owned(), vec![7]);
         let v = StreamsGroupTargetAssignmentMemberValue {
             active,
             standby: BTreeMap::new(),

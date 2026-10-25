@@ -1,14 +1,15 @@
 use {
     super::*,
     crate::{list_offsets::ListOffsetsSelectionDecision, timestamp::timestamp_record_time},
+    proptest::{collection, option},
 };
 
 proptest! {
     #[test]
     fn typed_batch_matches_an_independent_visible_record_oracle(
-        rows in proptest::collection::btree_map(0_i32..=i32::MAX, any::<i64>(), 0..12),
+        rows in collection::btree_map(0_i32..=i32::MAX, any::<i64>(), 0..12),
         base in 0_i64..=(i64::MAX - i64::from(i32::MAX)), batch_time in any::<i64>(),
-        append_time in proptest::option::of(any::<i64>()),
+        append_time in option::of(any::<i64>()),
         minimum in 0_i64..=i64::MAX, target in 0_i64..=i64::MAX,
         bound in 0_i64..=i64::MAX, epoch in -1_i32..=i32::MAX,
     ) {

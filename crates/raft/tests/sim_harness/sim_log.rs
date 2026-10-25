@@ -4,7 +4,7 @@
 
 use {
     super::node_log::SimNodeLog,
-    krabka_kraft_core::simulation_support::{append_epochs, replicate_epochs, truncate_epochs},
+    krabka_kraft_core::simulation_support::{append_epochs, epochs_to_replicate, truncate_epochs},
     krabka_raft::kraft::types::Epoch,
 };
 
@@ -31,7 +31,8 @@ impl SimNodeLog for SimLog {
 
     fn replicate_from(&mut self, leader: &Self) {
         // Divergent prefixes are truncated before this method runs.
-        replicate_epochs(&mut self.epochs, &leader.epochs);
+        self.epochs
+            .extend_from_slice(epochs_to_replicate(self.epochs.len(), &leader.epochs));
     }
 
     fn record_count(&self) -> usize { self.epochs.len() }

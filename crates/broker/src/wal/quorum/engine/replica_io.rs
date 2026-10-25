@@ -47,7 +47,8 @@ pub(super) fn sync_replica_blocking(
             )));
         } else {
             let existing = read_log_batches_exact(&log, batch.base_offset, batch.last_offset + 1)?;
-            if existing.len() != 1 || existing[0].verbatim.bytes != batch.verbatim.bytes {
+            if !matches!(existing.as_slice(), [only] if only.verbatim.bytes == batch.verbatim.bytes)
+            {
                 return Err(BrokerError::Replication(format!(
                     "wal replica diverges in batch {}..{}",
                     batch.base_offset.0,
@@ -57,6 +58,7 @@ pub(super) fn sync_replica_blocking(
         }
     }
     log.sync()?;
+    drop(log);
     Ok(())
 }
 

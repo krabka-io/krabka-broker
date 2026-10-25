@@ -80,7 +80,10 @@ pub(super) fn truncated_replay_bounds_first_retry(
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==> offsets@[j] == rows@[j].last_offset)]
     #[variant(rows@.len() - i@)]
     while i < rows.len() {
-        offsets.push(rows[i].last_offset);
+        let Some(row) = rows.get(i) else {
+            break;
+        };
+        offsets.push(row.last_offset);
         i += 1;
     }
     let (_, end, hwm, count, _, _, _) = whole_batch_truncation_bounds_controls(
@@ -102,7 +105,10 @@ pub(super) fn truncated_replay_bounds_first_retry(
     #[variant(count@ - i@)]
     while i < count {
         proof_assert!(crate::producer_snapshot::snapshot_entry_valid_model(end@, rows@[i@]));
-        prefix.push(rows[i]);
+        let Some(&row) = rows.get(i) else {
+            break;
+        };
+        prefix.push(row);
         i += 1;
     }
     let (first, decision, witness) = rebuilt_data_window_bounds_retry(end, hwm, &prefix, request);

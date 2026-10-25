@@ -1,4 +1,5 @@
 //! `krabka-soak-check` run the way an operator or CI runs it.
+#![cfg(test)]
 
 mod corpus;
 
@@ -6,15 +7,17 @@ use {
     assert2::{assert, check},
     krabka_bench_driver::soak::{contract::Contract, synthetic::clean_run},
     std::{
+        ffi::OsStr,
+        fs,
         path::PathBuf,
         process::{Command, Output},
     },
 };
 
 /// A contract under `bench/soak/`.
-fn contract(name: &str) -> PathBuf { corpus::bench_dir("soak").join(name) }
+fn contract(name: &str) -> PathBuf { corpus::bench_dir("soak").unwrap().join(name) }
 
-fn run(args: &[&std::ffi::OsStr]) -> Output {
+fn run(args: &[&OsStr]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_krabka-soak-check"))
         .args(args)
         .output()
@@ -57,13 +60,13 @@ fn plan_prints_the_schedule_the_contract_expands_to() {
 #[test]
 fn judge_fails_evidence_missing_a_record_and_writes_the_verdict() {
     let path = contract("rf3-72h.yaml");
-    let yaml = std::fs::read_to_string(&path).expect("read the contract");
+    let yaml = fs::read_to_string(&path).expect("read the contract");
     let parsed = Contract::from_yaml(&yaml).expect("the contract parses");
     let dir = tempfile::tempdir().expect("temp dir");
 
     let mut evidence = clean_run(&parsed);
     let clean = dir.path().join("clean.json");
-    std::fs::write(&clean, serde_json::to_vec(&evidence).unwrap()).unwrap();
+    fs::write(&clean, serde_json::to_vec(&evidence).unwrap()).unwrap();
     let output = run(&[
         "judge".as_ref(),
         "--contract".as_ref(),
@@ -77,7 +80,7 @@ fn judge_fails_evidence_missing_a_record_and_writes_the_verdict() {
     evidence.readers[0].seen.remove(7);
     let lossy = dir.path().join("lossy.json");
     let verdict = dir.path().join("verdict.json");
-    std::fs::write(&lossy, serde_json::to_vec(&evidence).unwrap()).unwrap();
+    fs::write(&lossy, serde_json::to_vec(&evidence).unwrap()).unwrap();
     let output = run(&[
         "judge".as_ref(),
         "--contract".as_ref(),
@@ -90,18 +93,18 @@ fn judge_fails_evidence_missing_a_record_and_writes_the_verdict() {
     check!(!output.status.success());
     check!(text(&output.stderr).contains("reconcile: lost on classic-idempotent (classic-idempotent-0) under read_uncommitted: 1 records, first [7]"));
     let written: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&verdict).expect("the verdict was written")).unwrap();
+        serde_json::from_slice(&fs::read(&verdict).expect("the verdict was written")).unwrap();
     check!(written["reconciliation"]["findings"][0]["kind"] == "lost");
 }
 
 #[test]
 fn an_unusable_contract_is_refused_with_its_reasons() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let yaml = std::fs::read_to_string(contract("self-check.yaml"))
+    let yaml = fs::read_to_string(contract("self-check.yaml"))
         .unwrap()
         .replace("replication_factor: 3", "replication_factor: 2");
     let bad = dir.path().join("bad.yaml");
-    std::fs::write(&bad, yaml).unwrap();
+    fs::write(&bad, yaml).unwrap();
     let output = run(&["plan".as_ref(), "--contract".as_ref(), bad.as_os_str()]);
     check!(!output.status.success());
     check!(

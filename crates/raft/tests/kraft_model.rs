@@ -1,7 +1,7 @@
 //! Exhaustive stateright checks of the `KRaft` consensus core. See
 //! `model/mod.rs`.
 //!
-//! Memory safety: the stateright BFS keeps every visited unique state resident.
+//! Memory bound: the stateright BFS keeps every visited unique state resident.
 //! Each checker run is therefore fenced with a `target_state_count` backstop,
 //! on top of the model's tight `within_boundary`, so a runaway space cannot
 //! exhaust the host RAM.
@@ -21,6 +21,7 @@
 //!   KIP-595 log-recency test in `handle_vote_request` observable: without it a
 //!   stale voter wins an election and `leader_completeness` fails.
 //! - `two_voters_append_via_linearizable`: 2 voters and stateless appenders.
+#![cfg(test)]
 mod model;
 
 use {krabka_ids::NodeId, model::ConsensusModel, stateright::Checker};

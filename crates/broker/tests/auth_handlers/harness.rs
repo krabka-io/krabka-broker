@@ -22,11 +22,19 @@ use {
         },
     },
     krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
-    std::io,
-    tokio::net::TcpStream,
+    krabka_protocol::owned::{
+        metadata_request::MetadataRequest, metadata_response::MetadataResponse,
+    },
+    std::{
+        io,
+        net::SocketAddr,
+        path::{Path, PathBuf},
+        time::Duration,
+    },
+    tokio::{io::AsyncReadExt, net::TcpStream, time},
 };
 
-pub(crate) mod common_imports {
+pub mod common_imports {
     pub use {
         assert2::check,
         krabka_broker::Broker,
@@ -84,17 +92,16 @@ krabka_macros::wire_test_driver!(socket pub round_trip, "krabka-sasl-test");
 
 /// Post-auth Metadata proves the session survived and the data plane remains reachable.
 pub async fn metadata_probe(stream: &mut TcpStream, corr_id: i32) -> io::Result<()> {
-    let response: krabka_protocol::owned::metadata_response::MetadataResponse =
-        kafka_wire::exchange()
-            .stream(stream)
-            .request(&krabka_protocol::owned::metadata_request::MetadataRequest::default())
-            .api_key(3)
-            .version(12)
-            .correlation(corr_id)
-            .client_id("krabka-sasl-test")
-            .header(RequestHeaderEncoding::Flexible)
-            .call()
-            .await?;
+    let response: MetadataResponse = kafka_wire::exchange()
+        .stream(stream)
+        .request(&MetadataRequest::default())
+        .api_key(3)
+        .version(12)
+        .correlation(corr_id)
+        .client_id("krabka-sasl-test")
+        .header(RequestHeaderEncoding::Flexible)
+        .call()
+        .await?;
     if response.brokers.is_empty() {
         return Err(io::Error::other("Metadata response carried no brokers"));
     }
@@ -104,18 +111,15 @@ pub async fn metadata_probe(stream: &mut TcpStream, corr_id: i32) -> io::Result<
 /// Read after an authentication deadline/refusal, bounded so a missing close fails the test.
 pub async fn read_after_auth(stream: &mut TcpStream) -> usize {
     let mut buf = [0_u8; 16];
-    tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        tokio::io::AsyncReadExt::read(stream, &mut buf),
-    )
-    .await
-    .expect("read should not hang")
-    .expect("read should not error")
+    time::timeout(Duration::from_secs(5), AsyncReadExt::read(stream, &mut buf))
+        .await
+        .expect("read should not hang")
+        .expect("read should not error")
 }
 
 /// Disable idle expiry so only the configured reauthentication deadline is observable.
 pub fn reauth_config(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     max_reauth: krabka_units::Time,
 ) -> krabka_broker::BrokerConfig {
     let mut config = sasl_plaintext_config(log_dir.to_path_buf());
@@ -127,7 +131,7 @@ pub fn reauth_config(
 /// A running broker and the address it listens on.
 pub struct ListeningBroker {
     pub handle: krabka_broker::BrokerHandle,
-    pub addr: std::net::SocketAddr,
+    pub addr: SocketAddr,
 }
 
 /// A running broker, the address it listens on, and the log directory that
@@ -135,28 +139,28 @@ pub struct ListeningBroker {
 pub struct RetainedBroker {
     pub log_dir: tempfile::TempDir,
     pub handle: krabka_broker::BrokerHandle,
-    pub addr: std::net::SocketAddr,
+    pub addr: SocketAddr,
 }
 
 /// A [`RetainedBroker`] with the first socket opened to it.
 pub struct BrokerSocket {
     pub log_dir: tempfile::TempDir,
     pub handle: krabka_broker::BrokerHandle,
-    pub addr: std::net::SocketAddr,
+    pub addr: SocketAddr,
     pub stream: TcpStream,
 }
 
 /// An authenticated SCRAM-admin fixture, enabling the mechanisms each case exercises.
 pub async fn start_scram_admin(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     password: &str,
     mechanisms: Vec<krabka_security::SaslMechanism>,
 ) -> ListeningBroker {
     let mut config = sasl_plaintext_mechanisms(log_dir.to_path_buf(), mechanisms);
     config
         .plain_credentials
-        .insert("admin".to_string(), password.to_string());
-    config.super_users = maplit::hashset! {"admin".to_string()};
+        .insert("admin".to_owned(), password.to_owned());
+    config.super_users = maplit::hashset! {"admin".to_owned()};
     let broker = krabka_broker::Broker::start(config)
         .await
         .expect("broker must start");
@@ -167,17 +171,14 @@ pub async fn start_scram_admin(
     }
 }
 
-pub fn alice_plain_config(
-    log_dir: std::path::PathBuf,
-    password: String,
-) -> krabka_broker::BrokerConfig {
+pub fn alice_plain_config(log_dir: PathBuf, password: String) -> krabka_broker::BrokerConfig {
     let mut cfg = sasl_plaintext_mechanisms(log_dir, vec![krabka_security::SaslMechanism::Plain]);
     cfg.plain_credentials.insert("alice".into(), password);
     cfg
 }
 
 pub async fn start_scram_alice(
-    log_dir: std::path::PathBuf,
+    log_dir: PathBuf,
     mechanism: krabka_security::SaslMechanism,
 ) -> krabka_broker::BrokerHandle {
     let cfg = sasl_plaintext_mechanisms(log_dir, vec![mechanism]);
@@ -198,11 +199,7 @@ pub async fn start_scram_alice(
 /// Panics if the temporary directory or broker cannot be created.
 pub async fn start_alice_plain(
     password: String,
-) -> (
-    tempfile::TempDir,
-    krabka_broker::BrokerHandle,
-    std::net::SocketAddr,
-) {
+) -> (tempfile::TempDir, krabka_broker::BrokerHandle, SocketAddr) {
     let log_dir = tempfile::tempdir().unwrap();
     let cfg = alice_plain_config(log_dir.path().to_path_buf(), password);
     let (handle, log_dir, addr) = start_broker(cfg, log_dir).await;
@@ -246,7 +243,7 @@ pub async fn alice_plain_socket(password: String) -> BrokerSocket {
 /// # Panics
 /// Panics if broker startup or SCRAM metadata submission fails.
 pub async fn start_reauth_broker(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     max_reauth: krabka_units::Time,
     mechanism: krabka_security::SaslMechanism,
 ) -> krabka_broker::BrokerHandle {
@@ -256,7 +253,7 @@ pub async fn start_reauth_broker(
         for user in ["alice", "bob"] {
             config
                 .plain_credentials
-                .insert(user.to_string(), alice_password());
+                .insert(user.to_owned(), alice_password());
         }
     }
     let broker = krabka_broker::Broker::start(config)

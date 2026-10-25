@@ -69,9 +69,8 @@ fn parse_int(value: &str) -> Option<i32> { java_trim(value).parse().ok() }
 
 /// A connection cap of at least `min`.
 fn parse_cap(value: &str, min: i32) -> Option<usize> {
-    parse_int(value)
-        .filter(|cap| *cap >= min)
-        .and_then(|cap| usize::try_from(cap).ok())
+    let cap = parse_int(value).filter(|cap| *cap >= min)?;
+    usize::try_from(cap).ok()
 }
 
 /// A connection creation rate: an `INT` of at least 1, as

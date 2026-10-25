@@ -38,14 +38,17 @@ fn select_finished_index(
     #[invariant(finished_selection(starts@, ends@, finished@, best, index@, latest))]
     #[variant(starts@.len() - index@)]
     while index < starts.len() {
-        if finished[index] && starts[index] >= 0 && starts[index] <= ends[index] {
+        if let (Some(true), Some(&start), Some(&end)) =
+            (finished.get(index), starts.get(index), ends.get(index))
+            && start >= 0
+            && start <= end
+        {
             let keep = match best {
+                Some(current) if latest => {
+                    matches!(ends.get(current), Some(&kept_end) if kept_end >= end)
+                }
                 Some(current) => {
-                    if latest {
-                        ends[current] >= ends[index]
-                    } else {
-                        starts[current] <= starts[index]
-                    }
+                    matches!(starts.get(current), Some(&kept_start) if kept_start <= start)
                 }
                 None => false,
             };
@@ -103,9 +106,13 @@ pub fn tiered_owning_epoch_index(
     #[invariant(owning_epoch_selection(epochs@, starts@, segment_start@, segment_end@, index@, best))]
     #[variant(starts@.len() - index@)]
     while index < starts.len() {
-        if epochs[index] >= 0 && starts[index] >= segment_start && starts[index] <= segment_end {
+        if let (Some(&epoch), Some(&start)) = (epochs.get(index), starts.get(index))
+            && epoch >= 0
+            && start >= segment_start
+            && start <= segment_end
+        {
             match best {
-                Some(current) if starts[current] >= starts[index] => {}
+                Some(current) if matches!(starts.get(current), Some(&kept) if kept >= start) => {}
                 _ => best = Some(index),
             }
         }
@@ -146,10 +153,15 @@ pub fn remote_time_index_candidate_count(entries: &[TimeEntry], target_timestamp
         ==> entries@[i - 1].coordinate@ < entries@[i].coordinate@)]
     #[variant(entries@.len() - count@)]
     while count < entries.len() {
-        if count > 0 && entries[count].coordinate <= entries[count - 1].coordinate {
+        let Some(entry) = entries.get(count) else {
+            break;
+        };
+        if count > 0
+            && matches!(entries.get(count - 1), Some(previous) if entry.coordinate <= previous.coordinate)
+        {
             break;
         }
-        if entries[count].key >= target_timestamp {
+        if entry.key >= target_timestamp {
             break;
         }
         count += 1;

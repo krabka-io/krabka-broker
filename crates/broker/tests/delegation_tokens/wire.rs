@@ -13,14 +13,15 @@ use {
         kafka_wire::{self, PlainAuthenticationSetup, exchange},
         rpc::send_create_delegation_token,
     },
-    base64::Engine,
+    base64::{Engine, engine::general_purpose},
     krabka_protocol::owned::{
         api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
+        create_delegation_token_request::CreateDelegationTokenRequest,
         sasl_handshake_request::SaslHandshakeRequest,
         sasl_handshake_response::SaslHandshakeResponse,
     },
-    krabka_security::SaslMechanism,
-    std::{io, net::SocketAddr},
+    krabka_security::{SaslMechanism, scram},
+    std::{io, net::SocketAddr, str},
     tokio::net::TcpStream,
 };
 
@@ -43,7 +44,7 @@ krabka_macros::wire_test_driver!(socket pub(crate) round_trip, CLIENT_ID);
 
 /// Connects and authenticates with SASL/PLAIN; see
 /// [`kafka_wire::sasl_plain_authenticate`].
-pub(crate) async fn sasl_plain_authenticate(
+pub async fn sasl_plain_authenticate(
     addr: SocketAddr,
     user: &str,
     password: &[u8],
@@ -61,7 +62,7 @@ pub(crate) async fn sasl_plain_authenticate(
 /// connection on success, which step (c) needs, and its client-first message
 /// carries the `tokenauth=true` extension that Kafka's `ScramLoginModule`
 /// sends for a token, so `username` is a token id and `password` its HMAC.
-pub(crate) async fn sasl_scram_sha256_authenticate(
+pub async fn sasl_scram_sha256_authenticate(
     addr: SocketAddr,
     username: &str,
     password: &str,
@@ -78,7 +79,7 @@ pub(crate) async fn sasl_scram_sha256_authenticate(
     let sh_resp: SaslHandshakeResponse = exchange()
         .stream(&mut stream)
         .request(&SaslHandshakeRequest {
-            mechanism: "SCRAM-SHA-256".to_string(),
+            mechanism: "SCRAM-SHA-256".to_owned(),
             ..Default::default()
         })
         .api_key(17)
@@ -161,7 +162,7 @@ impl TokenScramClient {
             mac.update(data);
             mac.finalize().into_bytes().to_vec()
         };
-        let server_first = std::str::from_utf8(server_first)
+        let server_first = str::from_utf8(server_first)
             .map_err(|e| io::Error::other(format!("server-first is not UTF-8: {e}")))?;
         let attribute = |name: &str| {
             server_first
@@ -176,7 +177,7 @@ impl TokenScramClient {
         let iterations: u32 = attribute("i=")?
             .parse()
             .map_err(|e| io::Error::other(format!("server-first iterations: {e}")))?;
-        let salted = krabka_security::scram::pbkdf2_salted(
+        let salted = scram::pbkdf2_salted(
             &self.password,
             SaslMechanism::ScramSha256,
             iterations,
@@ -191,23 +192,19 @@ impl TokenScramClient {
     }
 }
 
-pub(crate) async fn token_session(
+pub async fn token_session(
     addr: SocketAddr,
     token_id: &str,
     hmac: &[u8],
 ) -> Result<TcpStream, String> {
-    let password = base64::engine::general_purpose::STANDARD.encode(hmac);
+    let password = general_purpose::STANDARD.encode(hmac);
     let mut session = sasl_scram_sha256_authenticate(addr, token_id, &password)
         .await
         .map_err(|e| format!("token SCRAM auth: {e}"))?;
-    let create = send_create_delegation_token(
-        &mut session,
-        200,
-        &krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest {
-            max_lifetime_ms: -1,
-            ..Default::default()
-        },
-    )
+    let create = send_create_delegation_token(&mut session, 200, &CreateDelegationTokenRequest {
+        max_lifetime_ms: -1,
+        ..Default::default()
+    })
     .await
     .map_err(|e| format!("CreateDelegationToken(token-auth): {e}"))?;
     assert2::assert!(

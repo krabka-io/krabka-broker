@@ -1,11 +1,5 @@
-// rustc 1.95 clippy ICEs on this file in the same places as throttle.rs /
-// client_quotas.rs:
-//
-// 1. `clippy::pedantic` lints — annotate-snippets upstream bug.
-// 2. `clippy::unnecessary_unwrap` — UnwrappableVariablesVisitor ICE.
-//
-// Both are suppressed locally; the rest of the workspace still enforces the
-// full lint gate.
+#![cfg(test)]
+
 //! Broker-level integration test for (user, client-id) tuple quota
 //! end-to-end enforcement.
 //!

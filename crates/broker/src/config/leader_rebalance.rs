@@ -28,6 +28,7 @@ mod tests {
         super::*,
         assert2::{assert, check},
         krabka_units::minutes,
+        std::path::PathBuf,
     };
 
     #[test]
@@ -39,7 +40,7 @@ mod tests {
 
     #[test]
     fn auto_leader_rebalance_defaults_to_false_in_for_tests() {
-        let c = BrokerConfig::for_tests(std::path::PathBuf::from("/tmp"));
+        let c = BrokerConfig::for_tests(PathBuf::from("/tmp"));
         assert!(!c.features.auto_leader_rebalance_enable);
     }
 

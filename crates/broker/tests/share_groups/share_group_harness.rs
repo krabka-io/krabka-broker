@@ -13,8 +13,11 @@ use {
     krabka_client_core::Client,
     krabka_protocol::owned::{
         share_group_describe_request::ShareGroupDescribeRequest,
+        share_group_describe_response::ShareGroupDescribeResponse,
         share_group_heartbeat_request::ShareGroupHeartbeatRequest,
+        share_group_heartbeat_response::ShareGroupHeartbeatResponse,
     },
+    std::{path::PathBuf, sync::Arc},
 };
 
 /// Starts a broker on `log_dir` whose group and share coordinators serve
@@ -25,7 +28,7 @@ use {
 /// heartbeat initializes share state through the share coordinator. The
 /// handle helpers ask for each topic as a client's first lookup does, and wait
 /// until this broker serves it.
-pub async fn start(log_dir: std::path::PathBuf) -> krabka_broker::BrokerHandle {
+pub async fn start(log_dir: PathBuf) -> krabka_broker::BrokerHandle {
     let broker = Broker::start(broker_config(log_dir)).await.unwrap();
     broker.wait_until_group_coordinator_ready().await;
     broker.wait_until_share_coordinator_ready().await;
@@ -40,9 +43,7 @@ pub async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) 
 }
 
 /// Reopen the caller's existing directory without adding startup-readiness waits.
-pub async fn rejoin(
-    log_dir: std::path::PathBuf,
-) -> (krabka_broker::BrokerHandle, std::sync::Arc<Client>) {
+pub async fn rejoin(log_dir: PathBuf) -> (krabka_broker::BrokerHandle, Arc<Client>) {
     let mut config = broker_config(log_dir);
     config.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     let broker = Box::pin(Broker::start(config)).await.unwrap();
@@ -80,18 +81,13 @@ pub async fn join_share_group(
         .expect("join response includes a member id")
 }
 
-pub fn total_assigned(
-    resp: &krabka_protocol::owned::share_group_heartbeat_response::ShareGroupHeartbeatResponse,
-) -> usize {
+pub fn total_assigned(resp: &ShareGroupHeartbeatResponse) -> usize {
     resp.assignment.as_ref().map_or(0, |a| {
         a.topic_partitions.iter().map(|t| t.partitions.len()).sum()
     })
 }
 
-pub async fn describe(
-    client: &Client,
-    group: &str,
-) -> krabka_protocol::owned::share_group_describe_response::ShareGroupDescribeResponse {
+pub async fn describe(client: &Client, group: &str) -> ShareGroupDescribeResponse {
     client
         .send(ShareGroupDescribeRequest {
             group_ids: vec![group.into()],

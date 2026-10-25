@@ -37,6 +37,7 @@ use {
     krabka_broker::BrokerHandle,
     krabka_security::SaslMechanism,
     tempfile::TempDir,
+    tokio::task,
 };
 
 /// The SASL listener the oracle's own tools reach from inside its container.
@@ -278,10 +279,9 @@ struct SaslPair {
 
 impl SaslPair {
     async fn start(label: &'static str) -> Self {
-        let oracle =
-            tokio::task::spawn_blocking(move || Oracle::start_with_env(label, ORACLE_SASL_ENV))
-                .await
-                .expect("oracle boot");
+        let oracle = task::spawn_blocking(move || Oracle::start_with_env(label, ORACLE_SASL_ENV))
+            .await
+            .expect("oracle boot");
         let (broker, dir) = start_host_broker_with(|config| {
             configure_sasl(
                 config,

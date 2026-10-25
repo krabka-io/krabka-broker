@@ -10,13 +10,16 @@ use {
     crate::{support::storage::count_partition_dirs, wire::describe_log_dirs},
     assert2::assert,
     std::{
+        fs,
         net::SocketAddr,
+        path::{Path, PathBuf},
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
-pub(crate) fn count_topic_dirs(dir: &std::path::Path, topic: &str) -> usize {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+pub fn count_topic_dirs(dir: &Path, topic: &str) -> usize {
+    let Ok(entries) = fs::read_dir(dir) else {
         return 0;
     };
     count_partition_dirs(entries, topic, false)
@@ -24,21 +27,21 @@ pub(crate) fn count_topic_dirs(dir: &std::path::Path, topic: &str) -> usize {
 
 /// Wait until `DescribeLogDirs` reports both partitions of `topic`
 /// under `target_dir` with `is_future_key == false`.
-pub(crate) async fn wait_for_move_complete(
+pub async fn wait_for_move_complete(
     addr: SocketAddr,
-    target_dir: &std::path::Path,
+    target_dir: &Path,
     topic: &str,
     expected: &[i32],
 ) {
     let deadline = Instant::now() + Duration::from_secs(15);
-    let target_canon = std::fs::canonicalize(target_dir).unwrap();
+    let target_canon = fs::canonicalize(target_dir).unwrap();
     loop {
         let resp = describe_log_dirs(addr).await;
         let mut current_in_target: Vec<i32> = Vec::new();
         let mut any_future = false;
         for result in &resp.results {
-            let result_canon = std::fs::canonicalize(&result.log_dir)
-                .unwrap_or_else(|_| std::path::PathBuf::from(&result.log_dir));
+            let result_canon = fs::canonicalize(&result.log_dir)
+                .unwrap_or_else(|_| PathBuf::from(&result.log_dir));
             if result_canon != target_canon {
                 continue;
             }
@@ -69,7 +72,7 @@ pub(crate) async fn wait_for_move_complete(
         // reflected in the MetadataImage, exposed by any `*_for_test`
         // accessor, or surfaced as a metric. `DescribeLogDirs` over the wire
         // is the only observable, so we poll it with backoff.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 

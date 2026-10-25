@@ -3,7 +3,11 @@
 use {
     clap::Parser,
     krabka_parse_benches::{Args, compare_summaries, read_summaries, run_command, run_from_args},
-    std::process::ExitCode,
+    std::{
+        fs::{self, File},
+        io,
+        process::ExitCode,
+    },
 };
 
 fn main() -> ExitCode {
@@ -41,13 +45,13 @@ fn main() -> ExitCode {
         return match verdict {
             Ok(verdict) => {
                 if let Some(parent) = out_path.parent()
-                    && let Err(error) = std::fs::create_dir_all(parent)
+                    && let Err(error) = fs::create_dir_all(parent)
                 {
                     eprintln!("Error: {error}");
                     return ExitCode::FAILURE;
                 }
-                let write = std::fs::File::create(&out_path).and_then(|file| {
-                    serde_json::to_writer_pretty(file, &verdict).map_err(std::io::Error::other)
+                let write = File::create(&out_path).and_then(|file| {
+                    serde_json::to_writer_pretty(file, &verdict).map_err(io::Error::other)
                 });
                 if let Err(error) = write {
                     eprintln!("Error: {error}");

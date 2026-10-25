@@ -73,6 +73,9 @@ pub(crate) use self::{
 /// to register and we want lazy registration from multiple init paths.
 pub type SharedRegistry = Arc<Mutex<Registry>>;
 
+/// The prefix of every metric name the broker registry exports.
+const REGISTRY_PREFIX: &str = "krabka_broker";
+
 /// Cheaply-clonable bundle of counter / gauge handles. Construct once
 /// in `Broker::start`; hand out clones (each clone is a single
 /// `Arc::clone`) to every subsystem that emits.
@@ -89,7 +92,7 @@ pub type SharedRegistry = Arc<Mutex<Registry>>;
 #[derive(Clone, RegisterMetrics, derive_more::Debug)]
 #[debug("BrokerMetrics {{ .. }}")]
 pub struct BrokerMetrics {
-    #[metric(skip, new = Arc::new(Mutex::new(Registry::with_prefix("krabka_broker"))))]
+    #[metric(skip, new = Arc::new(Mutex::new(Registry::with_prefix(REGISTRY_PREFIX))))]
     pub registry: SharedRegistry,
     #[metric(help = "Bytes received from producers, per topic (cumulative). \
         Operators compute throughput via rate(...).")]

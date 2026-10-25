@@ -7,6 +7,7 @@
 use {
     crate::{GENESIS_HEAD, Spool, event::AuditEventClass, sink::AuditRecord},
     krabka_units::prelude::{ByteSize, mebibytes},
+    std::{fs, path::Path, sync::Arc},
 };
 
 /// A cap that is large enough that no test reaches it by accident.
@@ -38,13 +39,13 @@ pub fn seeded_spool(value: &[u8]) -> SeededSpool {
 }
 
 /// A spool with pending losses, and the directory that backs it.
-pub(crate) struct LossySpool {
+pub struct LossySpool {
     pub dir: tempfile::TempDir,
     pub spool: Spool,
-    pub losses: std::sync::Arc<super::PendingLosses>,
+    pub losses: Arc<super::PendingLosses>,
 }
 
-pub(crate) fn spool_with_losses(cap: ByteSize, count: u64) -> LossySpool {
+pub fn spool_with_losses(cap: ByteSize, count: u64) -> LossySpool {
     let dir = tempfile::tempdir().unwrap();
     let spool = Spool::open(dir.path(), cap).unwrap();
     let losses = spool.pending_losses();
@@ -52,10 +53,10 @@ pub(crate) fn spool_with_losses(cap: ByteSize, count: u64) -> LossySpool {
     LossySpool { dir, spool, losses }
 }
 
-pub(crate) fn reopen_after_losses(
-    directory: &std::path::Path,
+pub fn reopen_after_losses(
+    directory: &Path,
     spool: Spool,
-    losses: std::sync::Arc<super::PendingLosses>,
+    losses: Arc<super::PendingLosses>,
 ) -> Spool {
     drop(losses);
     drop(spool);
@@ -63,9 +64,9 @@ pub(crate) fn reopen_after_losses(
 }
 
 /// Checks that the spool file holds its version header and no records.
-pub fn check_empty_file(directory: &std::path::Path) {
+pub fn check_empty_file(directory: &Path) {
     assert2::check!(
-        std::fs::metadata(directory.join(super::SPOOL_FILE))
+        fs::metadata(directory.join(super::SPOOL_FILE))
             .unwrap()
             .len()
             == super::header_len_u64()

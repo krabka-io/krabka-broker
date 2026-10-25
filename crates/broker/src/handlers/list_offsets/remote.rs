@@ -6,20 +6,24 @@
 //! [`concurrently`] resolves the requested topics and partitions together
 //! instead of one after another.
 
-use std::{future::Future, time::Duration};
+use {
+    futures_util::future::join_all,
+    std::{future::Future, time::Duration},
+    tokio::time,
+};
 
 pub(super) async fn concurrently<F>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output>
 where
     F: Future,
 {
-    futures_util::future::join_all(futures).await
+    join_all(futures).await
 }
 
 pub(super) async fn await_remote<T>(
     timeout: Duration,
     future: impl Future<Output = Result<T, krabka_remote_storage::RemoteStorageError>>,
 ) -> Option<Result<T, krabka_remote_storage::RemoteStorageError>> {
-    tokio::time::timeout(timeout, future).await.ok()
+    time::timeout(timeout, future).await.ok()
 }
 
 pub(super) fn remote_timeout(version: i16, timeout_ms: i32, server_timeout: Duration) -> Duration {
@@ -36,7 +40,9 @@ mod tests {
         super::*,
         crate::{
             codes,
-            config_keys::REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS,
+            config_keys::{
+                REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS, resolve_remote_list_offsets_timeout,
+            },
             handlers::list_offsets::{
                 response::error_response,
                 sentinels::{UNKNOWN_OFFSET, UNKNOWN_TIMESTAMP},
@@ -44,7 +50,8 @@ mod tests {
         },
         assert2::assert,
         krabka_protocol::owned::list_offsets_response::ListOffsetsPartitionResponse,
-        std::sync::Arc,
+        std::{future, sync::Arc},
+        tokio::{sync::Barrier, time},
     };
 
     #[yare::parameterized(
@@ -81,12 +88,10 @@ mod tests {
         }
 
         assert!(
-            crate::config_keys::resolve_remote_list_offsets_timeout(&image, NodeId(1))
-                == Duration::from_millis(250)
+            resolve_remote_list_offsets_timeout(&image, NodeId(1)) == Duration::from_millis(250)
         );
         assert!(
-            crate::config_keys::resolve_remote_list_offsets_timeout(&image, NodeId(2))
-                == Duration::from_millis(400)
+            resolve_remote_list_offsets_timeout(&image, NodeId(2)) == Duration::from_millis(400)
         );
     }
 
@@ -94,7 +99,7 @@ mod tests {
     async fn remote_work_expires_at_the_request_deadline() {
         let result = await_remote(
             Duration::from_millis(1),
-            std::future::pending::<Result<(), krabka_remote_storage::RemoteStorageError>>(),
+            future::pending::<Result<(), krabka_remote_storage::RemoteStorageError>>(),
         )
         .await;
         assert!(result.is_none());
@@ -115,15 +120,15 @@ mod tests {
 
     #[tokio::test]
     async fn partition_futures_are_polled_concurrently() {
-        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let barrier = Arc::new(Barrier::new(2));
         let work = (0..2).map(|value| {
-            let barrier = barrier.clone();
+            let barrier = Arc::clone(&barrier);
             async move {
                 barrier.wait().await;
                 value
             }
         });
-        let output = tokio::time::timeout(Duration::from_secs(1), concurrently(work))
+        let output = time::timeout(Duration::from_secs(1), concurrently(work))
             .await
             .expect("both futures must start before either can finish");
         assert!(output == vec![0, 1]);

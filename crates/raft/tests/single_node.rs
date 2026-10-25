@@ -1,6 +1,7 @@
 //! In-process single-voter Controller. It validates the wiring of openraft,
 //! `log_store`, `state_machine`, and the listener, and it needs no 3-node
 //! cluster.
+#![cfg(test)]
 
 use {
     krabka_metadata::{MetadataRecord, NodeId},
@@ -8,6 +9,7 @@ use {
     krabka_units::prelude::{Time, millis},
     std::time::Duration,
     tempfile::TempDir,
+    tokio::time,
     uuid::Uuid,
 };
 
@@ -36,7 +38,7 @@ fn single_voter_config() -> SingleVoterConfig {
 
 async fn wait_for_leader(controller: &ControllerHandle) {
     let mut receiver = controller.watch_leader();
-    tokio::time::timeout(Duration::from_secs(30), receiver.wait_for(Option::is_some))
+    time::timeout(Duration::from_secs(30), receiver.wait_for(Option::is_some))
         .await
         .expect("no leader elected within 30s")
         .expect("leader watch channel closed");

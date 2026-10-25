@@ -18,7 +18,9 @@
 use {
     crate::{
         PASSWORD, TOPIC, VOTERS,
-        support::{self, NodeIndex, client::connect_owned, topics::diskless_topic_request},
+        support::{
+            self, NodeIndex, client::connect_owned, listeners, topics::diskless_topic_request,
+        },
     },
     assert2::assert,
     krabka_broker::{
@@ -28,11 +30,13 @@ use {
     krabka_metadata::MetadataRecord,
     krabka_security::ListenerProtocol,
     std::{
+        iter,
         net::SocketAddr,
         path::{Path, PathBuf},
         time::Duration,
     },
     tempfile::TempDir,
+    tokio::time,
 };
 
 /// The listener every client in this suite and every JVM container speaks to.
@@ -47,7 +51,7 @@ const INTER_BROKER_LISTENER: &str = "SASL_PLAINTEXT";
 ///
 /// `handle` is `None` once the broker is crashed. The config stays, because
 /// the schedule keeps reading the crashed node's ids and paths after it dies.
-pub(crate) struct TestNode {
+pub struct TestNode {
     pub(crate) handle: Option<BrokerHandle>,
     pub(crate) config: BrokerConfig,
     /// The port of the client-facing `PLAINTEXT` listener. It is read off the
@@ -77,7 +81,7 @@ impl TestNode {
 
 /// Boot `VOTERS` brokers that can run a diskless quorum between them, all
 /// flushing into `object_dir`.
-pub(crate) async fn start_jepsen_cluster(object_dir: &Path) -> Vec<TestNode> {
+pub async fn start_jepsen_cluster(object_dir: &Path) -> Vec<TestNode> {
     support::init_tracing();
 
     // Loopback addresses for the inter-broker listener and the controller,
@@ -92,9 +96,10 @@ pub(crate) async fn start_jepsen_cluster(object_dir: &Path) -> Vec<TestNode> {
     // `JvmListeners` also allocates a controller port, which this suite does
     // not use: its controller ports come from `bind_and_hold_ports` above,
     // which hands over the live socket instead of releasing it.
-    let jvm_listeners: Vec<support::JvmListeners> = (0..VOTERS)
-        .map(|_| support::JvmListeners::allocate())
-        .collect();
+    let jvm_listeners: Vec<support::JvmListeners> =
+        iter::repeat_with(support::JvmListeners::allocate)
+            .take(VOTERS)
+            .collect();
 
     let voters: Vec<(NodeId, String)> = (0..VOTERS)
         .map(|index| {
@@ -240,7 +245,7 @@ fn broker_config(
             sasl_mechanisms: None,
             principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         },
-        crate::support::listeners::listener(
+        listeners::listener(
             INTER_BROKER_LISTENER,
             addrs.inter,
             ListenerProtocol::SaslPlaintext,
@@ -283,7 +288,7 @@ fn broker_config(
 
 /// Wait until every broker's metadata image lists all `VOTERS` brokers.
 /// `CreateTopics` reads that broker set to place the replica.
-pub(crate) async fn await_brokers_registered(cluster: &[TestNode]) {
+pub async fn await_brokers_registered(cluster: &[TestNode]) {
     for node in cluster {
         node.handle().wait_until_brokers_registered(VOTERS).await;
     }
@@ -295,7 +300,7 @@ pub(crate) async fn await_brokers_registered(cluster: &[TestNode]) {
 /// Going through the handler is the point. `krabka.diskless` has to survive
 /// `validate_topic_config_map`, reach `V1TopicConfig` in the metadata log, and
 /// come back out of the image on every broker's reconcile pass.
-pub(crate) async fn create_diskless_topic(bootstrap: &str) {
+pub async fn create_diskless_topic(bootstrap: &str) {
     let client = connect_owned(bootstrap, "diskless-jepsen-admin", "admin client").await;
     let response = client
         .send(diskless_topic_request(TOPIC, 1))
@@ -311,7 +316,7 @@ pub(crate) async fn create_diskless_topic(bootstrap: &str) {
 /// Wait until every broker sees the single-replica placement and has its own
 /// diskless index projection and object flusher running. A flush that races
 /// the projection has no index to publish into.
-pub(crate) async fn await_topic_placement(cluster: &[TestNode]) {
+pub async fn await_topic_placement(cluster: &[TestNode]) {
     for node in cluster {
         node.handle()
             .wait_for_image(|image| {
@@ -325,7 +330,7 @@ pub(crate) async fn await_topic_placement(cluster: &[TestNode]) {
 }
 
 /// The controller leader, once all three brokers name the same one.
-pub(crate) async fn converged_controller_leader(cluster: &[TestNode]) -> NodeId {
+pub async fn converged_controller_leader(cluster: &[TestNode]) -> NodeId {
     let leader = cluster[0].handle().wait_until_controller_leader().await;
     for node in &cluster[1..] {
         let observed = node.handle().wait_until_controller_leader().await;
@@ -338,7 +343,7 @@ pub(crate) async fn converged_controller_leader(cluster: &[TestNode]) -> NodeId 
 }
 
 /// The index of the broker whose node id is `node`.
-pub(crate) fn index_of(cluster: &[TestNode], node: NodeId) -> usize {
+pub fn index_of(cluster: &[TestNode], node: NodeId) -> usize {
     cluster
         .iter()
         .position(|item| item.config.node_id == node)
@@ -353,7 +358,7 @@ pub(crate) fn index_of(cluster: &[TestNode], node: NodeId) -> usize {
 /// caller choose which. Submitting the record directly is the narrowest way to
 /// get there; the epochs are bumped the way the controller bumps them, so the
 /// partition runtimes install it as an ordinary leader change.
-pub(crate) async fn force_partition_owner(
+pub async fn force_partition_owner(
     cluster: &[TestNode],
     live: &[usize],
     submitter: usize,
@@ -399,8 +404,8 @@ pub(crate) async fn force_partition_owner(
 /// This reads the runtime placement rather than the metadata image, so a
 /// produce that follows it cannot race asynchronous placement reconciliation
 /// and time out on a high watermark that no follower is positioned to advance.
-pub(crate) async fn await_wal_runtime(node: &TestNode, leader: NodeId) {
-    tokio::time::timeout(Duration::from_secs(30), async {
+pub async fn await_wal_runtime(node: &TestNode, leader: NodeId) {
+    time::timeout(Duration::from_secs(30), async {
         loop {
             if node
                 .handle()
@@ -408,7 +413,7 @@ pub(crate) async fn await_wal_runtime(node: &TestNode, leader: NodeId) {
             {
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await
@@ -422,7 +427,7 @@ pub(crate) async fn await_wal_runtime(node: &TestNode, leader: NodeId) {
 /// survivor that still ran an ordinary follower replicator would hold the
 /// batches in its own partition log, and could serve the post-crash readback
 /// from there even if WAL hydration adopted nothing.
-pub(crate) async fn assert_sole_classic_owner(
+pub async fn assert_sole_classic_owner(
     cluster: &[TestNode],
     victim: usize,
     survivors: &[usize],
@@ -446,7 +451,7 @@ pub(crate) async fn assert_sole_classic_owner(
 
 /// Wait until the promoted broker leads the partition locally and has the
 /// whole acknowledged prefix both appended and committed.
-pub(crate) async fn await_promoted_leader(node: &TestNode, leader: NodeId, end_offset: i64) {
+pub async fn await_promoted_leader(node: &TestNode, leader: NodeId, end_offset: i64) {
     node.handle()
         .wait_until_local_partition_leader(TOPIC, 0, leader)
         .await;
@@ -460,7 +465,7 @@ pub(crate) async fn await_promoted_leader(node: &TestNode, leader: NodeId, end_o
 
 /// Shut every live broker down, so the tempdirs are not removed underneath a
 /// running writer.
-pub(crate) async fn shutdown(cluster: Vec<TestNode>) {
+pub async fn shutdown(cluster: Vec<TestNode>) {
     for node in cluster {
         if let Some(handle) = node.handle {
             handle.shutdown().await;
@@ -469,9 +474,9 @@ pub(crate) async fn shutdown(cluster: Vec<TestNode>) {
 }
 
 async fn await_path_absent(path: &Path) {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    time::timeout(Duration::from_secs(30), async {
         while path.exists() {
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await

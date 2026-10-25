@@ -56,10 +56,10 @@ pub fn validate_topic_name(name: &str) -> Result<(), InvalidTopicName> {
     }
     // A fold with no early exit and a table lookup per byte lets the
     // compiler check many bytes at once.
-    if name
-        .bytes()
-        .fold(1, |legal, byte| legal & LEGAL_BYTES[usize::from(byte)])
-        == 0
+    if name.bytes().fold(1, |legal, byte| {
+        // Every `u8` indexes the 256-entry table.
+        legal & LEGAL_BYTES.get(usize::from(byte)).copied().unwrap_or(0)
+    }) == 0
     {
         return Err(InvalidTopicName::IllegalCharacter(name.to_owned()));
     }
@@ -70,13 +70,15 @@ pub fn validate_topic_name(name: &str) -> Result<(), InvalidTopicName> {
 /// alphanumeric, `.`, `_` or `-`) and `0` for every other byte.
 const LEGAL_BYTES: [u8; 256] = {
     let mut table = [0; 256];
+    let mut rest: &mut [u8] = &mut table;
     let mut byte = 0;
-    while byte < 256 {
+    while let [slot, tail @ ..] = rest {
         // The byte values of `0-9`, `A-Z`, `a-z`, `.`, `_` and `-`: the
         // index is a `usize`, which a byte literal is not.
         if matches!(byte, 0x30..=0x39 | 0x41..=0x5A | 0x61..=0x7A | 0x2E | 0x5F | 0x2D) {
-            table[byte] = 1;
+            *slot = 1;
         }
+        rest = tail;
         byte += 1;
     }
     table

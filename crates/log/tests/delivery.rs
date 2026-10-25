@@ -1,4 +1,5 @@
 //! Deliver-at-time visibility: what a scheduled topic lets a reader see.
+#![cfg(test)]
 
 use {
     assert2::check,

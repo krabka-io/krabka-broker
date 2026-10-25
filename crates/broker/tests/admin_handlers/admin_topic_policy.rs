@@ -25,6 +25,7 @@ use {
         create_topics_request::CreateTopicsRequest,
         incremental_alter_configs_request::IncrementalAlterConfigsRequest,
     },
+    std::iter,
 };
 
 /// `POLICY_VIOLATION` in the Kafka error table.
@@ -142,11 +143,10 @@ async fn a_topic_the_policy_allows_is_created_and_validate_only_commits_nothing(
 async fn altering_a_topic_to_a_forbidden_config_is_a_policy_violation() {
     let cluster = start_n_node_with(1, |_, cfg| {
         cfg.topic_policy = TopicPolicy {
-            forbidden: [(
+            forbidden: iter::once((
                 "unclean.leader.election.enable".to_owned(),
                 "true".to_owned(),
-            )]
-            .into_iter()
+            ))
             .collect(),
             ..TopicPolicy::default()
         };

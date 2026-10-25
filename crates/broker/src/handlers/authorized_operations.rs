@@ -100,7 +100,7 @@ pub fn supported_operations(resource_type: ResourceType) -> &'static [AclOperati
 /// checks go through [`Authorizer::authorize_quiet`]: a Deny is not audited or
 /// counted.
 #[must_use]
-pub(crate) fn authorized_operations_bits(
+pub fn authorized_operations_bits(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,
     ctx: &RequestContext<'_>,
@@ -125,7 +125,7 @@ pub(crate) fn authorized_operations_bits(
 
 /// A row of a group describe response: `DescribeGroups`,
 /// `ConsumerGroupDescribe`, `ShareGroupDescribe` or `StreamsGroupDescribe`.
-pub(crate) trait DescribedGroupRow {
+pub trait DescribedGroupRow {
     /// The row that answers `group_id` with `error_code` and `error_message`
     /// alone, every other field at its generated default.
     fn error_row(group_id: &str, error_code: i16, error_message: Option<String>) -> Self;
@@ -144,7 +144,7 @@ krabka_macros::described_group_rows! {
 /// KIP-430: when `include` is set, gives every row whose error is `NONE` the
 /// bitfield of the group operations the principal of `ctx` holds. Every other
 /// row keeps the wire-default `i32::MIN` "not present" sentinel.
-pub(crate) fn fill_group_authorized_operations<R: DescribedGroupRow>(
+pub fn fill_group_authorized_operations<R: DescribedGroupRow>(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,
     ctx: &RequestContext<'_>,
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn simple_acl_with_no_acls_yields_zero() {
         let mut supers = HashSet::new();
-        supers.insert("ignored".to_string());
+        supers.insert("ignored".to_owned());
         let auth = SimpleAclAuthorizer::new(supers);
         let img = MetadataImage::new(Uuid::nil());
         let p = principal("alice");
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn super_user_gets_full_mask_per_resource() {
         let mut supers = HashSet::new();
-        supers.insert("admin".to_string());
+        supers.insert("admin".to_owned());
         let auth = SimpleAclAuthorizer::new(supers);
         let img = MetadataImage::new(Uuid::nil());
         let p = principal("admin");

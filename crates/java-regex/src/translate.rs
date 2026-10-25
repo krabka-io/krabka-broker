@@ -5,12 +5,15 @@ mod java_case;
 mod java_fold;
 mod java_property;
 
-pub(crate) use self::java_fold::BackrefFold;
-use self::java_fold::{Consumed, Escape};
+pub use self::java_fold::BackrefFold;
+use {
+    self::java_fold::{Consumed, Escape},
+    std::mem,
+};
 
 /// A pattern that [`translate_java`] rewrote.
 #[derive(Debug)]
-pub(crate) struct JavaTranslation {
+pub struct JavaTranslation {
     /// The pattern in `fancy_regex` syntax.
     pub(crate) pattern: String,
     /// How each backreference that `pattern` writes as `(?i:\1)` compares in
@@ -93,7 +96,7 @@ pub(crate) struct JavaTranslation {
 ///   below U+0100 of one class are one set, which a char after the
 ///   intersection still joins ([`ClassMember`]). So `[a-z&&]` is `[a-z]`,
 ///   `[&&a]` is `[a]`, and `[a&&&b]` is `[a&b]`.
-pub(crate) fn translate_java(pattern: &str) -> Option<JavaTranslation> {
+pub fn translate_java(pattern: &str) -> Option<JavaTranslation> {
     let chars = java_fold::remove_qe_quoting(&pattern.chars().collect::<Vec<char>>());
     let mut translator = Translator {
         chars: &chars,
@@ -146,13 +149,15 @@ fn look_behind_code_points(pattern: &str, java: &[(usize, bool)]) -> Vec<bool> {
     // nests them.
     let mut nest = 0_usize;
     let mut at = 0;
-    while at < bytes.len() {
-        at += match (bytes[at], nest) {
+    while let Some(&byte) = bytes.get(at) {
+        at += match (byte, nest) {
             // An escape is its backslash and the byte after it. What follows
             // that byte, such as the braces of `\x{85}`, holds no `(` or `[`.
             (b'\\', _) => 2,
             (b'(', 0)
-                if bytes[at + 1..].starts_with(b"?<=") || bytes[at + 1..].starts_with(b"?<!") =>
+                if bytes
+                    .get(at + 1..)
+                    .is_some_and(|rest| rest.starts_with(b"?<=") || rest.starts_with(b"?<!")) =>
             {
                 code_points.push(
                     java.next_if(|&&(opens, _)| opens == at)
@@ -240,24 +245,25 @@ impl Translator<'_> {
     fn in_class(&self) -> bool { !self.classes.is_empty() }
 
     /// Copies `len` chars as they are.
-    fn copy(&mut self, len: usize) {
-        self.out.extend(&self.chars[self.at..self.at + len]);
+    fn copy(&mut self, len: usize) -> Option<()> {
+        self.out.extend(self.chars.get(self.at..self.at + len)?);
         self.at += len;
+        Some(())
     }
 
     /// Reads and writes the next token: a char, an escape, a group opener, or a
     /// run of `(?x)` whitespace and comment.
     fn step(&mut self) -> Option<()> {
-        let c = self.chars[self.at];
-        let first_in_class = std::mem::take(&mut self.class_start);
+        let c = *self.chars.get(self.at)?;
+        let first_in_class = mem::take(&mut self.class_start);
         let ignored = self.ignored_len(self.at);
         if ignored > 0 {
             self.class_start = first_in_class;
             self.at += ignored;
             return Some(());
         }
-        self.prior_run = std::mem::take(&mut self.run);
-        let quantified = std::mem::replace(&mut self.quantified, Quantified::No);
+        self.prior_run = mem::take(&mut self.run);
+        let quantified = mem::replace(&mut self.quantified, Quantified::No);
         if !self.in_class() {
             match (quantified, c) {
                 (Quantified::No, '*' | '+' | '?') => self.quantified = Quantified::Open,
@@ -295,16 +301,16 @@ impl Translator<'_> {
             ')' if !self.in_class() => {
                 self.scope = self.outer.pop()?;
                 let number = self.groups.pop().flatten();
-                self.copy(1);
+                self.copy(1)?;
                 if let Some(number) = number {
-                    self.group_repeats[number] = self.group_curly_at(self.at);
+                    *self.group_repeats.get_mut(number)? = self.group_curly_at(self.at);
                 }
             }
             '|' if !self.in_class() => {
-                self.copy(1);
+                self.copy(1)?;
                 self.quantified = Quantified::Start;
             }
-            '[' => self.open_class(),
+            '[' => self.open_class()?,
             // First in a class, a `]` is a member, and may start a range.
             ']' if self.in_class() && !first_in_class => self.close_class()?,
             '.' if !self.in_class() && !self.scope.dot.dotall && !self.scope.dot.unix_lines => {
@@ -329,7 +335,9 @@ impl Translator<'_> {
     /// `x` flag is on.
     fn ignored_len(&self, at: usize) -> usize {
         if self.scope.comments {
-            java_fold::ignorable_len(&self.chars[at..], self.scope.dot.unix_lines)
+            self.chars.get(at..).map_or(0, |rest| {
+                java_fold::ignorable_len(rest, self.scope.dot.unix_lines)
+            })
         } else {
             0
         }
@@ -356,7 +364,11 @@ impl Translator<'_> {
             if escape != Escape::BackRef {
                 return None;
             }
-            let name: String = self.chars[self.at + 3..self.at + len - 1].iter().collect();
+            let name: String = self
+                .chars
+                .get(self.at + 3..self.at + len - 1)?
+                .iter()
+                .collect();
             if !self.group_names.contains(&name) {
                 return None;
             }
@@ -375,7 +387,7 @@ impl Translator<'_> {
                     BackrefFold::Ascii
                 });
                 self.out.push_str("(?i:");
-                self.copy(len);
+                self.copy(len)?;
                 self.out.push(')');
             }
             Escape::Char(code) => self.atom(code, len)?,
@@ -392,7 +404,7 @@ impl Translator<'_> {
                         self.out.push_str(&class);
                         self.at += len;
                     }
-                    None => self.copy(len),
+                    None => self.copy(len)?,
                 }
             }
             // `\Z` is the `$` of no `(?m)`.
@@ -417,7 +429,7 @@ impl Translator<'_> {
                     .get(self.at + 1)
                     .is_some_and(|&next| java_space(next, in_class).is_some()) =>
             {
-                let next = self.chars[self.at + 1];
+                let next = *self.chars.get(self.at + 1)?;
                 self.out.push_str(java_space(next, in_class)?);
                 self.at += len;
             }
@@ -425,7 +437,7 @@ impl Translator<'_> {
             // records.
             Escape::Other if !in_class && self.chars.get(self.at + 1) == Some(&'R') => {
                 self.linebreak_atoms.push(self.quantifier_at(self.at + len));
-                self.copy(len);
+                self.copy(len)?;
             }
             Escape::BackRef | Escape::Other => {
                 let ascii = self
@@ -437,7 +449,7 @@ impl Translator<'_> {
                         self.out.push_str(ascii);
                         self.at += len;
                     }
-                    _ => self.copy(len),
+                    _ => self.copy(len)?,
                 }
             }
         }
@@ -474,7 +486,7 @@ impl Translator<'_> {
                     }
                     java_case::push_members(&mut self.out, &java_case::range(code, end_code));
                 } else {
-                    let (first, last) = (&chars[start..after], &chars[end..end + end_len]);
+                    let (first, last) = (chars.get(start..after)?, chars.get(end..end + end_len)?);
                     java_fold::push_member(&mut self.out, first, code, true);
                     self.out.push('-');
                     java_fold::push_member(&mut self.out, last, end_code, true);
@@ -485,7 +497,7 @@ impl Translator<'_> {
                 self.at = end + end_len;
             }
             RangeEnd::Single => {
-                let source = &chars[start..after];
+                let source = chars.get(start..after)?;
                 if !in_class && !is_meta(source) {
                     self.run = self.prior_run + 1;
                 }
@@ -591,7 +603,7 @@ impl Translator<'_> {
     /// chars of a run.
     fn braces(&mut self) -> Option<()> {
         let len = self.bounds_len(self.at)?;
-        self.copy(len);
+        self.copy(len)?;
         self.quantified = Quantified::Open;
         Some(())
     }
@@ -601,9 +613,9 @@ impl Translator<'_> {
     /// repetition`, and for a bound past `i32::MAX` or a maximum below the
     /// minimum, Java's `Illegal repetition range`.
     fn bounds_len(&self, at: usize) -> Option<usize> {
-        let rest = &self.chars[at..];
+        let rest = self.chars.get(at..)?;
         let end = rest.iter().position(|&c| c == '}')?;
-        let bounds = &rest[1..end];
+        let bounds = rest.get(1..end)?;
         if !bounds.first().is_some_and(char::is_ascii_digit)
             || !bounds.iter().all(|&c| c.is_ascii_digit() || c == ',')
         {
@@ -674,18 +686,19 @@ impl Translator<'_> {
     }
 
     /// A `[`, which opens a class, or a class in a class.
-    fn open_class(&mut self) {
+    fn open_class(&mut self) -> Option<()> {
         let out_at = self.out.len();
         self.push_class_member(out_at, ClassMember::Nested);
         self.class_start = true;
-        self.copy(1);
+        self.copy(1)?;
         if self.chars.get(self.at) == Some(&'^') {
-            self.copy(1);
+            self.copy(1)?;
         }
         self.classes.push(OpenClass {
             members_at: self.out.len(),
             members: Vec::new(),
         });
+        Some(())
     }
 
     /// A `]` that closes the innermost class. A class with `&&` is written
@@ -706,12 +719,12 @@ impl Translator<'_> {
                     .members
                     .get(index + 1)
                     .map_or(text.len(), |&(next, _)| next - class.members_at);
-                members.push((member, &text[at - class.members_at..end]));
+                members.push((member, text.get(at - class.members_at..end)?));
             }
             let mut bit_sets = Vec::new();
             let mut next = 0;
             let set = java_class(&members, &mut next, &mut bit_sets)?;
-            set.write(&mut self.out, &bit_sets);
+            set.write(&mut self.out, &bit_sets)?;
         }
         self.out.push(']');
         self.at += 1;
@@ -743,7 +756,7 @@ impl Translator<'_> {
                         0xFF | 0xB5 | 0x49 | 0x69 | 0x53 | 0x73 | 0x4B | 0x6B | 0xC5 | 0xE5
                     ))
         });
-        let ampersand = self.chars[at] == '&';
+        let ampersand = self.chars.get(at) == Some(&'&');
         self.push_class_member(
             out_at,
             if bits {
@@ -759,10 +772,9 @@ impl Translator<'_> {
         let chars = self.chars;
         if chars.get(self.at + 1) != Some(&'?') {
             self.open_group(true);
-            self.copy(1);
-            return Some(());
+            return self.copy(1);
         }
-        let rest = &chars[self.at + 2..];
+        let rest = chars.get(self.at + 2..)?;
         let (opener, captures) = match rest.first() {
             Some(':' | '=' | '!' | '>') => (3, false),
             Some('<') => match rest.get(1) {
@@ -777,12 +789,15 @@ impl Translator<'_> {
                     (4, false)
                 }
                 Some(first) if first.is_ascii_alphabetic() => {
-                    let name = rest[2..].iter().position(|c| !c.is_ascii_alphanumeric())?;
-                    if rest[2 + name] != '>' {
+                    let name = rest
+                        .get(2..)?
+                        .iter()
+                        .position(|c| !c.is_ascii_alphanumeric())?;
+                    if rest.get(2 + name) != Some(&'>') {
                         return None;
                     }
                     // `Named capturing group <name> is already defined`.
-                    let text: String = rest[1..2 + name].iter().collect();
+                    let text: String = rest.get(1..2 + name)?.iter().collect();
                     if self.group_names.contains(&text) {
                         return None;
                     }
@@ -795,8 +810,7 @@ impl Translator<'_> {
             None => return None,
         };
         self.open_group(captures);
-        self.copy(opener);
-        Some(())
+        self.copy(opener)
     }
 
     /// Inline flags, `rest` starting just after their `(?`.
@@ -1010,22 +1024,23 @@ impl ClassSet<'_> {
     }
 
     /// Writes the set as a class in `fancy_regex` syntax.
-    fn write(&self, out: &mut String, bit_sets: &[String]) {
+    fn write(&self, out: &mut String, bit_sets: &[String]) -> Option<()> {
         out.push('[');
         match self {
-            Self::Bits(index) => out.push_str(&bit_sets[*index]),
+            Self::Bits(index) => out.push_str(bit_sets.get(*index)?),
             Self::Member(text) => push_class_text(out, text),
             Self::Union(left, right) => {
-                left.write(out, bit_sets);
-                right.write(out, bit_sets);
+                left.write(out, bit_sets)?;
+                right.write(out, bit_sets)?;
             }
             Self::And(left, right) => {
-                left.write(out, bit_sets);
+                left.write(out, bit_sets)?;
                 out.push_str("&&");
-                right.write(out, bit_sets);
+                right.write(out, bit_sets)?;
             }
         }
         out.push(']');
+        Some(())
     }
 }
 
@@ -1061,7 +1076,7 @@ fn java_class<'a>(
     while let Some(&(member, text)) = members.get(*next) {
         match member {
             ClassMember::Bits { .. } => {
-                push_class_text(&mut bit_sets[bits], text);
+                push_class_text(bit_sets.get_mut(bits)?, text);
                 curr = None;
                 has_bits = true;
                 *next += 1;
@@ -1086,7 +1101,7 @@ fn java_class<'a>(
                         _ => ClassSet::union(right, java_class(members, next, bit_sets)?),
                     });
                 }
-                if std::mem::take(&mut has_bits) {
+                if mem::take(&mut has_bits) {
                     match prev {
                         None => {
                             prev = Some(ClassSet::Bits(bits));
@@ -1239,7 +1254,7 @@ impl FlagGroup {
         let end = if self.scoped { ':' } else { ')' };
         match (on.is_empty() && off.is_empty(), self.scoped) {
             (true, false) => String::new(),
-            (true, true) => "(?:".to_string(),
+            (true, true) => "(?:".to_owned(),
             (false, _) if off.is_empty() => format!("(?{on}{end}"),
             (false, _) => format!("(?{on}-{off}{end}"),
         }

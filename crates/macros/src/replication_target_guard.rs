@@ -5,7 +5,7 @@ use moxy::{
     token::{Ident, LitStr, Span, TokenStream},
 };
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     let partition = Ident::parse(&parser)?;
     <Token![,]>::parse(&parser)?;

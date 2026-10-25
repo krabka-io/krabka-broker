@@ -32,7 +32,7 @@ use {
     krabka_log::{LogError, Offset},
     krabka_protocol::{owned::share_fetch_response::PartitionData, records::RecordsPayload},
     std::{
-        sync::Arc,
+        sync::{Arc, PoisonError},
         time::{Duration, Instant},
     },
 };
@@ -201,7 +201,7 @@ async fn grow_readable_window(
     let log_start = partition
         .log
         .lock()
-        .expect("log mutex poisoned")
+        .unwrap_or_else(PoisonError::into_inner)
         .local_log_start_offset();
     let mut scan_from = state.start_offset.max(log_start);
     loop {
@@ -575,10 +575,11 @@ async fn acquire_pass(
         // happens here. A failed write keeps the state dirty for a retry. A
         // fenced write drops the cell, and the records acquired on it must not
         // reach the client.
-        match mgr
+        let persisted = mgr
             .persist_if_dirty(group, p.topic_id, p.partition_index, Some(&cell), &mut st)
-            .await
-        {
+            .await;
+        drop(st);
+        match persisted {
             Err(code) if fences_the_partition(code) => fail_partition(p, false, code),
             _ => match append_records(&mut p.out, fresh) {
                 Ok(bytes) => {
@@ -659,6 +660,11 @@ mod tests {
         super::*,
         crate::share_partition::state::AcquisitionState,
         assert2::{assert, check},
+        krabka_protocol::records::{RecordBatch, RecordsError},
+        std::{
+            io::Error,
+            time::{Duration, Instant},
+        },
     };
 
     #[yare::parameterized(
@@ -689,7 +695,7 @@ mod tests {
 
     /// A transactional batch at offsets 0-2 from producer 1000, its end marker
     /// at offset 3, and a plain record at offset 4.
-    fn transaction_then_record(commit: bool) -> Vec<krabka_protocol::records::RecordBatch> {
+    fn transaction_then_record(commit: bool) -> Vec<RecordBatch> {
         use {
             bytes::Bytes,
             krabka_protocol::records::{Attributes, Record, RecordBatch},
@@ -778,8 +784,8 @@ mod tests {
                     "m",
                     500,
                     Offset(4),
-                    std::time::Instant::now(),
-                    std::time::Duration::from_secs(30),
+                    Instant::now(),
+                    Duration::from_secs(30),
                     5,
                 )
                 .into_iter()
@@ -812,7 +818,7 @@ mod tests {
     /// catches.
     #[test]
     fn a_failed_log_read_maps_to_the_partition_error_kafka_gives() {
-        let io = || std::io::Error::other("disk");
+        let io = || Error::other("disk");
         let cases = [
             (
                 BrokerError::Log(LogError::Io(io())),
@@ -823,9 +829,7 @@ mod tests {
                 codes::CORRUPT_MESSAGE,
             ),
             (
-                BrokerError::Log(LogError::Records(
-                    krabka_protocol::records::RecordsError::BodyTooShort { needed: 1 },
-                )),
+                BrokerError::Log(LogError::Records(RecordsError::BodyTooShort { needed: 1 })),
                 codes::CORRUPT_MESSAGE,
             ),
             (BrokerError::Io(io()), codes::UNKNOWN_SERVER_ERROR),

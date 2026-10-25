@@ -35,7 +35,7 @@
 //! so a broker that disagrees with its peers about the set is visible in the
 //! audit log after the fact.
 
-pub(crate) use self::decision::{Attempt, decide};
+pub use self::decision::{Attempt, decide};
 use {
     self::{
         report::{Report, phase_of, reason},
@@ -68,7 +68,7 @@ mod tests;
     api = "ApproveBreakGlass",
     level = "info"
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ApproveBreakGlassRequest,
     version: ApiVersion,

@@ -9,7 +9,7 @@ use super::lookup::topic_or_cluster_default;
 /// member returns. `true` accepts possible data loss in exchange for
 /// availability. `crate::leader_election::on_broker_dead` reads the topic
 /// override first and then the cluster-wide default broker config.
-pub(crate) const UNCLEAN_LEADER_ELECTION_ENABLE: &str = "unclean.leader.election.enable";
+pub const UNCLEAN_LEADER_ELECTION_ENABLE: &str = "unclean.leader.election.enable";
 /// KIP-966: topic-level unclean-recovery strategy. It supersedes
 /// `unclean.leader.election.enable`. At `Balanced` or `Aggressive` the
 /// controller runs offset-aware recovery: it polls surviving replicas for
@@ -17,11 +17,11 @@ pub(crate) const UNCLEAN_LEADER_ELECTION_ENABLE: &str = "unclean.leader.election
 /// which falls back to the legacy enable-flag behavior.
 /// `crate::unclean_recovery` and the failover / `ElectLeaders` paths read the
 /// topic override first and then the cluster-wide default broker config.
-pub(crate) const UNCLEAN_RECOVERY_STRATEGY: &str = "unclean.recovery.strategy";
+pub const UNCLEAN_RECOVERY_STRATEGY: &str = "unclean.recovery.strategy";
 
 /// Resolved value of `unclean.recovery.strategy` for a topic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RecoveryStrategy {
+pub enum RecoveryStrategy {
     /// No offset-aware recovery. Defer to `unclean.leader.election.enable`.
     None,
     /// Wait for all currently-alive replicas, then elect the most complete
@@ -49,7 +49,7 @@ impl RecoveryStrategy {
 /// precedence over the cluster-wide default broker config. The result is
 /// [`RecoveryStrategy::None`] when neither value exists or the selected value
 /// is unparseable.
-pub(crate) fn resolve_recovery_strategy(
+pub fn resolve_recovery_strategy(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
 ) -> RecoveryStrategy {
@@ -61,7 +61,7 @@ pub(crate) fn resolve_recovery_strategy(
 /// Resolve `unclean.leader.election.enable` for `topic`. A topic override
 /// takes precedence over the cluster-wide default broker config. Missing or
 /// invalid values resolve to `false`.
-pub(crate) fn resolve_unclean_leader_election_enabled(
+pub fn resolve_unclean_leader_election_enabled(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
 ) -> bool {

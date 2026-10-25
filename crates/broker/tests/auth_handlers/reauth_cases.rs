@@ -14,10 +14,12 @@ use {
         },
     },
     krabka_protocol::owned::{
+        metadata_request::MetadataRequest, metadata_response::MetadataResponse,
         sasl_handshake_request::SaslHandshakeRequest,
         sasl_handshake_response::SaslHandshakeResponse,
     },
-    std::ops::RangeInclusive,
+    std::{io, ops::RangeInclusive, time::Duration},
+    tokio::time,
 };
 
 pub struct Session {
@@ -47,7 +49,7 @@ impl Session {
         }
     }
 
-    async fn authenticate(&mut self, user: &str) -> std::io::Result<SaslAuthenticateResponse> {
+    async fn authenticate(&mut self, user: &str) -> io::Result<SaslAuthenticateResponse> {
         match self.mechanism {
             SaslMechanism::Plain => {
                 plain::plain_authenticate(
@@ -79,12 +81,12 @@ impl Session {
     }
 
     /// One `SaslHandshake` v1 for this session's mechanism.
-    async fn handshake(&mut self) -> std::io::Result<SaslHandshakeResponse> {
+    async fn handshake(&mut self) -> io::Result<SaslHandshakeResponse> {
         self.correlation.0 += 1;
         exchange()
             .stream(&mut self.stream)
             .request(&SaslHandshakeRequest {
-                mechanism: self.mechanism.wire_name().to_string(),
+                mechanism: self.mechanism.wire_name().to_owned(),
                 ..Default::default()
             })
             .api_key(17)
@@ -96,7 +98,7 @@ impl Session {
     }
 
     /// One PLAIN `SaslAuthenticate` v2 with no handshake before it.
-    async fn bare_authenticate(&mut self, user: &str) -> std::io::Result<SaslAuthenticateResponse> {
+    async fn bare_authenticate(&mut self, user: &str) -> io::Result<SaslAuthenticateResponse> {
         self.correlation.0 += 1;
         sasl_authenticate_on()
             .stream(&mut self.stream)
@@ -107,13 +109,11 @@ impl Session {
             .await
     }
 
-    async fn metadata(
-        &mut self,
-    ) -> std::io::Result<krabka_protocol::owned::metadata_response::MetadataResponse> {
+    async fn metadata(&mut self) -> io::Result<MetadataResponse> {
         self.correlation.0 += 1;
         exchange()
             .stream(&mut self.stream)
-            .request(&krabka_protocol::owned::metadata_request::MetadataRequest::default())
+            .request(&MetadataRequest::default())
             .api_key(3)
             .version(12)
             .correlation(self.correlation.0)
@@ -136,7 +136,7 @@ pub async fn capped_session_closes(mechanism: SaslMechanism) {
         "session_lifetime_ms = {}, expected the 300 ms cap",
         response.session_lifetime_ms
     );
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    time::sleep(Duration::from_millis(500)).await;
     // A data-plane request, rather than a timer, closes the expired session.
     let _ = session.metadata().await;
     let n = harness::read_after_auth(&mut session.stream).await;
@@ -156,7 +156,7 @@ async fn plain_expired_session_closes_on_a_bare_sasl_authenticate() {
     let mut session = Session::start(SaslMechanism::Plain, krabka_units::millis(300)).await;
     let initial = session.authenticate("alice").await.expect("authenticate");
     check!(initial.error_code == 0);
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    time::sleep(Duration::from_millis(500)).await;
     let response = session.bare_authenticate("alice").await;
     check!(
         response.is_err(),
@@ -177,14 +177,14 @@ async fn plain_expired_session_closes_on_a_handshake_inside_the_reauth_interval(
     check!(initial.error_code == 0);
     // Past the first window, so this re-authentication starts expired and
     // records its start.
-    tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
+    time::sleep(Duration::from_millis(1_050)).await;
     let reauth = session
         .authenticate("alice")
         .await
         .expect("re-authenticate");
     check!(reauth.error_code == 0);
     // Past the renewed 300 ms window, still inside a second of its start.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    time::sleep(Duration::from_millis(500)).await;
     let response = session.handshake().await;
     check!(
         response.is_err(),
@@ -227,7 +227,7 @@ pub async fn different_principal_closes(mechanism: SaslMechanism) {
                 error_message: Some(
                     "Cannot change principals during re-authentication from User.alice: \
                      User.bob"
-                        .to_string()
+                        .to_owned()
                 ),
                 ..Default::default()
             }
@@ -250,7 +250,7 @@ pub async fn repeated_expired_reauth(
     check!(initial.error_code == 0);
     for round in 1..=3 {
         // Also cross Kafka's minimum one-second reauthentication interval.
-        tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
+        time::sleep(Duration::from_millis(1_050)).await;
         let reauth = session
             .authenticate("alice")
             .await

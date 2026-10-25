@@ -14,13 +14,19 @@ use {
             sample_batch_with_epoch, test_log, tiny_segments, transaction_fields,
             transactional_batch,
         },
-        log_start_offset_checkpoint::write,
+        log_start_offset_checkpoint::{read, write},
         name::producer_snapshot_path,
         producer_snapshot::LoadedSnapshot,
         test_support::open_log,
     },
     assert2::{assert, check},
     krabka_ids::LeaderEpoch,
+    std::{
+        fs,
+        fs::{File, OpenOptions},
+        io,
+        path::Path,
+    },
     tempfile::tempdir,
 };
 
@@ -43,7 +49,7 @@ fn open_creates_log_file() {
 #[test]
 fn open_rejects_a_negative_segment_base() {
     let dir = tempdir().unwrap();
-    std::fs::File::create(name::log_path(dir.path(), -1)).unwrap();
+    File::create(name::log_path(dir.path(), -1)).unwrap();
 
     assert2::assert!(matches!(
         Log::open(dir.path(), LogConfig::default()),
@@ -57,11 +63,8 @@ fn open_recovers_partial_trailing_batch() {
     drop(log);
     // Append 10 bytes of garbage to the .log file.
     let log_path = dir.path().join("00000000000000000000.log");
-    let mut f = std::fs::OpenOptions::new()
-        .append(true)
-        .open(&log_path)
-        .unwrap();
-    std::io::Write::write_all(&mut f, &[0xAB; 10]).unwrap();
+    let mut f = OpenOptions::new().append(true).open(&log_path).unwrap();
+    io::Write::write_all(&mut f, &[0xAB; 10]).unwrap();
     f.sync_data().unwrap();
     drop(f);
     let log = open_log(dir.path());
@@ -83,7 +86,7 @@ fn open_truncates_epoch_checkpoint_to_recovered_leo() {
         first_batch_len
     };
 
-    std::fs::OpenOptions::new()
+    OpenOptions::new()
         .write(true)
         .open(&log_path)
         .unwrap()
@@ -206,7 +209,7 @@ fn recovery_recreates_missing_producer_snapshot_at_segment_boundary() {
 
     let missing = producer_snapshot::path(dir.path(), Offset(4));
     check!(missing.exists());
-    std::fs::remove_file(&missing).unwrap();
+    fs::remove_file(&missing).unwrap();
 
     let reopened = Log::open(dir.path(), reopen_cfg).unwrap();
     check!(missing.exists());
@@ -221,7 +224,7 @@ fn recovery_recreates_missing_producer_snapshot_at_segment_boundary() {
     } = producer_snapshot::reload(dir.path(), range)
         .unwrap()
         .unwrap();
-    let boundary = boundary_state.get(&ProducerId(42)).unwrap();
+    let boundary = &boundary_state[&ProducerId(42)];
     check!(boundary.last_sequence == 3);
     check!(boundary.last_offset == Offset(3));
     let recovered = reopened
@@ -492,7 +495,7 @@ fn pending_stamp_recovery_visits_only_the_surviving_transaction_suffix() {
         );
         let snapshot = producer_snapshot::path(dir.path(), log.log_end_offset());
         if snapshot.exists() {
-            std::fs::remove_file(snapshot).unwrap();
+            fs::remove_file(snapshot).unwrap();
         }
         log.close();
     }
@@ -611,7 +614,7 @@ fn reopen_seals_recovered_segments_at_next_base_minus_one() {
     check_contiguous_exports(&exports);
 }
 
-fn trimmed_active_log(root: &std::path::Path) -> Log {
+fn trimmed_active_log(root: &Path) -> Log {
     let mut log = open_log(root);
     log.append(&mut sample_batch(5)).unwrap();
     // A single segment cannot witness the interior trim in its filename.
@@ -709,9 +712,7 @@ fn open_resolves_a_checkpoint_against_what_the_log_holds(
     assert2::assert!(log.log_start_offset() == expected_start);
     assert2::assert!(log.local_log_start_offset() == Offset(2).max(expected_start));
     drop(log);
-    assert2::assert!(
-        crate::log_start_offset_checkpoint::read(dir.path()).unwrap() == Some(expected_file)
-    );
+    assert2::assert!(read(dir.path()).unwrap() == Some(expected_file));
 }
 
 #[test]
@@ -888,7 +889,7 @@ fn reopen_retains_the_snapshot_batch_and_the_replayed_tail() {
     // Every append rolled a segment and wrote a snapshot at its base. Keep
     // the ones up to offset 2, as if the stop came before the later ones.
     for offset in 3..=6 {
-        let _ = std::fs::remove_file(producer_snapshot_path(dir.path(), offset));
+        let _ = fs::remove_file(producer_snapshot_path(dir.path(), offset));
     }
 
     let reopened = Log::open(dir.path(), config).unwrap();

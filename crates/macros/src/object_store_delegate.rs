@@ -1,7 +1,7 @@
 //! Explicit delegation of an object-store wrapper's unchanged methods.
 
 use {
-    crate::meta::{ItemBody, item_body},
+    crate::meta::{ItemBody, body_group, item_body},
     moxy::{
         ast::ParseError,
         token::{Ident, Span, TokenStream, TokenTree},
@@ -110,22 +110,20 @@ fn implementation(name: &Ident) -> Result<TokenStream, ParseError> {
     Ok(implementation)
 }
 
-pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let names = methods(meta)?;
     let ItemBody {
         mut tokens,
         body_index: body,
     } = item_body(item, "object_store_delegate", TokenTree::is_keyword_impl)?;
-    let TokenTree::Group(group) = &mut tokens[body] else {
-        unreachable!()
-    };
+    let group = body_group(&mut tokens, body)?;
     let existing = Vec::from(group.tokens.clone());
     for name in names {
         if existing.windows(2).any(|pair| {
-            pair[0].is_keyword_fn()
-                && pair[1]
+            matches!(pair, [keyword, item] if keyword.is_keyword_fn()
+                && item
                     .as_ident()
-                    .is_some_and(|item| item.text() == name.text())
+                    .is_some_and(|item| item.text() == name.text()))
         }) {
             return Err(ParseError::new(
                 name.span(),

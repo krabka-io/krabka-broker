@@ -5,7 +5,11 @@
 use {
     crate::broker::{BrokerHandle, DISKLESS_FLUSHER_READY_TIMEOUT},
     krabka_ids::PartitionIndex,
-    std::sync::atomic::Ordering,
+    std::{
+        sync::{Arc, PoisonError, atomic::Ordering},
+        time::Duration,
+    },
+    tokio::{task, time},
 };
 
 impl BrokerHandle {
@@ -37,11 +41,11 @@ impl BrokerHandle {
             .current_image()
             .topic(topic)?
             .topic_id;
-        let rlmm = std::sync::Arc::clone(&self.broker.remote_reader.as_ref()?.rlmm);
+        let rlmm = Arc::clone(&self.broker.remote_reader.as_ref()?.rlmm);
         let tp = krabka_remote_storage::TopicIdPartition::new(topic_id, topic, partition);
         // The topic-backed manager bridges to its runtime with `block_on`, so
         // it is asked off the runtime, as the broker asks it.
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             rlmm.list_remote_log_segments(&tp).map(|segments| {
                 segments
                     .iter()
@@ -74,9 +78,9 @@ impl BrokerHandle {
             .diskless_flusher_ready
             .as_ref()
             .expect("diskless flusher is configured");
-        tokio::time::timeout(DISKLESS_FLUSHER_READY_TIMEOUT, async {
+        time::timeout(DISKLESS_FLUSHER_READY_TIMEOUT, async {
             while !ready.load(Ordering::Acquire) {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
@@ -98,10 +102,7 @@ impl BrokerHandle {
             .partitions
             .get(topic, PartitionIndex(partition))?;
         let (log_start, log_end) = {
-            let log = part
-                .log
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
             (log.log_start_offset().0, log.log_end_offset().0)
         };
         let high_watermark = part.high_watermark().await.0;

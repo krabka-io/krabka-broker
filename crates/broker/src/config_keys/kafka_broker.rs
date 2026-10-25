@@ -61,7 +61,7 @@ use super::{
 
 /// Whether an alter may set a key, and where.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Dynamic {
+pub enum Dynamic {
     /// Not in `ALL_DYNAMIC_CONFIGS`: the process reads it at startup, and an
     /// alter is refused with `Cannot update these configs dynamically`.
     ReadOnly,
@@ -76,7 +76,7 @@ use Dynamic::{Cluster, PerBroker, ReadOnly};
 /// The value check `DynamicConfig.Broker.validate` applies to a dynamic key,
 /// after the type parse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Check {
+pub enum Check {
     /// The type parse is the whole check.
     Free,
     /// `Range.atLeast(n)` on an `INT`, `SHORT` or `LONG`.
@@ -93,7 +93,7 @@ use Check::{AtLeast, Free, NonEmptyList, OneOf};
 
 /// One key of `AbstractKafkaConfig.CONFIG_DEF`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct KafkaBrokerConfig {
+pub struct KafkaBrokerConfig {
     pub(crate) name: &'static str,
     /// `ConfigKey.type`.
     pub(crate) config_type: ConfigType,
@@ -139,7 +139,7 @@ const fn ki(
 }
 
 /// Every `KafkaConfig` key of Apache Kafka 4.3.1, sorted by name.
-pub(crate) const KAFKA_BROKER_CONFIGS: &[KafkaBrokerConfig] = &[
+pub const KAFKA_BROKER_CONFIGS: &[KafkaBrokerConfig] = &[
     k(
         "add.partitions.to.txn.retry.backoff.max.ms",
         Int,
@@ -2186,11 +2186,11 @@ pub(crate) const KAFKA_BROKER_CONFIGS: &[KafkaBrokerConfig] = &[
 
 /// The roster row for `name`, when Kafka 4.3.1 defines it as a `KafkaConfig`
 /// key.
-pub(crate) fn lookup(name: &str) -> Option<&'static KafkaBrokerConfig> {
-    KAFKA_BROKER_CONFIGS
+pub fn lookup(name: &str) -> Option<&'static KafkaBrokerConfig> {
+    let index = KAFKA_BROKER_CONFIGS
         .binary_search_by(|row| row.name.cmp(name))
-        .ok()
-        .map(|index| &KAFKA_BROKER_CONFIGS[index])
+        .ok()?;
+    KAFKA_BROKER_CONFIGS.get(index)
 }
 
 /// Kafka's `LISTENER_MECHANISM_CONFIGS`: the keys a listener overrides under a
@@ -2205,7 +2205,7 @@ const LISTENER_MECHANISM_CONFIGS: &[&str] = &[
 
 /// The part of a `listener.name.<listener>.<rest>` override that follows the
 /// listener name, which is Kafka's `LISTENER_CONFIG_REGEX` group.
-pub(crate) fn listener_override_base(name: &str) -> Option<&str> {
+pub fn listener_override_base(name: &str) -> Option<&str> {
     let rest = name.strip_prefix("listener.name.")?;
     let (_, base) = rest.split_once('.')?;
     Some(base)
@@ -2215,7 +2215,7 @@ pub(crate) fn listener_override_base(name: &str) -> Option<&str> {
 /// the key itself, else the key a `listener.name.<listener>.` override
 /// overrides. A mechanism override such as `plain.sasl.jaas.config` resolves
 /// to the mechanism-independent key it ends in.
-pub(crate) fn resolve(name: &str) -> Option<&'static KafkaBrokerConfig> {
+pub fn resolve(name: &str) -> Option<&'static KafkaBrokerConfig> {
     lookup(name).or_else(|| {
         let rest = listener_override_base(name)?;
         let base = LISTENER_MECHANISM_CONFIGS

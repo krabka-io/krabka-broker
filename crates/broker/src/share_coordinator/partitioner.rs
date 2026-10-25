@@ -5,7 +5,10 @@
 //! share key therefore resolves to the same `__share_group_state` partition on
 //! Krabka as on Apache Kafka.
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use {
+    base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
+    krabka_verified::broker::java_string_hash_partition,
+};
 
 /// Map a share-coordinator key `(group_id, topic_id, partition)` to a
 /// partition index in `__share_group_state`.
@@ -27,7 +30,7 @@ pub fn partition_for_share_key(
     let topic_id = URL_SAFE_NO_PAD.encode(topic_id.as_bytes());
     let key = format!("{group_id}:{topic_id}:{partition}");
     let utf16: Vec<u16> = key.encode_utf16().collect();
-    krabka_verified::broker::java_string_hash_partition(&utf16, num)
+    java_string_hash_partition(&utf16, num)
         .expect("share coordinator partition count must be positive")
 }
 

@@ -49,12 +49,17 @@ mod tests;
 
 #[cfg(test)]
 pub(super) use self::static_broker::kafka_default_static_broker;
-pub(crate) use self::static_broker::static_settings;
+pub use self::static_broker::static_settings;
 pub(super) use self::{
     broker_logger::BrokerLoggers,
     static_broker::{StaticBrokerConfigs, StaticBrokerSetting},
 };
-use self::{static_broker::static_broker_entries, write_freeze::write_freeze_override};
+use {
+    self::{static_broker::static_broker_entries, write_freeze::write_freeze_override},
+    krabka_log::topic_name,
+    krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
+    std::collections::{BTreeMap, BTreeSet},
+};
 
 /// What a broker-scoped resource reports out of the serving process itself
 /// rather than out of the metadata image.
@@ -83,7 +88,7 @@ pub(super) struct ServingBroker<'a> {
 /// Dispatches one resource entry from a `DescribeConfigs` request.
 pub(super) fn describe_one(
     image: &krabka_metadata::MetadataImage,
-    r: &krabka_protocol::owned::describe_configs_request::DescribeConfigsResource,
+    r: &DescribeConfigsResource,
     serving: ServingBroker<'_>,
     client_metrics_default_interval_ms: i32,
     options: EntryOptions,
@@ -120,7 +125,7 @@ pub(super) fn describe_one(
         // refuses is INVALID_TOPIC_EXCEPTION, and a topic that does not exist
         // is UNKNOWN_TOPIC_OR_PARTITION with no message, never a list of
         // defaults that look real.
-        if let Err(invalid) = krabka_log::topic_name::validate_topic_name(&r.resource_name) {
+        if let Err(invalid) = topic_name::validate_topic_name(&r.resource_name) {
             return failed(codes::INVALID_TOPIC_EXCEPTION, Some(invalid.to_string()));
         }
         if image.topic(&r.resource_name).is_none() {
@@ -257,13 +262,13 @@ pub(super) fn describe_one(
 /// sets it and at `STATIC_BROKER_CONFIG` when `statics` does. `unstable` is
 /// Kafka's `unstable.api.versions.enable`, which decides whether Kafka
 /// trunk's topic keys are on the row.
-pub(crate) fn effective_topic_configs(
+pub fn effective_topic_configs(
     image: &krabka_metadata::MetadataImage,
     node: krabka_metadata::NodeId,
     topic: &str,
-    overrides: &std::collections::BTreeMap<String, String>,
+    overrides: &BTreeMap<String, String>,
     unstable: UnstableApiVersions,
-    statics: &std::collections::BTreeMap<&'static str, String>,
+    statics: &BTreeMap<&'static str, String>,
 ) -> Vec<DescribeConfigsResourceResult> {
     topic_configs_with_overrides(
         image,
@@ -318,14 +323,14 @@ struct TopicBrokerLayers<'a> {
     node: krabka_metadata::NodeId,
     /// The static settings of the answering node, by broker key: a topic key
     /// reports its broker synonym here at `STATIC_BROKER_CONFIG`.
-    statics: &'a std::collections::BTreeMap<&'static str, String>,
+    statics: &'a BTreeMap<&'static str, String>,
     unstable: UnstableApiVersions,
 }
 
 /// A topic and the config overrides stored for it, if any.
 struct TopicOverrides<'a> {
     topic: &'a str,
-    overrides: Option<&'a std::collections::BTreeMap<String, String>>,
+    overrides: Option<&'a BTreeMap<String, String>>,
 }
 
 /// [`topic_configs`] against a caller-supplied override map, which is what a
@@ -480,17 +485,17 @@ fn broker_configs(
     } = serving;
     let defaults = image.default_broker_config();
     let per_broker = node_id.and_then(|node_id| image.broker_config(node_id));
-    let mut keys: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut keys: BTreeSet<&str> = BTreeSet::new();
     keys.extend(
         defaults
             .into_iter()
-            .flat_map(std::collections::BTreeMap::keys)
+            .flat_map(BTreeMap::keys)
             .map(String::as_str),
     );
     keys.extend(
         per_broker
             .into_iter()
-            .flat_map(std::collections::BTreeMap::keys)
+            .flat_map(BTreeMap::keys)
             .map(String::as_str),
     );
     // A named broker reports every non-internal `KafkaConfig` key, set or
@@ -613,12 +618,14 @@ fn broker_default(key: &str, unstable: UnstableApiVersions) -> Option<&'static s
     let synonym_of = broker_dynamic::TOPIC_DEFAULT_SYNONYMS
         .iter()
         .find(|(broker, topic)| *broker == key && config_keys::serves_topic_key(topic, unstable));
-    match synonym_of {
-        Some((_, topic)) => broker_dynamic::topic_broker_synonyms(topic)
+    if let Some((_, topic)) = synonym_of {
+        let synonym = broker_dynamic::topic_broker_synonyms(topic)
             .into_iter()
-            .find(|synonym| synonym.name == key)
-            .and_then(|synonym| synonym.default),
-        None => kafka_broker::lookup(key).and_then(|row| row.default),
+            .find(|synonym| synonym.name == key)?;
+        synonym.default
+    } else {
+        let row = kafka_broker::lookup(key)?;
+        row.default
     }
 }
 
@@ -676,7 +683,7 @@ fn client_metrics_configs(
 /// The node's static settings and the API-version stability that decide which
 /// group keys a node serves.
 struct GroupServing<'a> {
-    statics: &'a std::collections::BTreeMap<&'static str, String>,
+    statics: &'a BTreeMap<&'static str, String>,
     unstable: UnstableApiVersions,
 }
 

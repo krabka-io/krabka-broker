@@ -51,10 +51,10 @@ pub(super) fn running_maximum_index_entry(
     proof_assert!(forall<i: Int, j: Int> 0 <= i && i < j && j < offsets@.len()
         ==> offsets@[i]@ < offsets@[j]@);
     let prefix = &timestamps[..=through];
-    match earliest_max_timestamp_index(prefix) {
-        Some(index) => TimeEntry::new(prefix[index], offsets[indexed]),
-        None => unreachable!(),
-    }
+    let Some(index) = earliest_max_timestamp_index(prefix) else {
+        unreachable!()
+    };
+    TimeEntry::new(prefix[index], offsets[indexed])
 }
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
@@ -96,11 +96,12 @@ pub(super) fn indexed_timestamp_scan_finds_first(
     #[invariant(start@ <= offsets@.len())]
     #[invariant(forall<i: Int> 0 <= i && i < start@ ==> timestamps@[i]@ < target@)]
     #[variant(offsets@.len() - start@)]
-    while start < offsets.len() && offsets[start] < relative {
+    while start < offsets.len() && matches!(offsets.get(start), Some(&offset) if offset < relative)
+    {
         proof_assert!(timestamps@[start@]@ < target@);
         start += 1;
     }
-    let suffix = &timestamps[start..];
+    let suffix = timestamps.get(start..)?;
     // Translate suffix indexes back to the original record window.
     proof_assert!(forall<i: Int> start@ <= i && i < timestamps@.len()
         ==> suffix@[i - start@] == timestamps@[i]);
@@ -132,11 +133,11 @@ pub(super) fn remote_timestamp_scan_preserves_first(
     target: i64,
 ) -> (usize, u32, Option<usize>) {
     let count = remote_time_index_candidate_count(entries, target);
-    let (relative, selected) = if count == 0 {
-        (0, &entries[..0])
-    } else {
-        (entries[count - 1].coordinate, &entries[count - 1..count])
-    };
+    let selected = count
+        .checked_sub(1)
+        .and_then(|last| entries.get(last..count))
+        .unwrap_or(&[]);
+    let relative = selected.first().map_or(0, |entry| entry.coordinate);
     // A selected remote row is strictly below the target, so the one-row
     // strict search starts at exactly the floor the remote adapter returns.
     let _local_floor = time_index_scan_start(selected, target);
@@ -232,7 +233,9 @@ pub(super) fn constructed_time_index_preserves_first(
         && offsets@[k]@ <= entries@[j].coordinate@ ==> timestamps@[k]@ <= entries@[j].key@)]
     #[variant(rows@.len() - i@)]
     while i < rows.len() {
-        let (indexed, through) = rows[i];
+        let Some(&(indexed, through)) = rows.get(i) else {
+            break;
+        };
         entries.push(running_maximum_index_entry(
             offsets, timestamps, indexed, through,
         ));

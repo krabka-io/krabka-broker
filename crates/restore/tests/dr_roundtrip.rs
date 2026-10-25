@@ -30,6 +30,7 @@
 //! fixture the other round-trip suites use, keeps the archive and the capture in
 //! temp directories, and boots the broker in process, so it needs no container
 //! and runs in the default `bazel test //...` set.
+#![cfg(test)]
 
 // The three modules below are the round-trip suite's own, included by path.
 // This binary uses one archive and one partition of it, so most of what they
@@ -56,13 +57,22 @@ use {
         topic_configuration::check_topic_configuration,
     },
     assert2::{assert, check},
-    krabka_backup::{archive::ArchiveArgs, capture::capture_key, manifest::RLMM_SNAPSHOT, run},
+    krabka_backup::{
+        archive::ArchiveArgs,
+        capture::capture_key,
+        manifest::{METADATA_CHECKPOINT, RLMM_SNAPSHOT},
+        run,
+    },
     krabka_broker::{BrokerConfig, BrokerHandle},
     krabka_client_admin::AdminClient,
     krabka_client_core::Client,
     krabka_metadata::{MetadataImage, MetadataRecord, NodeId, TopicConfigRecord, TopicRecord},
     krabka_restore::restore,
-    std::collections::BTreeMap,
+    std::{
+        collections::BTreeMap,
+        fs,
+        path::{Path, PathBuf},
+    },
     uuid::Uuid,
 };
 
@@ -124,22 +134,22 @@ fn metadata_checkpoint(fixture: &Fixture) -> Vec<u8> {
 
 /// Lay the two files out under a log directory the way a broker holds them, so
 /// the capture finds them by the paths it looks for on a real node.
-fn write_node_files(log_dir: &std::path::Path, fixture: &Fixture) {
+fn write_node_files(log_dir: &Path, fixture: &Fixture) {
     let rlmm = log_dir.join("remote-log-metadata");
-    std::fs::create_dir_all(&rlmm).expect("create the rlmm dir");
-    std::fs::write(rlmm.join("snapshot"), fixture.rlmm_snapshot(|_, _| true))
+    fs::create_dir_all(&rlmm).expect("create the rlmm dir");
+    fs::write(rlmm.join("snapshot"), fixture.rlmm_snapshot(|_, _| true))
         .expect("write the rlmm snapshot");
 
     let metadata = krabka_raft::metadata_partition_dir(log_dir);
-    std::fs::create_dir_all(&metadata).expect("create the metadata dir");
-    std::fs::write(
+    fs::create_dir_all(&metadata).expect("create the metadata dir");
+    fs::write(
         metadata.join("00000000000000000042-0000000001.checkpoint"),
         metadata_checkpoint(fixture),
     )
     .expect("write the metadata checkpoint");
 }
 
-fn archive_args(root: &std::path::Path) -> ArchiveArgs {
+fn archive_args(root: &Path) -> ArchiveArgs {
     ArchiveArgs {
         local: Some(root.to_path_buf()),
         ..ArchiveArgs::default()
@@ -154,7 +164,7 @@ struct BootedBroker {
 
 /// Start a broker on `log_dir`, its controller listening on `controller`, and
 /// connect a client to it.
-async fn boot(controller: &mut ControllerListener, log_dir: std::path::PathBuf) -> BootedBroker {
+async fn boot(controller: &mut ControllerListener, log_dir: PathBuf) -> BootedBroker {
     let broker = controller.start(BrokerConfig::for_tests(log_dir)).await;
     let client = Client::builder()
         .bootstrap(broker.listen_addr().to_string())
@@ -229,7 +239,7 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
         .await
         .expect("stand the pre-disaster cluster up");
     let node_files = workspace.path().join("node");
-    std::fs::create_dir_all(&node_files).expect("create the node dir");
+    fs::create_dir_all(&node_files).expect("create the node dir");
     write_node_files(&node_files, &fixture);
 
     let BootedBroker {
@@ -260,17 +270,16 @@ async fn a_captured_cluster_restores_with_its_configuration_and_its_group_positi
     // 3. The disaster. The cluster is gone and so are its disks.
     drop(pre_client);
     pre_broker.shutdown().await;
-    std::fs::remove_dir_all(&pre_log_dir).expect("destroy the pre-disaster data directory");
-    std::fs::remove_dir_all(&node_files).expect("destroy the node's other files");
+    fs::remove_dir_all(&pre_log_dir).expect("destroy the pre-disaster data directory");
+    fs::remove_dir_all(&node_files).expect("destroy the node's other files");
 
     // 4. The restore, with both captured snapshots.
     let rlmm = backup_root
         .path()
         .join(capture_key(&capture, RLMM_SNAPSHOT));
-    let checkpoint = backup_root.path().join(capture_key(
-        &capture,
-        krabka_backup::manifest::METADATA_CHECKPOINT,
-    ));
+    let checkpoint = backup_root
+        .path()
+        .join(capture_key(&capture, METADATA_CHECKPOINT));
     let post_log_dir = workspace.path().join("post");
     let report = restore(
         &controller.restore_args(fixture.archive_root.path(), &post_log_dir, &[

@@ -31,7 +31,7 @@
 //! `transaction_version`.
 
 use {
-    futures_util::future::BoxFuture,
+    futures_util::future::{BoxFuture, join_all},
     krabka_ids::PartitionIndex,
     krabka_protocol::owned::{
         write_txn_markers_request::WriteTxnMarkersRequest,
@@ -40,6 +40,11 @@ use {
             WritableTxnMarkerTopicResult, WriteTxnMarkersResponse,
         },
     },
+    std::{
+        collections::{HashMap, hash_map::Entry},
+        sync::Arc,
+        time::Instant,
+    },
 };
 
 mod leader;
@@ -47,9 +52,9 @@ mod materialize;
 mod offsets;
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 
-pub(crate) use self::{
+pub use self::{
     leader::{MARKER_COMMIT_TIMEOUT, append_marker_as_leader},
     materialize::MarkerAppend,
     offsets::CommittedOffsets,
@@ -69,7 +74,7 @@ use crate::{
 /// `WriteTxnMarkersRequest.getErrorResponse` with
 /// `CLUSTER_AUTHORIZATION_FAILED`: that code on every requested partition,
 /// and no marker is written.
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: WriteTxnMarkersRequest,
     _version: i16,
@@ -125,8 +130,8 @@ fn serve(
     broker: &Broker,
     req: WriteTxnMarkersRequest,
 ) -> BoxFuture<'static, WriteTxnMarkersResponse> {
-    let partitions = broker.partitions.clone();
-    let group_coordinator = broker.group_coordinator.clone();
+    let partitions = Arc::clone(&broker.partitions);
+    let group_coordinator = Arc::clone(&broker.group_coordinator);
     let log_dir_status = broker.log_dir_status.clone();
     let node_id = broker.config.node_id;
     Box::pin(async move {
@@ -180,8 +185,8 @@ fn serve(
             }
         }
 
-        let deadline = std::time::Instant::now() + MARKER_COMMIT_TIMEOUT;
-        let answered = futures_util::future::join_all(rows.into_iter().map(
+        let deadline = Instant::now() + MARKER_COMMIT_TIMEOUT;
+        let answered = join_all(rows.into_iter().map(
             |(producer_id, topic, partition, row)| async move {
                 let code = match row {
                     Ok(pending) => match pending.committed(deadline).await {
@@ -231,9 +236,9 @@ fn marker_error_code(topic: &str, partition: i32, error: &BrokerError) -> i16 {
 #[derive(Default)]
 struct MarkerResults {
     markers: Vec<WritableTxnMarkerResult>,
-    producers: std::collections::HashMap<i64, usize>,
-    topics: std::collections::HashMap<ProducerTopic, usize>,
-    partitions: std::collections::HashMap<ProducerPartition, usize>,
+    producers: HashMap<i64, usize>,
+    topics: HashMap<ProducerTopic, usize>,
+    partitions: HashMap<ProducerPartition, usize>,
 }
 
 /// A topic row of one producer's result.
@@ -262,7 +267,11 @@ impl MarkerResults {
             });
             self.markers.len() - 1
         });
-        let topics = &mut self.markers[marker].topics;
+        // The maps hold indices into the rows they were pushed with.
+        let Some(marker_result) = self.markers.get_mut(marker) else {
+            return;
+        };
+        let topics = &mut marker_result.topics;
         let topic_row = *self
             .topics
             .entry(ProducerTopic {
@@ -276,16 +285,21 @@ impl MarkerResults {
                 });
                 topics.len() - 1
             });
-        let partitions = &mut topics[topic_row].partitions;
+        let Some(topic_result) = topics.get_mut(topic_row) else {
+            return;
+        };
+        let partitions = &mut topic_result.partitions;
         match self.partitions.entry(ProducerPartition {
             producer_id,
             topic: topic.to_owned(),
             partition_index,
         }) {
-            std::collections::hash_map::Entry::Occupied(row) => {
-                partitions[*row.get()].error_code = error_code;
+            Entry::Occupied(row) => {
+                if let Some(partition) = partitions.get_mut(*row.get()) {
+                    partition.error_code = error_code;
+                }
             }
-            std::collections::hash_map::Entry::Vacant(row) => {
+            Entry::Vacant(row) => {
                 row.insert(partitions.len());
                 partitions.push(WritableTxnMarkerPartitionResult {
                     partition_index,
@@ -323,6 +337,8 @@ mod tests {
             UnknownTaggedFields,
             owned::write_txn_markers_request::{WritableTxnMarker, WritableTxnMarkerTopic},
         },
+        std::{collections::HashMap, sync::Arc, time::Duration},
+        tokio::time::sleep,
     };
 
     fn check_orders_marker(response: &WriteTxnMarkersResponse, expected_code: i16, label: &str) {
@@ -360,7 +376,7 @@ mod tests {
         #[builder(default = PendingOffsetsSetup::default().topic)] topic: &'_ str,
         #[builder(into, default = PendingOffsetsSetup::default().partition)]
         partition: krabka_ids::PartitionIndex,
-    ) -> std::sync::Arc<GroupActorHandle> {
+    ) -> Arc<GroupActorHandle> {
         let setup = PendingOffsetsSetup {
             group_id,
             topic,
@@ -377,7 +393,7 @@ mod tests {
         let ack = rpc::begin(&handle, |reply| GroupActorMessage::AddPendingTxnOffsets {
             producer_id: 91,
             written_at: 0,
-            keys: vec![(topic.to_string(), partition.0)],
+            keys: vec![(topic.to_owned(), partition.0)],
             reply,
         })
         .await;
@@ -580,8 +596,8 @@ mod tests {
                     .await;
                 part.replica_state.lock().await.set_policy(LeaderPolicy {
                     effective_min_isr: 2,
-                    replica_lag_time_max: std::time::Duration::from_secs(30),
-                    brokers: std::collections::HashMap::new(),
+                    replica_lag_time_max: Duration::from_secs(30),
+                    brokers: HashMap::new(),
                 });
             }
 
@@ -590,7 +606,7 @@ mod tests {
                 ..Default::default()
             };
             let answer = tokio::spawn({
-                let broker = std::sync::Arc::clone(&broker);
+                let broker = Arc::clone(&broker);
                 async move { handle_allowed(&broker, request).await }
             });
             if !matches!(change, Change::UnderMinIsr) {
@@ -605,7 +621,7 @@ mod tests {
                 }
                 // intentional: the handler would answer within this time if
                 // it answered at the local append.
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(100)).await;
                 assert!(!answer.is_finished(), "{name}: answered before the commit");
                 if matches!(change, Change::LeaderMoves) {
                     part.install_replication_target(None, follower.0, 4).await;
@@ -709,7 +725,7 @@ mod tests {
             .expect("offset home actor");
         let committed = rpc::fetch_offsets(&handle).await.committed;
         let entry = committed
-            .get(&("orders".to_string(), 2))
+            .get(&("orders".to_owned(), 2))
             .expect("committed offset visible");
         assert!(entry.offset == 42);
         assert!(entry.leader_epoch == 3);
@@ -763,7 +779,7 @@ mod tests {
             if handle.tx.is_closed() {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            sleep(Duration::from_millis(1)).await;
         }
         assert!(handle.tx.is_closed());
 
@@ -875,7 +891,7 @@ mod tests {
             assert!(
                 offsets
                     .committed
-                    .get(&(topic.to_string(), partition))
+                    .get(&(topic.to_owned(), partition))
                     .map(|entry| entry.offset)
                     == Some(krabka_log::Offset(offset))
             );

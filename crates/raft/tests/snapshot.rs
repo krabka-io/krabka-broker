@@ -9,6 +9,7 @@
 //! follows it. The engine's own byte- and interval-triggered snapshotting is
 //! covered in `krabka_raft::kraft::controller`, and the cross-node catch-up
 //! over KIP-595 `FetchSnapshot` is covered by the engine simulator.
+#![cfg(test)]
 
 use {
     assert2::check,
@@ -18,8 +19,9 @@ use {
         deserialize_metadata_snapshot_image, serialize_metadata_snapshot,
     },
     krabka_units::prelude::{Time, millis},
-    std::time::Duration,
+    std::{fs, path::Path, time::Duration},
     tempfile::TempDir,
+    tokio::time,
     uuid::Uuid,
 };
 
@@ -96,7 +98,7 @@ fn the_snapshot_image_keeps_the_quorum_controls() {
 
 async fn wait_for_leader(controller: &krabka_raft::ControllerHandle) {
     let mut leader_watch = controller.watch_leader();
-    tokio::time::timeout(Duration::from_secs(30), async {
+    time::timeout(Duration::from_secs(30), async {
         while leader_watch.borrow().is_none() {
             leader_watch.changed().await.expect("leader watch closed");
         }
@@ -196,8 +198,8 @@ async fn snapshot_then_restart_recovers_image() {
 // A lagging follower catching up through the real KIP-595 `FetchSnapshot` is
 // covered by `kraft_engine_sim::lagging_follower_catches_up_via_snapshot`.
 
-fn has_checkpoint(meta_dir: &std::path::Path) -> bool {
-    std::fs::read_dir(meta_dir)
+fn has_checkpoint(meta_dir: &Path) -> bool {
+    fs::read_dir(meta_dir)
         .into_iter()
         .flatten()
         .flatten()

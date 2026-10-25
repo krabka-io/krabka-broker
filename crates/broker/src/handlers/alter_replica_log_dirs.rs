@@ -41,7 +41,7 @@ use {
         },
     },
     krabka_security::{AuthMethod, Principal},
-    std::{collections::BTreeMap, net::SocketAddr, path::PathBuf},
+    std::{collections::BTreeMap, net::SocketAddr, path::PathBuf, sync::Arc},
 };
 
 /// A partition addressed by topic name and index, ordered by topic and then index.
@@ -51,7 +51,7 @@ struct TopicPartitionKey {
     partition: i32,
 }
 
-pub(crate) fn handle<'a>(
+pub fn handle<'a>(
     broker: &'a Broker,
     version: i16,
     _correlation_id: i32,
@@ -60,29 +60,24 @@ pub(crate) fn handle<'a>(
     peer: &'a SocketAddr,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
     let req_bytes = req_bytes.to_vec();
-    let partitions = broker.partitions.clone();
-    let future_logs = broker.future_logs.clone();
+    let partitions = Arc::clone(&broker.partitions);
+    let future_logs = Arc::clone(&broker.future_logs);
     let all_log_dirs = broker.config.all_log_dirs();
     let log_config = broker.config.log_config.clone();
     let log_dir_status = broker.log_dir_status.clone();
-    let controller = broker.controller.clone();
+    let controller = Arc::clone(&broker.controller);
     let move_policy = future_log::MovePolicy {
         retry_backoff: broker.config.future_log_move_retry_backoff,
         read_chunk: broker.config.future_log_move_read_chunk,
-        throttle: broker.throttle_state.alter_log_dirs.clone(),
+        throttle: Arc::clone(&broker.throttle_state.alter_log_dirs),
     };
     Box::pin(async move {
-        let anonymous;
-        let principal = if let Some(principal) = auth.principal() {
-            principal
-        } else {
-            anonymous = Principal {
-                name: "ANONYMOUS".to_string(),
-                auth_method: AuthMethod::Anonymous,
-                groups: vec![],
-            };
-            &anonymous
+        let anonymous = Principal {
+            name: "ANONYMOUS".to_owned(),
+            auth_method: AuthMethod::Anonymous,
+            groups: vec![],
         };
+        let principal = auth.principal().unwrap_or(&anonymous);
 
         let image = broker.controller.current_image();
         let authorized = broker
@@ -166,18 +161,18 @@ pub(crate) fn handle<'a>(
             target_path,
         ) in destinations
         {
-            let code = match future_log::start_move(
-                &partitions,
-                &future_logs,
-                &all_log_dirs,
-                &log_dir_status,
-                &log_config,
-                (&topic, krabka_ids::PartitionIndex(partition_index)),
-                image.topic(&topic).map(|topic| topic.topic_id),
-                &target_path,
-                move_policy.clone(),
-            )
-            .await
+            let code = match future_log::start_move()
+                .partitions(&partitions)
+                .future_logs(&future_logs)
+                .all_log_dirs(&all_log_dirs)
+                .log_dir_status(&log_dir_status)
+                .log_config(&log_config)
+                .topic_partition((&topic, krabka_ids::PartitionIndex(partition_index)))
+                .topic_id(image.topic(&topic).map(|topic| topic.topic_id))
+                .target_log_dir(&target_path)
+                .policy(move_policy.clone())
+                .call()
+                .await
             {
                 Ok(()) => codes::NONE,
                 Err(MoveError::TopicNameTooLong) => codes::INVALID_TOPIC_EXCEPTION,
@@ -255,7 +250,8 @@ mod tests {
             AlterReplicaLogDir, AlterReplicaLogDirTopic, MAX_VERSION, MIN_VERSION,
         },
         krabka_security::SaslMechanism,
-        std::sync::Arc,
+        std::{fs, os::unix::fs::symlink, sync::Arc, time::Duration},
+        tokio::{time, time::Instant},
     };
 
     krabka_macros::wire_codec_helpers! {
@@ -270,7 +266,7 @@ mod tests {
     ) -> AlterReplicaLogDirsResponse {
         krabka_macros::unthrottled_wire!(AlterReplicaLogDirsResponse {
             results: vec![krabka_macros::tagged_wire!(AlterReplicaLogDirTopicResult {
-                topic_name: topic.to_string(),
+                topic_name: topic.to_owned(),
                 partitions: vec![krabka_macros::tagged_wire!(
                     AlterReplicaLogDirPartitionResult {
                         partition_index,
@@ -331,7 +327,7 @@ mod tests {
 
         let expected = krabka_macros::unthrottled_wire!(AlterReplicaLogDirsResponse {
             results: vec![krabka_macros::tagged_wire!(AlterReplicaLogDirTopicResult {
-                topic_name: "orders".to_string(),
+                topic_name: "orders".to_owned(),
                 partitions: vec![krabka_macros::tagged_wire!(
                     AlterReplicaLogDirPartitionResult {
                         partition_index: 7,
@@ -357,10 +353,10 @@ mod tests {
     async fn destination_and_topic_name_validation_matches_kafka() {
         let version = 2;
         let extra = tempfile::tempdir().expect("extra log dir");
-        let extra_dir = std::fs::canonicalize(extra.path()).expect("canonical extra dir");
+        let extra_dir = fs::canonicalize(extra.path()).expect("canonical extra dir");
         let links = tempfile::tempdir().expect("link dir");
         let link = links.path().join("link");
-        std::os::unix::fs::symlink(&extra_dir, &link).expect("symlink to the extra dir");
+        symlink(&extra_dir, &link).expect("symlink to the extra dir");
         let extra_str = extra_dir.display().to_string();
         let name = extra_dir
             .file_name()
@@ -403,7 +399,7 @@ mod tests {
             ),
             (
                 "a relative path",
-                extra_str.trim_start_matches('/').to_string(),
+                extra_str.trim_start_matches('/').to_owned(),
                 "orders",
                 codes::LOG_DIR_NOT_FOUND,
             ),
@@ -453,21 +449,21 @@ mod tests {
     fn host_orders(broker: &Broker) -> Arc<Partition> {
         let primary = broker.config.log_dir.clone();
         let partition_dir = partition_dir(&primary, "orders", 0);
-        std::fs::create_dir_all(&partition_dir).expect("partition dir");
+        fs::create_dir_all(&partition_dir).expect("partition dir");
         let hosted = spawn_partition(
             "orders".into(),
             krabka_ids::PartitionIndex(0),
-            primary.clone(),
+            primary,
             krabka_log::Log::open(&partition_dir, krabka_log::LogConfig::default())
                 .expect("open log"),
             broker.log_dir_status.clone(),
-            std::sync::Arc::new(ProducerState::new()),
+            Arc::new(ProducerState::new()),
             false,
         );
         broker.partitions.insert(
             "orders".into(),
             krabka_ids::PartitionIndex(0),
-            hosted.clone(),
+            Arc::clone(&hosted),
         );
         hosted
     }
@@ -496,7 +492,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let target_entries = std::fs::read_dir(&extra_dir).expect("target dir").count();
+        let target_entries = fs::read_dir(&extra_dir).expect("target dir").count();
         for auth in [authed("alice"), ConnectionAuth::Anonymous] {
             for version in MIN_VERSION..=MAX_VERSION {
                 let bytes = handle(
@@ -518,9 +514,7 @@ mod tests {
                         )
                 );
                 assert!(broker.future_logs.is_empty());
-                assert!(
-                    std::fs::read_dir(&extra_dir).expect("target dir").count() == target_entries
-                );
+                assert!(fs::read_dir(&extra_dir).expect("target dir").count() == target_entries);
                 assert!(hosted.log_dir.load_full().as_path() == broker.config.log_dir.as_path());
             }
         }
@@ -542,7 +536,7 @@ mod tests {
         };
         let hosted = host_orders(&broker);
         let valid = extra_dir.display().to_string();
-        let unknown = "/krabka-missing-log-dir".to_string();
+        let unknown = "/krabka-missing-log-dir".to_owned();
 
         // (name, destinations in request order, expected code, whether the
         // partition ends up in the extra directory)
@@ -581,16 +575,16 @@ mod tests {
             // An empty partition moves within milliseconds once a move starts,
             // so a move that never starts is given a short look.
             let wait = if moves {
-                std::time::Duration::from_secs(20)
+                Duration::from_secs(20)
             } else {
-                std::time::Duration::from_millis(500)
+                Duration::from_millis(500)
             };
-            let deadline = tokio::time::Instant::now() + wait;
+            let deadline = Instant::now() + wait;
             let mut in_extra_dir = false;
-            while !in_extra_dir && tokio::time::Instant::now() < deadline {
-                in_extra_dir = std::fs::canonicalize(hosted.log_dir.load_full().as_path()).ok()
-                    == std::fs::canonicalize(&extra_dir).ok();
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            while !in_extra_dir && Instant::now() < deadline {
+                in_extra_dir = fs::canonicalize(hosted.log_dir.load_full().as_path()).ok()
+                    == fs::canonicalize(&extra_dir).ok();
+                time::sleep(Duration::from_millis(10)).await;
             }
             assert!(in_extra_dir == moves, "{name}");
         }
@@ -607,7 +601,7 @@ mod tests {
 
     fn topic_result(name: &str, partitions: &[i32]) -> AlterReplicaLogDirTopicResult {
         AlterReplicaLogDirTopicResult {
-            topic_name: name.to_string(),
+            topic_name: name.to_owned(),
             partitions: partitions
                 .iter()
                 .map(|&partition_index| AlterReplicaLogDirPartitionResult {

@@ -10,6 +10,7 @@ use {
             ELIGIBLE_LEADER_REPLICAS, MIN_INSYNC_REPLICAS, UNCLEAN_LEADER_ELECTION_ENABLE,
             UNCLEAN_RECOVERY_STRATEGY,
         },
+        elr::state,
         leader_election::test_support::{
             ElrFinalization, TopicConfigOverride, elected_partition, expected_clean_election,
             expected_partition, failover, failover_with_alive, img_with_partition,
@@ -268,7 +269,7 @@ async fn failover_balanced_strategy_requests_recovery_not_immediate_change() {
         "Balanced strategy must defer to the URM, not elect immediately, got {:?}",
         plan.changes,
     );
-    assert!(plan.recoveries == vec![("t".to_string(), 0, RecoveryStrategy::Balanced)]);
+    assert!(plan.recoveries == vec![("t".to_owned(), 0, RecoveryStrategy::Balanced)]);
 }
 
 #[tokio::test]
@@ -278,7 +279,7 @@ async fn failover_uses_cluster_default_recovery_settings() {
     let plan = failover_with_alive(&img, NodeId(1), &[2u64, 3]).await;
 
     assert!(plan.changes.is_empty());
-    assert!(plan.recoveries == vec![("t".to_string(), 0, RecoveryStrategy::Balanced)]);
+    assert!(plan.recoveries == vec![("t".to_owned(), 0, RecoveryStrategy::Balanced)]);
 }
 
 #[tokio::test]
@@ -334,7 +335,7 @@ async fn failover_scan_leaves_a_witness_only_survivor_unavailable() {
     let plan = compute_failover_changes(&img, /*dead=*/ NodeId(1), &l, &metrics).await;
     assert!(plan.changes.is_empty(), "got {:?}", plan.changes);
     assert!(plan.recoveries.is_empty());
-    assert!(plan.unavailable == vec![("t".to_string(), 0)]);
+    assert!(plan.unavailable == vec![("t".to_owned(), 0)]);
     assert!(metrics.unclean_leader_elections_total.get() == 0);
 }
 
@@ -578,7 +579,7 @@ async fn a_partition_with_nothing_to_elect_publishes_the_last_leader_as_last_kno
         let again = failover(&img, NodeId(1), &l).await;
         assert!(again.changes.is_empty(), "{label}: {:?}", again.changes);
         assert!(
-            crate::elr::state::is_leaderless(&img, img.partition("t", 0).expect("partition")),
+            state::is_leaderless(&img, img.partition("t", 0).expect("partition")),
             "{label}"
         );
     }

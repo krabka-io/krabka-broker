@@ -16,6 +16,7 @@
 //! directory from the follower's registration. The leader's own lag check
 //! cannot do it in this test, because the nodes wait ten minutes before they
 //! call a follower slow.
+#![cfg(test)]
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
@@ -35,10 +36,12 @@ use {
     krabka_client_producer::{Acks, Producer, ProducerRecord},
     std::{
         collections::BTreeMap,
+        fs::{self, Permissions},
         path::Path,
         time::{Duration, SystemTime, UNIX_EPOCH},
     },
     tempfile::TempDir,
+    tokio::time,
 };
 
 mod support;
@@ -156,12 +159,12 @@ fn apply_server_properties(cfg: &mut BrokerConfig) {
 
 /// Waits until every broker holds `partition` in one of its log directories.
 async fn wait_until_materialized(brokers: &[BrokerNode], partition: &str) {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    time::timeout(Duration::from_secs(30), async {
         while !brokers
             .iter()
             .all(|broker| broker.dir_of(partition).is_some())
         {
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await
@@ -174,9 +177,9 @@ async fn wait_until_each_hosts_an_audit_partition(brokers: &[BrokerNode]) {
     let hosts = |broker: &BrokerNode| {
         (0..brokers.len()).any(|index| broker.dir_of(&format!("__krabka_audit-{index}")).is_some())
     };
-    tokio::time::timeout(Duration::from_secs(30), async {
+    time::timeout(Duration::from_secs(30), async {
         while !brokers.iter().all(hosts) {
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await
@@ -210,10 +213,10 @@ impl ReadOnlyTree {
         let mut paths = Vec::new();
         let mut pending = vec![root.to_path_buf()];
         while let Some(path) = pending.pop() {
-            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
             if path.is_dir() {
                 pending.extend(
-                    std::fs::read_dir(&path)
+                    fs::read_dir(&path)
                         .unwrap()
                         .map(|entry| entry.unwrap().path()),
                 );
@@ -221,7 +224,7 @@ impl ReadOnlyTree {
             paths.push(PathMode { path, mode });
         }
         for PathMode { path, mode } in &paths {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & !0o222)).unwrap();
+            fs::set_permissions(path, Permissions::from_mode(mode & !0o222)).unwrap();
         }
         Self { paths }
     }
@@ -230,9 +233,9 @@ impl ReadOnlyTree {
     /// root can, and the test cannot make the directory fail.
     fn refuses_writes(&self) -> bool {
         let probe = self.paths[0].path.join(".write-probe");
-        let created = std::fs::write(&probe, b"probe").is_ok();
+        let created = fs::write(&probe, b"probe").is_ok();
         if created {
-            let _ = std::fs::remove_file(probe);
+            let _ = fs::remove_file(probe);
         }
         !created
     }
@@ -242,7 +245,7 @@ impl ReadOnlyTree {
 impl Drop for ReadOnlyTree {
     fn drop(&mut self) {
         for PathMode { path, mode } in &self.paths {
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(*mode));
+            let _ = fs::set_permissions(path, Permissions::from_mode(*mode));
         }
     }
 }

@@ -63,7 +63,7 @@ use {
     skip_all,
     fields(api = "DescribeDelegationToken")
 )]
-pub(crate) fn handle(
+pub fn handle(
     req: &DescribeDelegationTokenRequest,
     auth: &ConnectionAuth,
     secret_key: Option<&SecretBytes>,

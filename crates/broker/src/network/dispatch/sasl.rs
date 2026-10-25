@@ -38,7 +38,8 @@ use {
         },
     },
     krabka_security::{AuthMethod, Principal, SaslMechanism},
-    std::net::SocketAddr,
+    std::{net::SocketAddr, str},
+    tokio::time,
 };
 
 /// `SaslHandshake` wire `api_key`. The loop handles it inline, before the
@@ -145,7 +146,7 @@ impl SaslSession {
 pub(super) async fn delay_failed_authentication(broker: &Broker) {
     let delay = broker.config.failed_authentication_delay();
     if !delay.is_zero() {
-        tokio::time::sleep(delay).await;
+        time::sleep(delay).await;
     }
 }
 
@@ -188,7 +189,7 @@ pub(super) fn record_refused_authentication(
             audit_principal,
         ),
         krabka_audit::AuditOutcome::Failure,
-        Some(reason.to_string()),
+        Some(reason.to_owned()),
     );
 }
 
@@ -527,14 +528,15 @@ async fn run_authenticate(
             max_reauth,
         )
         .await),
-        Some(SaslMechanism::Gssapi) => {
-            let cfg = broker
-                .config
-                .gssapi
-                .as_ref()
-                .expect("GSSAPI enabled without config");
-            Ok(handle_authenticate_gssapi(req, auth, cfg, max_reauth))
-        }
+        // A listener offers GSSAPI only with its configuration; without one
+        // the connection closes as on any other failed exchange.
+        Some(SaslMechanism::Gssapi) => broker
+            .config
+            .gssapi
+            .as_ref()
+            .map_or(Err(ScramDisconnect), |cfg| {
+                Ok(handle_authenticate_gssapi(req, auth, cfg, max_reauth))
+            }),
         // Callers only run an exchange a handshake started.
         None => Ok(SaslAuthenticateResponse {
             error_code: codes::ILLEGAL_SASL_STATE,
@@ -594,7 +596,7 @@ async fn run_authenticate(
 /// time. `source` is built the same way [`crate::handlers::admin_audit`]
 /// builds it, so an auditor can join an authentication row to the
 /// privileged-action rows the same session went on to write.
-pub(crate) fn emit_authentication(
+pub fn emit_authentication(
     audit_log: &krabka_audit::AuditLog,
     peer: &SocketAddr,
     mechanism: &str,
@@ -604,7 +606,7 @@ pub(crate) fn emit_authentication(
 ) {
     audit_log.emit(krabka_audit::AuditEvent::Authentication {
         outcome,
-        mechanism: mechanism.to_string(),
+        mechanism: mechanism.to_owned(),
         principal,
         source: krabka_audit::AuditEndpoint {
             ip: peer.ip().to_string(),
@@ -621,7 +623,7 @@ pub(crate) fn emit_authentication(
 /// `break_glass::handlers::principal_name` puts on a `PrivilegedAction` row.
 /// An auditor joins the two by that string, so the two sites have to spell a
 /// principal the same way.
-pub(crate) fn audit_principal(principal: &Principal) -> krabka_audit::AuditPrincipal {
+pub fn audit_principal(principal: &Principal) -> krabka_audit::AuditPrincipal {
     krabka_audit::AuditPrincipal {
         name: principal.to_kafka().to_string(),
         auth_method: format!("{:?}", principal.auth_method),
@@ -646,7 +648,7 @@ fn claimed_principal(
             .auth_bytes
             .split(|&b| b == 0)
             .nth(1)
-            .and_then(|user| std::str::from_utf8(user).ok())
+            .and_then(|user| str::from_utf8(user).ok())
             // The same `User:<name>` form [`audit_principal`] renders, so a
             // failed row and a successful one name one person identically.
             .map_or_default(|user| format!("User:{user}")),
@@ -701,12 +703,12 @@ mod tests {
             test_support::assert_authentication_event,
         },
         assert2::{assert, check},
+        krabka_protocol::owned::metadata_request::MetadataRequest,
+        std::sync::Arc,
     };
 
-    fn request(
-        auth_bytes: &[u8],
-    ) -> krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest {
-        krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest {
+    fn request(auth_bytes: &[u8]) -> SaslAuthenticateRequest {
+        SaslAuthenticateRequest {
             auth_bytes: Bytes::copy_from_slice(auth_bytes),
             ..Default::default()
         }
@@ -785,8 +787,8 @@ mod tests {
             check!(
                 claimed_principal(mechanism, &req)
                     == krabka_audit::AuditPrincipal {
-                        name: name.to_string(),
-                        auth_method: auth_method.to_string(),
+                        name: name.to_owned(),
+                        auth_method: auth_method.to_owned(),
                     },
                 "{case}"
             );
@@ -800,15 +802,15 @@ mod tests {
     #[test]
     fn a_resolved_principal_is_audited_in_the_kafka_user_form() {
         let principal = krabka_security::Principal {
-            name: "alice".to_string(),
+            name: "alice".to_owned(),
             auth_method: krabka_security::AuthMethod::SaslScramSha512,
             groups: vec![],
         };
         assert!(
             audit_principal(&principal)
                 == krabka_audit::AuditPrincipal {
-                    name: "User:alice".to_string(),
-                    auth_method: "SaslScramSha512".to_string(),
+                    name: "User:alice".to_owned(),
+                    auth_method: "SaslScramSha512".to_owned(),
                 }
         );
     }
@@ -826,7 +828,7 @@ mod tests {
             SaslMechanism::Plain.wire_name(),
             claimed_principal(Some(SaslMechanism::Plain), &request(b"\0alice\0wonderland")),
             krabka_audit::AuditOutcome::Failure,
-            Some("authentication failed".to_string()),
+            Some("authentication failed".to_owned()),
         );
 
         let event = rx.try_recv().expect("the failed authentication row");
@@ -842,7 +844,7 @@ mod tests {
                 ip: "192.0.2.9".into(),
                 port: 9092,
             },
-            Some("authentication failed".to_string()),
+            Some("authentication failed".to_owned()),
         );
         assert!(rx.try_recv().is_err(), "exactly one row per refusal");
     }
@@ -906,15 +908,11 @@ mod tests {
 
     /// Strips the `ResponseHeader` an interception framed: `correlation_id`,
     /// plus the tagged-fields byte a flexible response carries.
-    fn authenticate_response(
-        bytes: &Bytes,
-    ) -> krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+    fn authenticate_response(bytes: &Bytes) -> SaslAuthenticateResponse {
         use krabka_protocol::Decode as _;
         let mut cur = &bytes[5..];
-        krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse::decode(
-            &mut cur, 2,
-        )
-        .expect("decode the framed SaslAuthenticate response")
+        SaslAuthenticateResponse::decode(&mut cur, 2)
+            .expect("decode the framed SaslAuthenticate response")
     }
 
     fn plain_payload(user: &str, password: &str) -> BytesMut {
@@ -967,19 +965,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
         cfg.plain_credentials
-            .insert("alice".to_string(), "wonderland".to_string());
+            .insert("alice".to_owned(), "wonderland".to_owned());
         let handle = Broker::start(cfg).await.expect("broker start");
-        let broker = std::sync::Arc::clone(handle.broker_for_test());
+        let broker = Arc::clone(handle.broker_for_test());
         let peer: SocketAddr = "192.0.2.9:9092".parse().expect("peer addr");
         let mechanisms = [SaslMechanism::Plain];
 
         let mut auth = ConnectionAuth::Anonymous;
 
         // A non-SASL api_key is left to the registry.
-        let metadata = encode_body(
-            &krabka_protocol::owned::metadata_request::MetadataRequest::default(),
-            12,
-        );
+        let metadata = encode_body(&MetadataRequest::default(), 12);
         check!(
             try_handle_sasl_frame(
                 &broker,
@@ -995,8 +990,8 @@ mod tests {
 
         // SaslHandshake opens the exchange and keeps the connection.
         let handshake = encode_body(
-            &krabka_protocol::owned::sasl_handshake_request::SaslHandshakeRequest {
-                mechanism: "PLAIN".to_string(),
+            &SaslHandshakeRequest {
+                mechanism: "PLAIN".to_owned(),
                 ..Default::default()
             },
             1,
@@ -1050,7 +1045,7 @@ mod tests {
         check!(outcome.close_after, "a refused credential must close");
         check!(
             authenticate_response(&outcome.response_bytes)
-                == krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+                == SaslAuthenticateResponse {
                     error_code: codes::SASL_AUTHENTICATION_FAILED,
                     error_message: Some(
                         "Authentication failed: Invalid username or password".into()
@@ -1082,7 +1077,7 @@ mod tests {
         let outcome = kept_authenticate(&broker, &good, &mut auth, &mechanisms, &peer).await;
         check!(
             authenticate_response(&outcome.response_bytes)
-                == krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+                == SaslAuthenticateResponse {
                     error_code: codes::ILLEGAL_SASL_STATE,
                     error_message: Some(AUTHENTICATE_AFTER_AUTHENTICATION.into()),
                     ..Default::default()
@@ -1095,8 +1090,8 @@ mod tests {
         // knows no such user and refuses.
         let mut scram = ConnectionAuth::Anonymous;
         let scram_handshake = encode_body(
-            &krabka_protocol::owned::sasl_handshake_request::SaslHandshakeRequest {
-                mechanism: "SCRAM-SHA-512".to_string(),
+            &SaslHandshakeRequest {
+                mechanism: "SCRAM-SHA-512".to_owned(),
                 ..Default::default()
             },
             1,
@@ -1119,7 +1114,7 @@ mod tests {
         .expect("handshake encodes");
         check!(scram.negotiated_mechanism() == Some(SaslMechanism::ScramSha512));
         let client_first = encode_body(
-            &krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest {
+            &SaslAuthenticateRequest {
                 auth_bytes: Bytes::from_static(b"n,,n=nobody,r=clientnonce"),
                 ..Default::default()
             },
@@ -1137,7 +1132,7 @@ mod tests {
         // SCRAM raises no client-facing text, so Kafka's generic sentence.
         check!(
             authenticate_response(&outcome.response_bytes)
-                == krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse {
+                == SaslAuthenticateResponse {
                     error_code: codes::SASL_AUTHENTICATION_FAILED,
                     error_message: Some(
                         "Authentication failed during authentication due to invalid \

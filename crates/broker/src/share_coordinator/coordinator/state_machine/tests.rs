@@ -16,7 +16,13 @@ use {
         },
     },
     assert2::{assert, check},
+    std::{
+        path::Path,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
     tempfile::tempdir,
+    tokio::{task::yield_now, time::sleep},
 };
 
 const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([5; 16]);
@@ -164,13 +170,13 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             tokio::select! {
                 biased;
                 result = &mut first => panic!("paused append completed: {result:?}"),
-                () = tokio::task::yield_now() => {}
+                () = yield_now() => {}
             }
             assert!(coord.entry("g", TOPIC, 0).is_none());
             tokio::select! {
                 biased;
                 result = &mut next => panic!("queued initialize completed: {result:?}"),
-                () = tokio::task::yield_now() => {}
+                () = yield_now() => {}
             }
             drop(transition);
             let (first, next) = tokio::join!(first, next);
@@ -395,7 +401,7 @@ struct Seeded {
 /// partitions: partition 0 at state epoch 2, leader epoch 3, start offset
 /// 10 and delivery complete count 4, and partition 2 (not in the image of
 /// two partitions) at state epoch 2.
-async fn seeded(dir: &std::path::Path, trunk: bool) -> Seeded {
+async fn seeded(dir: &Path, trunk: bool) -> Seeded {
     let ConfiguredCoordinator {
         coord,
         registry: _reg,
@@ -1086,8 +1092,8 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
             // The setup `initialize` below commits under the same timeout,
             // so the no-commit case keeps enough of it for a loaded machine.
             let timeout = match fault {
-                Fault::NoCommit => std::time::Duration::from_secs(2),
-                Fault::MovesAway | Fault::NewerEpoch => std::time::Duration::from_secs(30),
+                Fault::NoCommit => Duration::from_secs(2),
+                Fault::MovesAway | Fault::NewerEpoch => Duration::from_secs(30),
             };
             let config = ShareCoordinatorConfig {
                 write_timeout: timeout,
@@ -1110,16 +1116,16 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
                         &both,
                         &both,
                         krabka_raft::NodeId(1),
-                        std::time::Instant::now(),
+                        Instant::now(),
                     );
                 }
                 Fault::NewerEpoch => part.install_leader_change(1, 1).await,
             }
             let mover = matches!(fault, Fault::MovesAway).then(|| {
-                let part = std::sync::Arc::clone(&part);
+                let part = Arc::clone(&part);
                 tokio::spawn(async move {
                     // intentional: the operation has to wait before the move.
-                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    sleep(Duration::from_millis(20)).await;
                     part.install_leader_change(2, 1).await;
                 })
             });

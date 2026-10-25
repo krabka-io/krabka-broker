@@ -3,7 +3,10 @@
 use {
     crate::metrics::QuotaCharge,
     krabka_units::{Time, convert::TimeExt},
-    std::sync::atomic::{AtomicU64, Ordering},
+    std::sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 /// The KIP-219 throttle window a handler computed for the request in flight.
@@ -24,7 +27,7 @@ use {
 /// longest window rather than summing, which matches Kafka's single
 /// `throttle_time_ms` and single channel mute per request.
 #[derive(Debug, Default)]
-pub(crate) struct ThrottleSlot {
+pub struct ThrottleSlot {
     /// The window in whole microseconds. `Time` is an `f64` quantity and so
     /// cannot live in an atomic directly; microseconds are finer than the
     /// millisecond resolution of the wire field the same window is reported in.
@@ -33,7 +36,7 @@ pub(crate) struct ThrottleSlot {
     /// it together with the request quota in one metrics call. Kafka's
     /// `sendResponseMaybeThrottleWithControllerQuota` takes the larger of the
     /// controller-mutation and request throttles as one decision.
-    deferred: std::sync::OnceLock<QuotaCharge>,
+    deferred: OnceLock<QuotaCharge>,
 }
 
 impl ThrottleSlot {

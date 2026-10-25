@@ -209,7 +209,8 @@ mod tests {
             serve_http_pages,
         },
         assert2::check,
-        std::time::Duration,
+        std::{future, time::Duration},
+        tokio::time,
     };
 
     const GCS_TEST_KEY: &str = r#"{
@@ -415,7 +416,7 @@ mod tests {
         let HttpListener { listener, endpoint } = http_listener().await;
         let server = tokio::spawn(async move {
             let _socket = accept_http_request(listener).await;
-            std::future::pending::<()>().await;
+            future::pending::<()>().await;
         });
         let request_timeout = if retry_deadline {
             Duration::from_secs(2)
@@ -427,7 +428,7 @@ mod tests {
         } else {
             Duration::from_secs(2)
         };
-        let result = tokio::time::timeout(Duration::from_secs(1), async {
+        let result = time::timeout(Duration::from_secs(1), async {
             if gcs {
                 let mut cfg = gcs_cfg(endpoint);
                 cfg.request_timeout = request_timeout;

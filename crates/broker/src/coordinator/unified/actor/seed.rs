@@ -20,7 +20,7 @@ use {
     },
     krabka_protocol::primitives::uuid::Uuid,
     std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         time::{Duration, Instant},
     },
 };
@@ -46,7 +46,7 @@ pub(super) fn apply_seed(state: &mut GroupState, seed: GroupSeed) {
         state.set_resolved_regex(regex, resolved.into());
     }
     for (mid, meta) in seed.members {
-        let mut sub = std::collections::HashSet::new();
+        let mut sub = HashSet::new();
         for n in meta.subscribed_topic_names {
             sub.insert(n);
         }
@@ -169,10 +169,10 @@ mod tests {
         MemberMetadataValue {
             instance_id: None,
             rack_id: None,
-            client_id: "c".to_string(),
-            client_host: "/127.0.0.1".to_string(),
-            subscribed_topic_names: topics.iter().map(|topic| (*topic).to_string()).collect(),
-            subscribed_topic_regex: regex.map(str::to_string),
+            client_id: "c".to_owned(),
+            client_host: "/127.0.0.1".to_owned(),
+            subscribed_topic_names: topics.iter().map(|topic| (*topic).to_owned()).collect(),
+            subscribed_topic_regex: regex.map(str::to_owned),
             server_assignor: None,
             rebalance_timeout_ms: 60_000,
             classic,
@@ -233,28 +233,28 @@ mod tests {
             target_epoch: 5,
             assignment_timestamp_ms: 0,
             members: [(
-                "m".to_string(),
+                "m".to_owned(),
                 seeded_member_metadata(
                     &["t"],
                     None,
                     Some(ClassicMemberMetadata {
                         session_timeout_ms: 30_000,
                         supported_protocols: vec![(
-                            "range".to_string(),
+                            "range".to_owned(),
                             Bytes::from_static(b"meta"),
                         )],
                     }),
                 ),
             )]
             .into(),
-            target_per_member: [("m".to_string(), TargetAssignmentMemberValue {
+            target_per_member: [("m".to_owned(), TargetAssignmentMemberValue {
                 topic_partitions: vec![AssignedTopicPartitions {
                     topic_id: TOPIC,
                     partitions: target.into_iter().map(|index| index.0).collect(),
                 }],
             })]
             .into(),
-            current_per_member: [("m".to_string(), CurrentMemberAssignmentValue {
+            current_per_member: [("m".to_owned(), CurrentMemberAssignmentValue {
                 member_epoch: member_epoch.0,
                 previous_member_epoch: member_epoch.0 - 1,
                 state,
@@ -351,15 +351,15 @@ mod tests {
             target_epoch: 5,
             assignment_timestamp_ms: 0,
             members: [(
-                "m".to_string(),
+                "m".to_owned(),
                 seeded_member_metadata(&["orders"], Some("pay.*"), None),
             )]
             .into(),
             resolved_regexes: resolved
                 .into_iter()
                 .map(|topics| {
-                    ("pay.*".to_string(), RegularExpressionValue {
-                        topics: topics.iter().map(|topic| (*topic).to_string()).collect(),
+                    ("pay.*".to_owned(), RegularExpressionValue {
+                        topics: topics.iter().map(|topic| (*topic).to_owned()).collect(),
                         version: 7,
                         timestamp_ms: 1_000,
                     })
@@ -403,7 +403,7 @@ mod tests {
             want: SubscribedTopics,
         }
         let named = |topics: &[&str]| {
-            SubscribedTopics::Named(topics.iter().map(|topic| (*topic).to_string()).collect())
+            SubscribedTopics::Named(topics.iter().map(|topic| (*topic).to_owned()).collect())
         };
         let rows: [Row<'_>; 4] = [
             Row {
@@ -478,7 +478,7 @@ mod tests {
         check!(
             state.resolved_regex("pay.*")
                 == Some(&ResolvedRegularExpression {
-                    topics: ["payments".to_string()].into(),
+                    topics: ["payments".to_owned()].into(),
                     version: 7,
                     timestamp_ms: 1_000,
                 })

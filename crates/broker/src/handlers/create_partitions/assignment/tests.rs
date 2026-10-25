@@ -6,11 +6,11 @@ use {
     super::*,
     crate::handlers::{create_partitions::test_support::assn, test_support::sorted_replica_sites},
     assert2::assert,
-    std::collections::BTreeSet,
+    std::{collections::BTreeSet, ops::Range},
 };
 
 /// The seeds that a test runs the placement with.
-const SEEDS: std::ops::Range<u64> = 0..64;
+const SEEDS: Range<u64> = 0..64;
 
 /// Brokers that declare no site. The placement of such a cluster is Kafka's
 /// striped placement.
@@ -55,7 +55,7 @@ fn site_brokers(brokers: &[BrokerSite], witnesses: &[u64]) -> Vec<SiteBrokerView
         .iter()
         .map(|BrokerSite { node_id, site }| SiteBrokerView {
             node_id: NodeId(*node_id),
-            site: Some((*site).to_string()),
+            site: Some((*site).to_owned()),
             is_witness: witnesses.contains(node_id),
             fenced: false,
         })
@@ -66,7 +66,7 @@ fn site_of(brokers: &[BrokerSite], node_id: NodeId) -> String {
     brokers
         .iter()
         .find(|broker| NodeId(broker.node_id) == node_id)
-        .map(|broker| broker.site.to_string())
+        .map(|broker| broker.site.to_owned())
         .expect("the placement returns a broker that declared a site")
 }
 

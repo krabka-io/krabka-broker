@@ -34,10 +34,10 @@ mod tests {
 
     fn key() -> CacheKey {
         CacheKey {
-            principal: "User:alice".to_string(),
+            principal: "User:alice".to_owned(),
             operation: AclOperation::Read,
             resource_type: ResourceType::Topic,
-            resource_name: "orders".to_string(),
+            resource_name: "orders".to_owned(),
             host: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)),
         }
     }
@@ -47,7 +47,7 @@ mod tests {
         let expected = key();
         for changed in [
             CacheKey {
-                principal: "User:bob".to_string(),
+                principal: "User:bob".to_owned(),
                 ..key()
             },
             CacheKey {
@@ -59,7 +59,7 @@ mod tests {
                 ..key()
             },
             CacheKey {
-                resource_name: "payments".to_string(),
+                resource_name: "payments".to_owned(),
                 ..key()
             },
             CacheKey {

@@ -24,8 +24,11 @@ use {
     },
     krabka_ids::PartitionIndex,
     krabka_metadata::MetadataImage,
-    std::{sync::Arc, time::Duration},
-    tokio::task::JoinHandle,
+    std::{
+        sync::{Arc, PoisonError, atomic::Ordering},
+        time::Duration,
+    },
+    tokio::{sync::Mutex, task::JoinHandle, time},
     tracing::{info, warn},
 };
 
@@ -34,7 +37,7 @@ use {
 /// A caller that does not wait drops this value. The tasks run on.
 #[derive(Debug, Default, krabka_macros::ScheduledLoads)]
 #[scheduled_loads(failure_message = "__transaction_state load task failed")]
-pub(crate) struct ScheduledLoads {
+pub struct ScheduledLoads {
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -89,13 +92,8 @@ impl TxnCoordinator {
             self.partitions
                 .get(bootstrap::TOPIC, partition)
                 .is_some_and(|local| {
-                    local
-                        .current_leader
-                        .load(std::sync::atomic::Ordering::Acquire)
-                        == self.node_id.0
-                        && local
-                            .current_leader_epoch
-                            .load(std::sync::atomic::Ordering::Acquire)
+                    local.current_leader.load(Ordering::Acquire) == self.node_id.0
+                        && local.current_leader_epoch.load(Ordering::Acquire)
                             == record.leader_epoch.0
                 })
         };
@@ -110,20 +108,8 @@ impl TxnCoordinator {
         if unchanged {
             return ScheduledLoads::default();
         }
-        let changes = {
-            let mut leaders = self.leader_partitions.write().await;
-            let changes =
-                leadership::apply_image(&mut leaders, self.node_id, image, is_local, || {
-                    self.next_generation
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                });
-            // Drop the old transactions while the write guard holds, so no
-            // publication sees a half-dropped partition.
-            for partition in &changes.unload {
-                self.drop_partition_state(*partition);
-            }
-            changes
-        };
+        let changes =
+            self.apply_leadership(&mut *self.leader_partitions.write().await, image, is_local);
         // A write that waits to commit in a term that just ended stops
         // waiting, and the load of the next term can take the partition's
         // write lock from it.
@@ -222,7 +208,7 @@ impl TxnCoordinator {
                 finished.await;
             }
         };
-        match tokio::time::timeout(timeout, wait).await {
+        match time::timeout(timeout, wait).await {
             Ok(status) => status,
             Err(_elapsed) => self.load_status(partition).await,
         }
@@ -266,7 +252,7 @@ impl TxnCoordinator {
         let _pid_install = self
             .pid_install
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         self.state
             .retain(|tid, _| self.partition_for(tid) != partition);
         self.pid_to_tid
@@ -280,11 +266,9 @@ impl TxnCoordinator {
     // `leadership::apply_image` carry the decisions.
     #[cfg_attr(test, mutants::skip)]
     async fn load_partition(self: Arc<Self>, partition: PartitionIndex, generation: u64) {
-        let index = usize::try_from(partition.get())
-            .expect("transaction state partition index must be nonnegative");
         // An append holds this lock across its write, so the replay starts
         // after every append that began in an older term.
-        let state_partition_write = self.state_partition_writes[index].lock().await;
+        let state_partition_write = self.state_partition_writes.lock_for(partition).lock().await;
         // Kafka's `loadTransactionMetadata` never fails: a replay error ends
         // the replay with what it loaded so far, and a partition without a
         // log loads empty. Only a replay task that dies fails the load here.
@@ -331,7 +315,23 @@ impl TxnCoordinator {
         generation: u64,
         replay: Result<RecoveredTransactions, BrokerError>,
     ) -> Vec<String> {
-        let mut leaders = self.leader_partitions.write().await;
+        self.publish_term(
+            &mut *self.leader_partitions.write().await,
+            partition,
+            generation,
+            replay,
+        )
+    }
+
+    /// The body of [`Self::publish_load`], under the caller's write guard of
+    /// `leaders`.
+    fn publish_term(
+        &self,
+        leaders: &mut StatePartitionLeaders,
+        partition: PartitionIndex,
+        generation: u64,
+        replay: Result<RecoveredTransactions, BrokerError>,
+    ) -> Vec<String> {
         let Some(term) = leaders
             .get_mut(&partition)
             .and_then(|leadership| leadership.term.as_mut())
@@ -362,6 +362,25 @@ impl TxnCoordinator {
         }
     }
 
+    /// Applies the leadership of `image` to `leaders`, and drops the
+    /// transactions of every partition it unloads. The caller holds the write
+    /// guard of `leaders` across both, so no publication sees a half-dropped
+    /// partition.
+    fn apply_leadership(
+        &self,
+        leaders: &mut StatePartitionLeaders,
+        image: &MetadataImage,
+        is_local: impl Fn(PartitionIndex) -> bool,
+    ) -> leadership::LeadershipChanges {
+        let changes = leadership::apply_image(leaders, self.node_id, image, is_local, || {
+            self.next_generation.fetch_add(1, Ordering::Relaxed)
+        });
+        for partition in &changes.unload {
+            self.drop_partition_state(*partition);
+        }
+        changes
+    }
+
     /// Publishes the transactions of one replayed partition, and returns the
     /// `Prepare*` ones. The caller holds the leadership write guard.
     ///
@@ -376,7 +395,7 @@ impl TxnCoordinator {
         let _pid_install = self
             .pid_install
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         if let Some((pid, tid)) = recovered.pid_to_tid.iter().find(|(pid, tid)| {
             self.pid_to_tid
                 .get(pid)
@@ -392,8 +411,7 @@ impl TxnCoordinator {
             if super::completion::completion_for(entry.state).is_some() {
                 prepared.push(tid.clone());
             }
-            self.state
-                .insert(tid, Arc::new(tokio::sync::Mutex::new(entry)));
+            self.state.insert(tid, Arc::new(Mutex::new(entry)));
         }
         for (pid, tid) in recovered.pid_to_tid {
             self.pid_to_tid.insert(pid, tid);

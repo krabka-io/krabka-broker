@@ -1,6 +1,7 @@
 use {super::retention_delete_target, creusot_std::prelude::*};
 
 /// Extend a deletion floor through one completed whole-range delete.
+///
 /// A gap, malformed coordinates or an unrepresentable successor closes the
 /// contiguous run permanently. Completion and truthful metadata are host facts.
 #[ensures(current@ <= result.0@)]
@@ -19,8 +20,8 @@ pub fn remote_retention_floor_step(
     if !contiguous || current < 0 || start < 0 || start > end || start > current {
         return (current, false);
     }
-    match retention_delete_target(Some(end)) {
-        Some(target) => (current.max(target), true),
-        None => (current, false),
-    }
+    let Some(target) = retention_delete_target(Some(end)) else {
+        return (current, false);
+    };
+    (current.max(target), true)
 }

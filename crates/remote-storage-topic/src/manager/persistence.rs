@@ -14,6 +14,7 @@ use {
         log::PartitionStart,
         snapshot::{SNAPSHOT_FILE_NAME, Snapshot},
     },
+    std::sync::PoisonError,
     tracing::instrument,
 };
 
@@ -45,7 +46,7 @@ impl TopicBasedRemoteLogMetadataManager {
         // direction — cache BEHIND committed, which would skip an event on
         // resume — cannot occur because inner is always updated first.
         let (committed_offsets, dump) = {
-            let applied = self.applied.lock().expect("applied mutex poisoned");
+            let applied = self.applied.lock().unwrap_or_else(PoisonError::into_inner);
             let dump = self.inner.export();
             (applied.clone(), dump)
         };
@@ -80,18 +81,22 @@ impl TopicBasedRemoteLogMetadataManager {
     ) -> Result<ResumePlan, SnapshotError> {
         let mut committed = vec![-1i64; n];
         if let Some(snap) = snapshot {
-            for (i, &off) in snap.committed_offsets.iter().take(n).enumerate() {
+            for (slot, &off) in committed.iter_mut().zip(&snap.committed_offsets) {
                 Self::resume_start_offset(off)?;
-                committed[i] = off;
+                *slot = off;
             }
         }
-        let assignment = (0..n)
-            .map(|i| PartitionStart {
-                partition: i32::try_from(i).expect("metadata partition count came from i32"),
-                start_offset: Self::resume_start_offset(committed[i])
-                    .expect("committed offsets were validated above"),
+        // The metadata partition count came from an i32.
+        let assignment = committed
+            .iter()
+            .zip(0..=i32::MAX)
+            .map(|(&off, partition)| {
+                Ok(PartitionStart {
+                    partition,
+                    start_offset: Self::resume_start_offset(off)?,
+                })
             })
-            .collect();
+            .collect::<Result<_, SnapshotError>>()?;
         Ok(ResumePlan {
             committed,
             assignment,
@@ -140,7 +145,12 @@ mod tests {
         assert2::{assert, check},
         krabka_ids::LeaderEpoch,
         krabka_remote_storage::{PartitionDump, RemoteLogMetadataManager, RlmmCacheDump},
-        std::sync::Arc,
+        std::{
+            fs,
+            sync::Arc,
+            time::{Duration, Instant},
+        },
+        tokio::task,
     };
 
     fn snapshot_with_offsets(committed_offsets: Vec<i64>) -> Snapshot {
@@ -196,26 +206,34 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn oversized_snapshot_count_falls_back_to_replay() {
         let dir = snapshot_test_dir("oversized-count");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(SNAPSHOT_FILE_NAME), [
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(SNAPSHOT_FILE_NAME), [
             0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1,
         ])
         .unwrap();
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
         let mp = metadata_partition_for(&tp(), log.partition_count());
-        log.publish(mp, MetadataEvent::AddSegment(started(10, 0, 99)).encode())
-            .await
-            .unwrap();
-        log.publish(mp, MetadataEvent::UpdateSegment(finish(10)).encode())
-            .await
-            .unwrap();
+        log.publish(
+            mp,
+            MetadataEvent::AddSegment(started(10, 0, 99))
+                .encode()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        log.publish(
+            mp,
+            MetadataEvent::UpdateSegment(finish(10)).encode().unwrap(),
+        )
+        .await
+        .unwrap();
         let manager = start_manager_in(log, dir.clone()).unwrap();
         check!(manager.committed_offset(mp) == -1);
         manager.reconcile_assignment(&[mp]).await;
         wait_ready(&manager, &tp()).await;
         check!(manager.list_remote_log_segments(&tp()).unwrap().len() == 1);
         manager.shutdown_and_flush().await;
-        std::fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -246,7 +264,7 @@ mod tests {
         check!(manager.metadata_partition_ready(mp));
         check!(manager.list_remote_log_segments(&tp()).unwrap().is_empty());
         manager.shutdown();
-        std::fs::remove_dir_all(&dir).ok();
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -255,9 +273,9 @@ mod tests {
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
         let mp = metadata_partition_for(&tp(), log.partition_count());
 
-        let writer = start_manager_in(log.clone(), dir.clone()).unwrap();
+        let writer = start_manager_in(Arc::clone(&log), dir.clone()).unwrap();
         writer.reconcile_assignment(&[mp]).await;
-        let writer_for_add = writer.clone();
+        let writer_for_add = Arc::clone(&writer);
         on_blocking(move || {
             writer_for_add
                 .add_remote_log_segment_metadata(started(10, 0, 99))
@@ -267,7 +285,10 @@ mod tests {
         writer.shutdown_and_flush().await;
 
         let suffix_offset = log
-            .publish(mp, MetadataEvent::UpdateSegment(finish(10)).encode())
+            .publish(
+                mp,
+                MetadataEvent::UpdateSegment(finish(10)).encode().unwrap(),
+            )
             .await
             .expect("append lifecycle suffix");
         check!(suffix_offset == 1);
@@ -275,13 +296,13 @@ mod tests {
         let resumed = start_manager_in(log, dir.clone()).unwrap();
         check!(resumed.committed_offset(mp) == 0);
         resumed.reconcile_assignment(&[mp]).await;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(2);
         while !resumed.metadata_partition_ready(mp) {
             assert!(
-                std::time::Instant::now() < deadline,
+                Instant::now() < deadline,
                 "stale snapshot did not consume its exact suffix"
             );
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
         check!(
             resumed
@@ -290,14 +311,14 @@ mod tests {
                 == Some(99)
         );
         resumed.shutdown();
-        std::fs::remove_dir_all(&dir).ok();
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn shutdown_flushes_a_snapshot_covering_applied_events() {
         let dir = snapshot_test_dir("mgr-snap");
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
-        let m = start_seeded_manager_in(log.clone(), dir.clone(), &[seed(10, 0, 99)]).await;
+        let m = start_seeded_manager_in(Arc::clone(&log), dir.clone(), &[seed(10, 0, 99)]).await;
 
         m.shutdown_and_flush().await;
 
@@ -313,7 +334,7 @@ mod tests {
         // The dump contains the finished segment.
         assert!(snap.dump.partitions.len() == 1);
         check!(snap.dump.partitions[0].segments.len() == 1);
-        std::fs::remove_dir_all(&dir).ok();
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -324,7 +345,7 @@ mod tests {
         // First lifetime: seed three finished segments, then shutdown-flush.
         let pre_cache;
         {
-            let m = start_seeded_manager_in(log.clone(), dir.clone(), &[
+            let m = start_seeded_manager_in(Arc::clone(&log), dir.clone(), &[
                 seed(10, 0, 99),
                 seed(11, 100, 199),
                 seed(12, 200, 299),
@@ -362,7 +383,7 @@ mod tests {
         assert!(resumed_committed[idx] == committed);
 
         // Second lifetime against the SAME log + dir: must resume, not replay.
-        let fresh = start_manager_in(log.clone(), dir.clone()).unwrap();
+        let fresh = start_manager_in(Arc::clone(&log), dir.clone()).unwrap();
         // The manager exposes the same committed offset via its canonical
         // accessor used by the assignment reconciler.
         assert!(fresh.committed_offset(p) == committed);
@@ -373,13 +394,13 @@ mod tests {
         fresh
             .reconcile_assignment(&(0..log.partition_count()).collect::<Vec<_>>())
             .await;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !fresh.metadata_partition_ready(p) {
             assert!(
-                std::time::Instant::now() < deadline,
+                Instant::now() < deadline,
                 "fresh manager did not catch up on the orders partition"
             );
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
         let post_cache = fresh.list_remote_log_segments(&tp()).unwrap();
         assert!(
@@ -393,6 +414,6 @@ mod tests {
                 == Some(299)
         );
         fresh.shutdown();
-        std::fs::remove_dir_all(&dir).ok();
+        let _ = fs::remove_dir_all(&dir);
     }
 }

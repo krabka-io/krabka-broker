@@ -13,16 +13,24 @@ use {
         rpc::send_update_voter,
     },
     crate::codes,
-    krabka_protocol::owned::update_raft_voter_request::{
-        KRaftVersionFeature, Listener as UpdateListener, UpdateRaftVoterRequest,
+    krabka_protocol::{
+        owned::{
+            add_raft_voter_request,
+            update_raft_voter_request::{
+                KRaftVersionFeature, Listener as UpdateListener, UpdateRaftVoterRequest,
+            },
+        },
+        primitives::uuid::Uuid,
     },
     krabka_units::convert::TimeExt as _,
+    std::collections::BTreeMap,
+    tokio::time::sleep,
 };
 
 /// Advertise this controller at startup and after each leader change. The
 /// leader accepts this at both `kraft.version` levels; level zero keeps the
 /// data in memory for upgrade preflight, while level one persists it.
-pub(crate) async fn run_voter_updates(params: AutoJoinParams) {
+pub async fn run_voter_updates(params: AutoJoinParams) {
     let Ok(voter_id) = i32::try_from(params.node_id.0) else {
         tracing::error!(
             node_id = params.node_id.0,
@@ -34,6 +42,15 @@ pub(crate) async fn run_voter_updates(params: AutoJoinParams) {
         params.advertised_controller.as_deref(),
         params.controller.controller_bound_addr(),
     );
+    advertise_forever(&params, voter_id, &listener).await;
+}
+
+/// The loop of [`run_voter_updates`]: it runs for as long as the task does.
+async fn advertise_forever(
+    params: &AutoJoinParams,
+    voter_id: i32,
+    listener: &add_raft_voter_request::Listener,
+) -> ! {
     let mut last_updated = None;
     let mut next_server = 0usize;
     loop {
@@ -44,10 +61,10 @@ pub(crate) async fn run_voter_updates(params: AutoJoinParams) {
             // If our advertised listener and directory ID already match the committed
             // voter record, skip sending an update RPC.
             if let Some(my_voter) = quorum.voter_nodes.get(&params.node_id)
-                && voter_already_up_to_date(my_voter, params.directory_id, &listener)
+                && voter_already_up_to_date(my_voter, params.directory_id, listener)
             {
                 last_updated = Some((leader, epoch));
-                tokio::time::sleep(params.retry_backoff.to_std()).await;
+                sleep(params.retry_backoff.to_std()).await;
                 continue;
             }
 
@@ -66,7 +83,7 @@ pub(crate) async fn run_voter_updates(params: AutoJoinParams) {
                     ?leader,
                     "no target controller endpoint or bootstrap server available for UpdateVoter"
                 );
-                tokio::time::sleep(params.retry_backoff.to_std()).await;
+                sleep(params.retry_backoff.to_std()).await;
                 continue;
             };
             let request = build_update_raft_voter_request(
@@ -74,7 +91,7 @@ pub(crate) async fn run_voter_updates(params: AutoJoinParams) {
                 epoch,
                 voter_id,
                 params.directory_id,
-                &listener,
+                listener,
             );
             match send_update_voter(
                 &params.inter_broker_client,
@@ -102,14 +119,14 @@ pub(crate) async fn run_voter_updates(params: AutoJoinParams) {
                 ),
             }
         }
-        tokio::time::sleep(params.retry_backoff.to_std()).await;
+        sleep(params.retry_backoff.to_std()).await;
     }
 }
 
-pub(crate) fn voter_already_up_to_date(
+pub fn voter_already_up_to_date(
     my_voter: &krabka_raft::Node,
     directory_id: uuid::Uuid,
-    listener: &krabka_protocol::owned::add_raft_voter_request::Listener,
+    listener: &add_raft_voter_request::Listener,
 ) -> bool {
     let matches_dir = my_voter.directory_id == directory_id;
     let matches_listener = my_voter
@@ -119,9 +136,9 @@ pub(crate) fn voter_already_up_to_date(
     matches_dir && matches_listener
 }
 
-pub(crate) fn resolve_target_controller(
+pub fn resolve_target_controller(
     leader: Option<krabka_raft::NodeId>,
-    voter_nodes: &std::collections::BTreeMap<krabka_raft::NodeId, krabka_raft::Node>,
+    voter_nodes: &BTreeMap<krabka_raft::NodeId, krabka_raft::Node>,
     bootstrap_servers: &[String],
     next_server: &mut usize,
 ) -> Option<String> {
@@ -134,27 +151,26 @@ pub(crate) fn resolve_target_controller(
             .or_else(|| leader_node.endpoints.first())
     {
         Some(format!("{}:{}", ep.host, ep.port))
-    } else if !bootstrap_servers.is_empty() {
-        let s = select_bootstrap_server(bootstrap_servers, *next_server);
+    } else if let Some(s) = select_bootstrap_server(bootstrap_servers, *next_server) {
         *next_server = next_server.wrapping_add(1);
-        Some(s.to_string())
+        Some(s.to_owned())
     } else {
         None
     }
 }
 
-pub(crate) fn build_update_raft_voter_request(
+pub fn build_update_raft_voter_request(
     cluster_id: Option<uuid::Uuid>,
     epoch: i32,
     voter_id: i32,
     directory_id: uuid::Uuid,
-    listener: &krabka_protocol::owned::add_raft_voter_request::Listener,
+    listener: &add_raft_voter_request::Listener,
 ) -> UpdateRaftVoterRequest {
     UpdateRaftVoterRequest {
         cluster_id: cluster_id.map(|id| id.to_string()),
         current_leader_epoch: epoch,
         voter_id,
-        voter_directory_id: krabka_protocol::primitives::uuid::Uuid(*directory_id.as_bytes()),
+        voter_directory_id: Uuid(*directory_id.as_bytes()),
         listeners: vec![UpdateListener {
             name: listener.name.clone(),
             host: listener.host.clone(),
@@ -179,17 +195,26 @@ mod tests {
             test_support::FakeMetadataSource,
         },
         krabka_metadata::{KRaftVersionRange, VoterEndpoint},
+        krabka_protocol::owned::add_raft_voter_request::Listener,
         krabka_raft::{Node, NodeId},
-        std::{sync::Arc, time::Duration},
+        std::{
+            net::SocketAddr,
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering},
+            },
+            time::Duration,
+        },
+        tokio::{net::TcpListener, time::timeout},
     };
 
     #[test]
     fn build_update_raft_voter_request_carries_identity_and_endpoints() {
         let cluster = uuid::Uuid::from_u128(1234);
         let dir = uuid::Uuid::from_u128(5678);
-        let listener = krabka_protocol::owned::add_raft_voter_request::Listener {
-            name: "CONTROLLER".to_string(),
-            host: "10.0.0.1".to_string(),
+        let listener = Listener {
+            name: "CONTROLLER".to_owned(),
+            host: "10.0.0.1".to_owned(),
             port: 9093,
             ..Default::default()
         };
@@ -197,9 +222,7 @@ mod tests {
         assert2::assert!(req.cluster_id == Some(cluster.to_string()));
         assert2::assert!(req.current_leader_epoch == 5);
         assert2::assert!(req.voter_id == 42);
-        assert2::assert!(
-            req.voter_directory_id == krabka_protocol::primitives::uuid::Uuid(*dir.as_bytes())
-        );
+        assert2::assert!(req.voter_directory_id == Uuid(*dir.as_bytes()));
         assert2::assert!(req.listeners.len() == 1);
         assert2::assert!(req.listeners[0].name == "CONTROLLER");
         assert2::assert!(req.listeners[0].host == "10.0.0.1");
@@ -218,16 +241,16 @@ mod tests {
         let node = Node {
             directory_id: dir,
             endpoints: vec![VoterEndpoint {
-                name: "CONTROLLER".to_string(),
-                host: "127.0.0.1".to_string(),
+                name: "CONTROLLER".to_owned(),
+                host: "127.0.0.1".to_owned(),
                 port: 9093,
             }],
             kraft_version: KRaftVersionRange::default(),
         };
 
-        let matching_listener = krabka_protocol::owned::add_raft_voter_request::Listener {
-            name: "CONTROLLER".to_string(),
-            host: "127.0.0.1".to_string(),
+        let matching_listener = Listener {
+            name: "CONTROLLER".to_owned(),
+            host: "127.0.0.1".to_owned(),
             port: 9093,
             ..Default::default()
         };
@@ -241,18 +264,18 @@ mod tests {
         ));
 
         // Differing host
-        let wrong_host = krabka_protocol::owned::add_raft_voter_request::Listener {
-            name: "CONTROLLER".to_string(),
-            host: "127.0.0.2".to_string(),
+        let wrong_host = Listener {
+            name: "CONTROLLER".to_owned(),
+            host: "127.0.0.2".to_owned(),
             port: 9093,
             ..Default::default()
         };
         assert2::assert!(!voter_already_up_to_date(&node, dir, &wrong_host));
 
         // Differing port
-        let wrong_port = krabka_protocol::owned::add_raft_voter_request::Listener {
-            name: "CONTROLLER".to_string(),
-            host: "127.0.0.1".to_string(),
+        let wrong_port = Listener {
+            name: "CONTROLLER".to_owned(),
+            host: "127.0.0.1".to_owned(),
             port: 9094,
             ..Default::default()
         };
@@ -273,18 +296,18 @@ mod tests {
 
     #[test]
     fn resolve_target_controller_finds_leader_or_bootstrap() {
-        let mut voter_nodes = std::collections::BTreeMap::new();
+        let mut voter_nodes = BTreeMap::new();
         voter_nodes.insert(NodeId(1), Node {
             directory_id: uuid::Uuid::from_u128(1),
             endpoints: vec![
                 VoterEndpoint {
-                    name: "OTHER".to_string(),
-                    host: "127.0.0.1".to_string(),
+                    name: "OTHER".to_owned(),
+                    host: "127.0.0.1".to_owned(),
                     port: 8080,
                 },
                 VoterEndpoint {
-                    name: "CONTROLLER".to_string(),
-                    host: "127.0.0.1".to_string(),
+                    name: "CONTROLLER".to_owned(),
+                    host: "127.0.0.1".to_owned(),
                     port: 9093,
                 },
             ],
@@ -293,32 +316,32 @@ mod tests {
         voter_nodes.insert(NodeId(2), Node {
             directory_id: uuid::Uuid::from_u128(2),
             endpoints: vec![VoterEndpoint {
-                name: "INTERNAL".to_string(),
-                host: "127.0.0.1".to_string(),
+                name: "INTERNAL".to_owned(),
+                host: "127.0.0.1".to_owned(),
                 port: 7070,
             }],
             kraft_version: KRaftVersionRange::default(),
         });
 
         let mut next = 0;
-        let bootstraps = vec!["127.0.0.1:9092".to_string()];
+        let bootstraps = vec!["127.0.0.1:9092".to_owned()];
 
         // Prefers CONTROLLER endpoint
         assert2::assert!(
             resolve_target_controller(Some(NodeId(1)), &voter_nodes, &bootstraps, &mut next)
-                == Some("127.0.0.1:9093".to_string())
+                == Some("127.0.0.1:9093".to_owned())
         );
 
         // Falls back to first endpoint if no CONTROLLER
         assert2::assert!(
             resolve_target_controller(Some(NodeId(2)), &voter_nodes, &bootstraps, &mut next)
-                == Some("127.0.0.1:7070".to_string())
+                == Some("127.0.0.1:7070".to_owned())
         );
 
         // Unknown leader falls back to bootstrap server and advances index
         assert2::assert!(
             resolve_target_controller(Some(NodeId(99)), &voter_nodes, &bootstraps, &mut next)
-                == Some("127.0.0.1:9092".to_string())
+                == Some("127.0.0.1:9092".to_owned())
         );
         assert2::assert!(next == 1);
 
@@ -343,7 +366,7 @@ mod tests {
             ..params(source, vec![])
         };
 
-        tokio::time::timeout(Duration::from_millis(100), run_voter_updates(params))
+        timeout(Duration::from_millis(100), run_voter_updates(params))
             .await
             .expect("returns immediately on overflow");
     }
@@ -351,17 +374,15 @@ mod tests {
     /// A mock `UpdateRaftVoter` server: where it listens and how many valid
     /// requests it has answered.
     struct MockUpdateServer {
-        addr: std::net::SocketAddr,
-        count: Arc<std::sync::atomic::AtomicUsize>,
+        addr: SocketAddr,
+        count: Arc<AtomicUsize>,
     }
 
     async fn spawn_mock_update_server(response_code: i16) -> MockUpdateServer {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
-        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let count_clone = count.clone();
+        let count = Arc::new(AtomicUsize::new(0));
+        let count_clone = Arc::clone(&count);
 
         tokio::spawn(async move {
             use {
@@ -384,7 +405,7 @@ mod tests {
                     && frame.len() >= 8
                     && i16::from_be_bytes([frame[0], frame[1]]) == req::API_KEY
                 {
-                    count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    count_clone.fetch_add(1, Ordering::Relaxed);
                     let response = UpdateRaftVoterResponse {
                         error_code: response_code,
                         ..Default::default()
@@ -410,9 +431,9 @@ mod tests {
 
         let params = voter_update_params(addr, Some(NodeId(1)));
 
-        let _ = tokio::time::timeout(Duration::from_millis(200), run_voter_updates(params)).await;
+        let _ = timeout(Duration::from_millis(200), run_voter_updates(params)).await;
 
-        assert2::assert!(count.load(std::sync::atomic::Ordering::Relaxed) == 1);
+        assert2::assert!(count.load(Ordering::Relaxed) == 1);
     }
 
     #[tokio::test]
@@ -422,9 +443,9 @@ mod tests {
 
         let params = voter_update_params(addr, Some(NodeId(1)));
 
-        let _ = tokio::time::timeout(Duration::from_millis(150), run_voter_updates(params)).await;
+        let _ = timeout(Duration::from_millis(150), run_voter_updates(params)).await;
 
-        assert2::assert!(count.load(std::sync::atomic::Ordering::Relaxed) >= 2);
+        assert2::assert!(count.load(Ordering::Relaxed) >= 2);
     }
 
     #[tokio::test]
@@ -433,8 +454,8 @@ mod tests {
 
         let params = voter_update_params(addr, None);
 
-        let _ = tokio::time::timeout(Duration::from_millis(50), run_voter_updates(params)).await;
+        let _ = timeout(Duration::from_millis(50), run_voter_updates(params)).await;
 
-        assert2::assert!(count.load(std::sync::atomic::Ordering::Relaxed) == 0);
+        assert2::assert!(count.load(Ordering::Relaxed) == 0);
     }
 }

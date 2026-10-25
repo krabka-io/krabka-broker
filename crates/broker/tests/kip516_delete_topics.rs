@@ -1,4 +1,5 @@
 //! KIP-516: `DeleteTopics` by `topic_id` error semantics.
+#![cfg(test)]
 use assert2::assert;
 mod support;
 

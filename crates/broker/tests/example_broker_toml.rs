@@ -13,6 +13,7 @@
 //! still a file that parses. The last test therefore walks each example as
 //! plain TOML and checks every key, at every depth, against
 //! `docs/config-schema.json`, which is the schema `FileConfig` generates.
+#![cfg(test)]
 
 use {
     assert2::{assert, check},

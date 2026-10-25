@@ -30,6 +30,7 @@ use {
         partition_writer::replicate_inline,
     },
     bytes::Buf as _,
+    futures_util::future,
     krabka_ids::PartitionIndex,
     krabka_log::{Offset, VerbatimBatch},
     krabka_protocol::{
@@ -39,7 +40,12 @@ use {
     },
     krabka_units::Time,
     krabka_verified::{ReplicaFetchMutation, broker::ReplicaFetchFacts},
-    std::{collections::BTreeMap, sync::Arc},
+    std::{
+        collections::{BTreeMap, HashMap},
+        hash::Hash,
+        mem,
+        sync::{Arc, PoisonError, atomic},
+    },
     tracing::{info, warn},
 };
 
@@ -105,7 +111,7 @@ async fn follow_leader_log_start(part: &Partition, cfg: &Config, leader_log_star
     }
     let target = Offset(leader_log_start).min(part.high_watermark().await);
     let (differs, established) = {
-        let log = part.log.lock().expect("log mutex poisoned");
+        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
         (
             log.differs_from_leader_log_start(target),
             log.established_log_start(),
@@ -116,7 +122,7 @@ async fn follow_leader_log_start(part: &Partition, cfg: &Config, leader_log_star
     let lowers = established.is_some_and(|floor| target < floor);
     part.reported_leader_log_start.store(
         if lowers { target.0 } else { -1 },
-        std::sync::atomic::Ordering::Release,
+        atomic::Ordering::Release,
     );
     if lowers || !differs {
         return;
@@ -161,7 +167,7 @@ async fn restart_at_first_batch_base(part: &Partition, cfg: &Config, records: &R
     // every batch before appending it. Checking it here too used to scan that
     // batch twice on every fetch, including compressed batches.
     {
-        let log = part.log.lock().expect("log mutex poisoned");
+        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
         if log.log_start_offset() != log.log_end_offset() {
             return;
         }
@@ -170,7 +176,7 @@ async fn restart_at_first_batch_base(part: &Partition, cfg: &Config, records: &R
         return;
     };
     let (restarts, end) = {
-        let log = part.log.lock().expect("log mutex poisoned");
+        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
         (log.restarts_at_batch_base(base, last), log.log_end_offset())
     };
     if !restarts {
@@ -506,8 +512,8 @@ impl ReplicatedRun {
         if self.batches.is_empty() {
             return Ok(());
         }
-        let batches = std::mem::take(&mut self.batches);
-        let bytes = std::mem::take(&mut self.bytes);
+        let batches = mem::take(&mut self.batches);
+        let bytes = mem::take(&mut self.bytes);
         // An idle writer means the append runs here, with no hop to the
         // writer task and back; see `WriterGate`.
         let result = match replicate_inline(part, batches, &cfg.log_dir_status).await {
@@ -557,15 +563,15 @@ pub(super) struct KeyedAction {
 
 /// Stable lookup built only when a fetcher's metadata membership changes.
 pub(super) struct FollowedIndex {
-    by_id: std::collections::HashMap<IdPartition, Arc<Config>>,
-    by_name: std::collections::HashMap<Arc<str>, std::collections::HashMap<i32, Arc<Config>>>,
+    by_id: HashMap<IdPartition, Arc<Config>>,
+    by_name: HashMap<Arc<str>, HashMap<i32, Arc<Config>>>,
 }
 
 impl FollowedIndex {
     pub(super) fn new(followed: &BTreeMap<FollowedKey, Arc<Config>>) -> Self {
         let mut out = Self {
-            by_id: std::collections::HashMap::with_capacity(followed.len()),
-            by_name: std::collections::HashMap::with_capacity(followed.len()),
+            by_id: HashMap::with_capacity(followed.len()),
+            by_name: HashMap::with_capacity(followed.len()),
         };
         for cfg in followed.values() {
             out.by_id.insert(
@@ -613,13 +619,13 @@ impl FollowedIndex {
 pub(super) async fn apply_response_indexed(
     response: &mut FetchResponse,
     followed: &FollowedIndex,
-    request_epochs: &std::collections::HashMap<FollowedKey, i32>,
+    request_epochs: &HashMap<FollowedKey, i32>,
 ) -> Vec<KeyedAction> {
     let response_index = ResponseIndex::of(response);
     // First decide which rows to apply, against the whole response; then
     // apply them concurrently. Each row is its own partition with its own
     // writer, so one partition's append does not wait behind another's.
-    let mut wanted = std::collections::HashMap::new();
+    let mut wanted = HashMap::new();
     for (topic_index, topic) in response.responses.iter().enumerate() {
         for (partition_index, row) in topic.partitions.iter().enumerate() {
             let Some(cfg) = followed.config(topic, row.partition_index) else {
@@ -657,7 +663,7 @@ pub(super) async fn apply_response_indexed(
             });
         }
     }
-    futures_util::future::join_all(applying).await
+    future::join_all(applying).await
 }
 
 /// Where each `(topic identity, partition)` sits in one response.
@@ -666,12 +672,12 @@ pub(super) async fn apply_response_indexed(
 /// untouched.
 #[derive(Default)]
 struct ResponseIndex {
-    by_id: std::collections::HashMap<IdPartition, Option<RowLocation>>,
-    by_name: std::collections::HashMap<NamedPartition, Option<RowLocation>>,
+    by_id: HashMap<IdPartition, Option<RowLocation>>,
+    by_name: HashMap<NamedPartition, Option<RowLocation>>,
 }
 
-fn index_response_row<K: Eq + std::hash::Hash>(
-    index: &mut std::collections::HashMap<K, Option<RowLocation>>,
+fn index_response_row<K: Eq + Hash>(
+    index: &mut HashMap<K, Option<RowLocation>>,
     key: K,
     at: RowLocation,
 ) {
@@ -802,7 +808,8 @@ mod tests {
         },
         krabka_raft::NodeId,
         krabka_units::{mebibytes, secs},
-        std::time::Duration,
+        std::{fs::File, io, net::TcpListener, path::PathBuf, sync::atomic, time::Duration},
+        tokio::time::Instant,
     };
 
     /// A config, its log directory and the local partition opened for it.
@@ -861,7 +868,7 @@ mod tests {
         }
         part.set_follower_hw(Offset(10)).await;
         part.reported_leader_log_start
-            .store(1, std::sync::atomic::Ordering::Release);
+            .store(1, atomic::Ordering::Release);
 
         follow_leader_log_start(&part, &cfg, leader_start).await;
 
@@ -869,7 +876,7 @@ mod tests {
             (
                 part.log_start_offset(),
                 part.reported_leader_log_start
-                    .load(std::sync::atomic::Ordering::Acquire)
+                    .load(atomic::Ordering::Acquire)
             ) == (Offset(start), recorded)
         );
     }
@@ -915,7 +922,7 @@ mod tests {
             partition_response(PARTITION, codes::INVALID_REQUEST),
         );
 
-        let started = tokio::time::Instant::now();
+        let started = Instant::now();
         assert_backoff(response, &cfg).await;
         assert!(
             started.elapsed() == Duration::ZERO,
@@ -928,7 +935,7 @@ mod tests {
         let (mut cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
         ensure_local_partition(&cfg).unwrap();
         cfg.connection.replication.epoch_fence_backoff = secs(37);
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         cfg.leader_port = listener.local_addr().unwrap().port();
         let response = fetch_response(
@@ -1260,16 +1267,12 @@ mod tests {
     struct LogWritesFail;
 
     impl krabka_log::LogIo for LogWritesFail {
-        fn write(&self, _file: &std::fs::File, _buf: &[u8]) -> std::io::Result<usize> {
-            Err(std::io::ErrorKind::PermissionDenied.into())
+        fn write(&self, _file: &File, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::PermissionDenied.into())
         }
 
-        fn write_vectored(
-            &self,
-            _file: &std::fs::File,
-            _bufs: &[std::io::IoSlice<'_>],
-        ) -> std::io::Result<usize> {
-            Err(std::io::ErrorKind::PermissionDenied.into())
+        fn write_vectored(&self, _file: &File, _bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+            Err(io::ErrorKind::PermissionDenied.into())
         }
     }
 
@@ -1296,7 +1299,7 @@ mod tests {
 
             let action = handle_response(response, &cfg, cfg.leader_epoch.0).await;
 
-            let offline: Vec<std::path::PathBuf> = cfg
+            let offline: Vec<PathBuf> = cfg
                 .log_dir_status
                 .offline()
                 .into_iter()

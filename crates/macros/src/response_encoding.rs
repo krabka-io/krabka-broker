@@ -5,7 +5,7 @@ use moxy::{
     token::{Delim, Ident, TokenStream},
 };
 
-pub(crate) fn expand(tokens: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(tokens: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(tokens);
     let mut entries = Vec::new();
     while !parser.is_empty() {

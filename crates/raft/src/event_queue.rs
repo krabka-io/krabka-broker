@@ -1,5 +1,6 @@
-//! The controller's event-queue measurements: Kafka's
-//! `ControllerEventManager` `EventQueueTimeMs`, `EventQueueProcessingTimeMs`
+//! The controller's event-queue measurements.
+//!
+//! These are Kafka's `ControllerEventManager` `EventQueueTimeMs`, `EventQueueProcessingTimeMs`
 //! and `AvgIdleRatio`, and `KafkaController`'s
 //! `EventQueueOperationsStartedCount` and `EventQueueOperationsTimedOutCount`.
 //!
@@ -123,7 +124,7 @@ pub(crate) mod test_support {
 
     /// What a [`RecordingEventQueue`] has been told, in arrival order.
     #[derive(Debug, Clone, Default, PartialEq, Eq)]
-    pub(crate) struct EventQueueRecord {
+    pub struct EventQueueRecord {
         pub(crate) queue_times: Vec<Duration>,
         pub(crate) processing_times: Vec<Duration>,
         pub(crate) started: u64,
@@ -133,7 +134,7 @@ pub(crate) mod test_support {
 
     /// An [`EventQueueRecorder`] that keeps every measurement.
     #[derive(Debug, Default)]
-    pub(crate) struct RecordingEventQueue(Mutex<EventQueueRecord>);
+    pub struct RecordingEventQueue(Mutex<EventQueueRecord>);
 
     impl RecordingEventQueue {
         pub(crate) fn record(&self) -> EventQueueRecord {
@@ -238,7 +239,7 @@ mod tests {
         ];
         for case in cases {
             let recorder = Arc::new(RecordingEventQueue::default());
-            let mut meter = EventQueueMeter::new(Arc::clone(&recorder) as _);
+            let mut meter = EventQueueMeter::new(Arc::<RecordingEventQueue>::clone(&recorder));
             let enqueued_at = Instant::now();
             advance(case.busy).await;
             meter.finish_turn();

@@ -14,7 +14,8 @@ use {
     krabka_units::prelude::{ByteSize, ByteSizeExt},
     std::{
         fs::File,
-        io::{IoSlice, Seek, SeekFrom},
+        io::{self, ErrorKind, IoSlice, Seek, SeekFrom},
+        os::unix::fs::FileExt,
     },
 };
 
@@ -25,7 +26,7 @@ use {
 /// then returns the number of bytes read. Readers can therefore share the
 /// writer's `File` handle through `&self`, with no `dup(2)` or `lseek(2)` per
 /// call. The hot fetch path runs this function for every read.
-pub(super) fn read_full_at(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+pub(super) fn read_full_at(file: &File, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
     read_full_with(|at, into| read_at(file, at, into), offset, buf)
 }
 
@@ -37,31 +38,31 @@ pub(super) fn read_full_at(file: &File, offset: u64, buf: &mut [u8]) -> std::io:
 /// reach them through [`read_full_at`]. Generic rather than `dyn`, so the hot
 /// path monomorphises to what it was.
 fn read_full_with(
-    read: impl Fn(u64, &mut [u8]) -> std::io::Result<usize>,
+    read: impl Fn(u64, &mut [u8]) -> io::Result<usize>,
     mut offset: u64,
     buf: &mut [u8],
-) -> std::io::Result<usize> {
+) -> io::Result<usize> {
     let mut total = 0;
-    while total < buf.len() {
-        match read(offset, &mut buf[total..]) {
+    while let Some(rest) = buf.get_mut(total..).filter(|rest| !rest.is_empty()) {
+        match read(offset, rest) {
             Ok(0) => break, // EOF
             Ok(n) => {
                 total += n;
                 offset += n as u64;
             }
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
             Err(e) => return Err(e),
         }
     }
     Ok(total)
 }
 
-pub(super) fn seek_to_log_size(file: &File, log_size: u64) -> std::io::Result<()> {
+pub(super) fn seek_to_log_size(file: &File, log_size: u64) -> io::Result<()> {
     (&*file).seek(SeekFrom::Start(log_size))?;
     Ok(())
 }
 
-pub(super) fn write_all(io: &dyn LogIo, file: &File, buf: &[u8]) -> std::io::Result<()> {
+pub(super) fn write_all(io: &dyn LogIo, file: &File, buf: &[u8]) -> io::Result<()> {
     write_all_with(buf, |remaining| io.write(file, remaining))
 }
 
@@ -69,7 +70,7 @@ pub(super) fn write_all_vectored(
     io: &dyn LogIo,
     file: &File,
     mut bufs: &mut [IoSlice<'_>],
-) -> std::io::Result<()> {
+) -> io::Result<()> {
     while !bufs.is_empty() {
         let written = write_progress(|| io.write_vectored(file, bufs))?;
         IoSlice::advance_slices(&mut bufs, written);
@@ -78,8 +79,8 @@ pub(super) fn write_all_vectored(
 }
 
 #[cfg(unix)]
-fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
-    std::os::unix::fs::FileExt::read_at(file, buf, offset)
+fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+    FileExt::read_at(file, buf, offset)
 }
 
 #[cfg(windows)]
@@ -158,7 +159,12 @@ impl Segment {
         let to_read = usize::try_from(to_read).unwrap_or(usize::MAX);
         let base = buf.len();
         buf.resize(base + to_read, 0);
-        let n = self.read_at(start_pos, &mut buf[base..])?;
+        // `base` is the length the buffer had before it grew, so the tail
+        // always exists.
+        let n = match buf.get_mut(base..) {
+            Some(tail) => self.read_at(start_pos, tail)?,
+            None => 0,
+        };
         buf.truncate(base + n);
         Ok(())
     }
@@ -171,7 +177,7 @@ impl Segment {
     /// tail cache: a consumer reading right behind the producer would
     /// otherwise wait on the disk for every fetch. The cache runs to
     /// `log_size`, so a range that starts inside it ends inside it too.
-    fn read_at(&self, start_pos: u64, out: &mut [u8]) -> std::io::Result<usize> {
+    fn read_at(&self, start_pos: u64, out: &mut [u8]) -> io::Result<usize> {
         let Some(mode) = self.direct.as_ref() else {
             return read_full_at(&self.log_file, start_pos, out);
         };
@@ -196,7 +202,16 @@ impl Segment {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        std::{
+            io,
+            io::ErrorKind,
+            rc::Rc,
+            sync::atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     /// The read loop fills the buffer across short reads, retries an
     /// interrupted read, and stops at end of file.
@@ -212,7 +227,7 @@ mod tests {
         };
 
         /// The offset of every call the scripted reader received, in order.
-        type SeenOffsets = std::rc::Rc<RefCell<Vec<u64>>>;
+        type SeenOffsets = Rc<RefCell<Vec<u64>>>;
 
         /// A scripted reader and the offsets it has been called with.
         struct Scripted<R> {
@@ -223,10 +238,10 @@ mod tests {
         /// A reader that replays a script of results and records the offset of
         /// each call.
         fn scripted(
-            script: Vec<std::io::Result<usize>>,
-        ) -> Scripted<impl Fn(u64, &mut [u8]) -> std::io::Result<usize>> {
-            let offsets = std::rc::Rc::new(RefCell::new(Vec::new()));
-            let seen = std::rc::Rc::clone(&offsets);
+            script: Vec<io::Result<usize>>,
+        ) -> Scripted<impl Fn(u64, &mut [u8]) -> io::Result<usize>> {
+            let offsets = Rc::new(RefCell::new(Vec::new()));
+            let seen = Rc::clone(&offsets);
             let script = RefCell::new(script.into_iter());
             let read = move |offset: u64, into: &mut [u8]| {
                 seen.borrow_mut().push(offset);
@@ -292,29 +307,29 @@ mod tests {
     }
 
     #[yare::parameterized(
-        interrupted = { std::io::ErrorKind::Interrupted, true },
-        permission_denied = { std::io::ErrorKind::PermissionDenied, false },
+        interrupted = { ErrorKind::Interrupted, true },
+        permission_denied = { ErrorKind::PermissionDenied, false },
     )]
-    fn write_all_and_vectored_handle_interrupted(error_kind: std::io::ErrorKind, succeeds: bool) {
+    fn write_all_and_vectored_handle_interrupted(error_kind: ErrorKind, succeeds: bool) {
         use std::io::ErrorKind;
 
         #[derive(Debug)]
         struct MockIo {
-            calls: std::sync::atomic::AtomicUsize,
+            calls: AtomicUsize,
             error_kind: ErrorKind,
         }
 
         impl MockIo {
             fn new(error_kind: ErrorKind) -> Self {
                 Self {
-                    calls: std::sync::atomic::AtomicUsize::new(0),
+                    calls: AtomicUsize::new(0),
                     error_kind,
                 }
             }
 
-            fn offered(&self, len: usize) -> std::io::Result<usize> {
-                if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                    Err(std::io::Error::from(self.error_kind))
+            fn offered(&self, len: usize) -> io::Result<usize> {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(io::Error::from(self.error_kind))
                 } else {
                     Ok(len)
                 }
@@ -322,11 +337,11 @@ mod tests {
         }
 
         impl LogIo for MockIo {
-            fn write(&self, _file: &File, buf: &[u8]) -> std::io::Result<usize> {
+            fn write(&self, _file: &File, buf: &[u8]) -> io::Result<usize> {
                 self.offered(buf.len())
             }
 
-            fn write_vectored(&self, _file: &File, bufs: &[IoSlice<'_>]) -> std::io::Result<usize> {
+            fn write_vectored(&self, _file: &File, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
                 self.offered(bufs.iter().map(|b| b.len()).sum())
             }
         }

@@ -37,8 +37,10 @@ pub(super) fn candidate_has_majority(
     #[invariant(count@ <= majority@)]
     #[variant(n@ - j@)]
     while j < n {
-        let x = follower_offsets[j];
-        if x >= cand && count < majority {
+        if let Some(&x) = follower_offsets.get(j)
+            && x >= cand
+            && count < majority
+        {
             count += 1;
         }
         j += 1;
@@ -84,10 +86,12 @@ pub fn recompute_high_watermark(
     leader_counts: bool,
 ) -> i64 {
     let n = follower_offsets.len();
-    let mut majority_offset = i64::MIN;
-    if candidate_has_majority(log_end, follower_offsets, log_end, majority, leader_counts) {
-        majority_offset = log_end;
-    }
+    let mut majority_offset =
+        if candidate_has_majority(log_end, follower_offsets, log_end, majority, leader_counts) {
+            log_end
+        } else {
+            i64::MIN
+        };
 
     let mut i = 0;
     #[invariant(i@ <= n@)]
@@ -99,8 +103,8 @@ pub fn recompute_high_watermark(
         ==> hwm_member_at(log_end@, follower_offsets@, k) <= majority_offset@)]
     #[variant(n@ - i@)]
     while i < n {
-        let cand = follower_offsets[i];
-        if cand > majority_offset
+        if let Some(&cand) = follower_offsets.get(i)
+            && cand > majority_offset
             && candidate_has_majority(log_end, follower_offsets, cand, majority, leader_counts)
         {
             majority_offset = cand;

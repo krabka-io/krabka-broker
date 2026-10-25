@@ -16,7 +16,7 @@ use {
     krabka_protocol::records::{Record, RecordBatch},
     krabka_remote_storage::Sha256Digest,
     object_store::{ObjectStoreExt as _, PutPayload},
-    std::sync::Arc,
+    std::{fs, path, sync::Arc},
     tempfile::TempDir,
 };
 
@@ -24,7 +24,7 @@ fn test_partition() -> TopicIdPartition {
     TopicIdPartition::new(Uuid::from_u128(0xA5CD), "orders", 0)
 }
 
-fn archive_at(dir: &std::path::Path) -> ArchiveStore {
+fn archive_at(dir: &path::Path) -> ArchiveStore {
     let cli = Cli::parse_from([
         "krabka-restore",
         "--log-dir",
@@ -53,12 +53,12 @@ fn verification_context() -> VerificationContext {
     }
 }
 
-fn write_object(root: &std::path::Path, relative: &str, bytes: &[u8]) -> ArchiveObject {
+fn write_object(root: &path::Path, relative: &str, bytes: &[u8]) -> ArchiveObject {
     let path = root.join(relative);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).expect("mkdir");
+        fs::create_dir_all(parent).expect("mkdir");
     }
-    std::fs::write(&path, bytes).expect("write object");
+    fs::write(&path, bytes).expect("write object");
     ArchiveObject {
         key: Path::from(relative),
         size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
@@ -417,13 +417,13 @@ struct WrittenSegment {
     segment: SegmentInventory,
 }
 
-fn write_valid_segment(dir: &std::path::Path) -> WrittenSegment {
+fn write_valid_segment(dir: &path::Path) -> WrittenSegment {
     let fixture = valid_segment_bytes();
     let segment = write_segment(dir, &fixture, &[]);
     WrittenSegment { fixture, segment }
 }
 
-fn write_segment(dir: &std::path::Path, bytes: &SegmentBytes, omit: &[&str]) -> SegmentInventory {
+fn write_segment(dir: &path::Path, bytes: &SegmentBytes, omit: &[&str]) -> SegmentInventory {
     let present = |name: &str| !omit.contains(&name);
     SegmentInventory {
         segment_id: Uuid::from_u128(0xBEEF),
@@ -450,7 +450,7 @@ fn write_segment(dir: &std::path::Path, bytes: &SegmentBytes, omit: &[&str]) -> 
 }
 
 async fn expect_truncated_segment(
-    dir: &std::path::Path,
+    dir: &path::Path,
     store: &ArchiveStore,
     partition: &TopicIdPartition,
     fixture: &SegmentBytes,
@@ -506,7 +506,7 @@ async fn authenticated_fetch_rejects_object_replacement() {
         .artifacts()
         .map(|artifact| {
             let key = artifact.key.to_string();
-            let bytes = std::fs::read(dir.path().join(&key)).expect("read object");
+            let bytes = fs::read(dir.path().join(&key)).expect("read object");
             (key.clone(), krabka_remote_storage::ObjectEntry {
                 suffix: artifact
                     .key
@@ -523,7 +523,7 @@ async fn authenticated_fetch_rejects_object_replacement() {
         .collect();
 
     let replacement = vec![0x5a; fixture.log.len()];
-    std::fs::write(dir.path().join("orders-0/seg.log"), replacement).expect("replace log");
+    fs::write(dir.path().join("orders-0/seg.log"), replacement).expect("replace log");
 
     let error = verify_segment_authenticated(&store, &partition, &segment, &objects)
         .await

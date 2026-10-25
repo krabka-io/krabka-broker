@@ -18,7 +18,7 @@ use {
     },
     krabka_raft::NodeId,
     krabka_units::convert::ByteSizeExt as _,
-    std::sync::Arc,
+    std::{sync::Arc, time::Instant},
     tokio::sync::watch,
     tracing::{debug, error, info, warn},
 };
@@ -170,13 +170,10 @@ async fn fetch_over(
             None,
         )
     } else {
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         let applied = apply_fetch_records(fetch_offset, &resp.records, image_tx);
-        let processing_us = if applied.next_offset > fetch_offset {
-            Some(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX))
-        } else {
-            None
-        };
+        let processing_us = (applied.next_offset > fetch_offset)
+            .then(|| u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
         (applied, processing_us)
     };
     Some(FetchOutcome {
@@ -312,7 +309,7 @@ fn apply_fetch_records(
             // Kafka's `KafkaRaftClient.appendAsFollower` logs the failed
             // append at INFO, with the first batch header in hex, and appends
             // nothing.
-            let header = &records[..records.len().min(HEADER_LEN)];
+            let header = records.get(..HEADER_LEN).unwrap_or(records);
             info!(
                 fetch_offset,
                 %error,
@@ -437,7 +434,11 @@ mod tests {
         assert2::assert,
         bytes::Bytes,
         krabka_metadata::{MetadataRecord, to_kraft_values},
-        krabka_protocol::records::{Record, header::Attributes},
+        krabka_protocol::{
+            owned::no_op_record::NoOpRecord,
+            primitives::uuid::Uuid as WireUuid,
+            records::{Record, header::Attributes, metadata},
+        },
         uuid::Uuid,
     };
 
@@ -539,9 +540,7 @@ mod tests {
             ControlRecord::Voters(WireVoters {
                 voters: vec![WireVoter {
                     voter_id: 3001,
-                    voter_directory_id: krabka_protocol::primitives::uuid::Uuid(
-                        *directory_id.as_bytes(),
-                    ),
+                    voter_directory_id: WireUuid(*directory_id.as_bytes()),
                     endpoints: vec![Endpoint {
                         name: "CONTROLLER_PLAINTEXT".into(),
                         host: "ducker12".into(),
@@ -675,7 +674,7 @@ mod tests {
         let unknown_topic_config = to_kraft_values(
             &MetadataRecord::V1TopicConfig(krabka_metadata::TopicConfigRecord {
                 topic: "ghost".into(),
-                overrides: [("retention.ms".to_string(), "1".to_string())].into(),
+                overrides: [("retention.ms".to_owned(), "1".to_owned())].into(),
             }),
             &MetadataImage::new(Uuid::nil()),
         )
@@ -734,12 +733,10 @@ mod tests {
             },
             Case {
                 name: "empty KIP-835 no-op",
-                failing: krabka_protocol::records::metadata::KraftMetadataRecord::NoOp(
-                    krabka_protocol::owned::no_op_record::NoOpRecord::default(),
-                )
-                .encode_value(0)
-                .expect("encode a no-op")
-                .to_vec(),
+                failing: metadata::KraftMetadataRecord::NoOp(NoOpRecord::default())
+                    .encode_value(0)
+                    .expect("encode a no-op")
+                    .to_vec(),
                 want: Want::Skip,
             },
             Case {
@@ -928,7 +925,7 @@ mod tests {
         };
         let truncated_body = b[..b.len() - 3].to_vec();
         let truncated_header = b[..20].to_vec();
-        let unparseable_records = with_records_count(b.clone(), 5);
+        let unparseable_records = with_records_count(b, 5);
 
         let refused = Applied {
             next_offset: 0,
@@ -955,7 +952,7 @@ mod tests {
                 "negative batch length",
                 negative_length,
                 c.clone(),
-                refused.clone(),
+                refused,
                 [false; 3],
             ),
             (
@@ -985,7 +982,7 @@ mod tests {
             (
                 "records that do not parse in a sound batch",
                 unparseable_records,
-                c.clone(),
+                c,
                 Applied {
                     next_offset: 3,
                     load_errors: 1,

@@ -27,7 +27,14 @@ use {
         LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicConfigRecord,
         TopicRecord,
     },
-    std::{sync::Arc, time::Duration},
+    std::{
+        collections::BTreeMap,
+        fs::create_dir_all,
+        path::Path,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::time::sleep,
 };
 
 /// This broker.
@@ -71,9 +78,7 @@ fn state_image(leader: u64, epoch: i32, isr: &[u64]) -> MetadataImage {
     }));
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: bootstrap::TOPIC.into(),
-        overrides: [(MIN_INSYNC_REPLICAS.to_string(), "2".to_string())]
-            .into_iter()
-            .collect(),
+        overrides: BTreeMap::from([(MIN_INSYNC_REPLICAS.to_owned(), "2".to_owned())]),
     }));
     image.apply(&MetadataRecord::V1Partition(PartitionRecord {
         topic: bootstrap::TOPIC.into(),
@@ -98,12 +103,12 @@ struct StateCoordinator {
 /// watermark stays where the test puts it. With `with_metadata`, the
 /// coordinator also checks its writes against `metadata`.
 async fn coordinator(
-    dir: &std::path::Path,
+    dir: &Path,
     metadata: &Arc<FakeMetadataSource>,
     with_metadata: bool,
 ) -> StateCoordinator {
     let part_dir = partition_dir(dir, bootstrap::TOPIC, 0);
-    std::fs::create_dir_all(&part_dir).expect("create the partition dir");
+    create_dir_all(&part_dir).expect("create the partition dir");
     let partition = spawn_partition(
         bootstrap::TOPIC.to_owned(),
         P0,
@@ -126,7 +131,7 @@ async fn coordinator(
         krabka_units::mebibytes(1),
     );
     if with_metadata {
-        let metadata: Arc<dyn MetadataSource> = metadata.clone();
+        let metadata: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(metadata);
         coordinator.set_metadata_source_for_test(metadata);
     }
     let coordinator = Arc::new(coordinator);
@@ -157,14 +162,11 @@ enum Change {
 }
 
 async fn wait_for_log_end(partition: &Partition, end: Offset) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while partition.log_end_offset() < end {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the record reaches the log"
-        );
+        assert!(Instant::now() < deadline, "the record reaches the log");
         // intentional: the log has no awaiter for its end offset.
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        sleep(Duration::from_millis(5)).await;
     }
 }
 
@@ -175,12 +177,16 @@ async fn catch_up(partition: &Partition) {
 
 /// The leader epoch of every batch in the log of `partition`.
 fn logged_epochs(partition: &Partition) -> Vec<i32> {
-    let log = partition.log.lock().expect("the log is not poisoned");
+    epochs_in_log(&*partition.log.lock().expect("the log is not poisoned"))
+}
+
+/// The leader epoch of every batch in `log`.
+fn epochs_in_log(log: &Log) -> Vec<i32> {
     let end = log.log_end_offset();
     if end == Offset(0) {
         return Vec::new();
     }
-    read_batch_epochs(&log, end)
+    read_batch_epochs(log, end)
 }
 
 /// Kafka's `appendTransactionToLog` appends with `acks=-1` and changes the

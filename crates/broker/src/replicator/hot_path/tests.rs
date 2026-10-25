@@ -33,7 +33,10 @@ use {
     krabka_log::{Log, LogConfig, Offset},
     krabka_protocol::records::RecordBatch,
     krabka_units::mebibytes,
-    std::{path::PathBuf, sync::Arc},
+    std::{
+        path::PathBuf,
+        sync::{Arc, atomic},
+    },
     tempfile::TempDir,
 };
 
@@ -110,19 +113,19 @@ fn log_image(partition: &Partition) -> LogImage {
 async fn shape(partition: &Partition) -> PartitionShape {
     // Exhaustive on purpose: `..` here would let the next `Partition` field
     // land in the seam unexamined, which is the failure this module exists to
-    // catch. The three bindings discarded below are `Notify`s and a clock
-    // handle, which hold no value to compare.
+    // catch. The bindings named with a leading underscore below are `Notify`s
+    // and a clock handle, which hold no value to compare.
     let Partition {
         topic,
         index,
         log_dir,
-        log: _,
+        log: _log,
         writer_tx,
-        writer_gate: _,
+        writer_gate: _writer_gate,
         marker_materialization,
-        append_notify: _,
+        append_notify: _append_notify,
         replica_state,
-        hw_advance_notify: _,
+        hw_advance_notify: _hw_advance_notify,
         delivery,
         current_leader,
         current_leader_epoch,
@@ -147,12 +150,11 @@ async fn shape(partition: &Partition) -> PartitionShape {
         materializing_markers: marker_materialization.lock().await.len(),
         replica_state: replica_state.lock().await.clone(),
         delivery_watermark: delivery.watermark(),
-        current_leader: current_leader.load(std::sync::atomic::Ordering::SeqCst),
-        current_leader_epoch: current_leader_epoch.load(std::sync::atomic::Ordering::SeqCst),
+        current_leader: current_leader.load(atomic::Ordering::SeqCst),
+        current_leader_epoch: current_leader_epoch.load(atomic::Ordering::SeqCst),
         replication_target: *replication_target.read().await,
         diskless: *diskless,
-        reported_leader_log_start: reported_leader_log_start
-            .load(std::sync::atomic::Ordering::SeqCst),
+        reported_leader_log_start: reported_leader_log_start.load(atomic::Ordering::SeqCst),
         writer_running,
     }
 }
@@ -165,7 +167,7 @@ async fn shape(partition: &Partition) -> PartitionShape {
 /// would compare a difference this test did not make.
 fn production_partition(dir: &TempDir) -> Arc<Partition> {
     spawn_partition(
-        TOPIC.to_string(),
+        TOPIC.to_owned(),
         PARTITION,
         dir.path().to_path_buf(),
         Log::open(dir.path(), LogConfig::default()).expect("open the follower log"),

@@ -45,7 +45,11 @@ use {
     krabka_protocol::records::{Record, RecordBatch},
     krabka_units::convert::ByteSizeExt as _,
     stateright::{Checker, Model, Property},
-    std::sync::{Arc, Mutex},
+    std::{
+        array, iter,
+        sync::{Arc, Mutex, PoisonError},
+    },
+    tokio::runtime,
 };
 
 fn record_committed_watermark(state: &mut WalState, hwm: usize) {
@@ -148,7 +152,7 @@ impl Model for WalModel {
     fn init_states(&self) -> Vec<Self::State> {
         vec![WalState {
             steps: 0,
-            logs: std::array::from_fn(|_| Vec::new()),
+            logs: array::from_fn(|_| Vec::new()),
             leader: 0,
             leader_epoch: 0,
             live: 0b111,
@@ -253,7 +257,7 @@ fn drive_append(state: &WalState) -> [Vec<u8>; VOTERS] {
     } = materialize(state);
     logs[state.leader]
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .append(&mut RecordBatch {
             partition_leader_epoch: i32::from(state.leader_epoch),
             records: vec![Record::default()],
@@ -280,7 +284,7 @@ fn drive_ack(state: &WalState) -> AckRun {
         engine.set_replica_alive(node(voter), is_live(state, voter));
     }
     let target = Offset(model_offset(state.logs[state.leader].len()));
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("bounded WAL runtime");
@@ -323,7 +327,7 @@ struct Materialized {
 
 fn materialize(state: &WalState) -> Materialized {
     let directory = tempfile::tempdir().expect("bounded WAL directory");
-    let logs = std::array::from_fn(|voter| {
+    let logs = array::from_fn(|voter| {
         let mut log = Log::open(
             directory.path().join(format!("voter-{voter}")),
             LogConfig::default(),
@@ -344,21 +348,20 @@ fn materialize(state: &WalState) -> Materialized {
 }
 
 fn ordered_replicas(leader: usize, logs: &[Arc<Mutex<Log>>; VOTERS]) -> Vec<WalReplica> {
-    std::iter::once(leader)
+    iter::once(leader)
         .chain((0..VOTERS).filter(|voter| *voter != leader))
         .map(|voter| WalReplica::for_test(node(voter), Arc::clone(&logs[voter])))
         .collect()
 }
 
 fn observe(logs: &[Arc<Mutex<Log>>; VOTERS]) -> [Vec<u8>; VOTERS] {
-    std::array::from_fn(|voter| {
-        let log = logs[voter]
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    array::from_fn(|voter| {
+        let log = logs[voter].lock().unwrap_or_else(PoisonError::into_inner);
         let end = log.log_end_offset();
         let raw = log
             .read_raw(Offset(0), end, krabka_units::ByteSize::from_bytes(u64::MAX))
             .expect("read bounded WAL");
+        drop(log);
         split_batches(&raw.bytes)
             .expect("decode bounded WAL")
             .into_iter()

@@ -6,15 +6,19 @@ use {
         replay::{Replayed, apply_record, apply_tombstone},
         test_support::LogRecord,
     },
-    crate::coordinator::{GroupCoordinator, persistence},
+    crate::coordinator::{
+        GroupCoordinator, persistence,
+        unified::{
+            GroupType,
+            test_support::{plain_streams_member, stable_streams_assignment},
+        },
+    },
     assert2::{assert, check},
     krabka_protocol::records::RecordBatch,
+    std::sync::Arc,
 };
 
-fn apply_member_tombstones<K: AsRef<[u8]>>(
-    coordinator: &std::sync::Arc<GroupCoordinator>,
-    keys: [K; 2],
-) {
+fn apply_member_tombstones<K: AsRef<[u8]>>(coordinator: &Arc<GroupCoordinator>, keys: [K; 2]) {
     for bytes in keys {
         let key = persistence::parse_key(bytes.as_ref()).unwrap();
         apply_tombstone(coordinator, &mut Replayed::default(), key).unwrap();
@@ -82,7 +86,7 @@ async fn share_group_records_replay_into_seed() {
     super::test_support::replay_stream(&coord, recs);
 
     // Type locked + seed reconstructed.
-    assert!(coord.group_type("sg") == Some(crate::coordinator::unified::GroupType::Share));
+    assert!(coord.group_type("sg") == Some(GroupType::Share));
     let seed = coord.cached_share_seed("sg").expect("seed cached");
     check!(seed.group_epoch == 4);
     check!(seed.members.contains_key("m1"));
@@ -150,7 +154,7 @@ async fn streams_group_records_replay_into_seed() {
                 member_id: "m1".into(),
             })
             .unwrap(),
-            crate::coordinator::unified::test_support::plain_streams_member(2).encode(),
+            plain_streams_member(2).encode(),
         ),
         LogRecord::put(
             sp::encode_streams_key(&sp::StreamsGroupKey::CurrentMemberAssignment {
@@ -158,17 +162,14 @@ async fn streams_group_records_replay_into_seed() {
                 member_id: "m1".into(),
             })
             .unwrap(),
-            crate::coordinator::unified::test_support::stable_streams_assignment(
-                (7, 6),
-                maplit::btreemap! {"0".to_string() => vec![0, 1]},
-            )
-            .encode(),
+            stable_streams_assignment((7, 6), maplit::btreemap! {"0".to_owned() => vec![0, 1]})
+                .encode(),
         ),
     ];
     super::test_support::replay_stream(&coord, recs);
 
     // Type locked to Streams + seed reconstructed.
-    assert!(coord.group_type("stg") == Some(crate::coordinator::unified::GroupType::Streams));
+    assert!(coord.group_type("stg") == Some(GroupType::Streams));
     let seed = coord.cached_streams_seed("stg").expect("seed cached");
     check!(seed.group_epoch == 7);
     check!(seed.validated_topology_epoch == 2);
@@ -181,7 +182,7 @@ async fn streams_group_records_replay_into_seed() {
     );
     check!(
         seed.last_assignment_configs
-            == maplit::btreemap! {"num.standby.replicas".to_string() => "0".to_string()}
+            == maplit::btreemap! {"num.standby.replicas".to_owned() => "0".to_owned()}
     );
     check!(seed.members.contains_key("m1"));
     check!(seed.current_per_member["m1"].member_epoch == 7);
@@ -266,9 +267,7 @@ fn a_malformed_record_publishes_nothing_and_a_child_record_creates_its_group() {
     .unwrap();
     // Kafka's `getOrMaybeCreatePersistedStreamsGroup(groupId, true)`: the
     // member record creates the group.
-    check!(
-        coord.group_type("orphan-streams") == Some(crate::coordinator::unified::GroupType::Streams)
-    );
+    check!(coord.group_type("orphan-streams") == Some(GroupType::Streams));
     assert!(
         coord
             .cached_streams_seed("orphan-streams")

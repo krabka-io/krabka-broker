@@ -24,7 +24,7 @@ use {
 
 /// The listener name a controller advertises for the RPCs its peers address
 /// to it.
-pub(crate) const CONTROLLER_LISTENER_NAME: &str = "CONTROLLER";
+pub const CONTROLLER_LISTENER_NAME: &str = "CONTROLLER";
 
 /// One voter's controller-listener endpoint, by the same convention
 /// `krabka_raft::Node::controller_addr` uses to dial a raft peer: the endpoint
@@ -63,7 +63,7 @@ fn controller_endpoint(endpoints: &[krabka_metadata::VoterEndpoint]) -> Option<H
 ///   controller. Voter endpoints carry the advertised host instead.
 /// * The record is written asynchronously after startup, so it lags the voter
 ///   set that raft is already dialling.
-pub(crate) fn leader_endpoint(
+pub fn leader_endpoint(
     image: &krabka_metadata::MetadataImage,
     static_voters: &[(krabka_raft::NodeId, String)],
     leader: krabka_raft::NodeId,
@@ -83,24 +83,24 @@ pub(crate) fn leader_endpoint(
 
 /// The controller leader that a request is addressed to, the image that
 /// named it, and the endpoint to dial.
-pub(crate) struct LeaderEndpoint {
+pub struct LeaderEndpoint {
     pub(crate) leader_id: krabka_raft::NodeId,
-    pub(crate) image: std::sync::Arc<krabka_metadata::MetadataImage>,
+    pub(crate) image: Arc<krabka_metadata::MetadataImage>,
     pub(crate) endpoint: HostPort,
 }
 
 /// Resolve the current controller leader and the image used to build a request
 /// for it. Controller RPC senders share this lookup so they report missing
 /// leadership and missing endpoint information consistently.
-pub(crate) fn current_leader_endpoint(
+pub fn current_leader_endpoint(
     controller: &dyn MetadataSource,
     static_voters: &[(krabka_raft::NodeId, String)],
 ) -> Result<LeaderEndpoint, String> {
     let leader = *controller.watch_leader().borrow();
-    let leader = leader.ok_or_else(|| "no controller leader".to_string())?;
+    let leader = leader.ok_or_else(|| "no controller leader".to_owned())?;
     let image = controller.current_image();
     let (host, port) = leader_endpoint(&image, static_voters, leader)
-        .ok_or_else(|| "controller leader has no known controller endpoint".to_string())?;
+        .ok_or_else(|| "controller leader has no known controller endpoint".to_owned())?;
     Ok(LeaderEndpoint {
         leader_id: leader,
         image,
@@ -128,7 +128,7 @@ fn bootstrap_server_id(index: usize) -> krabka_raft::NodeId {
 /// bootstrap servers stay at the end of the list. So a node whose voters are
 /// all unreachable can still find the quorum, as Kafka's `RequestManager`
 /// falls back to them when it has no leader to ask.
-pub(crate) fn quorum_targets(
+pub fn quorum_targets(
     image: &krabka_metadata::MetadataImage,
     static_voters: &[(krabka_raft::NodeId, String)],
     bootstrap_servers: &[String],
@@ -162,9 +162,9 @@ pub(crate) fn quorum_targets(
 /// TLS and SASL when the controller listener is configured for them, plain TCP
 /// when it is not. A bare `krabka_client_core::Client` would send plaintext
 /// Kafka frames at a secured controller port and fail every attempt.
-pub(crate) struct ControllerDialer {
+pub struct ControllerDialer {
     /// Shared outbound dialer that runs the controller listener's TLS / SASL.
-    pub outbound_client: std::sync::Arc<InterBrokerClient>,
+    pub outbound_client: Arc<InterBrokerClient>,
     pub listener_protocol: krabka_security::ListenerProtocol,
     /// SNI and SASL server name for the controller listener, matching the one
     /// the raft dialer presents.
@@ -209,8 +209,8 @@ mod tests {
         named
             .iter()
             .map(|endpoint| krabka_metadata::VoterEndpoint {
-                name: endpoint.name.to_string(),
-                host: endpoint.host.to_string(),
+                name: endpoint.name.to_owned(),
+                host: endpoint.host.to_owned(),
                 port: endpoint.port,
             })
             .collect()
@@ -283,26 +283,26 @@ mod tests {
     #[test]
     fn leader_endpoint_reads_the_voter_set_then_the_configured_quorum() {
         let static_voters = vec![
-            (krabka_raft::NodeId(1), "static-one:9193".to_string()),
-            (krabka_raft::NodeId(2), "static-two:9293".to_string()),
+            (krabka_raft::NodeId(1), "static-one:9193".to_owned()),
+            (krabka_raft::NodeId(2), "static-two:9293".to_owned()),
         ];
         let image = image_with_voter(1, "voter-one", 9_093);
 
         // Voter set wins for a leader it names.
         assert!(
             leader_endpoint(&image, &static_voters, krabka_raft::NodeId(1))
-                == Some(("voter-one".to_string(), 9_093))
+                == Some(("voter-one".to_owned(), 9_093))
         );
         // A leader the voter set does not name falls back to the config.
         assert!(
             leader_endpoint(&image, &static_voters, krabka_raft::NodeId(2))
-                == Some(("static-two".to_string(), 9_293))
+                == Some(("static-two".to_owned(), 9_293))
         );
         // An image with no voters at all still resolves from the config.
         let empty = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
         assert!(
             leader_endpoint(&empty, &static_voters, krabka_raft::NodeId(1))
-                == Some(("static-one".to_string(), 9_193))
+                == Some(("static-one".to_owned(), 9_193))
         );
         // A leader nothing knows about yields nothing.
         assert!(leader_endpoint(&image, &static_voters, krabka_raft::NodeId(9)).is_none());

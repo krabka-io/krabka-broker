@@ -58,12 +58,11 @@ impl MetadataEvent {
     /// Encode this event into freshly-allocated [`Bytes`] with the JVM
     /// `RemoteLogMetadataSerde` wire format.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics only if the generated codec rejects the version. That is
-    /// impossible for version 0, which every record uses.
-    #[must_use]
-    pub fn encode(&self) -> Bytes {
+    /// Returns [`CodecError::Protocol`] if the generated codec rejects the
+    /// record. That cannot happen for version 0, which every record uses.
+    pub fn encode(&self) -> Result<Bytes, CodecError> {
         let record = match self {
             Self::AddSegment(md) => RemoteLogMetadataRecord::SegmentMetadata(to_proto_add(md)),
             Self::UpdateSegment(u) => {
@@ -75,7 +74,7 @@ impl MetadataEvent {
         };
         record
             .encode_value()
-            .expect("RemoteLogMetadataRecord::encode_value must not fail for version 0")
+            .map_err(|error| CodecError::Protocol(error.to_string()))
     }
 
     /// Decode an event from `bytes`.

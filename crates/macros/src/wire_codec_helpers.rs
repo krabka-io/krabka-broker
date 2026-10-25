@@ -4,7 +4,7 @@ use {
     crate::meta::edit_native_body,
     moxy::{
         ast::{Parse, ParseError, Parser, Token, Type, Visibility},
-        token::{Ident, Spanner, TokenStream},
+        token::{Ident, Span, Spanner, TokenStream},
     },
     proc_macro::{
         Delimiter, Group, TokenStream as NativeTokenStream, TokenTree as NativeTokenTree,
@@ -168,7 +168,7 @@ fn native_values(input: NativeTokenStream) -> Vec<NativeValue> {
     values
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let declarations = declarations(&input.clone().into())?;
     let values = native_values(input);
     let version = values
@@ -184,7 +184,7 @@ pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, Pars
             values
                 .iter()
                 .find(|entry| entry.name == "test_context")
-                .expect("validated context value")
+                .ok_or_else(|| ParseError::new(Span::call_site(), "expected a test_context value"))?
                 .value
                 .clone()
         } else {

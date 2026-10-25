@@ -43,58 +43,61 @@ async fn latest_answers_the_high_watermark_not_the_unreplicated_log_end() {
     const TOPIC: &str = "list-offsets-isolation-unreplicated";
 
     let p = support::start().await;
-    let producer = Producer::builder()
-        .bootstrap(p.broker.listen_addr().to_string())
-        .build()
-        .await
-        .expect("producer build");
+    {
+        let producer = Producer::builder()
+            .bootstrap(p.broker.listen_addr().to_string())
+            .build()
+            .await
+            .expect("producer build");
 
-    create_topic(&p.client, TOPIC).await;
-    p.broker.wait_until_partition_present(TOPIC, 0).await;
-    for value in ["a", "b", "c", "d"] {
-        send_ok(&producer, TOPIC, value).await;
-    }
-    wait_for_settled_log(&p.broker, TOPIC, 4).await;
-
-    // The control. Every record is acknowledged, so the high watermark and the
-    // log end offset are the same number and no bound can be told from the
-    // other. Without this reading a broker that answered a constant 2 below
-    // would look correct.
-    check!(
-        end_of_partition(&p.client, TOPIC).await
-            == EndOfPartition {
-                read_uncommitted: latest_row(4),
-                read_committed: latest_row(4),
-            },
-        "a fully replicated partition ends at its log end offset"
-    );
-
-    // Now the last two records are unreplicated: durable on the leader, not yet
-    // acknowledged by the ISR, exactly as they are while a follower catches up.
-    // A replicator reconcile can raise the watermark back to the log end at any
-    // moment, so the reading counts only when the hold is still in place after
-    // both isolation levels were asked; only the hold lowers the watermark, so
-    // then both answers were given under it.
-    let mut held = None;
-    for _ in 0..HOLD_ATTEMPTS {
-        check!(
-            p.broker.hold_high_watermark_for_test(TOPIC, 0, 2).await,
-            "the partition is hosted here"
-        );
-        let reading = end_of_partition(&p.client, TOPIC).await;
-        if p.broker.high_watermark_for_test(TOPIC, 0).await == Some(2) {
-            held = Some(reading);
-            break;
+        create_topic(&p.client, TOPIC).await;
+        p.broker.wait_until_partition_present(TOPIC, 0).await;
+        for value in ["a", "b", "c", "d"] {
+            send_ok(&producer, TOPIC, value).await;
         }
-    }
-    check!(
-        held == Some(EndOfPartition {
-            read_uncommitted: latest_row(2),
-            read_committed: latest_row(2),
-        }),
-        "neither isolation level may seek into the unreplicated tail"
-    );
+        wait_for_settled_log(&p.broker, TOPIC, 4).await;
 
-    producer.close().await.expect("producer close");
+        // The control. Every record is acknowledged, so the high watermark and the
+        // log end offset are the same number and no bound can be told from the
+        // other. Without this reading a broker that answered a constant 2 below
+        // would look correct.
+        check!(
+            end_of_partition(&p.client, TOPIC).await
+                == EndOfPartition {
+                    read_uncommitted: latest_row(4),
+                    read_committed: latest_row(4),
+                },
+            "a fully replicated partition ends at its log end offset"
+        );
+
+        // Now the last two records are unreplicated: durable on the leader, not yet
+        // acknowledged by the ISR, exactly as they are while a follower catches up.
+        // A replicator reconcile can raise the watermark back to the log end at any
+        // moment, so the reading counts only when the hold is still in place after
+        // both isolation levels were asked; only the hold lowers the watermark, so
+        // then both answers were given under it.
+        let mut held = None;
+        for _ in 0..HOLD_ATTEMPTS {
+            check!(
+                p.broker.hold_high_watermark_for_test(TOPIC, 0, 2).await,
+                "the partition is hosted here"
+            );
+            let reading = end_of_partition(&p.client, TOPIC).await;
+            if p.broker.high_watermark_for_test(TOPIC, 0).await == Some(2) {
+                held = Some(reading);
+                break;
+            }
+        }
+        check!(
+            held == Some(EndOfPartition {
+                read_uncommitted: latest_row(2),
+                read_committed: latest_row(2),
+            }),
+            "neither isolation level may seek into the unreplicated tail"
+        );
+
+        producer.close().await
+    }
+    .expect("producer close");
     p.broker.shutdown().await;
 }

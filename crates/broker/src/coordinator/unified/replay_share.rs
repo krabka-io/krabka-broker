@@ -94,13 +94,20 @@ impl GroupCoordinator {
     }
 
     /// Reads the replayed group, which must exist.
-    fn share_seed<T>(&self, group_id: &str, read: impl FnOnce(&ShareGroupSeed) -> T) -> T {
-        read(
-            self.share_seeds
-                .get(group_id)
-                .expect("the caller looked the group up")
-                .value(),
-        )
+    ///
+    /// # Errors
+    ///
+    /// Returns Kafka's `IllegalStateException` for a group with no replayed
+    /// state.
+    fn share_seed<T>(
+        &self,
+        group_id: &str,
+        read: impl FnOnce(&ShareGroupSeed) -> T,
+    ) -> Result<T, BrokerError> {
+        self.share_seeds
+            .get(group_id)
+            .map(|seed| read(seed.value()))
+            .ok_or_else(|| BrokerError::Startup(format!("Group {group_id} has no replayed state.")))
     }
 
     /// `ShareGroupMetadataValue`: the group epoch and the metadata hash.
@@ -274,13 +281,14 @@ impl GroupCoordinator {
                         seed.target_per_member.len(),
                         seed.target_epoch,
                     )
-                })?;
+                })??;
                 self.share_seeds.remove(group_id);
                 self.share_seeds_cache.remove(group_id);
                 self.group_types.remove(group_id);
             }
             K::MemberMetadata { member_id, .. } => {
-                let remove = self.share_seed(group_id, |seed| seed.member_tombstone(member_id))?;
+                let remove =
+                    self.share_seed(group_id, |seed| seed.member_tombstone(member_id))??;
                 if remove {
                     self.update_share_seed(group_id, |seed| {
                         seed.remove_replayed_member(member_id);
@@ -290,7 +298,7 @@ impl GroupCoordinator {
             K::TargetAssignmentMetadata { .. } => {
                 self.share_seed(group_id, |seed| {
                     target_metadata_tombstone(group_id, seed.target_per_member.len())
-                })?;
+                })??;
                 self.update_share_seed(group_id, |seed| {
                     seed.target_epoch = -1;
                     seed.assignment_timestamp_ms = 0;
@@ -302,7 +310,7 @@ impl GroupCoordinator {
                 });
             }
             K::CurrentMemberAssignment { member_id, .. } => {
-                if self.share_seed(group_id, |seed| seed.members.contains_key(member_id)) {
+                if self.share_seed(group_id, |seed| seed.members.contains_key(member_id))? {
                     self.update_share_seed(group_id, |seed| {
                         seed.current_per_member.insert(
                             member_id.clone(),

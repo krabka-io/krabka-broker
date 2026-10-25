@@ -30,14 +30,18 @@ use {
     },
     krabka_log::{Offset, VerbatimBatch},
     krabka_protocol::owned::produce_response::PartitionProduceResponse,
-    std::sync::Arc,
-    tokio::sync::{oneshot, watch},
+    std::{
+        future::{self, Future},
+        sync::Arc,
+        time::Instant,
+    },
+    tokio::sync::{OwnedRwLockReadGuard, oneshot, watch},
 };
 
 /// The partition metadata-transition barrier a produce holds from the dedup
 /// gate through to its ack. It is an owned guard, so it travels into a
 /// [`PendingAck`] and keeps that promise across the overlapped wait.
-pub(super) type ProduceTransition = tokio::sync::OwnedRwLockReadGuard<ReplicationTarget>;
+pub(super) type ProduceTransition = OwnedRwLockReadGuard<ReplicationTarget>;
 
 #[derive(Clone, Copy)]
 pub(super) struct AppendContext<'a> {
@@ -124,14 +128,14 @@ impl PendingAck {
     pub(super) fn leadership_changed(
         &self,
         mut images: watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
-    ) -> impl std::future::Future<Output = i16> + Send + 'static + use<> {
+    ) -> impl Future<Output = i16> + Send + 'static + use<> {
         let topic = self.partition.topic.clone();
         let partition = self.partition.index.0;
         let target = *self.transition;
         async move {
             loop {
                 {
-                    let image = images.borrow_and_update();
+                    let image = Arc::clone(&images.borrow_and_update());
                     let Some(record) = image.partition(&topic, partition) else {
                         return codes::UNKNOWN_TOPIC_OR_PARTITION;
                     };
@@ -143,7 +147,7 @@ impl PendingAck {
                     }
                 }
                 if images.changed().await.is_err() {
-                    std::future::pending::<()>().await;
+                    future::pending::<()>().await;
                 }
             }
         }
@@ -169,9 +173,9 @@ impl PendingAck {
     /// recognized as a duplicate rather than as out-of-order.
     pub(super) async fn finish(
         mut self,
-        deadline: std::time::Instant,
+        deadline: Instant,
         current_min_isr: impl FnOnce(&Partition, Option<uuid::Uuid>) -> Result<usize, i16>,
-        leadership_changed: impl std::future::Future<Output = i16>,
+        leadership_changed: impl Future<Output = i16>,
     ) -> PartitionProduceResponse {
         let gate = tokio::select! {
             biased;
@@ -535,7 +539,15 @@ mod tests {
         krabka_log::Offset,
         krabka_protocol::owned::produce_response::PartitionProduceResponse,
         krabka_raft::NodeId,
-        std::sync::Arc,
+        std::{
+            fs, future,
+            sync::Arc,
+            time::{Duration, Instant},
+        },
+        tokio::{
+            sync::{Notify, mpsc, watch},
+            time::{sleep, timeout},
+        },
     };
 
     /// Kafka's `acks=all` completion: `DelayedProduce` leaves an expired wait
@@ -628,7 +640,7 @@ mod tests {
         for case in cases {
             let dir = tempfile::tempdir().expect("tempdir");
             let part_dir = partition_dir(dir.path(), "orders", 0);
-            std::fs::create_dir_all(&part_dir).expect("partition dir");
+            fs::create_dir_all(&part_dir).expect("partition dir");
             let partition = spawn_standalone_partition()
                 .log_dir(dir.path())
                 .log(
@@ -640,28 +652,32 @@ mod tests {
             partition
                 .install_isr(&isr, &[NodeId(1), NodeId(2), NodeId(3)], NodeId(1))
                 .await;
-            let transition = partition.lock_produce_transition().await;
-            let admitted_topic_id = transition.topic_id;
-            let pending = PendingAck::new(
-                PartitionProduceResponse {
-                    index: 0,
-                    base_offset: 0,
-                    ..Default::default()
-                },
-                Arc::clone(&partition),
-                Offset(case.target),
-                None,
-                transition,
-            );
+            let (admitted_topic_id, pending) = {
+                let transition = partition.lock_produce_transition().await;
+                (
+                    transition.topic_id,
+                    PendingAck::new(
+                        PartitionProduceResponse {
+                            index: 0,
+                            base_offset: 0,
+                            ..Default::default()
+                        },
+                        Arc::clone(&partition),
+                        Offset(case.target),
+                        None,
+                        transition,
+                    ),
+                )
+            };
             let mut asked_for = None;
             let row = pending
                 .finish(
-                    std::time::Instant::now(),
+                    Instant::now(),
                     |_, topic_id| {
                         asked_for = Some(topic_id);
                         case.current_min_isr
                     },
-                    std::future::pending(),
+                    future::pending(),
                 )
                 .await;
             assert!(
@@ -691,7 +707,7 @@ mod tests {
             },
             krabka_metadata::MetadataRecord,
             krabka_protocol::records::{Record, RecordBatch},
-            std::{sync::atomic::Ordering, time::Duration},
+            std::sync::atomic::Ordering,
         };
 
         for (diskless, new_leader, recreated, already_durable) in [
@@ -701,7 +717,7 @@ mod tests {
             (false, 1, true, false),
             (false, 2, false, true),
         ] {
-            let (mut partition, _dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+            let (mut partition, _dir) = test_partition(Arc::new(Notify::new()));
             partition.diskless = diskless;
             let partition = Arc::new(partition);
             let mut image = image_with_topic("t", &[1, 2]);
@@ -725,7 +741,6 @@ mod tests {
                 })
                 .unwrap();
             let producer_state = Arc::new(ProducerState::new());
-            let transition = partition.lock_produce_transition().await;
             let pending = PendingAck::new(
                 PartitionProduceResponse {
                     index: 0,
@@ -746,12 +761,12 @@ mod tests {
                     is_transactional: false,
                     base_offset: Offset(0),
                 }),
-                transition,
+                partition.lock_produce_transition().await,
             );
-            let (images, receiver) = tokio::sync::watch::channel(Arc::new(image.clone()));
+            let (images, receiver) = watch::channel(Arc::new(image.clone()));
             let changed = pending.leadership_changed(receiver);
             let waiting = pending.finish(
-                std::time::Instant::now() + Duration::from_secs(30),
+                Instant::now() + Duration::from_secs(30),
                 |partition, _| {
                     assert!(partition.current_leader.load(Ordering::Acquire) == 1);
                     Ok(2)
@@ -794,9 +809,7 @@ mod tests {
                 partition.hw_advance_notify.notify_waiters();
             }
             images.send_replace(Arc::new(image));
-            let row = tokio::time::timeout(Duration::from_secs(1), waiting)
-                .await
-                .unwrap();
+            let row = timeout(Duration::from_secs(1), waiting).await.unwrap();
             assert!(row.error_code == codes::NOT_LEADER_OR_FOLLOWER);
             assert!(partition.high_watermark().await == Offset(i64::from(already_durable)));
             assert!(
@@ -812,9 +825,7 @@ mod tests {
                     .decision
                     == Decision::Duplicate { base_offset: 0 }
             );
-            tokio::time::timeout(Duration::from_secs(1), promotion)
-                .await
-                .unwrap();
+            timeout(Duration::from_secs(1), promotion).await.unwrap();
             assert!(partition.current_leader_epoch.load(Ordering::Acquire) == next_epoch);
             assert!(partition.lock_produce_transition().await.topic_id == Some(next_topic_id));
         }
@@ -824,7 +835,7 @@ mod tests {
     /// [`super::dispatch_prepared`], to a partition whose writer answers
     /// `answer` once `delay` has passed. Returns the partition's row.
     async fn append_answered_by_the_writer(
-        delay: std::time::Duration,
+        delay: Duration,
         answer: Result<AppendedBatch, BrokerError>,
     ) -> PartitionProduceResponse {
         use {
@@ -842,8 +853,8 @@ mod tests {
             krabka_protocol::records::{Record, RecordBatch},
         };
 
-        let (partition, _dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
-        let (writer_tx, mut writer_rx) = tokio::sync::mpsc::channel(1);
+        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
         let partition = Arc::new(Partition {
             writer_tx,
             writer_gate: WriterGate::shared(false),
@@ -851,7 +862,7 @@ mod tests {
         });
         tokio::spawn(async move {
             if let Some(WriterMessage::Produce(job)) = writer_rx.recv().await {
-                tokio::time::sleep(delay).await;
+                sleep(delay).await;
                 let _ = job.ack.send(answer);
             }
         });
@@ -906,7 +917,7 @@ mod tests {
     #[tokio::test]
     async fn an_io_failure_of_the_append_is_a_storage_error() {
         let row = append_answered_by_the_writer(
-            std::time::Duration::ZERO,
+            Duration::ZERO,
             Err(storage_failure_error("append failed", "synthetic EIO")),
         )
         .await;
@@ -929,7 +940,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_slow_writer_still_gets_its_append_reported() {
         let row = append_answered_by_the_writer(
-            std::time::Duration::from_secs(3600),
+            Duration::from_secs(3600),
             Ok(AppendedBatch {
                 base_offset: Offset(5),
                 log_append_time_ms: None,

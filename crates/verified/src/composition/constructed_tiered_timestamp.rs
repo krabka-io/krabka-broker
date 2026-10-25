@@ -46,9 +46,9 @@ pub(super) fn constructed_tiered_timestamp_preserves_first(
     epoch: i32,
 ) -> ListOffsetsSelectionDecision {
     let remote = constructed_index_retained_candidate(remote, bases.0, request.1, request.0)
-        .map(|i| (bases.0 + i64::from(remote.0[i]), remote.1[i]));
+        .and_then(|i| Some((bases.0 + i64::from(*remote.0.get(i)?), *remote.1.get(i)?)));
     let local = constructed_index_retained_candidate(local, bases.1, request.1, request.0)
-        .map(|i| (bases.1 + i64::from(local.0[i]), local.1[i]));
+        .and_then(|i| Some((bases.1 + i64::from(*local.0.get(i)?), *local.1.get(i)?)));
     let (offset, timestamp) = earliest_timestamp_candidate(remote, local).unwrap_or((-1, -1));
     list_offsets_selection_decision(ListOffsetsSelectionFacts {
         kind: list_offsets_kind(request.0, 11),

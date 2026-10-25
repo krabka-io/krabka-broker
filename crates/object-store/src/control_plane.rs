@@ -7,11 +7,14 @@ use {
         aws::{AwsAuthorizer, AwsCredential},
         client::HttpRequestBody,
     },
+    quick_xml::de,
     serde::de::DeserializeOwned,
+    std::fmt,
+    tokio::time,
 };
 
 /// The path-style URL of `cfg`'s bucket, on its custom endpoint if it has one.
-pub(crate) fn s3_bucket_url(cfg: &S3Config) -> Result<reqwest::Url, ObjectStoreError> {
+pub fn s3_bucket_url(cfg: &S3Config) -> Result<reqwest::Url, ObjectStoreError> {
     let endpoint = cfg.endpoint.as_ref().map_or_else(
         || format!("https://s3.{}.amazonaws.com/{}", cfg.region, cfg.bucket),
         |endpoint| format!("{}/{}", endpoint.trim_end_matches('/'), cfg.bucket),
@@ -24,7 +27,7 @@ pub(crate) fn s3_bucket_url(cfg: &S3Config) -> Result<reqwest::Url, ObjectStoreE
 ///
 /// A custom endpoint bypasses the system proxy, the way a local or in-cluster
 /// S3 implementation needs.
-pub(crate) fn s3_http_client(cfg: &S3Config) -> Result<reqwest::Client, ObjectStoreError> {
+pub fn s3_http_client(cfg: &S3Config) -> Result<reqwest::Client, ObjectStoreError> {
     let mut client = reqwest::Client::builder();
     client = client
         .timeout(cfg.request_timeout)
@@ -36,7 +39,7 @@ pub(crate) fn s3_http_client(cfg: &S3Config) -> Result<reqwest::Client, ObjectSt
 }
 
 /// An [`ObjectStoreError::Backend`] carrying `error`'s message.
-pub(crate) fn backend(error: impl std::fmt::Display) -> ObjectStoreError {
+pub fn backend(error: impl fmt::Display) -> ObjectStoreError {
     ObjectStoreError::Backend(error.to_string())
 }
 
@@ -45,7 +48,7 @@ pub(crate) fn backend(error: impl std::fmt::Display) -> ObjectStoreError {
 /// A non-success status is an error naming `operation`, the status and the
 /// body. Transient transport failures, 408, 429, and server errors retry
 /// within `retry`'s attempt and wall-clock bounds.
-pub(crate) async fn read_ok_body(
+pub async fn read_ok_body(
     request: reqwest::RequestBuilder,
     operation: &str,
     retry: &RetryConfig,
@@ -89,11 +92,11 @@ pub(crate) async fn read_ok_body(
                 return result;
             }
             retries += 1;
-            tokio::time::sleep(backoff).await;
+            time::sleep(backoff).await;
             backoff = backoff.saturating_mul(2).min(retry.backoff.max_backoff);
         }
     };
-    tokio::time::timeout(retry.retry_timeout, attempts)
+    time::timeout(retry.retry_timeout, attempts)
         .await
         .map_err(|_| backend(format!("{operation}: retry deadline exceeded")))?
 }
@@ -101,7 +104,7 @@ pub(crate) async fn read_ok_body(
 /// Sends a SigV4-signed `GET` for `url` and decodes the XML response body.
 ///
 /// `operation` names the S3 API call in the errors.
-pub(crate) async fn signed_s3_get_xml<T: DeserializeOwned>(
+pub async fn signed_s3_get_xml<T: DeserializeOwned>(
     client: &reqwest::Client,
     credential: &AwsCredential,
     cfg: &S3Config,
@@ -124,7 +127,7 @@ pub(crate) async fn signed_s3_get_xml<T: DeserializeOwned>(
         },
     )
     .await?;
-    quick_xml::de::from_reader(body.as_ref())
+    de::from_reader(body.as_ref())
         .map_err(|error| ObjectStoreError::Backend(format!("{operation}: {error}")))
 }
 
@@ -195,7 +198,7 @@ mod tests {
     async fn a_persistently_failing_control_plane_stops_at_the_retry_count() {
         let HttpListener { listener, endpoint } = http_listener().await;
         let attempts = Arc::new(AtomicUsize::new(0));
-        let observed = attempts.clone();
+        let observed = Arc::clone(&attempts);
         let server = tokio::spawn(async move {
             loop {
                 let (mut socket, _) = listener.accept().await.unwrap();

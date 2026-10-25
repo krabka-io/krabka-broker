@@ -20,7 +20,7 @@ use {
 /// already take several positional arguments and a bare flag among them is
 /// exactly the transposition the style guide's newtype rule targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ArchiveMode {
+pub enum ArchiveMode {
     /// An ordinary tiered-storage backend. Retention may delete what it wrote.
     Mutable,
     /// A write-once archive. Every object written stays written, and every

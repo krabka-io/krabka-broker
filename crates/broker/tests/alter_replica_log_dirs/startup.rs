@@ -20,6 +20,7 @@ use {
     bytes::Bytes,
     krabka_broker::Broker,
     krabka_client_producer::Producer,
+    std::fs,
 };
 
 /// Boot a broker, create a topic, produce records, shut down, then
@@ -40,19 +41,22 @@ async fn startup_resumes_move_for_existing_partition() {
     })
     .await;
 
-    let producer = Producer::builder()
-        .bootstrap(addr.to_string())
-        .build()
-        .await
-        .expect("producer");
-    enqueue_unkeyed_values(
-        &producer,
-        "t",
-        (0..5i32).map(|i| Bytes::from(format!("v{i}"))),
-    )
-    .await;
-    producer.flush().await.expect("flush");
-    producer.close().await.expect("producer close");
+    {
+        let producer = Producer::builder()
+            .bootstrap(addr.to_string())
+            .build()
+            .await
+            .expect("producer");
+        enqueue_unkeyed_values(
+            &producer,
+            "t",
+            (0..5i32).map(|i| Bytes::from(format!("v{i}"))),
+        )
+        .await;
+        producer.flush().await.expect("flush");
+        producer.close().await
+    }
+    .expect("producer close");
 
     // Find which dir holds `t-0` and pick the OTHER as the target.
     let primary_has_0 = primary.path().join("t-0").exists();
@@ -68,7 +72,7 @@ async fn startup_resumes_move_for_existing_partition() {
     // broker discovers it and resumes the move, copying the
     // already-produced batches into it.
     let future_path = target_dir.join("t-0-future");
-    std::fs::create_dir_all(&future_path).expect("plant future dir");
+    fs::create_dir_all(&future_path).expect("plant future dir");
     assert!(future_path.exists());
     assert!(
         current_dir.join("t-0").exists(),
@@ -103,7 +107,7 @@ async fn startup_cleans_up_stranded_future_dir() {
 
     // Stranded future dir: topic "ghost" was never created.
     let stranded = extra.path().join("ghost-0-future");
-    std::fs::create_dir_all(&stranded).unwrap();
+    fs::create_dir_all(&stranded).unwrap();
     assert!(stranded.exists());
 
     let cfg = two_dir_config(primary.path(), extra.path());

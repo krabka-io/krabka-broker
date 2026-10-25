@@ -37,8 +37,8 @@ async fn super_user_renews_and_expires_only_as_a_listed_renewer() {
         for (correlation_id, renewers) in [
             (100, vec![]),
             (101, vec![CreatableRenewers {
-                principal_type: "User".to_string(),
-                principal_name: "admin".to_string(),
+                principal_type: "User".to_owned(),
+                principal_name: "admin".to_owned(),
                 ..Default::default()
             }]),
         ] {
@@ -46,8 +46,8 @@ async fn super_user_renews_and_expires_only_as_a_listed_renewer() {
                 &mut admin,
                 correlation_id,
                 &CreateDelegationTokenRequest {
-                    owner_principal_type: Some("User".to_string()),
-                    owner_principal_name: Some("alice".to_string()),
+                    owner_principal_type: Some("User".to_owned()),
+                    owner_principal_name: Some("alice".to_owned()),
                     max_lifetime_ms: -1,
                     renewers,
                     ..Default::default()

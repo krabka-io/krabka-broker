@@ -8,18 +8,20 @@
 //! `DispatchKind::Context` handler: it logs a warning and closes the
 //! connection. A Kafka client asking `DescribeQuorum` during a dial failure
 //! or before a leader is known expects the typed answer instead.
+#![cfg(test)]
 
 mod support;
 
 use {
     crate::support::{client::connect_owned, shutdown_cluster, start_n_node_with_retry},
     assert2::{assert, check},
+    std::net::SocketAddr,
 };
 
 /// Kafka's `NOT_LEADER_OR_FOLLOWER`.
 const NOT_LEADER_OR_FOLLOWER: i16 = 6;
 
-async fn build_client(addr: std::net::SocketAddr) -> krabka_client_core::Client {
+async fn build_client(addr: SocketAddr) -> krabka_client_core::Client {
     connect_owned(
         format!("127.0.0.1:{}", addr.port()),
         "describe-quorum-no-leader-test",

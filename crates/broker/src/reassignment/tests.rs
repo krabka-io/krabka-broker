@@ -19,7 +19,11 @@ use {
         },
         time::Duration,
     },
-    tokio::sync::watch,
+    tokio::{
+        sync::watch,
+        task::{self, JoinHandle},
+        time::timeout,
+    },
     tokio_util::sync::CancellationToken,
 };
 
@@ -32,7 +36,7 @@ struct MockReassignmentController {
 
 impl MockReassignmentController {
     fn new(is_leader: bool, image: Arc<MetadataImage>) -> Self {
-        let (image_tx, _) = watch::channel(image.clone());
+        let (image_tx, _) = watch::channel(Arc::clone(&image));
         Self {
             is_leader: AtomicBool::new(is_leader),
             current: Mutex::new(image),
@@ -42,7 +46,7 @@ impl MockReassignmentController {
     }
 
     fn publish(&self, image: Arc<MetadataImage>) {
-        *self.current.lock().expect("current image mutex poisoned") = image.clone();
+        *self.current.lock().expect("current image mutex poisoned") = Arc::clone(&image);
         self.image_tx
             .send(image)
             .expect("run loop is watching image");
@@ -86,12 +90,12 @@ impl ReassignmentController for MockReassignmentController {
 }
 
 async fn wait_for_submission_count(controller: &MockReassignmentController, count: usize) {
-    tokio::time::timeout(Duration::from_secs(1), async {
+    timeout(Duration::from_secs(1), async {
         loop {
             if controller.submitted_len() >= count {
                 break;
             }
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
@@ -102,7 +106,7 @@ async fn wait_for_submission_count(controller: &MockReassignmentController, coun
 struct WatchingReassignment {
     controller: Arc<MockReassignmentController>,
     shutdown: CancellationToken,
-    task: tokio::task::JoinHandle<()>,
+    task: JoinHandle<()>,
 }
 
 async fn start_watching_reassignment(is_leader: bool) -> WatchingReassignment {
@@ -113,9 +117,10 @@ async fn start_watching_reassignment(is_leader: bool) -> WatchingReassignment {
     let controller = Arc::new(MockReassignmentController::new(is_leader, initial));
     let l = Arc::new(liveness(&[1, 2, 3]).await);
     let shutdown = CancellationToken::new();
-    let task_controller: Arc<dyn ReassignmentController> = controller.clone();
+    let task_controller: Arc<dyn ReassignmentController> =
+        Arc::<MockReassignmentController>::clone(&controller);
     let task = tokio::spawn(run(task_controller, l, shutdown.clone()));
-    tokio::task::yield_now().await;
+    task::yield_now().await;
     controller.publish(
         img()
             .adding(vec![krabka_ids::NodeId(3)])
@@ -155,7 +160,7 @@ async fn run_skips_ready_reassignment_when_not_leader() {
         shutdown,
         task,
     } = start_watching_reassignment(false).await;
-    let observed = tokio::time::timeout(
+    let observed = timeout(
         Duration::from_millis(100),
         wait_for_submission_count(&controller, 1),
     )

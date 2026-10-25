@@ -69,10 +69,7 @@ pub(super) fn image_with_topic_id_and_leader(
 pub(super) fn image_with_follower_throttle(value: &str) -> MetadataImage {
     let mut image = image_with_leader(LEADER_ID);
     let mut overrides = BTreeMap::new();
-    overrides.insert(
-        FOLLOWER_THROTTLED_REPLICAS_KEY.to_string(),
-        value.to_string(),
-    );
+    overrides.insert(FOLLOWER_THROTTLED_REPLICAS_KEY.to_owned(), value.to_owned());
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: TOPIC.into(),
         overrides,

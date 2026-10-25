@@ -19,7 +19,7 @@ use {
         rand::SystemRandom,
         signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair},
     },
-    std::io,
+    std::{io, net::SocketAddr},
     tokio::net::TcpStream,
 };
 
@@ -79,7 +79,7 @@ async fn sasl_oauthbearer_invalid_token_two_round_failure() {
 
 /// A signing key pair and the JWKS document that advertises its public key.
 struct Es256Key {
-    key_pair: ring::signature::EcdsaKeyPair,
+    key_pair: EcdsaKeyPair,
     jwks: String,
 }
 
@@ -101,12 +101,12 @@ fn es256_key(kid: &str) -> Es256Key {
 }
 
 /// Sign an ES256 JWS with `kp`, `kid` in the header and `claims` as the payload.
-fn es256_token(kp: &ring::signature::EcdsaKeyPair, kid: &str, claims: &str) -> String {
+fn es256_token(kp: &EcdsaKeyPair, kid: &str, claims: &str) -> String {
     let header = B64.encode(format!("{{\"alg\":\"ES256\",\"kid\":\"{kid}\"}}").as_bytes());
     let payload = B64.encode(claims.as_bytes());
     let signing_input = format!("{header}.{payload}");
     let sig = kp
-        .sign(&ring::rand::SystemRandom::new(), signing_input.as_bytes())
+        .sign(&SystemRandom::new(), signing_input.as_bytes())
         .unwrap();
     format!("{signing_input}.{}", B64.encode(sig.as_ref()))
 }
@@ -200,7 +200,7 @@ async fn expect_invalid_token(
     Ok(())
 }
 
-async fn invalid_token_session(addr: std::net::SocketAddr, token: &str) -> Result<(), io::Error> {
+async fn invalid_token_session(addr: SocketAddr, token: &str) -> Result<(), io::Error> {
     let mut session = oauthbearer_session_start(addr).await?;
     expect_invalid_token(&mut session.stream, &mut session.corr, token).await?;
     Ok(())

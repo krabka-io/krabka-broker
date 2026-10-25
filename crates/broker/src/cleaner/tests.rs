@@ -13,6 +13,7 @@ use {
     krabka_ids::PartitionIndex,
     krabka_units::secs,
     qubit_clock::Timer,
+    tokio::task::JoinHandle,
 };
 
 #[tokio::test]
@@ -114,7 +115,7 @@ async fn spawn_on(dir: &tempfile::TempDir, topic: &str, timer: Arc<dyn Timer>) -
 /// A running cleaner task, the partition it sweeps, and that partition's
 /// pre-sweep record count.
 struct SpawnedCleaner {
-    task: tokio::task::JoinHandle<()>,
+    task: JoinHandle<()>,
     partition: Arc<Partition>,
     before: usize,
 }

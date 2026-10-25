@@ -6,6 +6,10 @@
 //! take a records region through the kernel, and hands out the socket to
 //! `sendfile(2)` when it can.
 
+#[krabka_macros::sendfile_cfg]
+use std::time::Duration;
+use {tokio::net::TcpStream, tokio_rustls::server::TlsStream};
+
 /// A byte sink that can also drain a segment-file-backed records region with
 /// the most efficient mechanism available to it.
 ///
@@ -25,7 +29,7 @@ pub trait SendfileSink {
     /// listener policy. Buffered writes enforce their deadline through
     /// `AsyncWrite` instead.
     #[krabka_macros::sendfile_cfg]
-    fn write_idle_window(&self) -> Option<std::time::Duration> { None }
+    fn write_idle_window(&self) -> Option<Duration> { None }
 
     /// `true` when this stream can serve a records region with the kernel
     /// `sendfile(2)`, that is, a plaintext `TcpStream` on a SENDFILE-alias
@@ -38,12 +42,12 @@ pub trait SendfileSink {
     /// Present only on SENDFILE-alias platforms (Linux + Apple +
     /// FreeBSD/DragonFly). Windows has no compatible safe `sendfile`.
     #[krabka_macros::sendfile_cfg]
-    fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream>;
+    fn tcp_for_sendfile(&self) -> Option<&TcpStream>;
 }
 
-impl SendfileSink for tokio::net::TcpStream {
+impl SendfileSink for TcpStream {
     #[krabka_macros::sendfile_cfg]
-    fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream> { Some(self) }
+    fn tcp_for_sendfile(&self) -> Option<&TcpStream> { Some(self) }
 
     fn is_sendfile_capable(&self) -> bool {
         // True on every SENDFILE-alias platform; false on Windows.
@@ -59,14 +63,12 @@ impl SendfileSink for tokio::net::TcpStream {
     }
 }
 
-impl<S: SendfileSink> SendfileSink for tokio_rustls::server::TlsStream<S> {
+impl<S: SendfileSink> SendfileSink for TlsStream<S> {
     #[krabka_macros::sendfile_cfg]
-    fn write_idle_window(&self) -> Option<std::time::Duration> {
-        self.get_ref().0.write_idle_window()
-    }
+    fn write_idle_window(&self) -> Option<Duration> { self.get_ref().0.write_idle_window() }
 
     #[krabka_macros::sendfile_cfg]
-    fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream> { None }
+    fn tcp_for_sendfile(&self) -> Option<&TcpStream> { None }
 
     fn write_idle_is_enforced(&self) -> bool { self.get_ref().0.write_idle_is_enforced() }
 
@@ -86,8 +88,8 @@ impl<S: SendfileSink> SendfileSink for tokio_rustls::server::TlsStream<S> {
 // `TcpStream`; only the encrypt locus moves kernel-side, so the TLS record
 // stream a client decrypts is byte-identical to the userspace rustls path.
 #[cfg(target_os = "linux")]
-impl SendfileSink for ktls::KtlsStream<tokio::net::TcpStream> {
+impl SendfileSink for ktls::KtlsStream<TcpStream> {
     fn is_sendfile_capable(&self) -> bool { true }
 
-    fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream> { Some(self.get_ref()) }
+    fn tcp_for_sendfile(&self) -> Option<&TcpStream> { Some(self.get_ref()) }
 }

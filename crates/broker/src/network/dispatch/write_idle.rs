@@ -9,16 +9,19 @@ use {
         task::{Context, Poll},
         time::Duration,
     },
-    tokio::time::Sleep,
+    tokio::{
+        net::TcpStream,
+        time::{self, Sleep},
+    },
 };
 
 /// The listener's idle window applies to pending writes as well as reads.
 /// Each successful write starts a new window; handler and quota waits do not.
-pub(crate) type WriteIdle<S> = ObservedStream<S, IdleTimer>;
+pub type WriteIdle<S> = ObservedStream<S, IdleTimer>;
 
 /// The no-progress timer of a [`WriteIdle`]: armed by a write, flush or
 /// shutdown that stays pending, and reset by one that completes.
-pub(crate) struct IdleTimer {
+pub struct IdleTimer {
     window: Option<Duration>,
     pending: Option<Pin<Box<Sleep>>>,
 }
@@ -39,7 +42,7 @@ impl IdleTimer {
         };
         let timer = self
             .pending
-            .get_or_insert_with(|| Box::pin(tokio::time::sleep(window)));
+            .get_or_insert_with(|| Box::pin(time::sleep(window)));
         if timer.as_mut().poll(cx).is_ready() {
             Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -92,9 +95,7 @@ impl<S: SendfileSink> SendfileSink for WriteIdle<S> {
     }
 
     #[krabka_macros::sendfile_cfg]
-    fn tcp_for_sendfile(&self) -> Option<&tokio::net::TcpStream> {
-        self.get_ref().tcp_for_sendfile()
-    }
+    fn tcp_for_sendfile(&self) -> Option<&TcpStream> { self.get_ref().tcp_for_sendfile() }
 
     fn write_idle_is_enforced(&self) -> bool {
         self.observer().window.is_some() || self.get_ref().write_idle_is_enforced()

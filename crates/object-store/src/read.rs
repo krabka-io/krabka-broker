@@ -76,14 +76,19 @@ mod tests {
     use {
         super::{object_store, *},
         assert2::assert,
-        futures_util::StreamExt as _,
-        object_store::{PutPayload, path::Path},
-        std::sync::{Arc, atomic::Ordering::SeqCst},
+        futures_util::{StreamExt as _, stream},
+        object_store::{PutPayload, memory::InMemory, path::Path},
+        std::{
+            fmt, iter,
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering::SeqCst},
+            },
+        },
     };
 
     async fn store_with(key: &str, bytes: &'static [u8]) -> Arc<dyn object_store::ObjectStore> {
-        let store: Arc<dyn object_store::ObjectStore> =
-            Arc::new(object_store::memory::InMemory::new());
+        let store: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
         store
             .put(&Path::from(key), PutPayload::from(bytes))
             .await
@@ -111,8 +116,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_object_maps_to_not_found() {
-        let store: Arc<dyn object_store::ObjectStore> =
-            Arc::new(object_store::memory::InMemory::new());
+        let store: Arc<dyn object_store::ObjectStore> = Arc::new(InMemory::new());
         let err = read_capped(&store, &Path::from("absent"), 1024)
             .await
             .unwrap_err();
@@ -129,15 +133,13 @@ mod tests {
 
     #[derive(Debug)]
     struct ChangingStore {
-        inner: object_store::memory::InMemory,
+        inner: InMemory,
         race: Race,
-        chunks: Arc<std::sync::atomic::AtomicUsize>,
+        chunks: Arc<AtomicUsize>,
     }
 
-    impl std::fmt::Display for ChangingStore {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("ChangingStore")
-        }
+    impl fmt::Display for ChangingStore {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("ChangingStore") }
     }
 
     #[krabka_macros::object_store_delegate(
@@ -192,9 +194,9 @@ mod tests {
             let mut result = self.inner.get_opts(location, options).await?;
             if matches!(self.race, Race::Body) {
                 result.meta.size = 3;
-                let chunks = self.chunks.clone();
+                let chunks = Arc::clone(&self.chunks);
                 result.payload = object_store::GetResultPayload::Stream(
-                    futures_util::stream::iter((0..3).map(|_| Ok(Bytes::from_static(b"123"))))
+                    stream::iter(iter::repeat_with(|| Ok(Bytes::from_static(b"123"))).take(3))
                         .inspect(move |_| {
                             chunks.fetch_add(1, SeqCst);
                         })
@@ -213,7 +215,7 @@ mod tests {
     #[test_macro(tokio::test)]
     async fn overwrite_between_head_and_get_cannot_bypass_the_cap(race: Race) {
         let changing = Arc::new(ChangingStore {
-            inner: object_store::memory::InMemory::new(),
+            inner: InMemory::new(),
             race,
             chunks: Arc::default(),
         });
@@ -222,7 +224,7 @@ mod tests {
             .put(&key, PutPayload::from_static(b"123"))
             .await
             .unwrap();
-        let store: Arc<dyn object_store::ObjectStore> = changing.clone();
+        let store: Arc<dyn object_store::ObjectStore> = Arc::<ChangingStore>::clone(&changing);
         let error = read_capped(&store, &key, 5).await.unwrap_err();
         match race {
             Race::Etag => assert2::assert!(matches!(error, ObjectStoreError::Precondition { .. })),
@@ -240,7 +242,7 @@ mod tests {
     #[tokio::test]
     async fn versioned_get_reads_the_head_version_after_an_overwrite() {
         let changing = Arc::new(ChangingStore {
-            inner: object_store::memory::InMemory::new(),
+            inner: InMemory::new(),
             race: Race::Version,
             chunks: Arc::default(),
         });
@@ -249,7 +251,7 @@ mod tests {
             .put(&key, PutPayload::from_static(b"123"))
             .await
             .unwrap();
-        let store: Arc<dyn object_store::ObjectStore> = changing.clone();
+        let store: Arc<dyn object_store::ObjectStore> = Arc::<ChangingStore>::clone(&changing);
         assert!(read_capped(&store, &key, 5).await.unwrap().as_ref() == b"123");
         assert!(changing.inner.head(&key).await.unwrap().size == 9);
     }

@@ -40,6 +40,7 @@
 //! Networking mirrors `jvm_share_groups.rs`: the broker binds `0.0.0.0:9092`
 //! and advertises `host.docker.internal:9092`. The container reaches it with
 //! `--add-host=host.docker.internal:host-gateway`.
+#![cfg(test)]
 
 mod support;
 
@@ -52,6 +53,7 @@ use {
         streams_group_heartbeat_request::Topology,
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
+    std::process::Output,
 };
 
 /// Port the broker binds on the host and that the container reaches through
@@ -142,7 +144,7 @@ async fn keepalive(client: &Client, group: &str, member_id: &str, epoch: i32) {
 /// Run a docker container against the host broker and return its output. The
 /// admin tool may exit non-zero even on a successful round-trip, as the
 /// `jvm_share_groups.rs` note records. So callers check stdout, not exit status.
-fn docker_run(args: &[&str]) -> std::process::Output { support::jvm_docker_run(KAFKA_IMAGE, args) }
+fn docker_run(args: &[&str]) -> Output { support::jvm_docker_run(KAFKA_IMAGE, args) }
 
 /// A DEBUG-level log4j2 config, written into the container at `/tmp/d.yaml`, so
 /// the JVM tool's `NetworkClient`/`KafkaAdminClient` logs every request and

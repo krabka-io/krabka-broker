@@ -8,9 +8,20 @@
 //! `SASL_PLAINTEXT`.
 
 use {
-    crate::support::{client::connect_owned, heartbeat_config},
-    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
-    krabka_client_core::Client,
+    crate::support::{client::connect_owned, heartbeat_config, listeners},
+    krabka_broker::{
+        Broker, BrokerConfig, BrokerHandle,
+        operator_keys::{OperatorKeyEntry, OperatorKeys},
+    },
+    krabka_client_core::{
+        Client,
+        security::{ClientSecurity, SaslCredentials},
+    },
+    ring::{rand::SystemRandom, signature::Ed25519KeyPair},
+    std::{
+        fs,
+        path::{Path, PathBuf},
+    },
 };
 
 /// One operator key pair on disk, in the forms a test and a broker need.
@@ -27,7 +38,7 @@ pub struct OperatorKey {
     /// The PKCS#8 private key. Signs in process; the broker never sees it.
     pub pkcs8: Vec<u8>,
     /// The raw 32-byte public key, on disk, as `[[operator_keys]]` names it.
-    pub public_path: std::path::PathBuf,
+    pub public_path: PathBuf,
     /// The key id the signature carries.
     pub key_id: String,
     /// The principal this key is bound to, in the Kafka form both the freeze
@@ -37,13 +48,13 @@ pub struct OperatorKey {
 
 impl OperatorKey {
     /// The signing key, rebuilt per call because `Ed25519KeyPair` is not `Sync`.
-    pub fn pair(&self) -> ring::signature::Ed25519KeyPair {
-        ring::signature::Ed25519KeyPair::from_pkcs8(&self.pkcs8).expect("parse pkcs8")
+    pub fn pair(&self) -> Ed25519KeyPair {
+        Ed25519KeyPair::from_pkcs8(&self.pkcs8).expect("parse pkcs8")
     }
 
     /// The trust-set entry that names this key.
-    pub fn entry(&self) -> krabka_broker::operator_keys::OperatorKeyEntry {
-        krabka_broker::operator_keys::OperatorKeyEntry {
+    pub fn entry(&self) -> OperatorKeyEntry {
+        OperatorKeyEntry {
             key_id: self.key_id.clone(),
             principal: self.principal.clone(),
             public_key_path: self.public_path.clone(),
@@ -52,15 +63,15 @@ impl OperatorKey {
 }
 
 /// Mint one operator key pair under `dir`, bound to `principal`.
-pub fn mint_operator_key(dir: &std::path::Path, key_id: &str, principal: &str) -> OperatorKey {
+pub fn mint_operator_key(dir: &Path, key_id: &str, principal: &str) -> OperatorKey {
     use ring::signature::KeyPair as _;
 
-    let rng = ring::rand::SystemRandom::new();
-    let der = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).expect("generate pkcs8");
-    let pair = ring::signature::Ed25519KeyPair::from_pkcs8(der.as_ref()).expect("parse pkcs8");
+    let rng = SystemRandom::new();
+    let der = Ed25519KeyPair::generate_pkcs8(&rng).expect("generate pkcs8");
+    let pair = Ed25519KeyPair::from_pkcs8(der.as_ref()).expect("parse pkcs8");
 
     let public_path = dir.join(format!("{key_id}.pub"));
-    std::fs::write(&public_path, pair.public_key().as_ref()).expect("write public key");
+    fs::write(&public_path, pair.public_key().as_ref()).expect("write public key");
 
     OperatorKey {
         pkcs8: der.as_ref().to_vec(),
@@ -113,7 +124,7 @@ pub struct OperatorBroker {
 /// [`start_with_dir`]: super::start_with_dir
 #[bon::builder]
 pub async fn start_with_operator_keys(
-    dir: &std::path::Path,
+    dir: &Path,
     #[builder(default)] keys: &'_ [&'_ OperatorKey],
     #[builder(default)] approvers: &'_ [&'_ str],
 ) -> OperatorBroker {
@@ -140,7 +151,7 @@ pub async fn start_with_operator_keys(
 
 /// [`start_with_operator_keys`] with the single-key, single-approver shape the
 /// freeze cases want.
-pub async fn start_with_operator_key(dir: &std::path::Path, key: &OperatorKey) -> OperatorBroker {
+pub async fn start_with_operator_key(dir: &Path, key: &OperatorKey) -> OperatorBroker {
     start_with_operator_keys()
         .dir(dir)
         .keys(&[key])
@@ -162,7 +173,7 @@ pub async fn start_with_operator_key(dir: &std::path::Path, key: &OperatorKey) -
 /// `[[operator_keys]]` must use.
 #[bon::builder]
 pub async fn start_with_operator_keys_sasl(
-    dir: &std::path::Path,
+    dir: &Path,
     #[builder(default)] trust: OperatorKeysSetup<'_>,
     #[builder(default)] users: &'_ [(&'_ str, &'_ str)],
 ) -> (BrokerHandle, String, BrokerConfig) {
@@ -173,7 +184,7 @@ pub async fn start_with_operator_keys_sasl(
         .keys(trust.keys)
         .approvers(trust.approvers)
         .call();
-    config.listeners = vec![crate::support::listeners::loopback_listener(
+    config.listeners = vec![listeners::loopback_listener(
         "SASL_PLAINTEXT",
         krabka_security::ListenerProtocol::SaslPlaintext,
     )];
@@ -194,11 +205,11 @@ pub async fn start_with_operator_keys_sasl(
 ///
 /// Pair it with [`start_with_operator_keys_sasl`] to get a client that the
 /// broker authenticates as `User:<user>`.
-pub fn sasl_plain_security(user: &str, pass: &str) -> krabka_client_core::security::ClientSecurity {
-    krabka_client_core::security::ClientSecurity {
+pub fn sasl_plain_security(user: &str, pass: &str) -> ClientSecurity {
+    ClientSecurity {
         protocol: krabka_security::ListenerProtocol::SaslPlaintext,
         tls: None,
-        sasl: Some(krabka_client_core::security::SaslCredentials::Plain {
+        sasl: Some(SaslCredentials::Plain {
             username: user.to_owned(),
             password: pass.to_owned(),
         }),
@@ -219,7 +230,7 @@ pub async fn sasl_client(bootstrap: &str, user: &str, pass: &str) -> Client {
 
 #[bon::builder]
 fn operator_config(
-    dir: &std::path::Path,
+    dir: &Path,
     #[builder(default)] keys: &'_ [&'_ OperatorKey],
     #[builder(default)] approvers: &'_ [&'_ str],
 ) -> BrokerConfig {
@@ -227,8 +238,7 @@ fn operator_config(
     let OperatorKeysSetup { keys, approvers } = setup;
     let entries: Vec<_> = keys.iter().map(|key| key.entry()).collect();
     let mut config = heartbeat_config(dir);
-    config.operator_keys = krabka_broker::operator_keys::OperatorKeys::load(&entries)
-        .expect("load the operator trust set");
+    config.operator_keys = OperatorKeys::load(&entries).expect("load the operator trust set");
     config.break_glass.approvers = approvers
         .iter()
         .map(|principal| (*principal).to_owned())

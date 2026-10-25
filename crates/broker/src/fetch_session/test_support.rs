@@ -13,7 +13,7 @@ use {
         primitives::uuid::Uuid as WireUuid,
     },
     qubit_clock::ManualMonotonicClock,
-    std::sync::Arc,
+    std::{sync::Arc, time::Duration},
 };
 
 #[derive(Clone, Copy)]
@@ -26,7 +26,8 @@ pub(super) struct SessionSlotCount(pub usize);
 /// time with `clock.advance(..)` instead of a sleep between allocations.
 pub(super) fn manual_cache(max_slots: SessionSlotCount) -> ManualCache {
     let clock = ManualMonotonicClock::new_shared();
-    let cache = FetchSessionCache::with_clock(max_slots.0, clock.clone());
+    let cache =
+        FetchSessionCache::with_clock(max_slots.0, Arc::<ManualMonotonicClock>::clone(&clock));
     ManualCache { cache, clock }
 }
 
@@ -41,7 +42,7 @@ pub(super) const NAME_FETCH_VERSION: i16 = super::FIRST_TOPIC_ID_FETCH_VERSION -
 
 /// A one-nanosecond tick: the smallest advance that still gives the next
 /// allocation a strictly greater last-use stamp than the previous one.
-pub(super) const TICK: std::time::Duration = std::time::Duration::from_nanos(1);
+pub(super) const TICK: Duration = Duration::from_nanos(1);
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
 pub(super) struct RequestSessionId(pub FetchSessionId);
@@ -131,7 +132,7 @@ pub(super) fn forgotten_topic(
 
 pub(super) fn topic(name: &str, partitions: &[PartitionIndex]) -> FetchTopic {
     FetchTopic {
-        topic: name.to_string(),
+        topic: name.to_owned(),
         topic_id: WireUuid::ZERO,
         partitions: partitions
             .iter()

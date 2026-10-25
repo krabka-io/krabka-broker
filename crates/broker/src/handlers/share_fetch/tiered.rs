@@ -25,6 +25,7 @@ use {
     krabka_log::Offset,
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition},
     krabka_units::convert::TimeExt as _,
+    std::{io, sync::PoisonError},
 };
 
 /// The remote tier of one tiered share partition.
@@ -96,7 +97,7 @@ impl TieredSource<'_> {
             let local = partition
                 .log
                 .lock()
-                .expect("log mutex poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .aborted_in_range(from, Offset(last.saturating_add(1)));
             for txn in local {
                 aborted.add(txn.producer_id.get(), txn.start_offset.0, txn.last_offset.0);
@@ -106,7 +107,7 @@ impl TieredSource<'_> {
             let config = partition
                 .log
                 .lock()
-                .expect("log mutex poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .config_snapshot();
             (
                 config.delivery_policy,
@@ -152,7 +153,7 @@ impl TieredSource<'_> {
 
 /// The partition error of a remote read that the tier failed.
 fn tier_failure(error: &RemoteStorageError) -> BrokerError {
-    BrokerError::Io(std::io::Error::other(format!(
+    BrokerError::Io(io::Error::other(format!(
         "remote tier read failed: {error}"
     )))
 }

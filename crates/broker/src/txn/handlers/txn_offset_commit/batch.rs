@@ -240,6 +240,7 @@ mod tests {
         krabka_ids::PartitionIndex,
         krabka_log::{Log, Offset, ReadOutput},
         krabka_metadata::MetadataImage,
+        krabka_protocol::primitives::uuid::Uuid,
         std::sync::{Arc, MutexGuard},
     };
 
@@ -249,7 +250,7 @@ mod tests {
     /// The key of a row of topic `orders`.
     fn orders(partition: i32) -> TopicPartition {
         TopicPartition {
-            topic: "orders".to_string(),
+            topic: "orders".to_owned(),
             partition: PartitionIndex(partition),
         }
     }
@@ -448,7 +449,7 @@ mod tests {
     async fn append_txn_batch_skips_denied_topics_without_appending() {
         let OffsetsRegistry { _dir, registry } = offsets_registry();
         let req = request();
-        let denied = maplit::hashset! {"orders".to_string()};
+        let denied = maplit::hashset! {"orders".to_owned()};
 
         let appended = append_here(&req, &registry, sweep_of(&denied, &HashSet::new()), false)
             .await
@@ -617,7 +618,7 @@ mod tests {
         {
             let OffsetsRegistry { _dir, registry } = offsets_registry();
             let mut req = request();
-            req.topics[0].topic_id = krabka_protocol::primitives::uuid::Uuid(topic_id.into_bytes());
+            req.topics[0].topic_id = Uuid(topic_id.into_bytes());
 
             append_here(
                 &req,

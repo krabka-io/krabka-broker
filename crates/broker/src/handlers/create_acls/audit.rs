@@ -24,13 +24,13 @@ pub(super) fn created_acl_resources(
 ) -> Vec<krabka_audit::AuditResource> {
     to_submit
         .iter()
-        .filter(|creation| results[creation.result_index].error_code == codes::NONE)
-        .map(|creation| {
-            audit_resource(
-                "Acl",
-                req.creations[creation.result_index].resource_name.clone(),
-            )
+        .filter(|creation| {
+            results
+                .get(creation.result_index)
+                .is_some_and(|result| result.error_code == codes::NONE)
         })
+        .filter_map(|creation| req.creations.get(creation.result_index))
+        .map(|creation| audit_resource("Acl", creation.resource_name.clone()))
         .collect()
 }
 
@@ -80,8 +80,8 @@ mod tests {
         let resources = created_acl_resources(&req, &results, &submitted);
 
         let expected = vec![krabka_audit::AuditResource {
-            resource_type: "Acl".to_string(),
-            name: "topic-ok".to_string(),
+            resource_type: "Acl".to_owned(),
+            name: "topic-ok".to_owned(),
         }];
         assert!(resources == expected);
     }

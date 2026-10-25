@@ -18,6 +18,7 @@ use {
         FreezeMutationKind,
         reassignment::{ReassignmentAction, reassignment_action},
     },
+    std::collections::{HashMap, HashSet},
 };
 
 /// Remaps a partition's `directories` vector onto a new `replicas` order. A
@@ -28,12 +29,12 @@ use {
 /// failover. A surviving replica keeps its dir UUID. A newly added replica
 /// gets `Uuid::nil()`, which means UNASSIGNED, until it reports through
 /// `AssignReplicasToDirs`.
-pub(crate) fn remap_directories(
+pub fn remap_directories(
     old_replicas: &[NodeId],
     old_directories: &[uuid::Uuid],
     new_replicas: &[NodeId],
 ) -> Vec<uuid::Uuid> {
-    let old: std::collections::HashMap<NodeId, uuid::Uuid> = old_replicas
+    let old: HashMap<NodeId, uuid::Uuid> = old_replicas
         .iter()
         .copied()
         .zip(old_directories.iter().copied())
@@ -45,7 +46,7 @@ pub(crate) fn remap_directories(
 }
 
 /// The replicas and ISR a reassignment completes to.
-pub(crate) struct CompletedReassignment {
+pub struct CompletedReassignment {
     pub(crate) replicas: Vec<NodeId>,
     pub(crate) isr: Vec<NodeId>,
 }
@@ -60,7 +61,7 @@ pub(crate) struct CompletedReassignment {
 /// is in the ISR: completing earlier would shrink the ISR needlessly, so that
 /// `[0,1,2,3,4] -> [2,3,4,5]` with only 0, 1 and 5 in sync would leave an ISR
 /// of `[5]`.
-pub(crate) fn maybe_complete_reassignment(
+pub fn maybe_complete_reassignment(
     replicas: &[NodeId],
     isr: &[NodeId],
     adding: &[NodeId],
@@ -100,10 +101,7 @@ pub(crate) fn maybe_complete_reassignment(
 /// The function does no I/O. It is separate from
 /// `compute_reassignment_progress` so that a unit test and a model checker can
 /// drive the policy on its own.
-pub(crate) fn reassign_one(
-    pr: &PartitionRecord,
-    alive: &std::collections::HashSet<NodeId>,
-) -> Option<PartitionRecord> {
+pub fn reassign_one(pr: &PartitionRecord, alive: &HashSet<NodeId>) -> Option<PartitionRecord> {
     let target: Vec<NodeId> = pr
         .replicas
         .iter()
@@ -127,7 +125,7 @@ pub(crate) fn reassign_one(
     );
     if let ReassignmentAction::Handoff(index) = action {
         // The verified index maps to target ∩ ISR ∩ alive.
-        let new_leader = target[index];
+        let new_leader = *target.get(index)?;
         let leader_epoch = next_leader(pr.leader_epoch)?;
         let partition_epoch = next_i32(pr.partition_epoch)?;
         return Some(PartitionRecord {
@@ -177,7 +175,7 @@ pub(crate) fn reassign_one(
 /// does on every other path that moves an ISR: without it a replica the
 /// partition no longer has could stay in the ELR that
 /// `DescribeTopicPartitions` reports.
-pub(crate) async fn compute_reassignment_progress(
+pub async fn compute_reassignment_progress(
     image: &MetadataImage,
     liveness: &ControllerLivenessState,
 ) -> Vec<MetadataRecord> {
@@ -221,11 +219,11 @@ mod tests {
         krabka_metadata::{
             BrokerRegistrationRecord, MetadataImage, MetadataRecord, TopicFreezeRecord, TopicRecord,
         },
-        std::sync::Arc,
+        std::{iter, sync::Arc},
         uuid::Uuid,
     };
 
-    fn four_replica_reassignment_image(replicas: Vec<NodeId>) -> std::sync::Arc<MetadataImage> {
+    fn four_replica_reassignment_image(replicas: Vec<NodeId>) -> Arc<MetadataImage> {
         img()
             .replicas(replicas)
             .isr(vec![NodeId(1), NodeId(2), NodeId(3), NodeId(4)])
@@ -234,7 +232,7 @@ mod tests {
             .call()
     }
 
-    fn leader_in_removing_reassignment_image() -> std::sync::Arc<MetadataImage> {
+    fn leader_in_removing_reassignment_image() -> Arc<MetadataImage> {
         img()
             .adding(vec![NodeId(3)])
             .removing(vec![NodeId(2)])
@@ -541,7 +539,7 @@ mod tests {
         ] {
             // replicas=[1,2,3], removing=[3]: the completion drops broker 3
             // from the replica set, and the published ELR still names it.
-            let mut image = std::sync::Arc::try_unwrap(
+            let mut image = Arc::try_unwrap(
                 img()
                     .isr(isr.iter().copied().map(krabka_ids::NodeId).collect())
                     .adding(adding.iter().copied().map(krabka_ids::NodeId).collect())
@@ -553,8 +551,7 @@ mod tests {
             image.apply(&MetadataRecord::V1TopicConfig(
                 krabka_metadata::TopicConfigRecord {
                     topic: "foo".into(),
-                    overrides: [(MIN_INSYNC_REPLICAS.to_string(), "3".to_string())]
-                        .into_iter()
+                    overrides: iter::once((MIN_INSYNC_REPLICAS.to_owned(), "3".to_owned()))
                         .collect(),
                 },
             ));
@@ -691,7 +688,7 @@ mod tests {
     fn exhausted_epochs_block_reassignment_transitions() {
         let image = leader_in_removing_reassignment_image();
         let mut record = image.partition("foo", 0).expect("seeded partition").clone();
-        let alive = std::collections::HashSet::from([NodeId(1), NodeId(2), NodeId(3)]);
+        let alive = HashSet::from([NodeId(1), NodeId(2), NodeId(3)]);
 
         record.partition_epoch = i32::MAX;
         assert!(reassign_one(&record, &alive).is_none());
@@ -769,7 +766,7 @@ mod tests {
         let image =
             four_replica_reassignment_image(vec![NodeId(3), NodeId(4), NodeId(1), NodeId(2)]);
         let record = image.partition("foo", 0).expect("seeded partition");
-        let alive = std::collections::HashSet::from([NodeId(1), NodeId(2), NodeId(3), NodeId(4)]);
+        let alive = HashSet::from([NodeId(1), NodeId(2), NodeId(3), NodeId(4)]);
 
         let completed = reassign_one(record, &alive);
 

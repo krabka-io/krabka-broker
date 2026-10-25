@@ -1,6 +1,8 @@
 //! Defaulted inputs for non-transactional producer-state commits.
 
-use {super::ProducerState, crate::test_support::UnixMillis};
+use {
+    super::ProducerState, crate::test_support::UnixMillis, krabka_protocol::records::RecordBatch,
+};
 
 #[derive(derive_more::From, derive_more::Into, Debug, Clone, Copy, Default)]
 pub(super) struct ProducerEpoch(pub i16);
@@ -23,7 +25,7 @@ pub(super) struct ProducerCommitSetup<'a> {
     pub sequence: ProducerSequence,
     pub delta: SequenceDelta,
     pub offset: krabka_log::Offset,
-    #[default(crate::test_support::UnixMillis(1))]
+    #[default(UnixMillis(1))]
     pub timestamp: UnixMillis,
 }
 
@@ -37,7 +39,7 @@ pub(super) async fn commit_fixture(
     #[builder(into, default)] sequence: ProducerSequence,
     #[builder(into, default)] delta: SequenceDelta,
     #[builder(into, default)] offset: krabka_log::Offset,
-    #[builder(into, default = crate :: test_support :: UnixMillis (1))] timestamp: UnixMillis,
+    #[builder(into, default = UnixMillis (1))] timestamp: UnixMillis,
 ) {
     let setup = ProducerCommitSetup {
         topic,
@@ -88,7 +90,7 @@ pub(super) fn producer_batch(
     #[builder(into, default = SequenceDelta (0))] delta: SequenceDelta,
     #[builder(into, default)] timestamp: UnixMillis,
     #[builder(default)] offsets: RecordOffsets,
-) -> krabka_protocol::records::RecordBatch {
+) -> RecordBatch {
     use krabka_protocol::records::{Record, RecordBatch};
 
     let setup = ProducerBatchSetup {

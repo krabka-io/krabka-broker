@@ -50,7 +50,9 @@ pub fn remote_retention_prefix(
         == remote_retention_model(segments@, 0, size_debt@))]
     #[variant(segments@.len() - len@)]
     while len < segments.len() {
-        let segment = segments[len];
+        let Some(&segment) = segments.get(len) else {
+            break;
+        };
         if segment.blocked {
             break;
         }

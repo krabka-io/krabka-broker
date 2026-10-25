@@ -13,6 +13,7 @@
 //! 3. `LeaveGroup` v3+ with a `MemberIdentity { member_id: "",
 //!    group_instance_id: Some(...) }` resolves the static slot and
 //!    removes it.
+#![cfg(test)]
 
 use {
     crate::support::classic::{
@@ -44,7 +45,7 @@ async fn start() -> support::InProcess {
 
 fn join_request(group_id: &str, member_id: &str, instance_id: Option<&str>) -> JoinGroupRequest {
     JoinGroupRequest {
-        group_instance_id: instance_id.map(str::to_string),
+        group_instance_id: instance_id.map(str::to_owned),
         ..classic_join_request()
             .group_id((group_id).into())
             .member_id((member_id).into())

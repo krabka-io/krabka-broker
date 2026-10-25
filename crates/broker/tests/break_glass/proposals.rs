@@ -18,7 +18,7 @@ use {
     krabka_protocol::{
         krabka::break_glass::{
             ApproveBreakGlassRequest, ApproveBreakGlassResponse, DescribeBreakGlassRequest,
-            DescribedBreakGlassProposal, ProposeBreakGlassRequest,
+            DescribedBreakGlassProposal, ProposeBreakGlassRequest, ProposeBreakGlassResponse,
         },
         primitives::uuid::Uuid as WireUuid,
     },
@@ -29,27 +29,27 @@ use {
 // kept the broker self-consistent still fails this suite.
 
 /// `unclean_elect_leaders`.
-pub(super) const ACTION_UNCLEAN_ELECT_LEADERS: i8 = 2;
+pub const ACTION_UNCLEAN_ELECT_LEADERS: i8 = 2;
 /// `unregister_broker`.
-pub(super) const ACTION_UNREGISTER_BROKER: i8 = 4;
+pub const ACTION_UNREGISTER_BROKER: i8 = 4;
 /// `cancel_reassignment`.
-pub(super) const ACTION_CANCEL_REASSIGNMENT: i8 = 5;
+pub const ACTION_CANCEL_REASSIGNMENT: i8 = 5;
 /// `delete_topic`.
-pub(super) const ACTION_DELETE_TOPIC: i8 = 6;
+pub const ACTION_DELETE_TOPIC: i8 = 6;
 /// `delete_records`.
-pub(super) const ACTION_DELETE_RECORDS: i8 = 7;
+pub const ACTION_DELETE_RECORDS: i8 = 7;
 
 /// The `ttl_ms` value that asks the broker for its configured lifetime.
-pub(super) const TTL_CONFIGURED: i64 = 0;
+pub const TTL_CONFIGURED: i64 = 0;
 
 /// Open a proposal, and answer the whole response so a caller can assert on a
 /// refusal as easily as on a success.
-pub(super) async fn propose(
+pub async fn propose(
     client: &Client,
     action: i8,
     target: &str,
     ttl_ms: i64,
-) -> krabka_protocol::krabka::break_glass::ProposeBreakGlassResponse {
+) -> ProposeBreakGlassResponse {
     client
         .send(ProposeBreakGlassRequest {
             action,
@@ -63,7 +63,7 @@ pub(super) async fn propose(
 }
 
 /// Open a proposal that the broker must accept, and answer its id.
-pub(super) async fn open(client: &Client, action: i8, target: &str) -> WireUuid {
+pub async fn open(client: &Client, action: i8, target: &str) -> WireUuid {
     let response = propose(client, action, target, TTL_CONFIGURED).await;
     assert!(
         response.error_code == codes::NONE,
@@ -73,7 +73,7 @@ pub(super) async fn open(client: &Client, action: i8, target: &str) -> WireUuid 
 }
 
 /// Read one stored proposal back.
-pub(super) async fn stored(client: &Client, id: WireUuid) -> DescribedBreakGlassProposal {
+pub async fn stored(client: &Client, id: WireUuid) -> DescribedBreakGlassProposal {
     let response = client
         .send(DescribeBreakGlassRequest {
             proposal_id: id,
@@ -93,7 +93,7 @@ pub(super) async fn stored(client: &Client, id: WireUuid) -> DescribedBreakGlass
 }
 
 /// Add one unsigned approval.
-pub(super) async fn approve(client: &Client, id: WireUuid) -> ApproveBreakGlassResponse {
+pub async fn approve(client: &Client, id: WireUuid) -> ApproveBreakGlassResponse {
     client
         .send(ApproveBreakGlassRequest {
             proposal_id: id,
@@ -107,7 +107,7 @@ pub(super) async fn approve(client: &Client, id: WireUuid) -> ApproveBreakGlassR
 ///
 /// The signature covers the stored record and not one the caller made up, so
 /// this reads the proposal back first, exactly as `krabka-guard` does.
-pub(super) async fn approve_signed(
+pub async fn approve_signed(
     client: &Client,
     id: WireUuid,
     key: &support::OperatorKey,
@@ -122,7 +122,7 @@ pub(super) async fn approve_signed(
 }
 
 /// Add one approval carrying `key_id` and `signature` verbatim.
-pub(super) async fn approve_with(
+pub async fn approve_with(
     client: &Client,
     id: WireUuid,
     key_id: &str,
@@ -146,7 +146,7 @@ pub(super) async fn approve_with(
 /// the same bytes from its own record, so a signature this file makes verifies
 /// inside the broker only when the two agree. Deriving these bytes from the
 /// broker's own encoder would make the check vacuous.
-pub(super) fn approval_signing_bytes(proposal: &DescribedBreakGlassProposal) -> Vec<u8> {
+pub fn approval_signing_bytes(proposal: &DescribedBreakGlassProposal) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(b"krabka-break-glass-v1\0");
     out.extend_from_slice(&proposal.proposal_id.0);
@@ -166,7 +166,7 @@ fn push_len_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 /// Alice proposes, Bob and Carol approve. The proposal is then usable.
-pub(super) async fn approved_proposal(cluster: &Cluster, action: i8, target: &str) -> WireUuid {
+pub async fn approved_proposal(cluster: &Cluster, action: i8, target: &str) -> WireUuid {
     let alice = cluster.client(ALICE).await;
     let bob = cluster.client(BOB).await;
     let carol = cluster.client(CAROL).await;

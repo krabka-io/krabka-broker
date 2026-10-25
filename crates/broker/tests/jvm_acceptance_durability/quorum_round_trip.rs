@@ -15,6 +15,8 @@ use {
         },
     },
     assert2::assert,
+    std::time::Duration,
+    tokio::time,
 };
 
 // Three-node quorum: produce on one node, consume on another, then kill
@@ -116,7 +118,7 @@ async fn three_node_jvm_round_trip() {
     // after the leader was killed. There is no "controller leader changed"
     // awaiter, and a survivor's cached leader value can momentarily read stale,
     // so a fixed settle window is used rather than risk a stale-value wait.
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    time::sleep(Duration::from_secs(5)).await;
 
     // 6. Survivor still answers Metadata via kafka-topics --list.
     let survivor_idx = (0..client_ports.len())

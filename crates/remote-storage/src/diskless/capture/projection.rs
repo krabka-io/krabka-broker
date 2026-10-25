@@ -11,7 +11,10 @@ use {
         },
         CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture,
     },
-    std::collections::{BTreeMap, HashMap},
+    std::{
+        collections::{BTreeMap, HashMap},
+        hash::BuildHasher,
+    },
     uuid::Uuid,
 };
 
@@ -97,7 +100,7 @@ impl WalCaptureProjection {
     ///
     /// # Errors
     /// Returns an error for unknown topic ids or inconsistent live ranges.
-    pub fn capture<S: std::hash::BuildHasher>(
+    pub fn capture<S: BuildHasher>(
         &self,
         topics: &HashMap<Uuid, (String, i32), S>,
         source_cutoffs: Vec<i64>,
@@ -161,8 +164,9 @@ impl WalCaptureProjection {
         {
             ranges.sort_by_key(|range| range.entry.first_offset);
             if ranges
-                .windows(2)
-                .any(|pair| pair[0].entry.last_offset >= pair[1].entry.first_offset)
+                .iter()
+                .zip(ranges.iter().skip(1))
+                .any(|(earlier, later)| earlier.entry.last_offset >= later.entry.first_offset)
             {
                 return Err(format!(
                     "overlapping diskless WAL ranges for {topic}-{partition}"

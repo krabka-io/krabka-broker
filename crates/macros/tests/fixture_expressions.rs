@@ -1,4 +1,5 @@
 //! Caller-level command exits and native reassignment evaluation are executable contracts.
+#![cfg(test)]
 
 use {
     assert2::assert,

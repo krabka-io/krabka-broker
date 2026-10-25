@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use {
     assert2::check,
     krabka_audit::FileEd25519Signer,

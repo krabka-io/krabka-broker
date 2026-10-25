@@ -18,6 +18,7 @@ use {
     },
     assert2::check,
     krabka_units::prelude::{TimeExt as _, millis, secs},
+    std::collections::{BTreeMap, BTreeSet},
 };
 
 #[test]
@@ -130,8 +131,8 @@ fn election_timer_only_starts_non_leader_voters(is_voter: bool, is_leader: bool,
     },
     leader = {
         Role::Leader {
-            replicas: std::collections::BTreeMap::new(),
-            fetched_voters: std::collections::BTreeSet::new(),
+            replicas: BTreeMap::new(),
+            fetched_voters: BTreeSet::new(),
             high_watermark: 0,
             epoch_start_offset: 0,
         },

@@ -4,7 +4,10 @@
 //! the "allow everything" behavior is clear at config time. The behavior does
 //! not come from the empty-input path of the ACL implementation.
 
-use crate::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer};
+use {
+    crate::{AclSource, AuthorizationRequest, AuthorizationResult, Authorizer},
+    std::net::SocketAddr,
+};
 
 /// Authorizer that always returns [`AuthorizationResult::Allow`].
 ///
@@ -34,7 +37,7 @@ impl Authorizer for AllowAllAuthorizer {
         &self,
         _source: &dyn AclSource,
         _principal: &krabka_security::Principal,
-        _host: &std::net::SocketAddr,
+        _host: &SocketAddr,
         _resource_type: krabka_metadata::ResourceType,
         _operation: krabka_metadata::AclOperation,
     ) -> AuthorizationResult {

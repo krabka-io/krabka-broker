@@ -10,9 +10,17 @@ use {
         metrics::{BrokerMetrics, MetadataPartitionLabel},
         network::client::to_client_creds,
     },
-    krabka_remote_storage_topic::{MetadataPartitionReadiness, TopicBasedRemoteLogMetadataManager},
+    krabka_client_core::security::{ClientSecurity, TlsConnectorConfig, TrustStore},
+    krabka_remote_storage_topic::{
+        KafkaMetadataEventLog, MetadataPartitionReadiness, TopicBasedRemoteLogMetadataManager,
+    },
     krabka_units::convert::TimeExt as _,
-    std::{collections::BTreeSet, sync::Arc},
+    std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration},
+    tokio::{
+        runtime::Handle,
+        sync::watch,
+        time::{self, MissedTickBehavior},
+    },
     tokio_util::sync::CancellationToken,
 };
 
@@ -20,9 +28,9 @@ use {
 pub(super) struct KafkaSwapKickoff {
     pub(super) cfg: KafkaRlmmConfig,
     pub(super) broker_id: i32,
-    pub(super) bootstrap_backoff_initial: std::time::Duration,
-    pub(super) bootstrap_backoff_max: std::time::Duration,
-    pub(super) reconcile_tick: std::time::Duration,
+    pub(super) bootstrap_backoff_initial: Duration,
+    pub(super) bootstrap_backoff_max: Duration,
+    pub(super) reconcile_tick: Duration,
 }
 
 #[cfg(test)]
@@ -30,9 +38,9 @@ pub(super) fn test_kickoff(cfg: KafkaRlmmConfig) -> KafkaSwapKickoff {
     KafkaSwapKickoff {
         cfg,
         broker_id: 1,
-        bootstrap_backoff_initial: std::time::Duration::from_millis(10),
-        bootstrap_backoff_max: std::time::Duration::from_secs(1),
-        reconcile_tick: std::time::Duration::from_secs(1),
+        bootstrap_backoff_initial: Duration::from_millis(10),
+        bootstrap_backoff_max: Duration::from_secs(1),
+        reconcile_tick: Duration::from_secs(1),
     }
 }
 
@@ -62,16 +70,15 @@ pub(super) fn kafka_swap_kickoff(config: &BrokerConfig) -> Option<KafkaSwapKicko
     let security = (protocol.requires_tls() || protocol.requires_sasl()).then(|| {
         let tls = protocol.requires_tls().then(|| {
             config.tls_config.as_ref().map(|tls| {
-                let mut client_tls = krabka_client_core::security::TlsConnectorConfig::default();
+                let mut client_tls = TlsConnectorConfig::default();
                 if let Some(path) = &tls.trust_roots_path {
-                    client_tls.trust_store =
-                        krabka_client_core::security::TrustStore::PemFile(path.clone());
+                    client_tls.trust_store = TrustStore::PemFile(path.clone());
                 }
                 client_tls.server_name.clone_from(&advertised_host);
                 client_tls
             })
         });
-        Box::new(krabka_client_core::security::ClientSecurity {
+        Box::new(ClientSecurity {
             protocol,
             tls: tls.flatten(),
             sasl: config
@@ -144,30 +151,28 @@ fn needed_metadata_partitions(
 }
 
 /// Next backoff after a failed RLMM bootstrap attempt: double, capped.
-fn next_rlmm_backoff(cur: std::time::Duration, max: std::time::Duration) -> std::time::Duration {
-    (cur * 2).min(max)
-}
+fn next_rlmm_backoff(cur: Duration, max: Duration) -> Duration { (cur * 2).min(max) }
 
 /// A connectable loopback `host:port` for the broker's own data listener,
 /// used as the default RLMM metadata-client bootstrap when none is configured.
 /// A wildcard bind (`0.0.0.0` / `::`) is mapped to loopback so the in-process
 /// metadata client has a routable target.
-fn loopback_bootstrap(listen: std::net::SocketAddr) -> String {
+fn loopback_bootstrap(listen: SocketAddr) -> String {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     let ip = match listen.ip() {
         IpAddr::V4(v4) if v4 == Ipv4Addr::UNSPECIFIED => IpAddr::V4(Ipv4Addr::LOCALHOST),
         IpAddr::V6(v6) if v6 == Ipv6Addr::UNSPECIFIED => IpAddr::V6(Ipv6Addr::LOCALHOST),
         other => other,
     };
-    std::net::SocketAddr::new(ip, listen.port()).to_string()
+    SocketAddr::new(ip, listen.port()).to_string()
 }
 
 /// Back off after a failed RLMM bootstrap attempt. Sleeps for the current
 /// backoff (advancing it toward the cap), or returns `false` if shutdown
 /// fired during the sleep so the caller can abort the bootstrap.
 pub(super) async fn rlmm_bootstrap_backoff(
-    backoff: &mut std::time::Duration,
-    max_backoff: std::time::Duration,
+    backoff: &mut Duration,
+    max_backoff: Duration,
     shutdown: &CancellationToken,
 ) -> bool {
     tokio::select! {
@@ -175,7 +180,7 @@ pub(super) async fn rlmm_bootstrap_backoff(
             tracing::debug!("topic-backed RLMM bootstrap cancelled during backoff");
             false
         }
-        () = tokio::time::sleep(*backoff) => {
+        () = time::sleep(*backoff) => {
             *backoff = next_rlmm_backoff(*backoff, max_backoff);
             true
         }
@@ -216,10 +221,10 @@ pub(super) fn metadata_log_config(
 pub(super) async fn bootstrap_topic_rlmm(
     swap: Arc<krabka_remote_storage_topic::SwappableRlmm>,
     cfg: KafkaSwapKickoff,
-    runtime: tokio::runtime::Handle,
+    runtime: Handle,
     metrics: BrokerMetrics,
     node_id: krabka_metadata::NodeId,
-    image_rx: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
+    image_rx: watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
     shutdown: CancellationToken,
 ) {
     let log_cfg = metadata_log_config(
@@ -243,15 +248,14 @@ pub(super) async fn bootstrap_topic_rlmm(
         //
         // KafkaMetadataEventLog::start and TopicBasedRemoteLogMetadataManager::start
         // return different error types, so we handle them with separate match arms.
-        let started = tokio::select! {
+        let log = match tokio::select! {
             biased;
             () = shutdown.cancelled() => {
                 tracing::debug!("topic-backed RLMM bootstrap cancelled during attempt");
                 return;
             }
-            res = krabka_remote_storage_topic::KafkaMetadataEventLog::start(log_cfg.clone()) => res,
-        };
-        let log = match started {
+            res = KafkaMetadataEventLog::start(log_cfg.clone()) => res,
+        } {
             Ok(l) => l,
             Err(e) => {
                 tracing::warn!(error = %e, backoff_ms = backoff.as_millis(),
@@ -264,7 +268,7 @@ pub(super) async fn bootstrap_topic_rlmm(
             }
         };
         let manager = match TopicBasedRemoteLogMetadataManager::start(
-            log.clone(),
+            Arc::<KafkaMetadataEventLog>::clone(&log),
             runtime.clone(),
             cfg.cfg.snapshot_dir.clone(),
             cfg.cfg.snapshot_interval.to_std(),
@@ -287,7 +291,7 @@ pub(super) async fn bootstrap_topic_rlmm(
     };
     // Keep the concrete handle so the reconciler can call
     // `reconcile_assignment`; the swap facade only needs the trait object.
-    swap.swap(manager.clone());
+    swap.swap(Arc::<TopicBasedRemoteLogMetadataManager>::clone(&manager));
     metrics.tiered_storage_rlmm_topic_backed.set(1);
     tracing::info!("topic-backed RemoteLogMetadataManager activated");
 
@@ -306,8 +310,8 @@ async fn run_topic_assignment(
     manager: Arc<TopicBasedRemoteLogMetadataManager>,
     metrics: BrokerMetrics,
     node_id: krabka_metadata::NodeId,
-    mut image_rx: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
-    reconcile_tick: std::time::Duration,
+    mut image_rx: watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
+    reconcile_tick: Duration,
     shutdown: CancellationToken,
 ) {
     // An existing metadata topic can differ from the provisioning config,
@@ -320,7 +324,7 @@ async fn run_topic_assignment(
     // partitions).
     let initial =
         needed_metadata_partitions(&image_rx.borrow_and_update(), node_id, partition_count);
-    let (set_tx, set_rx) = tokio::sync::watch::channel(initial);
+    let (set_tx, set_rx) = watch::channel(initial);
 
     // Keep both loops owned by this bootstrap task so broker shutdown can join
     // them before the Tokio runtime drops.
@@ -331,8 +335,8 @@ async fn run_topic_assignment(
 }
 
 async fn watch_rlmm_needed_partitions(
-    mut image_rx: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
-    set_tx: tokio::sync::watch::Sender<Vec<i32>>,
+    mut image_rx: watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
+    set_tx: watch::Sender<Vec<i32>>,
     node_id: krabka_metadata::NodeId,
     partition_count: i32,
     shutdown: CancellationToken,
@@ -376,15 +380,15 @@ async fn watch_rlmm_needed_partitions(
 async fn run_rlmm_reconciler(
     manager: Arc<TopicBasedRemoteLogMetadataManager>,
     metrics: BrokerMetrics,
-    mut set_rx: tokio::sync::watch::Receiver<Vec<i32>>,
-    reconcile_tick: std::time::Duration,
+    mut set_rx: watch::Receiver<Vec<i32>>,
+    reconcile_tick: Duration,
     shutdown: CancellationToken,
 ) {
     let mut published = BTreeSet::new();
     let set = set_rx.borrow_and_update().clone();
     reconcile_and_publish(&manager, &set, &metrics, &mut published).await;
-    let mut tick = tokio::time::interval(reconcile_tick);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut tick = time::interval(reconcile_tick);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             () = shutdown.cancelled() => return,

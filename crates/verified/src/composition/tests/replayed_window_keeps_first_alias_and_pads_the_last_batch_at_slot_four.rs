@@ -1,4 +1,4 @@
-use {super::*, assert2::assert};
+use {super::*, assert2::assert, proptest::collection};
 
 #[test]
 fn replayed_window_keeps_first_alias_and_pads_the_last_batch_at_slot_four() {
@@ -34,7 +34,7 @@ fn replayed_window_keeps_first_alias_and_pads_the_last_batch_at_slot_four() {
 proptest! {
     #[test]
     fn corrupt_snapshot_fallback_matches_latest_noncorrupt_and_io_oracle(
-        snapshots in proptest::collection::vec((any::<i64>(), 0u8..=2), 0..24),
+        snapshots in collection::vec((any::<i64>(), 0u8..=2), 0..24),
         (range, cut) in replay_range_cases(),
     ) {
         let start = range.log_start;
@@ -98,7 +98,7 @@ fn corrupt_snapshot_fallback_retries_only_corruption_and_keeps_original_identity
 proptest! {
     #[test]
     fn truncated_snapshot_matches_latest_survivor_and_exact_replay_oracles(
-        offsets in proptest::collection::vec(any::<i64>(), 0..24),
+        offsets in collection::vec(any::<i64>(), 0..24),
         (range, cut) in replay_range_cases(),
     ) {
         let start = range.log_start;

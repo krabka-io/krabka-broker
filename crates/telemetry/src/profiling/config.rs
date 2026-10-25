@@ -10,6 +10,7 @@ use {
     krabka_macros::RefinedNewtype,
     krabka_units::{Time, parse, per_sec, secs},
     refined_type::rule::GreaterI32,
+    std::io,
     thiserror::Error,
 };
 
@@ -19,7 +20,7 @@ pub enum ProfilingError {
     #[error("invalid profiling configuration: {0}")]
     Config(String),
     #[error(transparent)]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 }
 
 /// A positive, finite, whole-Hz sampling frequency accepted by `pprof`, whose
@@ -64,10 +65,10 @@ pub struct ProfilingConfig {
         value_delimiter = ','
     )]
     #[default(vec![
-        "libc".to_string(),
-        "libgcc".to_string(),
-        "pthread".to_string(),
-        "vdso".to_string(),
+        "libc".to_owned(),
+        "libgcc".to_owned(),
+        "pthread".to_owned(),
+        "vdso".to_owned(),
     ])]
     pub profiling_native_frame_blocklist: Vec<String>,
 }
@@ -80,13 +81,13 @@ impl ProfilingConfig {
     /// when a maximum is below the compatible one-second request floor.
     pub fn validate(&self) -> Result<(), String> {
         if self.profiling_cpu_default_duration > self.profiling_cpu_max_duration {
-            return Err("profiling CPU default duration exceeds maximum".to_string());
+            return Err("profiling CPU default duration exceeds maximum".to_owned());
         }
         if self.profiling_heap_default_duration > self.profiling_heap_max_duration {
-            return Err("profiling heap default duration exceeds maximum".to_string());
+            return Err("profiling heap default duration exceeds maximum".to_owned());
         }
         if self.profiling_cpu_max_duration < secs(1) || self.profiling_heap_max_duration < secs(1) {
-            return Err("profiling maximum duration must be at least 1s".to_string());
+            return Err("profiling maximum duration must be at least 1s".to_owned());
         }
         Ok(())
     }

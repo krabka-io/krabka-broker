@@ -23,7 +23,7 @@ use {
     krabka_protocol::owned::alter_client_quotas_response::{
         EntityData as RespEntity, EntryData as RespEntry,
     },
-    std::sync::Arc,
+    std::{collections::HashSet, sync::Arc},
 };
 
 krabka_macros::wire_codec_helpers! {
@@ -137,7 +137,7 @@ async fn handle_denies_cluster_alter_for_each_entry() {
 #[tokio::test]
 async fn cluster_alter_configs_gates_the_quota_write() {
     let version = 1;
-    let empty_super_users = std::collections::HashSet::new();
+    let empty_super_users = HashSet::new();
     krabka_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
         boot [start_broker(Arc::new(fixture_authorizers::SimpleAclAuthorizer::new(
@@ -175,7 +175,7 @@ async fn cluster_alter_configs_gates_the_quota_write() {
         } else {
             (
                 CLUSTER_AUTHORIZATION_FAILED,
-                Some("Cluster authorization failed.".to_string()),
+                Some("Cluster authorization failed.".to_owned()),
             )
         };
         assert_handled_response()

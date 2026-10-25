@@ -23,17 +23,14 @@ use {crate::error::BrokerError, std::future::Future, tokio::sync::watch};
 /// A channel that closes without a fault is a controller that stopped in an
 /// orderly way, or a source that has none. That is no fault, and `work` runs
 /// on.
-pub(crate) async fn or_fatal_fault<T>(
+pub async fn or_fatal_fault<T>(
     mut faults: watch::Receiver<Option<String>>,
     work: impl Future<Output = Result<T, BrokerError>>,
 ) -> Result<T, BrokerError> {
     let published = faults.clone();
     let fault = async move {
-        faults
-            .wait_for(Option::is_some)
-            .await
-            .ok()
-            .and_then(|fault| fault.clone())
+        let fault = faults.wait_for(Option::is_some).await.ok()?;
+        fault.clone()
     };
     tokio::select! {
         biased;
@@ -46,7 +43,13 @@ pub(crate) async fn or_fatal_fault<T>(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert, std::time::Duration};
+    use {
+        super::*,
+        assert2::assert,
+        futures_util::future::join,
+        std::{future, time::Duration},
+        tokio::{task, time},
+    };
 
     const FAULT: &str = "Tried to apply FeatureLevelRecord, but this controller only supports 7-30";
 
@@ -60,17 +63,14 @@ mod tests {
     #[tokio::test]
     async fn a_fault_published_mid_work_ends_it_at_once() {
         let (tx, rx) = watch::channel(None);
-        let work = or_fatal_fault(rx, std::future::pending::<Result<(), BrokerError>>());
+        let work = or_fatal_fault(rx, future::pending::<Result<(), BrokerError>>());
         let publish = async {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
             tx.send_replace(Some(FAULT.to_owned()));
         };
-        let (result, ()) = tokio::time::timeout(
-            Duration::from_secs(30),
-            futures_util::future::join(work, publish),
-        )
-        .await
-        .expect("the fault did not end the work");
+        let (result, ()) = time::timeout(Duration::from_secs(30), join(work, publish))
+            .await
+            .expect("the fault did not end the work");
         let Err(error) = result else {
             panic!("work that a fault ended returned Ok");
         };
@@ -120,7 +120,7 @@ mod tests {
         let (tx, rx) = watch::channel(None);
         drop(tx);
         let done = or_fatal_fault(rx, async {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
             Ok::<_, BrokerError>(7)
         })
         .await;

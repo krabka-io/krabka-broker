@@ -8,6 +8,7 @@
 //! pre-auth SASL gate, inter-broker authentication, GSSAPI, and a
 //! two-broker SASL cluster -- and `harness` holds the wire plumbing and the
 //! credential fixtures they share.
+#![cfg(test)]
 
 #[path = "auth_handlers/alter_scram.rs"]
 mod alter_scram;

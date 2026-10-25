@@ -1,11 +1,11 @@
 //! The common transport failures, preceding each caller's unchanged protocol-specific errors.
 
 use crate::{
-    meta::{ItemBody, item_body},
+    meta::{ItemBody, body_group, item_body},
     prelude::*,
 };
 
-pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     if meta.into_iter().next().is_some() {
         return Err(ParseError::new(
             Span::call_site(),
@@ -16,9 +16,7 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
         mut tokens,
         body_index: body,
     } = item_body(item, "transport_errors", TokenTree::is_keyword_enum)?;
-    let TokenTree::Group(group) = &mut tokens[body] else {
-        unreachable!()
-    };
+    let group = body_group(&mut tokens, body)?;
     if group.tokens.clone().into_iter().any(|token| {
         token
             .as_ident()

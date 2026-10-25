@@ -10,13 +10,14 @@ use {
     },
     crate::{
         error::BrokerError,
-        metrics::BrokerMetrics,
+        metrics::{BrokerMetrics, WalShardLabel},
         wal::{WalStore, quorum::registry::ShardId},
     },
     assert2::assert,
     krabka_ids::{Offset, PartitionIndex},
     krabka_kraft_core::NodeId,
-    std::sync::Arc,
+    std::{sync::Arc, time::Duration},
+    tokio::{task::JoinHandle, time},
     uuid::Uuid,
 };
 
@@ -25,13 +26,13 @@ use {
 /// pause proves nothing about whether the vote is in yet, and a follower
 /// acknowledgement that arrives before it is one vote of three, not a majority.
 async fn wait_for_leader_vote(store: &QuorumWalStore, offset: Offset) {
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    time::timeout(Duration::from_secs(30), async {
         while store
             .engine
             .voter_durable_offset(NodeId(1))
             .is_none_or(|voted| voted < offset)
         {
-            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
@@ -41,11 +42,11 @@ async fn wait_for_leader_vote(store: &QuorumWalStore, offset: Offset) {
 async fn spawn_sync_while_leader_vote_is_pending(
     store: &Arc<QuorumWalStore>,
     offset: Offset,
-) -> tokio::task::JoinHandle<Result<Offset, BrokerError>> {
+) -> JoinHandle<Result<Offset, BrokerError>> {
     let syncing = Arc::clone(store);
     let mut sync = tokio::spawn(async move { syncing.sync_durable(offset).await });
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(20), &mut sync)
+        time::timeout(Duration::from_millis(20), &mut sync)
             .await
             .is_err()
     );
@@ -85,7 +86,7 @@ async fn distributed_wal_waits_for_a_remote_fsync_ack() {
     assert!(
         metrics
             .diskless_wal_durable_watermark
-            .get_or_create(&crate::metrics::WalShardLabel {
+            .get_or_create(&WalShardLabel {
                 topic_id: Uuid::from_u128(99).to_string(),
                 partition: 0,
             })
@@ -128,7 +129,7 @@ async fn durable_advance_waits_for_an_offset_strictly_after_the_observation() {
     let engine = Arc::clone(&store.engine);
     let mut waiting = tokio::spawn(async move { engine.wait_for_durable_advance(first).await });
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(20), &mut waiting)
+        time::timeout(Duration::from_millis(20), &mut waiting)
             .await
             .is_err()
     );
@@ -219,7 +220,7 @@ async fn distributed_wal_reopens_without_truncating_the_source() {
     let mut batch = batch(2);
     source.lock().unwrap().append(&mut batch).unwrap();
     source.lock().unwrap().sync().unwrap();
-    let store = distributed_store(source.clone(), Uuid::from_u128(100), 3);
+    let store = distributed_store(Arc::clone(&source), Uuid::from_u128(100), 3);
     assert!(store.engine.durable_watermark() == Offset(0));
     assert!(store.engine.replica_end_offsets() == vec![Offset(2)]);
     drop(store);

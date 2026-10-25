@@ -1,4 +1,5 @@
 //! Property-based round-trip and truncation tests for [`krabka_log::Log`].
+#![cfg(test)]
 
 mod support;
 
@@ -23,7 +24,7 @@ proptest! {
         let dir = tempdir().unwrap();
         let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
         let mut expected_record_count: usize = 0;
-        for mut b in batches.clone() {
+        for mut b in batches {
             expected_record_count += b.records.len();
             log.append(&mut b).unwrap();
         }
@@ -45,7 +46,7 @@ proptest! {
     ) {
         let dir = tempdir().unwrap();
         let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-        for mut b in batches.clone() {
+        for mut b in batches {
             log.append(&mut b).unwrap();
         }
         let log_end = log.log_end_offset();

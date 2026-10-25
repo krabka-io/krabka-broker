@@ -19,7 +19,7 @@ krabka_macros::scram_users_fixture!(describe_request);
 /// Returns `(top_level_error, per_user_rows)` where each row is
 /// `(user, error_code, credential_infos)` and each `credential_info` is
 /// `(mechanism, iterations)`.
-pub(crate) async fn drive_describe_user_scram_credentials_sasl(
+pub async fn drive_describe_user_scram_credentials_sasl(
     addr: SocketAddr,
     user: &str,
     pass: &str,

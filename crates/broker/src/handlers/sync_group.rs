@@ -23,9 +23,11 @@ use {
         sync_group_request::SyncGroupRequest, sync_group_response::SyncGroupResponse,
     },
     krabka_units::convert::TimeExt as _,
+    std::sync::Arc,
+    tokio::time,
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: SyncGroupRequest,
     version: ApiVersion,
@@ -35,7 +37,7 @@ pub(crate) async fn handle(
         coordinator::unified::actor::GroupActorMessage, handlers::acl_gates::classic_group_refusal,
     };
 
-    let coordinator = broker.group_coordinator.clone();
+    let coordinator = Arc::clone(&broker.group_coordinator);
 
     // Kafka's `KafkaApis.handleSyncGroupRequest` answers a v5+ request
     // without a protocol type or name before the ACL check
@@ -64,7 +66,7 @@ pub(crate) async fn handle(
         reply,
     });
     let Ok(Ok(result)) =
-        tokio::time::timeout(broker.config.sync_group_follower_wait.to_std(), asked).await
+        time::timeout(broker.config.sync_group_follower_wait.to_std(), asked).await
     else {
         return Ok(SyncGroupResponse::error(codes::REBALANCE_IN_PROGRESS));
     };

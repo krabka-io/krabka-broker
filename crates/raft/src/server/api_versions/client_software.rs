@@ -21,16 +21,13 @@
 /// needed.
 #[must_use]
 pub fn is_valid_client_info(s: &str) -> bool {
-    let bytes = s.as_bytes();
     let is_alnum = |b: u8| b.is_ascii_alphanumeric();
     let is_interior = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'.';
-    match bytes.len() {
-        0 => false,
-        1 => is_alnum(bytes[0]),
-        n => {
-            is_alnum(bytes[0])
-                && is_alnum(bytes[n - 1])
-                && bytes[1..n - 1].iter().all(|&b| is_interior(b))
+    match s.as_bytes() {
+        [] => false,
+        &[only] => is_alnum(only),
+        &[first, ref interior @ .., last] => {
+            is_alnum(first) && is_alnum(last) && interior.iter().all(|&b| is_interior(b))
         }
     }
 }

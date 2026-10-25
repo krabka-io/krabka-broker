@@ -37,10 +37,18 @@ use {
     },
     bytes::{Buf, BufMut, Bytes, BytesMut},
     krabka_log::Offset,
-    krabka_protocol::primitives::{fixed, string_bytes},
+    krabka_protocol::{
+        ProtocolError,
+        owned::{
+            offset_commit_value,
+            offset_commit_value::{MAX_VERSION, MIN_VERSION},
+        },
+        primitives::{fixed, string_bytes, uuid::Uuid},
+    },
+    std::collections::HashMap,
 };
 
-pub(crate) mod flex;
+pub mod flex;
 
 /// Discriminator that [`parse_key`] returns.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,9 +98,9 @@ pub enum RecordKey {
 pub fn parse_key(buf: &[u8]) -> Result<Key, BrokerError> {
     match parse_record_key(buf)? {
         RecordKey::Known(key) => Ok(key),
-        RecordKey::UnknownType(_) => Err(BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue("unknown __consumer_offsets key version"),
-        )),
+        RecordKey::UnknownType(_) => Err(BrokerError::Protocol(ProtocolError::InvalidValue(
+            "unknown __consumer_offsets key version",
+        ))),
     }
 }
 
@@ -108,9 +116,9 @@ pub fn parse_key(buf: &[u8]) -> Result<Key, BrokerError> {
 /// record type, or when a key of a known record type does not decode.
 pub fn parse_record_key(mut buf: &[u8]) -> Result<RecordKey, BrokerError> {
     if buf.remaining() < 2 {
-        return Err(BrokerError::Protocol(
-            krabka_protocol::ProtocolError::InvalidValue("offsets key too short"),
-        ));
+        return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
+            "offsets key too short",
+        )));
     }
     let version = buf.get_i16();
     let key = match version {
@@ -212,15 +220,13 @@ impl OffsetCommitValue {
     pub fn encode_value(&self) -> Bytes {
         use krabka_protocol::Encode as _;
         let version = self.value_version();
-        let wire = krabka_protocol::owned::offset_commit_value::OffsetCommitValue {
+        let wire = offset_commit_value::OffsetCommitValue {
             offset: self.offset.0,
             leader_epoch: self.leader_epoch,
             metadata: self.metadata.clone(),
             commit_timestamp: self.commit_timestamp_ms,
             expire_timestamp: self.expire_timestamp_ms.unwrap_or(-1),
-            topic_id: krabka_protocol::primitives::uuid::Uuid(
-                self.topic_id.unwrap_or_default().into_bytes(),
-            ),
+            topic_id: Uuid(self.topic_id.unwrap_or_default().into_bytes()),
             ..Default::default()
         };
         let mut buf = BytesMut::new();
@@ -236,17 +242,12 @@ impl OffsetCommitValue {
     pub fn decode_value(mut buf: &[u8]) -> Result<Self, BrokerError> {
         use krabka_protocol::Decode as _;
         let version = get_i16(&mut buf)?;
-        if !(krabka_protocol::owned::offset_commit_value::MIN_VERSION
-            ..=krabka_protocol::owned::offset_commit_value::MAX_VERSION)
-            .contains(&version)
-        {
-            return Err(BrokerError::Protocol(
-                krabka_protocol::ProtocolError::InvalidValue("unknown OffsetCommitValue version"),
-            ));
+        if !(MIN_VERSION..=MAX_VERSION).contains(&version) {
+            return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
+                "unknown OffsetCommitValue version",
+            )));
         }
-        let wire = krabka_protocol::owned::offset_commit_value::OffsetCommitValue::decode(
-            &mut buf, version,
-        )?;
+        let wire = offset_commit_value::OffsetCommitValue::decode(&mut buf, version)?;
         let topic_id = uuid::Uuid::from_bytes(wire.topic_id.0);
         Ok(Self {
             offset: Offset(wire.offset),
@@ -335,7 +336,11 @@ impl GroupMetadataValue {
         put_nullable_string(&mut buf, self.protocol_name.as_deref())?;
         put_nullable_string(&mut buf, self.leader.as_deref())?;
         buf.put_i64(self.current_state_timestamp_ms);
-        let n = i32::try_from(self.members.len()).expect("members fit in i32");
+        let n = i32::try_from(self.members.len()).map_err(|_| {
+            BrokerError::Protocol(ProtocolError::InvalidValue(
+                "GroupMetadataValue has more members than an i32 counts",
+            ))
+        })?;
         buf.put_i32(n);
         for m in &self.members {
             put_string(&mut buf, &m.member_id)?;
@@ -353,9 +358,9 @@ impl GroupMetadataValue {
     pub fn decode_value(mut buf: &[u8]) -> Result<Self, BrokerError> {
         let version = get_i16(&mut buf)?;
         if !(0..=3).contains(&version) {
-            return Err(BrokerError::Protocol(
-                krabka_protocol::ProtocolError::InvalidValue("unknown GroupMetadataValue version"),
-            ));
+            return Err(BrokerError::Protocol(ProtocolError::InvalidValue(
+                "unknown GroupMetadataValue version",
+            )));
         }
         let protocol_type = get_string(&mut buf)?;
         let generation = get_i32(&mut buf)?;
@@ -363,7 +368,11 @@ impl GroupMetadataValue {
         let leader = get_nullable_string(&mut buf)?;
         let current_state_timestamp_ms = if version >= 2 { get_i64(&mut buf)? } else { -1 };
         let n = get_i32(&mut buf)?;
-        let cap = usize::try_from(n.max(0)).expect("non-negative i32 fits in usize");
+        let cap = usize::try_from(n.max(0)).map_err(|_| {
+            BrokerError::Protocol(ProtocolError::InvalidValue(
+                "GroupMetadataValue member count does not fit a usize",
+            ))
+        })?;
         let mut members = Vec::with_capacity(cap);
         for _ in 0..n.max(0) {
             let member_id = get_string(&mut buf)?;
@@ -404,29 +413,29 @@ impl GroupMetadataValue {
 
 // ── primitives (non-flexible Kafka encoding) ───────────────────────────────
 
-pub(crate) fn get_i16(buf: &mut &[u8]) -> Result<i16, BrokerError> { Ok(fixed::get_i16(buf)?) }
+pub fn get_i16(buf: &mut &[u8]) -> Result<i16, BrokerError> { Ok(fixed::get_i16(buf)?) }
 
-pub(crate) fn get_i32(buf: &mut &[u8]) -> Result<i32, BrokerError> { Ok(fixed::get_i32(buf)?) }
+pub fn get_i32(buf: &mut &[u8]) -> Result<i32, BrokerError> { Ok(fixed::get_i32(buf)?) }
 
-pub(crate) fn get_i64(buf: &mut &[u8]) -> Result<i64, BrokerError> { Ok(fixed::get_i64(buf)?) }
+pub fn get_i64(buf: &mut &[u8]) -> Result<i64, BrokerError> { Ok(fixed::get_i64(buf)?) }
 
-pub(crate) fn get_string(buf: &mut &[u8]) -> Result<String, BrokerError> {
+pub fn get_string(buf: &mut &[u8]) -> Result<String, BrokerError> {
     Ok(string_bytes::get_string_owned(buf)?)
 }
 
-pub(crate) fn get_nullable_string(buf: &mut &[u8]) -> Result<Option<String>, BrokerError> {
+pub fn get_nullable_string(buf: &mut &[u8]) -> Result<Option<String>, BrokerError> {
     Ok(string_bytes::get_nullable_string_owned(buf)?)
 }
 
 /// Reads a `BYTES` field, a null reading as empty.
-pub(crate) fn get_bytes(buf: &mut &[u8]) -> Result<Bytes, BrokerError> {
+pub fn get_bytes(buf: &mut &[u8]) -> Result<Bytes, BrokerError> {
     Ok(string_bytes::get_nullable_bytes_owned(buf)?.unwrap_or_default())
 }
 
 /// The longest string, in bytes, that Kafka reads or writes: `Short.MAX_VALUE`,
 /// the largest `INT16` length. Its generated request readers refuse a longer
 /// string field, and its generated writers refuse to serialize one.
-pub(crate) const MAX_STRING_BYTES: usize = 0x7fff;
+pub const MAX_STRING_BYTES: usize = 0x7fff;
 
 /// Writes `s` with an `INT16` length.
 ///
@@ -439,9 +448,9 @@ pub(crate) const MAX_STRING_BYTES: usize = 0x7fff;
 /// # Errors
 ///
 /// Returns [`BrokerError::Protocol`] when `s` is longer than `i16::MAX` bytes.
-pub(crate) fn put_string<B: BufMut>(buf: &mut B, s: &str) -> Result<(), BrokerError> {
+pub fn put_string<B: BufMut>(buf: &mut B, s: &str) -> Result<(), BrokerError> {
     let n = i16::try_from(s.len()).map_err(|_| {
-        BrokerError::Protocol(krabka_protocol::ProtocolError::InvalidValue(
+        BrokerError::Protocol(ProtocolError::InvalidValue(
             "STRING longer than 32767 bytes",
         ))
     })?;
@@ -457,7 +466,7 @@ pub(crate) fn put_string<B: BufMut>(buf: &mut B, s: &str) -> Result<(), BrokerEr
 ///
 /// Returns [`BrokerError::Protocol`] when a part is longer than `i16::MAX`
 /// bytes.
-pub(crate) fn encode_string_key(version: i16, parts: &[&str]) -> Result<Bytes, BrokerError> {
+pub fn encode_string_key(version: i16, parts: &[&str]) -> Result<Bytes, BrokerError> {
     let mut buf = BytesMut::new();
     buf.put_i16(version);
     for part in parts {
@@ -471,10 +480,7 @@ pub(crate) fn encode_string_key(version: i16, parts: &[&str]) -> Result<Bytes, B
 /// # Errors
 ///
 /// Returns [`BrokerError::Protocol`] when `s` is longer than `i16::MAX` bytes.
-pub(crate) fn put_nullable_string<B: BufMut>(
-    buf: &mut B,
-    s: Option<&str>,
-) -> Result<(), BrokerError> {
+pub fn put_nullable_string<B: BufMut>(buf: &mut B, s: Option<&str>) -> Result<(), BrokerError> {
     match s {
         None => {
             buf.put_i16(-1);
@@ -484,14 +490,12 @@ pub(crate) fn put_nullable_string<B: BufMut>(
     }
 }
 
-pub(crate) fn put_bytes<B: BufMut>(buf: &mut B, b: &Bytes) { string_bytes::put_bytes(buf, b); }
+pub fn put_bytes<B: BufMut>(buf: &mut B, b: &Bytes) { string_bytes::put_bytes(buf, b); }
 
 /// The topics in id order and the partitions ascending, so that two equal
 /// assignments give equal records.
-pub(super) fn sorted_partitions(
-    partitions: &std::collections::HashMap<krabka_protocol::primitives::uuid::Uuid, Vec<i32>>,
-) -> Vec<(krabka_protocol::primitives::uuid::Uuid, Vec<i32>)> {
-    let mut topics: Vec<(krabka_protocol::primitives::uuid::Uuid, Vec<i32>)> = partitions
+pub(super) fn sorted_partitions(partitions: &HashMap<Uuid, Vec<i32>>) -> Vec<(Uuid, Vec<i32>)> {
+    let mut topics: Vec<(Uuid, Vec<i32>)> = partitions
         .iter()
         .filter(|(_, partitions)| !partitions.is_empty())
         .map(|(topic_id, partitions)| {
@@ -505,7 +509,7 @@ pub(super) fn sorted_partitions(
 }
 
 pub(super) fn sorted_assigned_partitions(
-    partitions: &std::collections::HashMap<krabka_protocol::primitives::uuid::Uuid, Vec<i32>>,
+    partitions: &HashMap<Uuid, Vec<i32>>,
 ) -> Vec<AssignedTopicPartitions> {
     sorted_partitions(partitions)
         .into_iter()
@@ -518,7 +522,12 @@ pub(super) fn sorted_assigned_partitions(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::coordinator::unified::test_support::wire_bytes, assert2::assert};
+    use {
+        super::*,
+        crate::coordinator::unified::test_support::wire_bytes,
+        assert2::assert,
+        krabka_protocol::{owned::offset_commit_value, primitives::uuid::Uuid},
+    };
 
     const TOPIC_ID: uuid::Uuid = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
 
@@ -592,13 +601,13 @@ mod tests {
     #[test]
     fn offset_commit_value_reads_versions_0_to_4() {
         use krabka_protocol::Encode as _;
-        let wire = krabka_protocol::owned::offset_commit_value::OffsetCommitValue {
+        let wire = offset_commit_value::OffsetCommitValue {
             offset: 42,
             leader_epoch: 4,
             metadata: "meta".into(),
             commit_timestamp: 1_000_000,
             expire_timestamp: 9_999_999,
-            topic_id: krabka_protocol::primitives::uuid::Uuid(TOPIC_ID.into_bytes()),
+            topic_id: Uuid(TOPIC_ID.into_bytes()),
             ..Default::default()
         };
         let cases = [
@@ -628,9 +637,9 @@ mod tests {
         }
         let mut unexpiring_v1 = BytesMut::new();
         unexpiring_v1.put_i16(1);
-        krabka_protocol::owned::offset_commit_value::OffsetCommitValue {
+        offset_commit_value::OffsetCommitValue {
             expire_timestamp: -1,
-            ..wire.clone()
+            ..wire
         }
         .encode(&mut unexpiring_v1, 1)
         .unwrap();
@@ -722,7 +731,7 @@ mod tests {
                 current_state_timestamp_ms,
                 members: vec![MemberMetadata {
                     member_id: "m1".into(),
-                    group_instance_id: group_instance_id.map(str::to_string),
+                    group_instance_id: group_instance_id.map(str::to_owned),
                     client_id: "c".into(),
                     client_host: "h".into(),
                     rebalance_timeout_ms,
@@ -829,8 +838,8 @@ mod tests {
         assert!(
             parse_key(&key).unwrap()
                 == Key::OffsetCommit {
-                    group_id: "grp".to_string(),
-                    topic: "topic".to_string(),
+                    group_id: "grp".to_owned(),
+                    topic: "topic".to_owned(),
                     partition: 7,
                 }
         );

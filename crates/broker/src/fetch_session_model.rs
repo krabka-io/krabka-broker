@@ -74,7 +74,7 @@ enum Ref {
 }
 fn ref_name(r: Ref) -> String {
     match r {
-        Ref::Both(n, _) | Ref::NameOnly(n) => n.to_string(),
+        Ref::Both(n, _) | Ref::NameOnly(n) => n.to_owned(),
         Ref::IdOnly(_) => String::new(),
     }
 }
@@ -257,7 +257,7 @@ impl Model for FsModel {
         let mut partitions = SessionPartitions::new();
         partitions.insert(
             FetchSessionKey {
-                topic_name: NAME_A.to_string(),
+                topic_name: NAME_A.to_owned(),
                 topic_id: id_of(1),
                 partition: self.partitions[0],
             },

@@ -56,22 +56,23 @@ use {
         replicator_supervisor::materialize_partition,
         txn::coordinator::leadership::LoadStatus,
     },
+    std::{sync::Arc, time::Duration},
 };
 
 /// How long a transactional `InitProducerId` waits for the load of its
 /// `__transaction_state` partition before it answers
 /// `COORDINATOR_LOAD_IN_PROGRESS`.
-const INIT_LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+const INIT_LOAD_WAIT: Duration = Duration::from_secs(1);
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: InitProducerIdRequest,
     version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<InitProducerIdResponse, BrokerError> {
-    let producer_ids = broker.producer_ids.clone();
-    let coord = broker.txn_coordinator.clone();
-    let controller = broker.controller.clone();
+    let producer_ids = Arc::clone(&broker.producer_ids);
+    let coord = Arc::clone(&broker.txn_coordinator);
+    let controller = Arc::clone(&broker.controller);
     let log_dirs = broker.config.all_log_dirs();
     let log_dir_status = broker.log_dir_status.clone();
 

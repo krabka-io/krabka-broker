@@ -347,9 +347,8 @@ fn validate_reconfiguration(current: &ListenerView, proposed: &ListenerView) -> 
             ));
         }
         let protocol = |view: &ListenerView| {
-            view.protocol_map()
-                .ok()
-                .and_then(|map| map.get(&endpoint.name).copied())
+            let map = view.protocol_map().ok()?;
+            map.get(&endpoint.name).copied()
         };
         if protocol(current) != protocol(proposed) {
             return Err(format!(
@@ -418,7 +417,7 @@ impl ListenerChange {
 /// What the reconfiguration checks of an alter of this node's own `BROKER`
 /// resource need of the node: its running listeners for their `SslFactory`
 /// checks, and its static config as Kafka keys.
-pub(crate) struct OwnBrokerChecks<'a> {
+pub struct OwnBrokerChecks<'a> {
     pub(crate) listener_tls: ListenerTlsInputs<'a>,
     pub(crate) static_config: BTreeMap<String, String>,
 }

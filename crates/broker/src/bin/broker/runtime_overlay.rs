@@ -6,14 +6,17 @@
 
 use {
     crate::{cli::Args, runtime_args::RuntimeArgs},
-    krabka_broker::{BrokerConfig, config::DEFAULT_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT},
+    krabka_broker::{
+        BrokerConfig, config::DEFAULT_CONTROLLED_SHUTDOWN_DRAIN_TIMEOUT,
+        file_config::RuntimeFileConfig,
+    },
     krabka_client_core::{ClientFrameMax, ConnectionDispatchQueueCapacity},
     krabka_units::Time,
 };
 
 impl RuntimeArgs {
-    fn as_file_runtime(&self) -> krabka_broker::file_config::RuntimeFileConfig {
-        let mut runtime = krabka_broker::file_config::RuntimeFileConfig::default();
+    fn as_file_runtime(&self) -> RuntimeFileConfig {
+        let mut runtime = RuntimeFileConfig::default();
         self.copy_into(&mut runtime);
         runtime.streams_group_assignor = self.streams_group_assignor.map(|value| {
             use krabka_broker::coordinator::unified::streams::config::StreamsAssignorKind;
@@ -29,7 +32,7 @@ impl RuntimeArgs {
 }
 
 impl Args {
-    fn runtime_overlay(&self) -> krabka_broker::file_config::RuntimeFileConfig {
+    fn runtime_overlay(&self) -> RuntimeFileConfig {
         let mut runtime = self.runtime.as_file_runtime();
         runtime.partition_disk_scan_interval = self.partition_disk_scan_interval;
         runtime.observer_lag_bound = self.observer_lag_bound;
@@ -78,10 +81,8 @@ impl Args {
         let cli_shutdown = runtime.controlled_shutdown_drain_timeout;
         runtime.apply_to(cfg).map_err(|error| error.to_string())?;
         cfg.client_dispatch_queue_capacity =
-            ConnectionDispatchQueueCapacity::new(self.runtime.client_dispatch_queue_capacity)
-                .expect("validated by clap");
-        cfg.client_frame_max =
-            ClientFrameMax::try_from(self.runtime.client_frame_max).expect("validated by clap");
+            ConnectionDispatchQueueCapacity::new(self.runtime.client_dispatch_queue_capacity)?;
+        cfg.client_frame_max = ClientFrameMax::try_from(self.runtime.client_frame_max)?;
         cfg.validate().map_err(|error| error.to_string())?;
         Ok(cli_shutdown
             .or(file_shutdown)

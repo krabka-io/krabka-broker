@@ -5,17 +5,19 @@
 
 use {
     super::{broker::HostBroker, ports::broker0_advertised},
-    krabka_broker::BrokerConfig,
+    crate::support::listeners,
+    krabka_broker::{BrokerConfig, authorizer::SimpleAclAuthorizer},
+    std::sync::Arc,
 };
 
-pub(crate) const ADMIN: &str = "admin";
-pub(crate) const ADMIN_PASS: &str = "admin-secret";
-pub(crate) const ALICE: &str = "alice";
-pub(crate) const ALICE_PASS: &str = "alice-secret";
+pub const ADMIN: &str = "admin";
+pub const ADMIN_PASS: &str = "admin-secret";
+pub const ALICE: &str = "alice";
+pub const ALICE_PASS: &str = "alice-secret";
 
 /// Build a JAAS config string for the `PlainLoginModule`. The trailing `;`
 /// is mandatory. Kafka's JAAS parser rejects the entry without it.
-pub(crate) fn plain_jaas(user: &str, pass: &str) -> String {
+pub fn plain_jaas(user: &str, pass: &str) -> String {
     format!(
         "org.apache.kafka.common.security.plain.PlainLoginModule required \
          username=\"{user}\" password=\"{pass}\";",
@@ -24,7 +26,7 @@ pub(crate) fn plain_jaas(user: &str, pass: &str) -> String {
 
 /// Build a JAAS config string for the `ScramLoginModule`. The
 /// SCRAM-SHA-512 acceptance test uses it.
-pub(crate) fn scram_jaas(user: &str, pass: &str) -> String {
+pub fn scram_jaas(user: &str, pass: &str) -> String {
     format!(
         "org.apache.kafka.common.security.scram.ScramLoginModule required \
          username=\"{user}\" password=\"{pass}\";",
@@ -35,9 +37,7 @@ pub(crate) fn scram_jaas(user: &str, pass: &str) -> String {
 /// an allocated port, advertised as an allocated port. The listener
 /// starts with the given PLAIN `users` already installed. Mirrors
 /// [`start_host_broker`] otherwise.
-pub(crate) fn start_sasl_plaintext_broker(
-    users: &[(&str, &str)],
-) -> impl std::future::Future<Output = HostBroker> {
+pub fn start_sasl_plaintext_broker(users: &[(&str, &str)]) -> impl Future<Output = HostBroker> {
     start_sasl_with_users(users, None)
 }
 
@@ -51,21 +51,18 @@ pub(crate) fn start_sasl_plaintext_broker(
 ///
 /// `jvm_sasl_scram_sha512_produce_consume` and
 /// `jvm_sasl_scram_sha256_produce_consume` use this broker.
-pub(crate) fn start_dual_mech_broker(
-    admin: &str,
-    admin_pass: &str,
-) -> impl std::future::Future<Output = HostBroker> {
+pub fn start_dual_mech_broker(admin: &str, admin_pass: &str) -> impl Future<Output = HostBroker> {
     start_dual_mech_broker_with_reauth(admin, admin_pass, None)
 }
 
 /// [`start_dual_mech_broker`] with the KIP-368 `connections.max.reauth.ms`
 /// window set, so a JVM client on the listener must re-authenticate in band
 /// before `max_reauth` elapses or have its connection closed.
-pub(crate) fn start_dual_mech_broker_with_reauth(
+pub fn start_dual_mech_broker_with_reauth(
     admin: &str,
     admin_pass: &str,
     max_reauth: Option<krabka_units::Time>,
-) -> impl std::future::Future<Output = HostBroker> {
+) -> impl Future<Output = HostBroker> {
     super::broker::start_host_broker_with(move |config| {
         configure_sasl(config, &[(admin, admin_pass)], Some(admin));
         config.enabled_sasl_mechanisms.extend([
@@ -82,7 +79,7 @@ pub(crate) fn start_dual_mech_broker_with_reauth(
 /// exactly the token shape Krabka's
 /// [`krabka_security::UnsecuredJwsValidator`] accepts. It pairs with
 /// `OAuthBearerUnsecuredLoginCallbackHandler` on the client.
-pub(crate) fn oauthbearer_jaas(sub: &str) -> String {
+pub fn oauthbearer_jaas(sub: &str) -> String {
     format!(
         "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required \
          unsecuredLoginStringClaim_sub=\"{sub}\";",
@@ -92,7 +89,7 @@ pub(crate) fn oauthbearer_jaas(sub: &str) -> String {
 /// Spawn a single `SASL_PLAINTEXT` broker that enables **only** OAUTHBEARER.
 /// The broker validates the JVM client's unsecured JWS with the default
 /// validator (principal claim `sub`). Mirrors [`start_sasl_plaintext_broker`].
-pub(crate) async fn start_oauthbearer_broker() -> HostBroker {
+pub async fn start_oauthbearer_broker() -> HostBroker {
     super::broker::start_host_broker_with(|config| {
         configure_sasl(config, &[], None);
         config.enabled_sasl_mechanisms = vec![krabka_security::SaslMechanism::OAuthBearer];
@@ -108,18 +105,14 @@ pub(crate) async fn start_oauthbearer_broker() -> HostBroker {
 /// `DeleteAcls (31)`, and `DescribeAcls (29)`, which all need the
 /// `Cluster Alter` or `Cluster Describe` operation. The super-user bypass
 /// in `authorize()` short-circuits that check.
-pub(crate) fn start_sasl_plaintext_broker_with_super_user<'a>(
+pub fn start_sasl_plaintext_broker_with_super_user<'a>(
     super_user: &'a str,
     users: &'a [(&'a str, &'a str)],
-) -> impl std::future::Future<Output = HostBroker> + 'a {
+) -> impl Future<Output = HostBroker> + 'a {
     start_sasl_with_users(users, Some(super_user))
 }
 
-pub(crate) fn configure_sasl(
-    config: &mut BrokerConfig,
-    users: &[(&str, &str)],
-    super_user: Option<&str>,
-) {
+pub fn configure_sasl(config: &mut BrokerConfig, users: &[(&str, &str)], super_user: Option<&str>) {
     use {
         krabka_broker::config::ListenerSpec,
         krabka_security::{ListenerProtocol, SaslMechanism},
@@ -127,7 +120,7 @@ pub(crate) fn configure_sasl(
 
     config.listeners = vec![ListenerSpec {
         advertised: broker0_advertised().into(),
-        ..crate::support::listeners::listener(
+        ..listeners::listener(
             "SASL_PLAINTEXT",
             config.listen_addr,
             ListenerProtocol::SaslPlaintext,
@@ -143,14 +136,12 @@ pub(crate) fn configure_sasl(
     if let Some(user) = super_user {
         // The node's own heartbeat reaches the PLAINTEXT controller as ANONYMOUS.
         config.super_users.extend([user.into(), "ANONYMOUS".into()]);
-        config.authorizer = std::sync::Arc::new(
-            krabka_broker::authorizer::SimpleAclAuthorizer::new(config.super_users.clone()),
-        );
+        config.authorizer = Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
     }
 }
 
 /// ACL fixture with an admin-owned topic and a provisioned PLAIN user.
-pub(crate) async fn start_plain_acl_topic(
+pub async fn start_plain_acl_topic(
     topic: &str,
     user: &str,
     password: &str,
@@ -179,12 +170,12 @@ pub(crate) async fn start_plain_acl_topic(
 fn start_sasl_with_users<'a>(
     users: &'a [(&'a str, &'a str)],
     super_user: Option<&'a str>,
-) -> impl std::future::Future<Output = HostBroker> + 'a {
+) -> impl Future<Output = HostBroker> + 'a {
     super::broker::start_host_broker_with(move |config| configure_sasl(config, users, super_user))
 }
 
 /// Admin-created topic with the user's exact literal topic operations.
-pub(crate) async fn start_plain_acl_topic_with_ops(
+pub async fn start_plain_acl_topic_with_ops(
     topic: &str,
     user: &str,
     password: &str,

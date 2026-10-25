@@ -20,6 +20,8 @@
 //! An unassignment while a publish is in flight fails it with `NotReady`,
 //! unless the pump applied its record before the unassignment.
 
+#[cfg(test)]
+use tokio::sync;
 use {
     super::{TopicBasedRemoteLogMetadataManager, assignment::ReadGate},
     crate::{error::MetadataLogError, partitioning::metadata_partition_for},
@@ -27,7 +29,7 @@ use {
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition},
     std::{
         collections::{HashMap, hash_map::Entry},
-        sync::{Mutex, MutexGuard},
+        sync::{Mutex, MutexGuard, PoisonError},
     },
     tokio::sync::oneshot,
 };
@@ -49,7 +51,7 @@ pub(super) struct MutationWaiters {
     state: Mutex<WaiterState>,
     /// Held by the pump while it applies a record; see [`Self::stall_pump`].
     #[cfg(test)]
-    stall: tokio::sync::Mutex<()>,
+    stall: sync::Mutex<()>,
 }
 
 /// The bookkeeping behind [`MutationWaiters`], always under its lock.
@@ -124,7 +126,7 @@ impl WaiterState {
 
 impl MutationWaiters {
     fn state(&self) -> MutexGuard<'_, WaiterState> {
-        self.state.lock().expect("mutation waiters mutex poisoned")
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Start a publish on `partition` if `ready` admits it, checked under the
@@ -193,6 +195,7 @@ impl MutationWaiters {
             .waiters
             .extract_if(|key, _| key.partition == partition)
             .collect::<Vec<_>>();
+        drop(state);
         for (_, reply) in removed {
             let _ = reply.send(Err(RemoteStorageError::NotReady { partition }));
         }
@@ -201,9 +204,7 @@ impl MutationWaiters {
     /// Stop the pump before it applies its next record, until the guard drops.
     /// The pump takes the same guard around each record it applies.
     #[cfg(test)]
-    pub(super) async fn stall_pump(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.stall.lock().await
-    }
+    pub(super) async fn stall_pump(&self) -> sync::MutexGuard<'_, ()> { self.stall.lock().await }
 
     /// `true` when no mutation is registered, in flight, or holding an outcome.
     #[cfg(test)]

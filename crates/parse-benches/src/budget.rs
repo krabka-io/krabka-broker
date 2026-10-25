@@ -200,31 +200,27 @@ pub fn judge(
             Direction::HigherIsBetter => -change,
         }
     };
-    let (allowed_change, status) = match budget {
-        None => (0.0, Status::NotBudgeted),
-        Some(budget) => {
-            let materiality = budget.materiality_percent / 100.0;
-            let allowed = calibrated_tolerance(
-                materiality,
-                budget.spread_multiplier,
-                reference_spread,
-                candidate_spread,
-            );
-            let status =
-                if reference_spread.max(candidate_spread) > budget.max_spread_percent / 100.0 {
-                    Status::ExcessVariance
-                } else if worse_change > allowed {
-                    Status::MaterialRegression
-                } else if worse_change > materiality {
-                    Status::NoisyNotMaterial
-                } else if -worse_change > allowed {
-                    Status::Improved
-                } else {
-                    Status::WithinBudget
-                };
-            (allowed, status)
-        }
-    };
+    let (allowed_change, status) = budget.map_or((0.0, Status::NotBudgeted), |budget| {
+        let materiality = budget.materiality_percent / 100.0;
+        let allowed = calibrated_tolerance(
+            materiality,
+            budget.spread_multiplier,
+            reference_spread,
+            candidate_spread,
+        );
+        let status = if reference_spread.max(candidate_spread) > budget.max_spread_percent / 100.0 {
+            Status::ExcessVariance
+        } else if worse_change > allowed {
+            Status::MaterialRegression
+        } else if worse_change > materiality {
+            Status::NoisyNotMaterial
+        } else if -worse_change > allowed {
+            Status::Improved
+        } else {
+            Status::WithinBudget
+        };
+        (allowed, status)
+    });
     MetricVerdict {
         reference_median,
         candidate_median,
@@ -305,7 +301,16 @@ pub fn evaluate(
         }
     }
 
-    let gate_performance = contract.modes[&record.mode].gate_performance;
+    let gate_performance = contract
+        .modes
+        .get(&record.mode)
+        .ok_or_else(|| {
+            BudgetError::InvalidRecord(format!(
+                "mode {} is not in the contract",
+                record.mode.name()
+            ))
+        })?
+        .gate_performance;
     let mut rejections = Vec::new();
     let mut cells = BTreeMap::new();
     for cell in &contract.cells {
@@ -361,15 +366,17 @@ pub fn evaluate(
         let mut metrics = BTreeMap::new();
         for metric in Metric::ALL {
             let side_values = |side: Side| -> Vec<f64> {
-                values[&side]
-                    .iter()
+                values
+                    .get(&side)
+                    .into_iter()
+                    .flatten()
                     .map(|measurement| metric_value(metric, measurement))
                     .collect()
             };
-            let budget = cell
-                .budgeted
-                .contains(&metric)
-                .then(|| &contract.budgets[&metric]);
+            let budget = contract
+                .budgets
+                .get(&metric)
+                .filter(|_| cell.budgeted.contains(&metric));
             let verdict = judge(
                 metric,
                 &side_values(Side::Reference),

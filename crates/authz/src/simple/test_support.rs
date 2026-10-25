@@ -138,7 +138,7 @@ pub(super) fn image_with_acls(
 pub(super) fn no_super() -> HashSet<String> { HashSet::new() }
 pub(super) fn one_super(name: &str) -> HashSet<String> {
     let mut s = HashSet::new();
-    s.insert(name.to_string());
+    s.insert(name.to_owned());
     s
 }
 

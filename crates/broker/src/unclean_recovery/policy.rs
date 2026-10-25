@@ -7,7 +7,7 @@
 use {super::BackgroundRecovery, crate::config_keys::RecoveryStrategy, krabka_units::Time};
 
 #[derive(Debug, Clone)]
-pub(crate) struct RecoveryPolicy {
+pub struct RecoveryPolicy {
     pub aggressive_deadline: Time,
     pub balanced_deadline: Time,
     pub queue_capacity: usize,
@@ -40,7 +40,7 @@ mod tests {
             balanced_deadline: millis(19),
             queue_capacity: 3,
             listener_protocol: krabka_security::ListenerProtocol::Ssl,
-            inter_broker_server_name: "broker.internal".to_string(),
+            inter_broker_server_name: "broker.internal".to_owned(),
             background: BackgroundRecovery::new(&BreakGlassConfig::default(), AuditLog::disabled()),
         };
 

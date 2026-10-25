@@ -18,6 +18,7 @@ use {
         },
     },
     krabka_protocol::owned::sync_group_request::SyncGroupRequest,
+    std::time::Instant,
     tokio::sync::oneshot,
 };
 
@@ -28,7 +29,7 @@ pub(super) async fn handle_classic_sync_message(
     request: SyncGroupRequest,
     reply: oneshot::Sender<SyncResult>,
 ) {
-    if group.as_classic_mut().is_none() {
+    let Some(state) = group.as_classic_mut() else {
         let result = match group.as_consumer_mut() {
             Some(state) => {
                 let result =
@@ -38,7 +39,7 @@ pub(super) async fn handle_classic_sync_message(
                 if result.error_code == codes::NONE
                     && let Some(member) = state.members.get_mut(&request.member_id)
                 {
-                    member.last_seen = std::time::Instant::now();
+                    member.last_seen = Instant::now();
                 }
                 result
             }
@@ -49,10 +50,7 @@ pub(super) async fn handle_classic_sync_message(
         };
         let _ = reply.send(result);
         return;
-    }
-    let state = group
-        .as_classic_mut()
-        .expect("group kind checked immediately above");
+    };
     let previous = state.clone();
     match classic_ops::handle_sync(state, &request) {
         classic_ops::SyncAction::Immediate(result) => {
@@ -91,7 +89,7 @@ mod tests {
         super::*,
         crate::coordinator::unified::{
             actor::{
-                DescribeMember, GroupActorMessage,
+                DescribeMember, GroupActorMessage, JoinResult,
                 test_support::{
                     RejoinedClassic, decode_assignment, last_classic_metadata, make_coordinator,
                     make_coordinator_with_topic_policy, rpc, seed_and_upgrade,
@@ -103,10 +101,12 @@ mod tests {
         },
         assert2::{assert, check},
         bytes::Bytes,
+        krabka_protocol::primitives::uuid::Uuid,
+        std::{collections::HashMap, sync::atomic::Ordering},
     };
 
     /// Partitions by topic id.
-    type Partitions = std::collections::HashMap<krabka_protocol::primitives::uuid::Uuid, Vec<i32>>;
+    type Partitions = HashMap<Uuid, Vec<i32>>;
 
     /// What a member holds and at which epoch, as `Describe` reports it.
     #[derive(Debug, PartialEq)]
@@ -167,8 +167,7 @@ mod tests {
         let seeded = seed_completing_classic(&coord, &["m1"]);
         let handle = seeded.handle;
         let generation = seeded.generation;
-        log.fail_next
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        log.fail_next.store(true, Ordering::SeqCst);
         let request =
             rpc::assignment_sync_request(generation, "m1", Bytes::from_static(b"assignment"));
 
@@ -222,7 +221,7 @@ mod tests {
         let join = rpc::classic_join(&handle, "m-classic", "t").await;
         let member = rpc::describe_member(&handle, "m-classic").await;
         check!(
-            join == crate::coordinator::unified::actor::JoinResult {
+            join == JoinResult {
                 error_code: codes::NONE,
                 generation_id: member.member_epoch,
                 protocol_type: Some("consumer".into()),

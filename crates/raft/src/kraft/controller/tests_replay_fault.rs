@@ -85,7 +85,7 @@ fn unknown_topic_removal_value() -> Vec<u8> {
 fn unknown_topic_config_value() -> Vec<u8> {
     let record = MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: "ghost".into(),
-        overrides: [("retention.ms".to_string(), "1".to_string())].into(),
+        overrides: [("retention.ms".to_owned(), "1".to_owned())].into(),
     });
     to_kraft_values(&record, &MetadataImage::new(uuid::Uuid::nil()))
         .expect("encode a topic config")
@@ -498,7 +498,7 @@ fn a_control_record_without_its_key_or_value_is_invalid() {
         (
             "empty key",
             Some(Bytes::new()),
-            value.clone(),
+            value,
             "Got an unexpected empty key in the record",
         ),
         (
@@ -509,7 +509,7 @@ fn a_control_record_without_its_key_or_value_is_invalid() {
         ),
         (
             "empty value",
-            key.clone(),
+            key,
             Some(Bytes::new()),
             "Got an unexpected empty value in the record",
         ),

@@ -195,7 +195,7 @@ fn st(id: i8) -> TxnState { TxnState::from_kafka_status(id).expect("valid TxnSta
 /// Reconstructs the real `TxnEntry` from the projection, so the real decision
 /// fns behave as in a live run.
 fn rebuild(s: &TxnProj) -> TxnEntry {
-    let mut e = TxnEntry::new_empty("tid".to_string(), ProducerId(s.pid), s.epoch, 60_000, 1);
+    let mut e = TxnEntry::new_empty("tid".to_owned(), ProducerId(s.pid), s.epoch, 60_000, 1);
     e.state = st(s.state);
     e
 }

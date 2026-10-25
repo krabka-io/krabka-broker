@@ -15,7 +15,13 @@ use {
         wire::KrabkaSubmitChangeResponse,
     },
     krabka_units::prelude::{ByteSize, Time, TimeExt as _, gibibytes, millis, secs},
-    std::sync::Arc,
+    std::{
+        io::{Error, ErrorKind},
+        iter,
+        sync::{Arc, Mutex},
+        time::Duration as StdDuration,
+    },
+    tokio::{net, time},
     uuid::Uuid,
 };
 
@@ -46,7 +52,7 @@ pub(super) async fn joining_controller(context: &str) -> (tempfile::TempDir, Con
     let dir = tempfile::TempDir::new().unwrap();
     let cfg = ControllerConfig {
         bootstrap_mode: BootstrapMode::Join,
-        initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
+        initial_voters: krabka_metadata::VoterSet::from_voters(iter::empty()),
         ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
     };
     let ctrl = Controller::start(cfg).await.expect(context);
@@ -55,7 +61,7 @@ pub(super) async fn joining_controller(context: &str) -> (tempfile::TempDir, Con
 
 pub(super) async fn wait_for_leader(ctrl: &ControllerHandle) {
     let mut leader_rx = ctrl.watch_leader();
-    tokio::time::timeout(
+    time::timeout(
         TEST_OP_TIMEOUT.to_std(),
         leader_rx.wait_for(Option::is_some),
     )
@@ -69,18 +75,18 @@ pub(super) async fn submit_change_with_timeout(
     records: Vec<krabka_metadata::MetadataRecord>,
     context: &str,
 ) -> Result<(), RaftError> {
-    tokio::time::timeout(TEST_OP_TIMEOUT.to_std(), ctrl.submit_change(records))
+    time::timeout(TEST_OP_TIMEOUT.to_std(), ctrl.submit_change(records))
         .await
         .unwrap_or_else(|_| panic!("{context} submit_change timed out"))
         .map(|_| ())
 }
 
-krabka_macros::bind_retry_fixture!(bind_eventually, ::std::time::Duration::from_secs(5));
+krabka_macros::bind_retry_fixture!(bind_eventually, StdDuration::from_secs(5));
 
 #[derive(Clone, Default)]
 pub(super) struct RecordingDialer {
-    pub(super) client_ids: Arc<std::sync::Mutex<Vec<String>>>,
-    pub(super) options: Arc<std::sync::Mutex<Vec<krabka_client_core::ConnectionOptions>>>,
+    pub(super) client_ids: Arc<Mutex<Vec<String>>>,
+    pub(super) options: Arc<Mutex<Vec<krabka_client_core::ConnectionOptions>>>,
 }
 
 #[async_trait::async_trait]
@@ -96,13 +102,13 @@ impl OutboundDialer for RecordingDialer {
             .unwrap()
             .push(options.client_id.clone());
         self.options.lock().unwrap().push(options.clone());
-        let sock = tokio::net::lookup_host(addr)
+        let sock = net::lookup_host(addr)
             .await
             .map_err(krabka_client_core::ClientError::Io)?
             .next()
             .ok_or_else(|| {
-                krabka_client_core::ClientError::Io(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
+                krabka_client_core::ClientError::Io(Error::new(
+                    ErrorKind::NotFound,
                     "test address resolved to no sockets",
                 ))
             })?;

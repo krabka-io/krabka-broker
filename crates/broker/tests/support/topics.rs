@@ -1,7 +1,11 @@
 //! Pure topic request fixtures, usable by both clients and raw socket drivers.
 
-use krabka_protocol::owned::create_topics_request::{
-    CreatableTopic, CreatableTopicConfig, CreateTopicsRequest,
+use krabka_protocol::{
+    owned::{
+        create_topics_request::{CreatableTopic, CreatableTopicConfig, CreateTopicsRequest},
+        metadata_request::MetadataRequestTopic,
+    },
+    primitives::uuid::Uuid,
 };
 
 pub fn topic_configs<'a>(
@@ -88,11 +92,8 @@ pub fn create_topic_request_with_setup(
 }
 
 /// A metadata lookup row, including name-free topic-ID lookups.
-pub fn metadata_topic(
-    name: Option<String>,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
-) -> krabka_protocol::owned::metadata_request::MetadataRequestTopic {
-    krabka_protocol::owned::metadata_request::MetadataRequestTopic {
+pub fn metadata_topic(name: Option<String>, topic_id: Uuid) -> MetadataRequestTopic {
+    MetadataRequestTopic {
         name,
         topic_id,
         ..Default::default()
@@ -138,15 +139,10 @@ pub fn diskless_topic_request(name: impl Into<String>, replication: i16) -> Crea
 }
 
 /// KIP-516 distinguishes a missing nonzero UUID from the all-zero sentinel.
-pub fn unresolved_topic_ids(
-    id: u128,
-) -> [(&'static str, krabka_protocol::primitives::uuid::Uuid); 2] {
+pub fn unresolved_topic_ids(id: u128) -> [(&'static str, Uuid); 2] {
     [
-        (
-            "non-zero id",
-            krabka_protocol::primitives::uuid::Uuid(uuid::Uuid::from_u128(id).into_bytes()),
-        ),
-        ("zero id", krabka_protocol::primitives::uuid::Uuid::ZERO),
+        ("non-zero id", Uuid(uuid::Uuid::from_u128(id).into_bytes())),
+        ("zero id", Uuid::ZERO),
     ]
 }
 
@@ -196,7 +192,7 @@ impl AssignedTopicSetup {
 pub fn assigned_topic(
     #[builder(default = "orders" . into ())] name: String,
     #[builder(default = vec ! [MetadataNodeId (1)])] replicas: Vec<MetadataNodeId>,
-) -> krabka_protocol::owned::create_topics_request::CreatableTopic {
+) -> CreatableTopic {
     let setup = AssignedTopicSetup { name, replicas };
     let replicas: Vec<i32> = setup
         .replicas
@@ -213,7 +209,7 @@ pub async fn create_assigned_partition<'a>(
     #[builder(default = "orders" . into ())] name: String,
     #[builder(default = vec ! [MetadataNodeId (1)])] replicas: Vec<MetadataNodeId>,
     brokers: impl IntoIterator<Item = &'a krabka_broker::BrokerHandle>,
-) -> krabka_protocol::primitives::uuid::Uuid {
+) -> Uuid {
     let setup = AssignedTopicSetup { name, replicas };
     let topic = setup.name.clone();
     let response = client

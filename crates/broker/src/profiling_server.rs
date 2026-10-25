@@ -20,6 +20,17 @@ use {
     tokio::sync::{Mutex, Semaphore},
     tokio_util::sync::CancellationToken,
 };
+use {
+    krabka_telemetry::{
+        profiling,
+        profiling::{ProfilingConfig, ProfilingError},
+    },
+    std::{
+        fs,
+        io::{Error, ErrorKind},
+    },
+    tokio::net::TcpListener,
+};
 
 #[cfg(not(target_family = "wasm"))]
 #[derive(Clone)]
@@ -30,12 +41,9 @@ struct Protection {
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn router(
-    token: Vec<u8>,
-    profiling: krabka_telemetry::profiling::ProfilingConfig,
-) -> Result<Router, krabka_telemetry::profiling::ProfilingError> {
+fn router(token: Vec<u8>, profiling: ProfilingConfig) -> Result<Router, ProfilingError> {
     Ok(protect(
-        krabka_telemetry::profiling::pprof_router_with_config(profiling)?,
+        profiling::pprof_router_with_config(profiling)?,
         token,
     ))
 }
@@ -72,7 +80,7 @@ async fn authorize_and_limit(
         tracing::warn!(path = %request.uri().path(), "profiling request denied");
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let Ok(permit) = state.active.clone().try_acquire_owned() else {
+    let Ok(permit) = Arc::clone(&state.active).try_acquire_owned() else {
         tracing::warn!(path = %request.uri().path(), "concurrent profiling request rejected");
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     };
@@ -91,23 +99,23 @@ async fn authorize_and_limit(
 
 /// Bind the explicitly enabled profiling listener and serve until shutdown.
 #[cfg(not(target_family = "wasm"))]
-pub(crate) async fn run(
+pub async fn run(
     addr: SocketAddr,
     token_file: &Path,
-    profiling: krabka_telemetry::profiling::ProfilingConfig,
+    profiling: ProfilingConfig,
     shutdown: CancellationToken,
-) -> Result<SocketAddr, krabka_telemetry::profiling::ProfilingError> {
-    let token = std::fs::read(token_file)?;
+) -> Result<SocketAddr, ProfilingError> {
+    let token = fs::read(token_file)?;
     let token = token.strip_suffix(b"\n").unwrap_or(&token).to_vec();
     if token.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
             "profiling authentication token file is empty",
         )
         .into());
     }
     let app = router(token, profiling)?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
     tracing::info!(%bound, "authenticated profiling server listening");
     spawn(
@@ -138,7 +146,8 @@ pub(crate) fn run(
     .into()))
 }
 
-#[cfg(all(test, not(target_family = "wasm")))]
+#[cfg(test)]
+#[cfg(not(target_family = "wasm"))]
 mod tests {
     use {
         super::*,
@@ -146,6 +155,7 @@ mod tests {
         axum::{body::Body, http::Request, routing::get},
         tokio::{
             io::{AsyncReadExt as _, AsyncWriteExt as _},
+            net::TcpStream,
             sync::Notify,
         },
         tower::ServiceExt as _,
@@ -171,25 +181,18 @@ mod tests {
             ("a different token", Some("Bearer secreT")),
         ];
         for (name, authorization) in cases {
-            let response = router(
-                b"secret".to_vec(),
-                krabka_telemetry::profiling::ProfilingConfig::default(),
-            )
-            .unwrap()
-            .oneshot(request("/debug/pprof/profile", authorization))
-            .await
-            .unwrap();
+            let response = router(b"secret".to_vec(), ProfilingConfig::default())
+                .unwrap()
+                .oneshot(request("/debug/pprof/profile", authorization))
+                .await
+                .unwrap();
             assert!(response.status() == StatusCode::UNAUTHORIZED, "{name}");
         }
     }
 
     #[tokio::test]
     async fn valid_bearer_token_reaches_protected_router() {
-        let app = router(
-            b"secret".to_vec(),
-            krabka_telemetry::profiling::ProfilingConfig::default(),
-        )
-        .unwrap();
+        let app = router(b"secret".to_vec(), ProfilingConfig::default()).unwrap();
         let response = app
             .clone()
             .oneshot(request("/not-a-profile", Some("Bearer secret")))
@@ -235,16 +238,16 @@ mod tests {
 
     #[test]
     fn an_invalid_profiling_policy_is_refused() {
-        let profiling = krabka_telemetry::profiling::ProfilingConfig {
+        let profiling = ProfilingConfig {
             profiling_cpu_default_duration: krabka_units::secs(61),
-            ..krabka_telemetry::profiling::ProfilingConfig::default()
+            ..ProfilingConfig::default()
         };
-        assert!(let Err(krabka_telemetry::profiling::ProfilingError::Config(_)) =
+        assert!(let Err(ProfilingError::Config(_)) =
             router(b"secret".to_vec(), profiling));
     }
 
     async fn status_line(addr: SocketAddr, authorization: &str) -> String {
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut stream = TcpStream::connect(addr).await.unwrap();
         stream
             .write_all(
                 format!(
@@ -264,12 +267,12 @@ mod tests {
     async fn run_serves_with_the_token_from_the_file_without_its_newline() {
         let dir = tempfile::tempdir().unwrap();
         let token_file = dir.path().join("token");
-        std::fs::write(&token_file, "secret\n").unwrap();
+        fs::write(&token_file, "secret\n").unwrap();
         let shutdown = CancellationToken::new();
         let bound = run(
             "127.0.0.1:0".parse().unwrap(),
             &token_file,
-            krabka_telemetry::profiling::ProfilingConfig::default(),
+            ProfilingConfig::default(),
             shutdown.clone(),
         )
         .await
@@ -287,26 +290,22 @@ mod tests {
     async fn run_refuses_a_missing_or_empty_token_file() {
         let dir = tempfile::tempdir().unwrap();
         let empty = dir.path().join("empty");
-        std::fs::write(&empty, "\n").unwrap();
+        fs::write(&empty, "\n").unwrap();
         let cases = [
-            (
-                "missing",
-                dir.path().join("missing"),
-                std::io::ErrorKind::NotFound,
-            ),
-            ("empty", empty, std::io::ErrorKind::InvalidInput),
+            ("missing", dir.path().join("missing"), ErrorKind::NotFound),
+            ("empty", empty, ErrorKind::InvalidInput),
         ];
         for (name, token_file, kind) in cases {
             let error = run(
                 "127.0.0.1:0".parse().unwrap(),
                 &token_file,
-                krabka_telemetry::profiling::ProfilingConfig::default(),
+                ProfilingConfig::default(),
                 CancellationToken::new(),
             )
             .await
             .unwrap_err();
             assert!(
-                matches!(&error, krabka_telemetry::profiling::ProfilingError::Io(error)
+                matches!(&error, ProfilingError::Io(error)
                     if error.kind() == kind),
                 "{name}"
             );

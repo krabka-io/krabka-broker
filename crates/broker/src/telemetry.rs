@@ -27,17 +27,18 @@
 
 // Re-export the generic OTLP pipeline from krabka-telemetry.
 pub use krabka_telemetry::{OtlpConfig, OtlpProtocol, TelemetryError, TelemetryGuard, init};
-use std::net::SocketAddr;
+use {std::net::SocketAddr, tracing::field::Empty};
 
 /// `tracing` target carrying per-request server spans. The broker keeps it off
 /// the `fmt` layer's default filter so request spans only materialise for OTLP.
 pub const REQUEST_TARGET: &str = "krabka_broker::request";
 
-/// Build the per-request server span. The span is disabled, and so costs
-/// nothing, unless the OTLP layer has enabled [`REQUEST_TARGET`] at `DEBUG`.
-/// This function sets the span name to the Kafka API name with the `otel.name`
-/// field that `tracing-opentelemetry` recognises. Attribute names follow
-/// OpenTelemetry semantic conventions.
+/// Build the per-request server span.
+///
+/// The span is disabled, and so costs nothing, unless the OTLP layer has
+/// enabled [`REQUEST_TARGET`] at `DEBUG`. This function sets the span name to
+/// the Kafka API name with the `otel.name` field that `tracing-opentelemetry`
+/// recognises. Attribute names follow OpenTelemetry semantic conventions.
 #[must_use]
 pub fn request_span(
     api_key: i16,
@@ -50,7 +51,7 @@ pub fn request_span(
         target: REQUEST_TARGET,
         "kafka.request",
         otel.kind = "server",
-        otel.name = tracing::field::Empty,
+        otel.name = Empty,
         messaging.system = "kafka",
         kafka.api_key = api_key,
         kafka.api_version = api_version,
@@ -63,11 +64,12 @@ pub fn request_span(
 }
 
 /// Map a Kafka request `api_key` to its canonical protocol name, used as
-/// the `OTel` span name. This function takes the name from the generated
-/// [`krabka_protocol::ApiKey`] registry, so it stays in sync with the schemas.
-/// That registry's variant names are the canonical Kafka request names. Keys
-/// outside the registry render as `"Unknown"`, so the broker still emits a
-/// span.
+/// the `OTel` span name.
+///
+/// This function takes the name from the generated [`krabka_protocol::ApiKey`]
+/// registry, so it stays in sync with the schemas. That registry's variant
+/// names are the canonical Kafka request names. Keys outside the registry
+/// render as `"Unknown"`, so the broker still emits a span.
 #[must_use]
 pub fn api_name(api_key: i16) -> &'static str {
     krabka_protocol::ApiKey::from_i16(api_key).map_or("Unknown", Into::into)
@@ -75,7 +77,14 @@ pub fn api_name(api_key: i16) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::test_support::peer, assert2::check};
+    use {
+        super::*,
+        crate::test_support::peer,
+        assert2::check,
+        std::{fmt::Debug, mem, sync},
+        tracing::subscriber,
+        tracing_subscriber::filter::LevelFilter,
+    };
 
     #[yare::parameterized(
         produce = { 0, "Produce" },
@@ -110,7 +119,7 @@ mod tests {
         // is set afterwards via `Span::record`, so capture both callbacks.
         struct V<'a>(&'a mut Captured);
         impl Visit for V<'_> {
-            fn record_debug(&mut self, _f: &Field, _v: &dyn std::fmt::Debug) {}
+            fn record_debug(&mut self, _f: &Field, _v: &dyn Debug) {}
 
             fn record_str(&mut self, f: &Field, v: &str) {
                 match f.name() {
@@ -138,15 +147,14 @@ mod tests {
         }
 
         let captured = Arc::new(Mutex::new(Captured::default()));
-        let subscriber = tracing_subscriber::registry().with(
-            Cap(captured.clone()).with_filter(tracing_subscriber::filter::LevelFilter::DEBUG),
-        );
+        let subscriber = tracing_subscriber::registry()
+            .with(Cap(sync::Arc::clone(&captured)).with_filter(LevelFilter::DEBUG));
         let peer = peer();
-        tracing::subscriber::with_default(subscriber, || {
+        subscriber::with_default(subscriber, || {
             let _span = request_span(0, 9, 42, Some("my-client"), &peer);
         });
 
-        let g = captured.lock().unwrap();
+        let g = mem::take(&mut *captured.lock().unwrap());
         check!(g.name.as_deref() == Some("Produce"));
         check!(g.kind.as_deref() == Some("server"));
         check!(g.api_key == Some(0));

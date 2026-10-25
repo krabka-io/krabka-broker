@@ -82,7 +82,7 @@ fn invalid_header() -> RemoteStorageError {
     RemoteStorageError::Backend("incomplete archived activation scan".into())
 }
 
-pub(crate) fn segment_activation_frontier(
+pub fn segment_activation_frontier(
     rsm: &dyn RemoteStorageManager,
     metadata: &RemoteLogSegmentMetadata,
     minimum: Offset,
@@ -122,8 +122,11 @@ pub(crate) fn segment_activation_frontier(
             window = window.saturating_mul(2).min(MAX_ACTIVATION_SCAN_WINDOW);
         }
         let cursor = usize::try_from(position - buffer_start).map_err(|_| invalid_header())?;
-        let header = RecordBatchHeader::ref_from_bytes(&buffered[cursor..cursor + HEADER_LEN])
-            .map_err(|_| invalid_header())?;
+        let header_bytes = buffered
+            .get(cursor..cursor + HEADER_LEN)
+            .ok_or_else(invalid_header)?;
+        let header =
+            RecordBatchHeader::ref_from_bytes(header_bytes).map_err(|_| invalid_header())?;
         let length = u32::try_from(header.batch_length.get())
             .ok()
             .and_then(|length| length.checked_add(12))
@@ -183,6 +186,15 @@ mod tests {
             RemoteLogSegmentMetadataUpdate,
         },
         krabka_units::millis,
+        std::{
+            fs,
+            sync::{
+                Condvar, Mutex,
+                atomic::{AtomicUsize, Ordering},
+            },
+            time::Duration,
+        },
+        tokio::{sync::Notify, time},
     };
 
     krabka_macros::timestamped_batch!(batch_at);
@@ -205,8 +217,8 @@ mod tests {
         }
         let log_path = source.path().join("segment.log");
         let index_path = source.path().join("empty.index");
-        std::fs::write(&log_path, &bytes).unwrap();
-        std::fs::write(&index_path, []).unwrap();
+        fs::write(&log_path, &bytes).unwrap();
+        fs::write(&index_path, []).unwrap();
         let id = RemoteLogSegmentId::new(tp(), uuid::Uuid::new_v4());
         let metadata = RemoteLogSegmentMetadata::new(
             id.clone(),
@@ -422,16 +434,16 @@ mod tests {
 
     /// Holds a fetch until the test releases it.
     struct ReleaseGate {
-        released: std::sync::Mutex<bool>,
-        wake: std::sync::Condvar,
+        released: Mutex<bool>,
+        wake: Condvar,
     }
 
     struct PausingRsm {
         inner: Arc<dyn RemoteStorageManager>,
-        entered: Arc<tokio::sync::Notify>,
-        finished: Arc<tokio::sync::Notify>,
+        entered: Arc<Notify>,
+        finished: Arc<Notify>,
         release: Arc<ReleaseGate>,
-        fetches: Arc<std::sync::atomic::AtomicUsize>,
+        fetches: Arc<AtomicUsize>,
     }
 
     impl Drop for PausingRsm {
@@ -453,8 +465,7 @@ mod tests {
             start: u32,
             end: Option<u32>,
         ) -> Result<Vec<u8>, RemoteStorageError> {
-            self.fetches
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.fetches.fetch_add(1, Ordering::SeqCst);
             self.entered.notify_one();
             let mut released = self.release.released.lock().unwrap();
             while !*released {
@@ -485,13 +496,13 @@ mod tests {
             reader: source,
             dir: _remote,
         } = sparse_remote_segment_reader();
-        let entered = Arc::new(tokio::sync::Notify::new());
-        let finished = Arc::new(tokio::sync::Notify::new());
+        let entered = Arc::new(Notify::new());
+        let finished = Arc::new(Notify::new());
         let release = Arc::new(ReleaseGate {
-            released: std::sync::Mutex::new(false),
-            wake: std::sync::Condvar::new(),
+            released: Mutex::new(false),
+            wake: Condvar::new(),
         });
-        let fetches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let fetches = Arc::new(AtomicUsize::new(0));
         let rsm = Arc::new(PausingRsm {
             inner: Arc::clone(&source.rsm),
             entered: Arc::clone(&entered),
@@ -507,19 +518,15 @@ mod tests {
             () = entered.notified() => {},
             result = &mut scan => panic!("scan returned before the backend was released: {result:?}"),
         }
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(1), scan)
-                .await
-                .is_err()
-        );
+        assert!(time::timeout(Duration::from_millis(1), scan).await.is_err());
         drop(reader);
         *release.released.lock().unwrap() = true;
         release.wake.notify_all();
         // The wrapper drops only after the detached blocking scan releases its
         // last RSM reference, so the count is observed after that scan stops.
-        tokio::time::timeout(std::time::Duration::from_secs(3), finished.notified())
+        time::timeout(Duration::from_secs(3), finished.notified())
             .await
             .unwrap();
-        assert!(fetches.load(std::sync::atomic::Ordering::SeqCst) == 1);
+        assert!(fetches.load(Ordering::SeqCst) == 1);
     }
 }

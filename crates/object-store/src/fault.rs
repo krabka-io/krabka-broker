@@ -20,19 +20,24 @@
 use {
     crate::{build::build_object_store, config::ObjectStoreConfig, error::ObjectStoreError},
     bytes::Bytes,
-    futures_util::stream::{BoxStream, StreamExt as _},
+    futures_util::{
+        stream,
+        stream::{BoxStream, StreamExt as _},
+    },
     object_store::{
         CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-        PutMultipartOptions, PutOptions, PutPayload, PutResult, path::Path,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult, memory::InMemory, path::Path,
     },
     std::{
         collections::BTreeMap,
+        fmt,
         sync::{
             Arc,
             atomic::{AtomicU64, Ordering},
         },
         time::Duration,
     },
+    tokio::time,
 };
 
 /// The operation classes a [`FaultPolicy`] can single out.
@@ -231,19 +236,14 @@ fn failed_stream<T: Send + 'static>(
     operation: StoreOp,
 ) -> BoxStream<'static, object_store::Result<T>> {
     let error = kind.error(operation.label(), &listing_path());
-    futures_util::stream::once(async move { Err(error) }).boxed()
+    stream::once(async move { Err(error) }).boxed()
 }
 
 impl FaultInjectingStore {
     /// A fault-free in-memory store for consistency tests that inject one
     /// targeted GET replacement.
     #[must_use]
-    pub fn memory() -> Self {
-        Self::new(
-            Arc::new(object_store::memory::InMemory::new()),
-            FaultPolicy::none(),
-        )
-    }
+    pub fn memory() -> Self { Self::new(Arc::new(InMemory::new()), FaultPolicy::none()) }
 
     /// Wrap `inner` with `policy`.
     #[must_use]
@@ -280,7 +280,7 @@ impl FaultInjectingStore {
             return Ok(());
         };
         if !fault.latency.is_zero() {
-            tokio::time::sleep(fault.latency).await;
+            time::sleep(fault.latency).await;
         }
         if fault.fails_call(n) {
             return Err(fault.kind.error(op.label(), location));
@@ -289,8 +289,8 @@ impl FaultInjectingStore {
     }
 }
 
-impl std::fmt::Display for FaultInjectingStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for FaultInjectingStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "FaultInjectingStore({})", self.inner)
     }
 }
@@ -356,7 +356,7 @@ impl ObjectStore for FaultInjectingStore {
                 let stream = self.inner.delete_stream(locations);
                 stream
                     .then(move |item| async move {
-                        tokio::time::sleep(fault.latency).await;
+                        time::sleep(fault.latency).await;
                         item
                     })
                     .boxed()
@@ -375,8 +375,8 @@ impl ObjectStore for FaultInjectingStore {
             Some(fault) if !fault.latency.is_zero() => {
                 let stream = self.inner.list(prefix);
                 let latency = fault.latency;
-                futures_util::stream::once(async move { tokio::time::sleep(latency).await })
-                    .flat_map(move |()| futures_util::stream::empty())
+                stream::once(async move { time::sleep(latency).await })
+                    .flat_map(move |()| stream::empty())
                     .chain(stream)
                     .boxed()
             }
@@ -426,7 +426,9 @@ mod tests {
         super::*,
         crate::{config::ObjectStoreConfig, test_support::round_trip},
         assert2::{assert, check},
-        object_store::ObjectStoreExt as _,
+        object_store::{ObjectStoreExt as _, memory::InMemory},
+        std::array,
+        tokio::time::Instant,
     };
 
     fn memory(policy: FaultPolicy) -> Arc<FaultInjectingStore> {
@@ -435,7 +437,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_overwrite_changes_the_body_after_head_without_changing_head_itself() {
-        let inner: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+        let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let key = Path::from("mutable");
         inner
             .put(&key, PutPayload::from_static(b"old"))
@@ -470,7 +472,7 @@ mod tests {
     )]
     fn fail_rates_pick_the_same_calls_every_run(rate: u32, want: [bool; 4]) {
         let fault = OpFault::rate(FaultKind::Throttled, rate);
-        let got: [bool; 4] = std::array::from_fn(|n| fault.fails_call(n as u64));
+        let got: [bool; 4] = array::from_fn(|n| fault.fails_call(n as u64));
         check!(got == want, "rate {rate}");
     }
 
@@ -521,7 +523,7 @@ mod tests {
             memory(FaultPolicy::none().with(StoreOp::Put, OpFault::stall(Duration::from_secs(30))));
         let path = Path::from("seg.log");
 
-        let started = tokio::time::Instant::now();
+        let started = Instant::now();
         store
             .put(&path, PutPayload::from(b"bytes".to_vec()))
             .await

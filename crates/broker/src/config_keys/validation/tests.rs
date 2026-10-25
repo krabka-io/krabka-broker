@@ -18,6 +18,7 @@ use {
     crate::throttle::{FOLLOWER_THROTTLED_REPLICAS_KEY, LEADER_THROTTLED_REPLICAS_KEY},
     assert2::check,
     krabka_log::CleanupPolicy,
+    std::collections::BTreeMap,
 };
 
 /// A config key and its value.
@@ -258,22 +259,22 @@ fn the_remaining_kafka_topic_config_names_are_accepted(key: &str, accepted: &str
 #[yare::parameterized(
     repartition_topic = {
         maplit::btreemap! {
-            CLEANUP_POLICY.to_string() => "delete".to_string(),
-            SEGMENT_BYTES.to_string() => "52428800".to_string(),
-            RETENTION_MS.to_string() => "-1".to_string(),
-            MESSAGE_TIMESTAMP_TYPE.to_string() => "CreateTime".to_string(),
+            CLEANUP_POLICY.to_owned() => "delete".to_owned(),
+            SEGMENT_BYTES.to_owned() => "52428800".to_owned(),
+            RETENTION_MS.to_owned() => "-1".to_owned(),
+            MESSAGE_TIMESTAMP_TYPE.to_owned() => "CreateTime".to_owned(),
         },
     },
     windowed_changelog = {
         maplit::btreemap! {
-            CLEANUP_POLICY.to_string() => "compact,delete".to_string(),
-            RETENTION_MS.to_string() => "86400000".to_string(),
-            MIN_COMPACTION_LAG_MS.to_string() => "0".to_string(),
-            MESSAGE_TIMESTAMP_TYPE.to_string() => "CreateTime".to_string(),
+            CLEANUP_POLICY.to_owned() => "compact,delete".to_owned(),
+            RETENTION_MS.to_owned() => "86400000".to_owned(),
+            MIN_COMPACTION_LAG_MS.to_owned() => "0".to_owned(),
+            MESSAGE_TIMESTAMP_TYPE.to_owned() => "CreateTime".to_owned(),
         },
     },
 )]
-fn streams_topic_override_set_is_accepted(overrides: std::collections::BTreeMap<String, String>) {
+fn streams_topic_override_set_is_accepted(overrides: BTreeMap<String, String>) {
     assert2::assert!(validate_topic_config_map(&overrides) == Ok(()));
 }
 
@@ -377,10 +378,10 @@ fn compact_and_scheduled_delivery_exclude_each_other() {
     for (policy, mode, want_ok) in cases {
         let mut overrides = BTreeMap::new();
         if let Some(policy) = policy {
-            overrides.insert(CLEANUP_POLICY.to_string(), policy.to_string());
+            overrides.insert(CLEANUP_POLICY.to_owned(), policy.to_owned());
         }
         if let Some(mode) = mode {
-            overrides.insert(DELIVERY_MODE.to_string(), mode.to_string());
+            overrides.insert(DELIVERY_MODE.to_owned(), mode.to_owned());
         }
         assert2::assert!(
             validate_config_combination(&overrides, &TopicDefaults::default(), true).is_ok()
@@ -412,10 +413,10 @@ fn a_min_compaction_lag_above_the_max_is_refused() {
     for (case, min, max, want_ok) in cases {
         let mut overrides = BTreeMap::new();
         if let Some(min) = min {
-            overrides.insert(MIN_COMPACTION_LAG_MS.to_string(), min.to_string());
+            overrides.insert(MIN_COMPACTION_LAG_MS.to_owned(), min.to_owned());
         }
         if let Some(max) = max {
-            overrides.insert(MAX_COMPACTION_LAG_MS.to_string(), max.to_string());
+            overrides.insert(MAX_COMPACTION_LAG_MS.to_owned(), max.to_owned());
         }
         assert2::assert!(
             validate_config_combination(&overrides, &TopicDefaults::default(), true).is_ok()
@@ -429,15 +430,15 @@ fn a_min_compaction_lag_above_the_max_is_refused() {
 #[test]
 fn the_compaction_lag_conflict_carries_kafkas_message() {
     let overrides = BTreeMap::from([
-        (MIN_COMPACTION_LAG_MS.to_string(), "60000".to_string()),
-        (MAX_COMPACTION_LAG_MS.to_string(), "1".to_string()),
+        (MIN_COMPACTION_LAG_MS.to_owned(), "60000".to_owned()),
+        (MAX_COMPACTION_LAG_MS.to_owned(), "1".to_owned()),
     ]);
     assert2::assert!(
         validate_config_combination(&overrides, &TopicDefaults::default(), true)
             == Err(
                 "conflict topic config setting min.compaction.lag.ms (60000) > \
                  max.compaction.lag.ms (1)"
-                    .to_string()
+                    .to_owned()
             )
     );
 }
@@ -1095,8 +1096,8 @@ fn trunk_topic_keys_take_no_cluster_default_under_kafka_4_3_1() {
 #[test]
 fn compact_and_delete_is_compaction_for_the_scheduled_delivery_rule() {
     let overrides = maplit::btreemap! {
-    CLEANUP_POLICY.to_string() => "compact,delete".to_string(),
-    DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
+    CLEANUP_POLICY.to_owned() => "compact,delete".to_owned(),
+    DELIVERY_MODE.to_owned() => DELIVERY_MODE_SCHEDULED.to_owned()};
 
     assert2::assert!(
         validate_config_combination(&overrides, &TopicDefaults::default(), true).is_err()
@@ -1117,12 +1118,9 @@ fn log_append_time_and_scheduled_delivery_exclude_each_other() {
     ];
     for (timestamp_type, mode, want_ok) in cases {
         let mut overrides = BTreeMap::new();
-        overrides.insert(
-            MESSAGE_TIMESTAMP_TYPE.to_string(),
-            timestamp_type.to_string(),
-        );
+        overrides.insert(MESSAGE_TIMESTAMP_TYPE.to_owned(), timestamp_type.to_owned());
         if let Some(mode) = mode {
-            overrides.insert(DELIVERY_MODE.to_string(), mode.to_string());
+            overrides.insert(DELIVERY_MODE.to_owned(), mode.to_owned());
         }
         let outcome = validate_config_combination(&overrides, &TopicDefaults::default(), true);
         check!(
@@ -1142,8 +1140,8 @@ fn log_append_time_and_scheduled_delivery_exclude_each_other() {
 #[test]
 fn validate_topic_config_map_refuses_log_append_time_on_a_scheduled_topic() {
     let overrides = maplit::btreemap! {
-    MESSAGE_TIMESTAMP_TYPE.to_string() => "LogAppendTime".to_string(),
-    DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
+    MESSAGE_TIMESTAMP_TYPE.to_owned() => "LogAppendTime".to_owned(),
+    DELIVERY_MODE.to_owned() => DELIVERY_MODE_SCHEDULED.to_owned()};
 
     assert2::assert!(validate_topic_config_map(&overrides).is_err());
 }
@@ -1151,8 +1149,8 @@ fn validate_topic_config_map_refuses_log_append_time_on_a_scheduled_topic() {
 #[test]
 fn compact_plus_scheduled_rejection_names_both_keys() {
     let overrides = maplit::btreemap! {
-    CLEANUP_POLICY.to_string() => "compact".to_string(),
-    DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
+    CLEANUP_POLICY.to_owned() => "compact".to_owned(),
+    DELIVERY_MODE.to_owned() => DELIVERY_MODE_SCHEDULED.to_owned()};
     let error =
         validate_config_combination(&overrides, &TopicDefaults::default(), true).unwrap_err();
     assert2::assert!(error.contains(CLEANUP_POLICY), "got: {error}");
@@ -1162,19 +1160,19 @@ fn compact_plus_scheduled_rejection_names_both_keys() {
 #[test]
 fn validate_topic_config_map_checks_pairs_and_then_combinations() {
     let accepted = maplit::btreemap! {
-    RETENTION_MS.to_string() => "60000".to_string(),
-    DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
+    RETENTION_MS.to_owned() => "60000".to_owned(),
+    DELIVERY_MODE.to_owned() => DELIVERY_MODE_SCHEDULED.to_owned()};
     assert2::assert!(validate_topic_config_map(&accepted) == Ok(()));
 
-    let bad_pair = maplit::btreemap! {DELIVERY_MODE.to_string() => "later".to_string()};
+    let bad_pair = maplit::btreemap! {DELIVERY_MODE.to_owned() => "later".to_owned()};
     assert2::assert!(validate_topic_config_map(&bad_pair).is_err());
 
-    let unknown_key = maplit::btreemap! {UNKNOWN_KEY.to_string() => "1000".to_string()};
+    let unknown_key = maplit::btreemap! {UNKNOWN_KEY.to_owned() => "1000".to_owned()};
     assert2::assert!(validate_topic_config_map(&unknown_key).is_err());
 
     let bad_combination = maplit::btreemap! {
-    CLEANUP_POLICY.to_string() => "compact".to_string(),
-    DELIVERY_MODE.to_string() => DELIVERY_MODE_SCHEDULED.to_string()};
+    CLEANUP_POLICY.to_owned() => "compact".to_owned(),
+    DELIVERY_MODE.to_owned() => DELIVERY_MODE_SCHEDULED.to_owned()};
     assert2::assert!(validate_topic_config_map(&bad_combination).is_err());
 }
 
@@ -1184,7 +1182,7 @@ fn validate_topic_config_map_checks_pairs_and_then_combinations() {
 #[test]
 fn disabling_tiered_storage_needs_the_delete_flag() {
     let stored =
-        |enabled: bool| BTreeMap::from([(REMOTE_STORAGE_ENABLE.to_string(), enabled.to_string())]);
+        |enabled: bool| BTreeMap::from([(REMOTE_STORAGE_ENABLE.to_owned(), enabled.to_string())]);
     let cases = [
         (
             "the bare flip is refused",
@@ -1232,7 +1230,7 @@ fn disabling_tiered_storage_needs_the_delete_flag() {
     for (case, current, next, want_ok) in cases {
         let next: BTreeMap<String, String> = next
             .into_iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
             .collect();
         assert2::assert!(
             validate_remote_storage_disable(current.as_ref(), &next).is_ok() == want_ok,
@@ -1245,8 +1243,8 @@ fn disabling_tiered_storage_needs_the_delete_flag() {
 /// out of `kafka-configs` and has to pick one.
 #[test]
 fn the_disable_refusal_names_both_ways_out() {
-    let current = BTreeMap::from([(REMOTE_STORAGE_ENABLE.to_string(), "true".to_string())]);
-    let next = BTreeMap::from([(REMOTE_STORAGE_ENABLE.to_string(), "false".to_string())]);
+    let current = BTreeMap::from([(REMOTE_STORAGE_ENABLE.to_owned(), "true".to_owned())]);
+    let next = BTreeMap::from([(REMOTE_STORAGE_ENABLE.to_owned(), "false".to_owned())]);
     let message = validate_remote_storage_disable(Some(&current), &next)
         .expect_err("the bare flip is refused");
     check!(

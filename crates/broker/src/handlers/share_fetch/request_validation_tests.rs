@@ -24,11 +24,14 @@ use {
     assert2::assert,
     bytes::Bytes,
     krabka_metadata::{AclOperation, ResourceType},
-    krabka_protocol::owned::{
-        share_acknowledge_request::ShareAcknowledgeRequest,
-        share_acknowledge_response::{self, ShareAcknowledgeResponse},
-        share_fetch_request::ShareFetchRequest,
-        share_fetch_response::{self, ShareFetchResponse},
+    krabka_protocol::{
+        owned,
+        owned::{
+            share_acknowledge_request::ShareAcknowledgeRequest,
+            share_acknowledge_response::{self, ShareAcknowledgeResponse},
+            share_fetch_request::{API_KEY, ShareFetchRequest},
+            share_fetch_response::{self, ShareFetchResponse},
+        },
     },
     std::sync::Arc,
 };
@@ -159,7 +162,7 @@ async fn dispatch_share_fetch(
 ) -> Bytes {
     try_dispatch_context(
         broker,
-        krabka_protocol::owned::share_fetch_request::API_KEY,
+        API_KEY,
         version,
         &encode_request(fetch, version),
         ctx,
@@ -194,7 +197,7 @@ async fn group_and_member_ids_are_checked_in_kafka_order() {
         };
         let acknowledged = try_dispatch_context(
             &shared,
-            krabka_protocol::owned::share_acknowledge_request::API_KEY,
+            owned::share_acknowledge_request::API_KEY,
             acknowledge_version,
             &encode_request(&acknowledge, acknowledge_version),
             &ctx,

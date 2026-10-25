@@ -25,8 +25,12 @@ use {
     krabka_protocol::owned::{
         end_txn_response::EndTxnResponse, find_coordinator_request::FindCoordinatorRequest,
     },
-    std::time::Duration,
+    std::{
+        path::PathBuf,
+        time::{Duration, Instant},
+    },
     tempfile::TempDir,
+    tokio::time,
 };
 
 /// Whether `error_code` is Kafka's answer from a transaction coordinator that
@@ -42,7 +46,7 @@ const fn coordinator_not_ready(error_code: i16) -> bool { matches!(error_code, 1
 /// log and checkpoint instead of a re-bootstrap, so the restart uses
 /// `BootstrapMode::Rejoin`. This is the same pattern as
 /// `consumer_group_next_gen_persistence.rs`.
-fn recovery_config(log_dir: std::path::PathBuf) -> BrokerConfig {
+fn recovery_config(log_dir: PathBuf) -> BrokerConfig {
     let mut cfg = heartbeat_config(log_dir);
     // Recovery fails closed if any locally led state partition is missing.
     // This single-transaction fixture materializes and replays one partition.
@@ -51,7 +55,7 @@ fn recovery_config(log_dir: std::path::PathBuf) -> BrokerConfig {
     cfg
 }
 
-fn rejoin_config(log_dir: std::path::PathBuf) -> BrokerConfig {
+fn rejoin_config(log_dir: PathBuf) -> BrokerConfig {
     let mut cfg = recovery_config(log_dir);
     cfg.bootstrap_mode = BootstrapMode::Rejoin;
     cfg
@@ -83,8 +87,8 @@ async fn init_producer_id(client: &Client, tid: &str) -> ProducerIdentity {
     find_ready_coordinator(client, tid).await;
 
     let mut init = None;
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while std::time::Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
         let resp = client
             .send(
                 init_producer_request()
@@ -103,7 +107,7 @@ async fn init_producer_id(client: &Client, tid: &str) -> ProducerIdentity {
         );
         // intentional: txn-coordinator load state is not in the metadata image and
         // has no metric/awaiter; only InitProducerId's error code signals it.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
     let init = init.expect("InitProducerId did not become ready within 10s");
     ProducerIdentity::from_wire((init.producer_id, init.producer_epoch))
@@ -153,7 +157,7 @@ async fn commit_via_end_txn(
     find_ready_coordinator(client, tid).await;
 
     // Retry while the coordinator is still loading state from disk.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let resp = client
             .send(
@@ -165,11 +169,11 @@ async fn commit_via_end_txn(
             .await
             .expect("EndTxn");
         // The coordinator is not ready yet: keep retrying until the deadline.
-        if coordinator_not_ready(resp.error_code) && std::time::Instant::now() < deadline {
+        if coordinator_not_ready(resp.error_code) && Instant::now() < deadline {
             // intentional: coordinator recover/load state after restart is not in the
             // metadata image and has no metric/awaiter; only EndTxn's error code
             // signals it. Bounded RPC-response poll, not a materialization wait.
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
             continue;
         }
         return resp;

@@ -12,6 +12,7 @@ use {
     krabka_ids::{LeaderEpoch, Offset},
     krabka_protocol::records::RecordBatch,
     krabka_units::prelude::mebibytes,
+    std::path::Path,
     tempfile::tempdir,
 };
 
@@ -25,7 +26,7 @@ use {
 /// | 4       | `k4`                 | dropped, `k4` is rewritten at 6          |
 /// | 5, 6, 7 | one record each      | kept                                     |
 /// | 8       | `k9`                 | active, not cleaned                      |
-fn compacted_leader(dir: &std::path::Path) -> Log {
+fn compacted_leader(dir: &Path) -> Log {
     let mut log = Log::open(dir, compacting_segments()).unwrap();
     for mut batch in [
         keyed_batch(0, &[KeyedRecord {
@@ -80,7 +81,7 @@ fn compacted_leader(dir: &std::path::Path) -> Log {
     }
     // The grouping cap shares `segment.bytes` with the roll that put each
     // batch in a segment of its own, so widen it for the pass.
-    set_segment_size(&mut log, mebibytes(1));
+    set_segment_size(&log, mebibytes(1));
     log.compact(&compaction_ctx()).unwrap();
     log
 }

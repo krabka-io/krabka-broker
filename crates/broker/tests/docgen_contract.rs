@@ -5,9 +5,11 @@
 //! `krabka_raft::scenarios` simulator sits behind the `scenarios` feature,
 //! which this crate's dev-dependency on `krabka-raft` turns on for the test
 //! build alone.
+#![cfg(test)]
 
 use {
     assert2::{assert, check},
+    krabka_broker::file_config,
     krabka_raft::scenarios::{NodeRole, ScenarioTrace, TraceAction, TraceStep, scenarios},
     std::collections::BTreeSet,
     support::api_versions::supported_client_apis,
@@ -17,7 +19,7 @@ mod support;
 
 #[test]
 fn file_config_schema_has_the_shape_docgen_renders() {
-    let schema = krabka_broker::file_config::config_schema();
+    let schema = file_config::config_schema();
     // `render_sectioned_field_table` partitions `properties` of the root and
     // resolves `$ref` pointers into a `$defs` table.
     check!(schema["title"] == "FileConfig");
@@ -140,9 +142,9 @@ fn scenarios_record_the_trace_shape_docgen_renders() {
         for (position, step) in steps.iter().enumerate() {
             let TraceStep {
                 index,
-                clock_ms: _,
+                clock_ms: _clock_ms,
                 action,
-                note: _,
+                note: _note,
                 roles,
             } = step;
             check!(
@@ -156,11 +158,11 @@ fn scenarios_record_the_trace_shape_docgen_renders() {
             for role in roles {
                 let NodeRole {
                     id: node,
-                    role: _,
-                    epoch: _,
-                    log_len: _,
-                    hwm: _,
-                    partitioned: _,
+                    role: _role,
+                    epoch: _epoch,
+                    log_len: _log_len,
+                    hwm: _hwm,
+                    partitioned: _partitioned,
                 } = role;
                 check!(nodes.contains(node), "scenario {id} snapshots node {node}");
             }
@@ -177,9 +179,9 @@ fn scenarios_record_the_trace_shape_docgen_renders() {
                 }
                 TraceAction::Partition { node }
                 | TraceAction::Heal { node }
-                | TraceAction::Timeout { node, kind: _ }
-                | TraceAction::Elected { node, epoch: _ }
-                | TraceAction::Append { node, count: _ } => vec![*node],
+                | TraceAction::Timeout { node, .. }
+                | TraceAction::Elected { node, .. }
+                | TraceAction::Append { node, .. } => vec![*node],
             };
             for participant in participants {
                 check!(

@@ -36,6 +36,7 @@ use {
         future::{OptionFuture, try_join_all},
         stream::FuturesUnordered,
     },
+    hdrhistogram::CreationError,
     krabka_client_consumer::{
         AutoOffsetReset, Consumer, ConsumerError, IsolationLevel, OffsetAndMetadata,
     },
@@ -44,16 +45,21 @@ use {
     },
     krabka_units::prelude::*,
     std::{
-        collections::{BTreeMap, HashMap, VecDeque},
+        collections::{BTreeMap, HashMap, VecDeque, btree_map::Entry},
         future::Future,
         pin::Pin,
+        str,
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
         },
         time::{Duration, Instant},
     },
-    tokio::{sync::Notify, task::JoinHandle, time::MissedTickBehavior},
+    tokio::{
+        sync::Notify,
+        task::{JoinError, JoinHandle},
+        time::{self, MissedTickBehavior, interval, sleep},
+    },
 };
 
 /// How long a client that could not be built waits before it tries again.
@@ -169,14 +175,16 @@ pub fn compacted_key(producer: &str, seq: u64, key_space: u64) -> String {
 /// The key index a compacted key carries.
 #[must_use]
 pub fn key_index(key: &[u8]) -> Option<u64> {
-    let text = std::str::from_utf8(key).ok()?;
+    let text = str::from_utf8(key).ok()?;
     let (_, index) = text.rsplit_once("/k")?;
     index.parse().ok()
 }
 
-/// Whether a failed compacted send has been superseded: a later value of its
-/// key was already sent, so resending it would put an older value after a
-/// newer one, which is a regression the application itself would cause.
+/// Whether a failed compacted send has been superseded.
+///
+/// A later value of its key was already sent, so resending it would put an
+/// older value after a newer one, which is a regression the application itself
+/// would cause.
 #[must_use]
 pub fn superseded(seq: u64, key_space: u64, next_seq: u64) -> bool {
     seq.saturating_add(key_space) < next_seq
@@ -260,7 +268,7 @@ async fn connect_producer(ctx: &LoadContext, name: &str, transactional: bool) ->
             },
             Err(error) => eprintln!("soak-contract: {name}: build producer: {error}"),
         }
-        tokio::time::sleep(RECONNECT_BACKOFF).await;
+        sleep(RECONNECT_BACKOFF).await;
     }
     None
 }
@@ -281,16 +289,16 @@ async fn enqueue(producer: &Producer, record: ProducerRecord, seq: u64, attempt:
 
 /// The pace of a pipelined producer: one tick per `period`, skipping the ticks
 /// it missed.
-fn pipelined_ticker(period: Duration) -> tokio::time::Interval {
-    let mut ticker = tokio::time::interval(period);
+fn pipelined_ticker(period: Duration) -> time::Interval {
+    let mut ticker = interval(period);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     ticker
 }
 
 /// The pace of a transactional producer: one tick per `period` on average,
 /// with the ticks missed while a transaction ended fired at once.
-fn transactional_ticker(period: Duration) -> tokio::time::Interval {
-    let mut ticker = tokio::time::interval(period);
+fn transactional_ticker(period: Duration) -> time::Interval {
+    let mut ticker = interval(period);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Burst);
     ticker
 }
@@ -327,11 +335,17 @@ fn record(path: &LoadPath, producer: &str, seq: u64) -> ProducerRecord {
 /// A send that fails is sent again, up to `max_send_attempts` in all, and is
 /// recorded as failed and as retried. A compacted send whose key has a later
 /// value in flight is not sent again: see [`superseded`].
-pub async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> ProducerOutput {
+///
+/// `latencies` is where its send latencies go.
+pub async fn run_idempotent(
+    ctx: Arc<LoadContext>,
+    path: LoadPath,
+    latencies: Latencies,
+) -> ProducerOutput {
     let name = producer_name(&path.name);
     let mut output = ProducerOutput {
         ledger: empty_ledger(&path, &name),
-        latencies: Latencies::new(),
+        latencies,
         acked_at: Vec::new(),
     };
     let max_attempts = ctx.contract.clients.producer.max_send_attempts;
@@ -415,32 +429,26 @@ pub async fn run_idempotent(ctx: Arc<LoadContext>, path: LoadPath) -> ProducerOu
 /// id, whose `InitProducerId` settles what it left open. A commit that
 /// returned an error is recorded as [`TxnOutcome::Unknown`]; a transaction
 /// whose commit was never sent is aborted, whatever ended it.
-pub async fn run_transactional(ctx: Arc<LoadContext>, path: LoadPath) -> ProducerOutput {
+///
+/// `latencies` is where its send latencies go.
+pub async fn run_transactional(
+    ctx: Arc<LoadContext>,
+    path: LoadPath,
+    latencies: Latencies,
+) -> ProducerOutput {
     let mut run = TransactionalRun {
         name: producer_name(&path.name),
         ledger: empty_ledger(&path, &producer_name(&path.name)),
-        latencies: Latencies::new(),
+        latencies,
         acked_at: Vec::new(),
         ticker: transactional_ticker(path.rate.period().to_std()),
         next_seq: 0,
         index: 0,
     };
-    let mut producer: Option<Producer> = None;
-    while ctx.running() {
-        let Some(current) = producer.as_ref() else {
-            producer = connect_producer(&ctx, &run.name, true).await;
-            continue;
-        };
-        if !run.transaction(&ctx, &path, current).await
-            && let Some(stale) = producer.take()
-        {
-            let _ = stale.close().await;
-        }
-    }
-    run.ledger.attempted = run.next_seq;
-    if let Some(producer) = producer {
+    if let Some(producer) = run.transact_until_stopped(&ctx, &path).await {
         let _ = producer.close().await;
     }
+    run.ledger.attempted = run.next_seq;
     ProducerOutput {
         ledger: run.ledger,
         latencies: run.latencies,
@@ -454,12 +462,35 @@ struct TransactionalRun {
     ledger: ProducerLedger,
     latencies: Latencies,
     acked_at: Vec<Ack>,
-    ticker: tokio::time::Interval,
+    ticker: time::Interval,
     next_seq: u64,
     index: u64,
 }
 
 impl TransactionalRun {
+    /// Run transactions until the load stops, reconnecting after a producer
+    /// becomes unusable, and return the producer still open at the end.
+    async fn transact_until_stopped(
+        &mut self,
+        ctx: &LoadContext,
+        path: &LoadPath,
+    ) -> Option<Producer> {
+        let mut producer: Option<Producer> = None;
+        while ctx.running() {
+            match producer.as_ref() {
+                None => producer = connect_producer(ctx, &self.name, true).await,
+                Some(current) => {
+                    if !self.transaction(ctx, path, current).await
+                        && let Some(stale) = producer.take()
+                    {
+                        let _ = stale.close().await;
+                    }
+                }
+            }
+        }
+        producer
+    }
+
     /// Run one transaction on `producer`, and say whether the producer is
     /// still usable.
     async fn transaction(
@@ -661,8 +692,8 @@ pub async fn run_consumer(
     isolation: Isolation,
     tracker: Option<Arc<CommitTracker>>,
     mut consumer: Consumer,
+    mut latencies: Latencies,
 ) -> Latencies {
-    let mut latencies = Latencies::new();
     let settings = ctx.contract.clients.consumer.clone();
     let group = group_name(&path.name, isolation);
     let mut positions: BTreeMap<i32, i64> = BTreeMap::new();
@@ -685,7 +716,7 @@ pub async fn run_consumer(
             }
             Err(error) => {
                 eprintln!("soak-contract: {group}: poll: {error}");
-                tokio::time::sleep(Duration::from_millis(200)).await;
+                sleep(Duration::from_millis(200)).await;
             }
         }
         if let Some(tracker) = &tracker
@@ -766,24 +797,39 @@ pub async fn prepare(
 
 /// Start the load `ctx` declares. It runs until [`LoadContext::stop`] or
 /// [`LoadContext::abandon`], and [`RunningLoad::finish`] then collects it.
-#[must_use]
-pub fn start(ctx: &Arc<LoadContext>, prepared: PreparedLoad) -> RunningLoad {
+///
+/// # Errors
+///
+/// The [`CreationError`] building a latency histogram returned. Nothing has
+/// started then.
+pub fn start(ctx: &Arc<LoadContext>, prepared: PreparedLoad) -> Result<RunningLoad, CreationError> {
     let contract = &ctx.contract;
+    let mut producer_latencies = Vec::with_capacity(contract.paths.len());
+    for _ in &contract.paths {
+        producer_latencies.push(Latencies::new()?);
+    }
+    let mut consumer_latencies = Vec::with_capacity(prepared.consumers.len());
+    for _ in &prepared.consumers {
+        consumer_latencies.push(Latencies::new()?);
+    }
     let producers = contract
         .paths
         .iter()
-        .map(|path| match path.semantics {
+        .zip(producer_latencies)
+        .map(|(path, latencies)| match path.semantics {
             Semantics::Transactional => {
-                tokio::spawn(run_transactional(Arc::clone(ctx), path.clone()))
+                tokio::spawn(run_transactional(Arc::clone(ctx), path.clone(), latencies))
             }
             Semantics::Idempotent | Semantics::Compacted => {
-                tokio::spawn(run_idempotent(Arc::clone(ctx), path.clone()))
+                tokio::spawn(run_idempotent(Arc::clone(ctx), path.clone(), latencies))
             }
         })
         .collect();
     let mut trackers = Vec::new();
     let mut consumers = Vec::new();
-    for (path, isolation, consumer) in prepared.consumers {
+    for ((path, isolation, consumer), latencies) in
+        prepared.consumers.into_iter().zip(consumer_latencies)
+    {
         let tracker = path.commit_offsets.then(|| {
             Arc::new(CommitTracker::new(
                 group_name(&path.name, isolation),
@@ -802,47 +848,61 @@ pub fn start(ctx: &Arc<LoadContext>, prepared: PreparedLoad) -> RunningLoad {
                 isolation,
                 tracker,
                 consumer,
+                latencies,
             )),
         ));
     }
-    RunningLoad {
+    Ok(RunningLoad {
         ctx: Arc::clone(ctx),
         trackers,
         producers,
         consumers,
-    }
+    })
 }
 
 impl RunningLoad {
     /// Wait for every task of a load that was stopped or abandoned.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When a load task panicked: its ledger is gone, and a run without it
-    /// cannot be judged.
-    pub async fn finish(self) -> LoadOutcome {
+    /// When a load task panicked or was cancelled: its ledger is gone, and a
+    /// run without it cannot be judged.
+    pub async fn finish(self) -> Result<LoadOutcome, JoinError> {
         let mut producers = Vec::new();
         for task in self.producers {
-            producers.push(task.await.expect("a producer task"));
+            producers.push(task.await?);
         }
         let mut consume_latency: BTreeMap<String, Latencies> = BTreeMap::new();
         for (path, task) in self.consumers {
-            let latencies = task.await.expect("a consumer task");
-            consume_latency.entry(path).or_default().merge(&latencies);
+            let latencies = task.await?;
+            match consume_latency.entry(path) {
+                Entry::Occupied(mut merged) => merged.get_mut().merge(&latencies),
+                Entry::Vacant(first) => {
+                    first.insert(latencies);
+                }
+            }
         }
-        LoadOutcome {
+        Ok(LoadOutcome {
             producers,
             consume_latency,
-        }
+        })
     }
 }
 
 impl LoadOutcome {
     /// Each path's measurement over `steady` time.
-    #[must_use]
-    pub fn measurements(&self, contract: &Contract, steady: Time) -> Vec<PathMeasurement> {
-        let empty = Latencies::new();
-        contract
+    ///
+    /// # Errors
+    ///
+    /// The [`CreationError`] building the empty latencies of a path with no
+    /// samples returned.
+    pub fn measurements(
+        &self,
+        contract: &Contract,
+        steady: Time,
+    ) -> Result<Vec<PathMeasurement>, CreationError> {
+        let empty = Latencies::new()?;
+        Ok(contract
             .paths
             .iter()
             .map(|path| {
@@ -858,7 +918,7 @@ impl LoadOutcome {
                     steady,
                 )
             })
-            .collect()
+            .collect())
     }
 }
 
@@ -881,7 +941,7 @@ mod tests {
             sync::{Arc, Mutex},
             time::Duration,
         },
-        tokio::time::{Instant, Interval},
+        tokio::time::{Instant, Interval, sleep, sleep_until},
     };
 
     const PERIOD: Duration = Duration::from_millis(10);
@@ -912,7 +972,7 @@ mod tests {
         let mut run = TransactionalRun {
             name: "paced".into(),
             ledger: empty_ledger(&path, "paced"),
-            latencies: Latencies::new(),
+            latencies: Latencies::new().unwrap(),
             acked_at: Vec::new(),
             ticker: transactional_ticker(PERIOD),
             next_seq: 0,
@@ -922,16 +982,16 @@ mod tests {
         let observed = Arc::new(Mutex::new(Vec::new()));
         let failed = run
             .deliveries(&ctx, &path, |seq| {
-                let observed = observed.clone();
+                let observed = Arc::clone(&observed);
                 let delay = if stall_admission && seq == 1 {
                     PERIOD * 3
                 } else {
                     Duration::ZERO
                 };
-                tokio::time::sleep(delay).map(move |()| {
+                sleep(delay).map(move |()| {
                     let ready_at = Instant::now() + PERIOD / 2;
                     let delivery: Delivery = Box::pin(async move {
-                        tokio::time::sleep_until(ready_at).await;
+                        sleep_until(ready_at).await;
                         observed.lock().unwrap().push(start.elapsed());
                         let result = if reject_last && seq == 2 {
                             Err(ProducerError::Server(19))
@@ -977,7 +1037,7 @@ mod tests {
     async fn ten_ticks_across_a_stall(mut ticker: Interval) -> Duration {
         let start = Instant::now();
         ticker.tick().await;
-        tokio::time::sleep(PERIOD * 5).await;
+        sleep(PERIOD * 5).await;
         for _ in 1..10 {
             ticker.tick().await;
         }

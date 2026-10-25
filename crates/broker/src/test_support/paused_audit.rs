@@ -13,7 +13,7 @@ use {
 
 /// The first required write announces admission and waits for the test.
 #[derive(Debug, Default)]
-pub(crate) struct PausedAudit {
+pub struct PausedAudit {
     entered: Notify,
     release: Notify,
     records: MemorySink,

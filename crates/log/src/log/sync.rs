@@ -13,10 +13,11 @@ use {
     super::Log,
     crate::{error::LogError, segment::Segment},
     krabka_ids::Offset,
+    std::time::Instant,
 };
 
 #[cfg(test)]
-pub(crate) mod sync_observer {
+pub mod sync_observer {
     #[cfg(unix)]
     use std::path::PathBuf;
     use {krabka_ids::Offset, std::cell::RefCell};
@@ -33,7 +34,7 @@ pub(crate) mod sync_observer {
     #[cfg(unix)]
     pub(super) fn take_dir_syncs() -> Vec<PathBuf> { DIR_SYNCS.take() }
 
-    pub(crate) fn take_segment_flushes() -> Vec<Offset> { SEGMENT_FLUSHES.take() }
+    pub fn take_segment_flushes() -> Vec<Offset> { SEGMENT_FLUSHES.take() }
 
     #[cfg(unix)]
     pub(super) fn record_dir_sync(dir: PathBuf) {
@@ -76,7 +77,7 @@ impl Log {
         // record is too.
         self.flush_log_start_checkpoint()?;
         self.unflushed_messages = 0;
-        self.last_flush = std::time::Instant::now();
+        self.last_flush = Instant::now();
         Ok(())
     }
 
@@ -89,10 +90,7 @@ impl Log {
     }
 
     pub(super) fn active_segment_flush(&mut self) -> Result<(), LogError> {
-        let active = self
-            .active
-            .as_mut()
-            .expect("active segment must exist after Log::open");
+        let active = self.active.as_mut().ok_or_else(super::no_active_segment)?;
         Self::segment_flush(active)
     }
 

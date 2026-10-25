@@ -107,29 +107,27 @@ pub fn diskless_retention_prefix(
         return 0;
     }
     let max_expire = max_timestamps.len() - 1;
-    let horizon = match policy.retention_ms {
-        Some(retention) => policy.now_ms.checked_sub(retention),
-        None => None,
-    };
     // Kafka's `diff`, `None` once it is negative. A `u128` holds the sum of
     // any slice of `u64` lengths without overflow.
-    let mut debt: Option<u128> = match policy.retention_bytes {
-        Some(budget) => {
-            let mut indexed = 0u128;
-            let mut scanned = 0usize;
-            #[invariant(scanned@ <= byte_lens@.len())]
-            #[invariant(indexed@ == indexed_bytes(byte_lens@, scanned@))]
-            #[invariant(indexed@ <= scanned@ * u64::MAX@)]
-            #[variant(byte_lens@.len() - scanned@)]
-            while scanned < byte_lens.len() {
-                proof_assert!(indexed_bytes(byte_lens@, scanned@ + 1)
-                    == indexed_bytes(byte_lens@, scanned@) + byte_lens@[scanned@]@);
-                indexed += u128::from(byte_lens[scanned]);
-                scanned += 1;
+    let mut debt: Option<u128> = 'debt: {
+        let Some(budget) = policy.retention_bytes else {
+            break 'debt None;
+        };
+        let mut indexed = 0u128;
+        let mut scanned = 0usize;
+        #[invariant(scanned@ <= byte_lens@.len())]
+        #[invariant(indexed@ == indexed_bytes(byte_lens@, scanned@))]
+        #[invariant(indexed@ <= scanned@ * u64::MAX@)]
+        #[variant(byte_lens@.len() - scanned@)]
+        while scanned < byte_lens.len() {
+            proof_assert!(indexed_bytes(byte_lens@, scanned@ + 1)
+                == indexed_bytes(byte_lens@, scanned@) + byte_lens@[scanned@]@);
+            if let Some(&byte_len) = byte_lens.get(scanned) {
+                indexed += u128::from(byte_len);
             }
-            indexed.checked_sub(u128::from(budget))
+            scanned += 1;
         }
-        None => None,
+        indexed.checked_sub(u128::from(budget))
     };
 
     let mut len = 0usize;
@@ -147,23 +145,29 @@ pub fn diskless_retention_prefix(
     while len < max_expire {
         proof_assert!(indexed_bytes(byte_lens@, len@ + 1)
             == indexed_bytes(byte_lens@, len@) + byte_lens@[len@]@);
-        let below_floor = last_offsets[len] < policy.log_start_offset;
-        let aged_out = match horizon {
-            Some(horizon) => max_timestamps[len] < horizon,
-            None => false,
+        let (Some(&last_offset), Some(&max_timestamp), Some(&byte_len)) = (
+            last_offsets.get(len),
+            max_timestamps.get(len),
+            byte_lens.get(len),
+        ) else {
+            break;
         };
-        let size = u128::from(byte_lens[len]);
-        let over_budget = match debt {
-            Some(debt) => debt >= size,
-            None => false,
-        };
+        let below_floor = last_offset < policy.log_start_offset;
+        let aged_out = matches!(
+            policy.retention_ms,
+            Some(retention) if matches!(
+                policy.now_ms.checked_sub(retention),
+                Some(horizon) if max_timestamp < horizon
+            )
+        );
+        let size = u128::from(byte_len);
+        let over_budget = matches!(debt, Some(debt) if debt >= size);
         if !below_floor && !aged_out && !over_budget {
             break;
         }
-        debt = match debt {
-            Some(debt) => debt.checked_sub(size),
-            None => None,
-        };
+        if let Some(remaining) = debt {
+            debt = remaining.checked_sub(size);
+        }
         len += 1;
     }
     len
@@ -199,11 +203,9 @@ pub fn diskless_logical_range(entries: &[RangeEntry], requested: i64) -> Option<
         return None;
     }
     let floor = lo - 1;
-    if requested <= entries[floor].coordinate {
-        Some(floor)
-    } else if lo < entries.len() {
-        Some(lo)
-    } else {
-        None
+    match entries.get(floor) {
+        Some(entry) if requested <= entry.coordinate => Some(floor),
+        _ if lo < entries.len() => Some(lo),
+        _ => None,
     }
 }

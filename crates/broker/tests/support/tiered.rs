@@ -9,12 +9,21 @@ use {
             create_topic_request_with_setup, topic_configs,
         },
     },
-    krabka_protocol::owned::create_topics_request::CreatableTopicConfig,
+    krabka_protocol::{
+        owned::create_topics_request::{CreatableTopic, CreatableTopicConfig},
+        primitives::uuid::Uuid,
+        records::Record,
+    },
+    std::{
+        iter,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
 pub fn tiered_configs(segment_bytes: Option<&str>) -> Vec<CreatableTopicConfig> {
     topic_configs(
-        std::iter::once(("remote.storage.enable", "true"))
+        iter::once(("remote.storage.enable", "true"))
             .chain(segment_bytes.map(|value| ("internal.segment.bytes", value)))
             .chain([
                 ("local.retention.bytes", "1"),
@@ -31,12 +40,10 @@ pub async fn create_configured_topic(
     configs: Vec<CreatableTopicConfig>,
 ) {
     let response = client
-        .send(create_topic_request(
-            krabka_protocol::owned::create_topics_request::CreatableTopic {
-                configs,
-                ..creatable_topic().name((topic).into()).call()
-            },
-        ))
+        .send(create_topic_request(CreatableTopic {
+            configs,
+            ..creatable_topic().name((topic).into()).call()
+        }))
         .await
         .expect("CreateTopics");
     assert2::assert!(
@@ -66,15 +73,13 @@ pub async fn create_assigned_topic(
     let response = client
         .send(
             create_topic_request_with_setup()
-                .topic(
-                    krabka_protocol::owned::create_topics_request::CreatableTopic {
-                        configs: tiered_configs(setup.segment_bytes),
-                        ..assigned_topic()
-                            .name(setup.topic.name)
-                            .replicas(setup.topic.replicas)
-                            .call()
-                    },
-                )
+                .topic(CreatableTopic {
+                    configs: tiered_configs(setup.segment_bytes),
+                    ..assigned_topic()
+                        .name(setup.topic.name)
+                        .replicas(setup.topic.replicas)
+                        .call()
+                })
                 .timeout(10_000)
                 .call(),
         )
@@ -93,7 +98,7 @@ pub async fn await_tiered_replicas(
     segment_size: Option<krabka_units::ByteSize>,
     failure: &str,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let ready = |broker: &&krabka_broker::BrokerHandle| {
             broker
@@ -107,8 +112,8 @@ pub async fn await_tiered_replicas(
         if brokers.iter().all(ready) {
             return;
         }
-        assert2::assert!(std::time::Instant::now() <= deadline, "{failure}");
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert2::assert!(Instant::now() <= deadline, "{failure}");
+        time::sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -122,7 +127,7 @@ pub struct TieredRecordIndex(pub usize);
 pub struct TieredRecordsSetup<'a> {
     #[default("orders")]
     pub topic: &'a str,
-    pub topic_id: krabka_protocol::primitives::uuid::Uuid,
+    pub topic_id: Uuid,
     #[default(TieredRecordCount(1))]
     pub count: TieredRecordCount,
 }
@@ -133,7 +138,7 @@ pub async fn produce_records(
     client: &krabka_client_core::Client,
     value: impl Fn(TieredRecordIndex) -> bytes::Bytes,
     #[builder(default = "orders")] topic: &'_ str,
-    #[builder(default)] topic_id: krabka_protocol::primitives::uuid::Uuid,
+    #[builder(default)] topic_id: Uuid,
     #[builder(into, default = TieredRecordCount (1))] count: TieredRecordCount,
 ) {
     let setup = TieredRecordsSetup {
@@ -142,7 +147,7 @@ pub async fn produce_records(
         count,
     };
     for index in 0..setup.count.0 {
-        let batch = batch_from_records(vec![krabka_protocol::records::Record {
+        let batch = batch_from_records(vec![Record {
             value: Some(value(TieredRecordIndex(index))),
             ..Default::default()
         }]);

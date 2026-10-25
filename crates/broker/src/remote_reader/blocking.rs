@@ -14,6 +14,7 @@ use {
     krabka_remote_storage::{
         BytePosition, IndexType, RemoteLogSegmentMetadata, RemoteStorageError, TopicIdPartition,
     },
+    std::{io, sync::Arc},
     tracing::warn,
 };
 
@@ -22,13 +23,13 @@ impl RemoteReader {
         &self,
         tp: &TopicIdPartition,
     ) -> Result<Vec<RemoteLogSegmentMetadata>, RemoteStorageError> {
-        let rlmm = self.rlmm.clone();
+        let rlmm = Arc::clone(&self.rlmm);
         let tp = tp.clone();
         match spawn_blocking(move || rlmm.list_remote_log_segments(&tp)).await {
             Ok(result) => result,
             Err(error) => {
                 warn!(error = %error, "remote-reader: list_remote_log_segments task panicked");
-                Err(RemoteStorageError::Io(std::io::Error::other(
+                Err(RemoteStorageError::Io(io::Error::other(
                     "list_remote_log_segments task panicked",
                 )))
             }
@@ -48,8 +49,8 @@ impl RemoteReader {
         metadata: RemoteLogSegmentMetadata,
         kind: IndexType,
     ) -> Result<Vec<u8>, RemoteStorageError> {
-        let rsm = self.rsm.clone();
-        let cache = self.index_cache.clone();
+        let rsm = Arc::clone(&self.rsm);
+        let cache = Arc::clone(&self.index_cache);
         let segment_id = metadata.remote_log_segment_id().id;
         match spawn_blocking(move || {
             cache.get_or_fetch(segment_id, kind, || rsm.fetch_index(&metadata, kind))
@@ -59,7 +60,7 @@ impl RemoteReader {
             Ok(res) => res.map(|(bytes, _)| bytes),
             Err(e) => {
                 warn!(error = %e, "remote-reader: fetch_index task panicked");
-                Err(RemoteStorageError::Io(std::io::Error::other(
+                Err(RemoteStorageError::Io(io::Error::other(
                     "fetch_index task panicked",
                 )))
             }
@@ -72,14 +73,14 @@ impl RemoteReader {
         start_position: BytePosition,
         end_position: Option<BytePosition>,
     ) -> Result<Vec<u8>, RemoteStorageError> {
-        let rsm = self.rsm.clone();
+        let rsm = Arc::clone(&self.rsm);
         match spawn_blocking(move || rsm.fetch_log_segment(&metadata, start_position, end_position))
             .await
         {
             Ok(res) => res,
             Err(e) => {
                 warn!(error = %e, "remote-reader: fetch_log_segment task panicked");
-                Err(RemoteStorageError::Io(std::io::Error::other(
+                Err(RemoteStorageError::Io(io::Error::other(
                     "fetch_log_segment task panicked",
                 )))
             }
@@ -95,12 +96,20 @@ mod tests {
         assert2::assert,
         krabka_ids::LeaderEpoch,
         krabka_remote_storage::{LocalTieredStorage, RemoteLogMetadataManager},
-        std::sync::Arc,
+        std::{
+            sync::{
+                Arc,
+                atomic::{AtomicBool, Ordering},
+            },
+            thread,
+            time::Duration,
+        },
+        tokio::time,
     };
 
     struct SlowListRlmm {
-        reactor_ticked: Arc<std::sync::atomic::AtomicBool>,
-        observed_tick: Arc<std::sync::atomic::AtomicBool>,
+        reactor_ticked: Arc<AtomicBool>,
+        observed_tick: Arc<AtomicBool>,
     }
 
     impl RemoteLogMetadataManager for SlowListRlmm {
@@ -139,11 +148,10 @@ mod tests {
             &self,
             _topic_id_partition: &TopicIdPartition,
         ) -> Result<Vec<RemoteLogSegmentMetadata>, RemoteStorageError> {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            thread::sleep(Duration::from_millis(50));
             self.observed_tick.store(
-                self.reactor_ticked
-                    .load(std::sync::atomic::Ordering::Acquire),
-                std::sync::atomic::Ordering::Release,
+                self.reactor_ticked.load(Ordering::Acquire),
+                Ordering::Release,
             );
             Ok(Vec::new())
         }
@@ -179,7 +187,7 @@ mod tests {
         let observed_tick = Arc::new(AtomicBool::new(false));
         let tick = reactor_ticked.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            time::sleep(Duration::from_millis(5)).await;
             tick.store(true, Ordering::Release);
         });
         let remote_dir = tempfile::tempdir().unwrap();

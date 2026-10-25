@@ -150,14 +150,13 @@ pub fn select_best_recovery_replica(candidates: &[RecoveryCandidate]) -> Option<
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==> ranks_ge(candidates@[best@], candidates@[j]))]
     #[variant(n@ - i@)]
     while i < n {
-        let candidate = candidates[i];
-        let current = candidates[best];
-        if candidate.last_epoch > current.last_epoch
-            || (candidate.last_epoch == current.last_epoch
-                && candidate.log_end_offset > current.log_end_offset)
-            || (candidate.last_epoch == current.last_epoch
-                && candidate.log_end_offset == current.log_end_offset
-                && candidate.broker_id < current.broker_id)
+        if let (Some(candidate), Some(current)) = (candidates.get(i), candidates.get(best))
+            && (candidate.last_epoch > current.last_epoch
+                || (candidate.last_epoch == current.last_epoch
+                    && candidate.log_end_offset > current.log_end_offset)
+                || (candidate.last_epoch == current.last_epoch
+                    && candidate.log_end_offset == current.log_end_offset
+                    && candidate.broker_id < current.broker_id))
         {
             best = i;
         }

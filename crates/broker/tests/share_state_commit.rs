@@ -9,6 +9,7 @@
 //! append only could acknowledge state that the next leader of the partition
 //! never gets. A share-partition leader then loses or delivers again the
 //! records that the state covered.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -53,6 +54,7 @@ use {
     },
     std::time::Duration,
     tempfile::TempDir,
+    tokio::time,
 };
 
 mod support;
@@ -306,7 +308,7 @@ async fn initialize_when_loaded(client: &Client, topic_id: uuid::Uuid) -> Answer
         }
         // intentional: the client has no awaiter for the load of the state
         // partition. It retries, as Kafka's persister does.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
     panic!("the share coordinator did not load __share_group_state-0");
 }

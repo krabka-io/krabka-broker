@@ -18,9 +18,12 @@ use {
     krabka_log::Offset,
     krabka_verified::transaction::{
         TransactionMarkerMaterializationDecision as Decision, TransactionMarkerPartitionState,
-        TransactionMarkerRequest,
+        TransactionMarkerRequest, transaction_marker_equal_epoch_fenced,
     },
-    std::{collections::HashMap, sync::Arc},
+    std::{
+        collections::HashMap,
+        sync::{Arc, atomic::Ordering},
+    },
 };
 
 /// Append a transaction marker and, on a `__consumer_offsets` partition,
@@ -95,7 +98,7 @@ pub(super) async fn append_marker_and_materialize(
         .lock()
         .map_err(|_| BrokerError::Txn("transaction marker log lock poisoned".into()))?
         .transaction_marker_state(producer_id);
-    if krabka_verified::transaction::transaction_marker_equal_epoch_fenced(
+    if transaction_marker_equal_epoch_fenced(
         transaction_version,
         producer_epoch,
         current_producer_epoch,
@@ -170,9 +173,7 @@ pub(super) async fn append_marker_and_materialize(
     // The owned produce path stamps this field from the metadata image. A
     // marker does not travel that path, so it stamps its own, and a marker
     // that kept the default of zero would carry a false leader epoch.
-    marker.partition_leader_epoch = partition
-        .current_leader_epoch
-        .load(std::sync::atomic::Ordering::Acquire);
+    marker.partition_leader_epoch = partition.current_leader_epoch.load(Ordering::Acquire);
     let append_from = partition.log_end_offset();
     let appended = if let Some(stamp) = commit_stamp {
         partition.produce_commit_marker(marker, stamp).await
@@ -224,6 +225,7 @@ pub(super) async fn append_marker_and_materialize(
         .await?;
         materialization.remove(&producer_id);
     }
+    drop(materialization);
     Ok(marker_offset + 1)
 }
 
@@ -259,11 +261,12 @@ fn landed_marker_offset(
             ));
         }
     }
+    drop(log);
     Ok(None)
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct MarkerAppend {
+pub struct MarkerAppend {
     pub(crate) producer_id: krabka_log::ProducerId,
     pub(crate) producer_epoch: i16,
     pub(crate) marker_type: MarkerType,
@@ -299,6 +302,7 @@ mod tests {
         assert2::assert,
         bytes::Bytes,
         krabka_ids::PartitionIndex,
+        tokio::sync::{mpsc, oneshot},
     };
 
     #[tokio::test]
@@ -345,10 +349,13 @@ mod tests {
         .expect("abort marker");
 
         assert!(broker.group_coordinator.find(group_id).is_none());
-        {
-            let log = part.log.lock().expect("offsets log lock");
-            assert!(log.pending_transaction_start(producer_id).is_none());
-        }
+        assert!(
+            part.log
+                .lock()
+                .expect("offsets log lock")
+                .pending_transaction_start(producer_id)
+                .is_none()
+        );
         broker_handle.shutdown().await;
     }
 
@@ -651,7 +658,7 @@ mod tests {
     fn dropping_acks(part: &Partition) -> Partition {
         use crate::partition::{ProduceJob, WriterGate, WriterMessage};
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<WriterMessage>(8);
+        let (tx, mut rx) = mpsc::channel::<WriterMessage>(8);
         let writer = part.writer_tx.clone();
         tokio::spawn(async move {
             while let Some(message) = rx.recv().await {
@@ -663,7 +670,7 @@ mod tests {
                     ack,
                     producer_check,
                 } = job;
-                let (landed_tx, landed_rx) = tokio::sync::oneshot::channel();
+                let (landed_tx, landed_rx) = oneshot::channel();
                 let forwarded = writer
                     .send(WriterMessage::Produce(ProduceJob {
                         data,

@@ -1,11 +1,11 @@
 //! Explicit wire inputs and feature oracles shared by storage and broker tests.
 
 use {
-    crate::{fixtures::name as fixture_name, meta::arguments},
+    crate::{fixtures::name as fixture_name, meta::argument_array},
     moxy::{ast::ParseError, token::TokenStream},
 };
 
-pub(crate) fn supported_feature_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn supported_feature_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = fixture_name(input)?;
     Ok(moxy::template! {
         fn {{ name }}(name: &str, min_version: i16, max_version: i16)
@@ -18,9 +18,8 @@ pub(crate) fn supported_feature_fixture(input: TokenStream) -> Result<TokenStrea
     })
 }
 
-pub(crate) fn supported_features_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let [name, supported]: [TokenStream; 2] =
-        arguments(input, 2)?.try_into().expect("two arguments");
+pub fn supported_features_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [name, supported]: [TokenStream; 2] = argument_array(input)?;
     let name = fixture_name(name)?;
     let supported = fixture_name(supported)?;
     Ok(moxy::template! {
@@ -42,7 +41,7 @@ pub(crate) fn supported_features_fixture(input: TokenStream) -> Result<TokenStre
     })
 }
 
-pub(crate) fn finalized_feature_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn finalized_feature_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = fixture_name(input)?;
     Ok(moxy::template! {
         fn {{ name }}(name: &str, level: i16)
@@ -56,7 +55,7 @@ pub(crate) fn finalized_feature_fixture(input: TokenStream) -> Result<TokenStrea
     })
 }
 
-pub(crate) fn record_limit_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn record_limit_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = fixture_name(input)?;
     Ok(moxy::template! {
         /// A record with a `value_len`-byte value, a key, a header and a
@@ -75,7 +74,7 @@ pub(crate) fn record_limit_fixture(input: TokenStream) -> Result<TokenStream, Pa
     })
 }
 
-pub(crate) fn compaction_record_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn compaction_record_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = fixture_name(input)?;
     Ok(moxy::template! {
         /// A one-record data batch of `key` and `value`. `producer` is `(id, epoch,
@@ -103,11 +102,8 @@ pub(crate) fn compaction_record_fixture(input: TokenStream) -> Result<TokenStrea
     })
 }
 
-pub(crate) fn registration_feature_projection(
-    input: TokenStream,
-) -> Result<TokenStream, ParseError> {
-    let [name, feature_type]: [TokenStream; 2] =
-        arguments(input, 2)?.try_into().expect("two arguments");
+pub fn registration_feature_projection(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [name, feature_type]: [TokenStream; 2] = argument_array(input)?;
     let name = fixture_name(name)?;
     Ok(moxy::template! {
         fn {{ name }}(features: &[{{ feature_type }}]) -> ::std::collections::BTreeMap<String, (i16, i16)> {
@@ -119,8 +115,8 @@ pub(crate) fn registration_feature_projection(
 }
 
 /// Independently encode the expected bytes without calling the storage append path.
-pub(crate) fn compression_bytes_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let [name, level]: [TokenStream; 2] = arguments(input, 2)?.try_into().expect("two arguments");
+pub fn compression_bytes_fixture(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [name, level]: [TokenStream; 2] = argument_array(input)?;
     let name = fixture_name(name)?;
     let level = fixture_name(level)?;
     Ok(moxy::template! {

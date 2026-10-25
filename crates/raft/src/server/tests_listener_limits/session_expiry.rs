@@ -3,6 +3,7 @@ use {
     crate::{ClusterGrants, ClusterOperation},
     krabka_protocol::{Encode as _, owned::describe_quorum_request::DescribeQuorumRequest},
     std::sync::atomic::{AtomicI64, AtomicUsize, Ordering},
+    tokio::{io, time},
 };
 
 struct CountingGrants(Arc<AtomicUsize>);
@@ -68,7 +69,7 @@ async fn credential_deadlines_close_before_bootstrap_or_acl_dispatch(
     let mut ctx = context(ListenerLimits::default());
     ctx.expires_at_ms = deadline;
     ctx.grants = Arc::new(CountingGrants(Arc::clone(&calls)));
-    let (mut client, server) = tokio::io::duplex(1 << 16);
+    let (mut client, server) = io::duplex(1 << 16);
     let connection = tokio::spawn(handle_conn(
         server,
         engine,
@@ -92,7 +93,7 @@ async fn credential_deadlines_close_before_bootstrap_or_acl_dispatch(
     client.write_all(&request(2)).await.unwrap();
     if closes {
         let mut size = [0_u8; 4];
-        let read = tokio::time::timeout(Duration::from_secs(1), client.read(&mut size))
+        let read = time::timeout(Duration::from_secs(1), client.read(&mut size))
             .await
             .unwrap()
             .unwrap();
@@ -106,7 +107,7 @@ async fn credential_deadlines_close_before_bootstrap_or_acl_dispatch(
         assert2::assert!(calls.load(Ordering::Relaxed) == first_calls * 2);
     }
     drop(client);
-    tokio::time::timeout(Duration::from_secs(1), connection)
+    time::timeout(Duration::from_secs(1), connection)
         .await
         .unwrap()
         .unwrap()

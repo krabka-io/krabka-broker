@@ -31,15 +31,19 @@ mod sealed_input;
 mod test_support;
 mod timestamp_scan;
 
-pub(crate) use self::{
+pub use self::{
     append::PlacedBatch,
     open::{FrontierScan, TailScan},
     sealed_input::SealedInput,
 };
-use crate::{
-    index::{OFFSET_ENTRY_SIZE, OffsetIndex, TIME_ENTRY_SIZE, TimeIndex},
-    io::LogIo,
-    name::{leader_epoch_checkpoint_path, stampindex_path, txnindex_path},
+use {
+    crate::{
+        index::{OFFSET_ENTRY_SIZE, OffsetIndex, TIME_ENTRY_SIZE, TimeIndex},
+        io::LogIo,
+        name::{leader_epoch_checkpoint_path, stampindex_path, txnindex_path},
+    },
+    krabka_protocol::records::FileRegion,
+    std::{sync::atomic::AtomicBool, time::SystemTime},
 };
 
 /// A single log segment: the `.log` data file paired with its sparse
@@ -107,7 +111,7 @@ pub struct Segment {
     wrote_direct: bool,
     /// Unsupported page-cache probes are remembered per open segment: other
     /// segments can live on filesystems with different NOWAIT capabilities.
-    cache_probe_unsupported: std::sync::atomic::AtomicBool,
+    cache_probe_unsupported: AtomicBool,
 }
 
 /// Verbatim, decode-free output of [`Segment::read_raw`].
@@ -139,7 +143,7 @@ pub struct RawSegmentDesc {
     pub last_offset: Offset,
     /// The records run, as a file-backed descriptor. `None` when the walk
     /// found no complete batch in range.
-    pub region: Option<krabka_protocol::records::FileRegion>,
+    pub region: Option<FileRegion>,
 }
 
 #[krabka_macros::sendfile_cfg]
@@ -181,7 +185,7 @@ impl RawSegmentRead {
 
 /// What an activation walk found in one segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ActivationScan {
+pub struct ActivationScan {
     /// Exclusive end of the run of active batches that begins at the offset
     /// the walk started from. It equals that offset when the first batch is
     /// already waiting.
@@ -199,21 +203,17 @@ impl Segment {
 
     /// Path to this segment's `.txnindex` file (may not exist yet).
     #[must_use]
-    pub fn txn_index_path(&self) -> std::path::PathBuf {
-        txnindex_path(&self.dir, self.base_offset.0)
-    }
+    pub fn txn_index_path(&self) -> PathBuf { txnindex_path(&self.dir, self.base_offset.0) }
 
     /// Path to this segment's `.stampindex` sidecar (may not exist yet).
     #[must_use]
-    pub fn stamp_index_path(&self) -> std::path::PathBuf {
-        stampindex_path(&self.dir, self.base_offset.0)
-    }
+    pub fn stamp_index_path(&self) -> PathBuf { stampindex_path(&self.dir, self.base_offset.0) }
 
     /// Path to the per-partition `.leader-epoch-checkpoint` file in this
     /// segment's directory. All segments in a partition share the checkpoint,
     /// and epoch history accumulates over the log's lifetime.
     #[must_use]
-    pub fn leader_epoch_checkpoint_path(&self) -> std::path::PathBuf {
+    pub fn leader_epoch_checkpoint_path(&self) -> PathBuf {
         leader_epoch_checkpoint_path(&self.dir)
     }
 
@@ -274,7 +274,7 @@ impl Segment {
     /// `None` when the filesystem cannot report it, which retention treats
     /// as "unknown, not overdue" rather than as license to guess.
     #[must_use]
-    pub fn last_modified(&self) -> Option<std::time::SystemTime> {
+    pub fn last_modified(&self) -> Option<SystemTime> {
         self.log_file.metadata().ok()?.modified().ok()
     }
 

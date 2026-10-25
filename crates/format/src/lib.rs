@@ -24,7 +24,10 @@
 //! [`krabka_security`]. It is a library as well as a binary so `krabka-cli` can
 //! call it rather than carry a second copy.
 
-use clap::Parser;
+use {
+    clap::Parser,
+    std::{io, io::Write},
+};
 
 mod format;
 mod ids;
@@ -98,7 +101,7 @@ pub async fn run_from_args() -> i32 { run_from_args_with_records(argv, Vec::new(
 /// requests print to stdout and return 0, without terminating the caller.
 #[krabka_macros::argv_entrypoint]
 pub async fn run_from_args_with_records(extra: Vec<MetadataRecord>) -> i32 {
-    run_from_args_with_records_to(argv, extra, &mut std::io::stdout()).await
+    run_from_args_with_records_to(argv, extra, &mut io::stdout()).await
 }
 
 /// [`run_from_args_with_records`], with the progress lines of a successful
@@ -110,7 +113,7 @@ pub async fn run_from_args_with_records(extra: Vec<MetadataRecord>) -> i32 {
 #[krabka_macros::argv_entrypoint]
 pub async fn run_from_args_with_records_to(
     extra: Vec<MetadataRecord>,
-    progress: &mut (dyn std::io::Write + Send),
+    progress: &mut (dyn Write + Send),
 ) -> i32 {
     match Cli::try_parse_from(argv) {
         Ok(cli) => run_with_records_to(cli.args, extra, progress).await,

@@ -29,9 +29,12 @@ use {
     krabka_metadata::{
         BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId, PartitionRecord,
     },
-    krabka_protocol::owned::{
-        broker_registration_request::{BrokerRegistrationRequest, Listener},
-        describe_topic_partitions_response::DescribeTopicPartitionsResponsePartition,
+    krabka_protocol::{
+        owned::{
+            broker_registration_request::{BrokerRegistrationRequest, Listener, MAX_VERSION},
+            describe_topic_partitions_response::{self, DescribeTopicPartitionsResponsePartition},
+        },
+        primitives::uuid::Uuid,
     },
     std::sync::Arc,
 };
@@ -39,9 +42,8 @@ use {
 const TOPIC: &str = "orders";
 const TOPIC_ID_BYTES: [u8; 16] = [9; 16];
 const LEADER_EPOCH: i32 = 7;
-const DESCRIBE_VERSION: i16 =
-    krabka_protocol::owned::describe_topic_partitions_response::MAX_VERSION;
-const REGISTER_VERSION: i16 = krabka_protocol::owned::broker_registration_request::MAX_VERSION;
+const DESCRIBE_VERSION: i16 = describe_topic_partitions_response::MAX_VERSION;
+const REGISTER_VERSION: i16 = MAX_VERSION;
 
 fn partition_record(isr: &[NodeId]) -> PartitionRecord {
     metadata_partition_record()
@@ -247,9 +249,7 @@ async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) {
     let request = BrokerRegistrationRequest {
         broker_id: 3,
         cluster_id: image.cluster_id().to_string(),
-        incarnation_id: krabka_protocol::primitives::uuid::Uuid(
-            *uuid::Uuid::from_u128(incarnation).as_bytes(),
-        ),
+        incarnation_id: Uuid(*uuid::Uuid::from_u128(incarnation).as_bytes()),
         listeners: vec![Listener {
             name: "PLAINTEXT".into(),
             host: "127.0.0.1".into(),
@@ -258,9 +258,7 @@ async fn register_broker_3(broker: &Arc<Broker>, incarnation: u128) {
             ..Default::default()
         }],
         features,
-        log_dirs: vec![krabka_protocol::primitives::uuid::Uuid(
-            *uuid::Uuid::from_u128(3000).as_bytes(),
-        )],
+        log_dirs: vec![Uuid(*uuid::Uuid::from_u128(3000).as_bytes())],
         ..Default::default()
     };
     let principal = principal("replica");

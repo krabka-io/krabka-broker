@@ -14,6 +14,7 @@ use {
         sink::{AuditError, AuditRecord, HEADER_PREV_HASH, HEADER_SEQ},
     },
     krabka_verified::{ChainStep, chain_step},
+    std::str,
 };
 
 /// Where the chain continues after the last chained record in the spool.
@@ -86,13 +87,13 @@ fn chain_headers(record: &AuditRecord) -> Result<ChainHeaders, AuditError> {
         .headers
         .iter()
         .find(|(key, _)| key == HEADER_SEQ)
-        .and_then(|(_, value)| std::str::from_utf8(value).ok())
+        .and_then(|(_, value)| str::from_utf8(value).ok())
         .and_then(|value| value.parse().ok());
     let previous = record
         .headers
         .iter()
         .find(|(key, _)| key == HEADER_PREV_HASH)
-        .and_then(|(_, value)| std::str::from_utf8(value).ok())
+        .and_then(|(_, value)| str::from_utf8(value).ok())
         .and_then(from_hex32);
     seq.zip(previous)
         .map(|(seq, previous)| ChainHeaders { seq, previous })

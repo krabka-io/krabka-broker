@@ -17,8 +17,8 @@ use {
         kraft::{log::KraftLog, types::QuorumState},
     },
     krabka_ids::Offset,
-    krabka_metadata::{MetadataImage, MetadataRecord},
-    krabka_protocol::records::{RecordBatch, metadata::control::ControlRecord},
+    krabka_metadata::{MetadataImage, MetadataRecord, metadata_version::METADATA_VERSION_FEATURE},
+    krabka_protocol::records::{Record, RecordBatch, metadata::control::ControlRecord},
     krabka_verified::recovery::{
         ReplayCursorDecision, ReplayRecordDecision, replay_cursor_decision, replay_record_decision,
         should_capture_first_downgrade,
@@ -118,7 +118,7 @@ pub fn replay_committed_with_timestamp(
                         &meta,
                         MetadataRecord::V1FeatureLevel(feature)
                             if feature.name
-                                == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+                                == METADATA_VERSION_FEATURE
                                 && image
                                     .finalized_metadata_version()
                                     .is_some_and(|current| feature.level < current)
@@ -204,7 +204,7 @@ fn replay_control_records_until(
 /// describes.
 fn apply_control_record(
     state: &mut QuorumState,
-    record: &krabka_protocol::records::Record,
+    record: &Record,
     offset: i64,
 ) -> Result<(), MetadataReplayError> {
     let invalid = |reason: String| MetadataReplayError::InvalidControlRecord { offset, reason };

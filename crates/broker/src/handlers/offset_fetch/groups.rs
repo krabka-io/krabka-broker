@@ -25,7 +25,7 @@ use {
     },
     krabka_protocol::{
         owned::{
-            offset_fetch_request::OffsetFetchRequest,
+            offset_fetch_request::{OffsetFetchRequest, OffsetFetchRequestTopics},
             offset_fetch_response::{
                 OffsetFetchResponse, OffsetFetchResponseGroup, OffsetFetchResponsePartitions,
                 OffsetFetchResponseTopics,
@@ -107,8 +107,9 @@ pub(super) async fn handle_groups(
         };
         // Named/id'd topics: resolve id→name (v10) and read each requested
         // partition from the name-keyed store. `None` topics → fetch-all.
-        let topics_out: Vec<OffsetFetchResponseTopics> =
-            if let Some(req_topics) = grp.topics.as_deref() {
+        let topics_out: Vec<OffsetFetchResponseTopics> = grp.topics.as_deref().map_or_else(
+            || group_fetch_all(broker, ctx, version, &image, &offsets, req.require_stable),
+            |req_topics| {
                 group_named_topics(
                     broker,
                     ctx,
@@ -118,9 +119,8 @@ pub(super) async fn handle_groups(
                     &offsets,
                     req.require_stable,
                 )
-            } else {
-                group_fetch_all(broker, ctx, version, &image, &offsets, req.require_stable)
-            };
+            },
+        );
 
         groups_out.push(OffsetFetchResponseGroup {
             group_id: grp.group_id.clone(),
@@ -171,7 +171,7 @@ fn group_named_topics(
     context: &RequestContext<'_>,
     version: i16,
     image: &krabka_metadata::MetadataImage,
-    requested: &[krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopics],
+    requested: &[OffsetFetchRequestTopics],
     offsets: &GroupOffsets,
     require_stable: bool,
 ) -> Vec<OffsetFetchResponseTopics> {
@@ -204,19 +204,20 @@ fn group_named_topics(
         } else {
             Some(codes::TOPIC_AUTHORIZATION_FAILED)
         };
-        let partitions = topic
-            .partition_indexes
-            .iter()
-            .map(|&partition| match refusal {
-                Some(error_code) => missing_offset_row(partition, error_code),
-                None => committed_row(
-                    name,
-                    partition,
-                    use_topic_ids.then(|| uuid::Uuid::from_bytes(topic.topic_id.0)),
-                    offsets,
-                    require_stable,
-                ),
-            });
+        let partitions = topic.partition_indexes.iter().map(|&partition| {
+            refusal.map_or_else(
+                || {
+                    committed_row(
+                        name,
+                        partition,
+                        use_topic_ids.then(|| uuid::Uuid::from_bytes(topic.topic_id.0)),
+                        offsets,
+                        require_stable,
+                    )
+                },
+                |error_code| missing_offset_row(partition, error_code),
+            )
+        });
         let row = OffsetFetchResponseTopics {
             name: name.clone(),
             topic_id: topic.topic_id,
@@ -264,7 +265,7 @@ fn group_fetch_all(
             }
             partitions.sort_by_key(|p| p.partition_index);
             Some(OffsetFetchResponseTopics {
-                name: name.to_string(),
+                name: name.to_owned(),
                 topic_id,
                 partitions,
                 ..Default::default()
@@ -289,7 +290,7 @@ fn committed_row(
     offsets: &GroupOffsets,
     require_stable: bool,
 ) -> OffsetFetchResponsePartitions {
-    let key = (topic.to_string(), partition_index);
+    let key = (topic.to_owned(), partition_index);
     if require_stable && offsets.pending_txn.contains(&key) {
         return unstable::group_row(partition_index);
     }
@@ -312,7 +313,12 @@ fn is_mismatched_topic_id(stored: Option<uuid::Uuid>, requested: Option<uuid::Uu
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::coordinator::unified::classic_state::OffsetEntry, assert2::check};
+    use {
+        super::*,
+        crate::coordinator::unified::classic_state::OffsetEntry,
+        assert2::check,
+        std::collections::{HashMap, HashSet},
+    };
 
     /// #987, Kafka's `isOffsetInvalid`: an `OffsetFetch` that names the topic
     /// by an id other than the one the offset was committed under reads no
@@ -324,18 +330,15 @@ mod tests {
         let committed_id = uuid::Uuid::from_u128(1);
         let other_id = uuid::Uuid::from_u128(2);
         let offsets = |topic_id| GroupOffsets {
-            committed: std::collections::HashMap::from([(
-                ("orders".to_string(), 0),
-                OffsetEntry {
-                    offset: krabka_log::Offset(7),
-                    leader_epoch: 3,
-                    metadata: "m".into(),
-                    commit_timestamp_ms: 0,
-                    expire_timestamp_ms: None,
-                    topic_id,
-                },
-            )]),
-            pending_txn: std::collections::HashSet::new(),
+            committed: HashMap::from([(("orders".to_owned(), 0), OffsetEntry {
+                offset: krabka_log::Offset(7),
+                leader_epoch: 3,
+                metadata: "m".into(),
+                commit_timestamp_ms: 0,
+                expire_timestamp_ms: None,
+                topic_id,
+            })]),
+            pending_txn: HashSet::new(),
         };
         let found = OffsetFetchResponsePartitions {
             partition_index: 0,

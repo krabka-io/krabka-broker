@@ -21,7 +21,7 @@
 
 use {
     krabka_metadata::{MetadataImage, MetadataRecord},
-    std::{borrow::Cow, cell::Cell, ops::Deref, sync::Arc},
+    std::{borrow::Cow, cell::Cell, mem, ops::Deref, sync::Arc},
     tokio::sync::watch,
 };
 
@@ -85,7 +85,7 @@ impl AppliedImage {
     /// or the records do not describe the difference, the next image is a
     /// copy of the new snapshot.
     pub(super) fn publish(&mut self) {
-        let snapshot = Arc::new(std::mem::take(&mut self.image));
+        let snapshot = Arc::new(mem::take(&mut self.image));
         let replaced = self.tx.send_replace(Arc::clone(&snapshot));
         self.image = match (Arc::try_unwrap(replaced), self.since_publish.take()) {
             (Ok(mut image), Some(records)) => {

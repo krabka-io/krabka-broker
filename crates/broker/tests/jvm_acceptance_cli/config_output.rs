@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 /// The configuration one `--describe` reported, whichever path printed it.
-pub(crate) type Configs = BTreeMap<String, String>;
+pub type Configs = BTreeMap<String, String>;
 
 /// Parse a `kafka-configs --describe` stdout into the keys it reported.
 ///
@@ -26,7 +26,7 @@ pub(crate) type Configs = BTreeMap<String, String>;
 /// private business, and a krabka change that moved an entity from one path to
 /// the other would be a divergence this suite must catch rather than a reason
 /// to fail parsing.
-pub(crate) fn parse_describe(stdout: &str) -> Configs {
+pub fn parse_describe(stdout: &str) -> Configs {
     let mut configs = Configs::new();
     for line in stdout.lines() {
         let line = line.trim();
@@ -56,7 +56,7 @@ fn is_quota_line(line: &str) -> bool { line.starts_with("Quota configs for ") }
 /// `user-principal 'u', client-id 'c'`. A case that only compared the values
 /// would pass on a broker that quietly dropped the client half and answered
 /// for the user alone.
-pub(crate) fn quota_entities(stdout: &str) -> Vec<String> {
+pub fn quota_entities(stdout: &str) -> Vec<String> {
     stdout
         .lines()
         .map(str::trim)

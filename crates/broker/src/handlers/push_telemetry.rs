@@ -108,7 +108,17 @@ crate::handlers::raw_request_handler!(
             PushDecision::Accept {
                 metrics: subscribed,
             } => {
-                let ct = codec.expect("authorize_push accepts only a supported codec");
+                // `authorize_push` refuses an unsupported codec before it
+                // accepts a push, with the code this answers.
+                let Some(ct) = codec else {
+                    return encode_response(
+                        &PushTelemetryResponse {
+                            error_code: codes::UNSUPPORTED_COMPRESSION_TYPE,
+                            ..Default::default()
+                        },
+                        version,
+                    );
+                };
                 // Kafka 4.3.1 maps export failures, including oversized
                 // decompression, to INVALID_RECORD. Unstable versions use
                 // the retriable TELEMETRY_TOO_LARGE (KAFKA-21076).

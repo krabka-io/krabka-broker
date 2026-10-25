@@ -73,16 +73,17 @@ use {
         },
         primitives::uuid::Uuid as WireUuid,
     },
+    std::{
+        collections::{HashMap, HashSet},
+        ops::RangeInclusive,
+        sync::Arc,
+    },
 };
 
 mod missing_topics;
 
 /// Named refusals and absent topics have no partitions and carry the zero id.
-pub(crate) fn topic_error_row(
-    broker: &Broker,
-    name: &str,
-    error_code: i16,
-) -> MetadataResponseTopic {
+pub fn topic_error_row(broker: &Broker, name: &str, error_code: i16) -> MetadataResponseTopic {
     MetadataResponseTopic {
         error_code,
         name: Some(name.to_owned()),
@@ -123,18 +124,18 @@ const FIRST_TOPIC_ID_VERSION: i16 = 12;
 const FIRST_LISTENER_NOT_FOUND_VERSION: i16 = 6;
 
 /// The versions that carry `cluster_authorized_operations` (KIP-430).
-const CLUSTER_AUTHORIZED_OPERATIONS_VERSIONS: std::ops::RangeInclusive<i16> = 8..=10;
+const CLUSTER_AUTHORIZED_OPERATIONS_VERSIONS: RangeInclusive<i16> = 8..=10;
 
 /// The first version that carries `topic_authorized_operations` (KIP-430).
 const FIRST_TOPIC_AUTHORIZED_OPERATIONS_VERSION: i16 = 8;
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: MetadataRequest,
     version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<MetadataResponse, BrokerError> {
-    let controller = broker.controller.clone();
+    let controller = Arc::clone(&broker.controller);
 
     let image = controller.current_image();
 
@@ -340,7 +341,7 @@ fn push_distinct(names: &mut Vec<String>, name: &str) {
 /// Every requested topic gets a row with `error_code`, its requested name (an
 /// empty name for a null one) and its requested id. The response carries no
 /// broker, no cluster id and no controller.
-pub(crate) fn error_response(request: &MetadataRequest, error_code: i16) -> MetadataResponse {
+pub fn error_response(request: &MetadataRequest, error_code: i16) -> MetadataResponse {
     MetadataResponse {
         topics: request
             .topics
@@ -367,7 +368,7 @@ struct TopicRowInputs<'a> {
     requested: &'a RequestedTopics,
     /// Brokers the controller currently treats as fenced or dead, from
     /// [`crate::handlers::offline_replicas::unavailable_brokers`].
-    unavailable: &'a std::collections::HashSet<u64>,
+    unavailable: &'a HashSet<u64>,
     /// The listener the request arrived on.
     listener: &'a str,
 }
@@ -382,7 +383,7 @@ fn build_topic_rows(
 ) -> Vec<MetadataResponseTopic> {
     let requested = inputs.requested;
     let authorizer = broker.config.authorizer.as_ref();
-    let allowed = |results: &std::collections::HashMap<&str, AuthorizationResult>, name: &str| {
+    let allowed = |results: &HashMap<&str, AuthorizationResult>, name: &str| {
         results.get(name).copied() == Some(AuthorizationResult::Allow)
     };
 
@@ -595,9 +596,7 @@ fn partition_row(
 }
 
 /// A node id as the wire carries it.
-pub(crate) fn wire_id(node: krabka_metadata::NodeId) -> i32 {
-    i32::try_from(node.0).unwrap_or(i32::MAX)
-}
+pub fn wire_id(node: krabka_metadata::NodeId) -> i32 { i32::try_from(node.0).unwrap_or(i32::MAX) }
 
 /// Projects a stored [`krabka_metadata::BrokerRegistrationRecord`] into one
 /// wire-format [`MetadataResponseBroker`].
@@ -639,7 +638,7 @@ fn project_broker(
 ///   2. the inter-broker endpoint, matched by name;
 ///   3. the first recorded endpoint;
 ///   4. the legacy top-level `host` and `port` when `endpoints` is empty.
-pub(crate) fn pick_endpoint_host_port(
+pub fn pick_endpoint_host_port(
     b: &krabka_metadata::BrokerRegistrationRecord,
     connection_listener_name: &str,
     inter_broker_name: &str,
@@ -650,10 +649,10 @@ pub(crate) fn pick_endpoint_host_port(
         .find(|e| e.name == connection_listener_name)
         .or_else(|| b.endpoints.iter().find(|e| e.name == inter_broker_name))
         .or_else(|| b.endpoints.first());
-    match primary {
-        Some(e) => (e.host.clone(), i32::from(e.port)),
-        None => (b.host.clone(), i32::from(b.port)),
-    }
+    primary.map_or_else(
+        || (b.host.clone(), i32::from(b.port)),
+        |e| (e.host.clone(), i32::from(e.port)),
+    )
 }
 
 #[cfg(test)]
@@ -666,8 +665,8 @@ mod tests {
 
     fn endpoint(name: &str, host: &str, port: u16) -> krabka_metadata::BrokerEndpoint {
         krabka_metadata::BrokerEndpoint {
-            name: name.to_string(),
-            host: host.to_string(),
+            name: name.to_owned(),
+            host: host.to_owned(),
             port,
             protocol: krabka_security::ListenerProtocol::Plaintext,
         }
@@ -677,9 +676,9 @@ mod tests {
         endpoints: Vec<krabka_metadata::BrokerEndpoint>,
     ) -> krabka_metadata::BrokerRegistrationRecord {
         krabka_metadata::BrokerRegistrationRecord {
-            host: "legacy-host".to_string(),
+            host: "legacy-host".to_owned(),
             port: 1000,
-            rack: Some("rack-a".to_string()),
+            rack: Some("rack-a".to_owned()),
             endpoints,
             ..broker_registration(krabka_raft::NodeId(7))
         }
@@ -701,9 +700,9 @@ mod tests {
                 project_broker(&rec, listener)
                     == Some(krabka_macros::tagged_wire!(MetadataResponseBroker {
                         node_id: 7,
-                        host: host.to_string(),
+                        host: host.to_owned(),
                         port,
-                        rack: Some("rack-a".to_string()),
+                        rack: Some("rack-a".to_owned()),
                     })),
                 "{listener}"
             );

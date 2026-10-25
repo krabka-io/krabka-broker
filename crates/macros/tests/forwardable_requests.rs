@@ -1,4 +1,5 @@
 //! Envelope dispatch selects one decoder while allowing bytes after its body.
+#![cfg(test)]
 
 use {assert2::assert, std::sync::Mutex};
 
@@ -35,8 +36,8 @@ impl<const KEY: i16> Decoder<KEY> {
 }
 
 mod requests {
-    pub(super) type Create = super::Decoder<19>;
-    pub(super) type Delete = super::Decoder<20>;
+    pub type Create = super::Decoder<19>;
+    pub type Delete = super::Decoder<20>;
 }
 
 krabka_macros::forwardable_requests! {

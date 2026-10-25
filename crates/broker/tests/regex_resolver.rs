@@ -1,4 +1,5 @@
 //! A custom resolver implemented through the broker's public API.
+#![cfg(test)]
 
 use {
     assert2::assert,

@@ -24,6 +24,7 @@
 //! The barrier is the one `txn_uncommitted_writes` builds: the coordinator's
 //! data listener sits behind a relay, and a cut relay stops its followers from
 //! fetching while they stay in the ISR.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -65,7 +66,7 @@ use {
         net::SocketAddr,
         time::{Duration, Instant},
     },
-    tokio::task::JoinHandle,
+    tokio::{task::JoinHandle, time},
 };
 
 mod support;
@@ -383,7 +384,7 @@ async fn retry_until_moved(
         );
         // intentional: a client has no awaiter for the move; it retries
         // after a backoff, as Kafka's clients do.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 

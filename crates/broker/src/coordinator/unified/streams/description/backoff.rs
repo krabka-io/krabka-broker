@@ -13,7 +13,10 @@
 //! group's streams actor keeps its own here, which forgets it when the group
 //! is deleted, as Kafka's `DeleteGroups` does.
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::hash_map::RandomState,
+    time::{Duration, Instant},
+};
 
 /// Kafka's `INITIAL_DELAY_MS`.
 const INITIAL_DELAY_MS: u64 = 30_000;
@@ -37,9 +40,7 @@ impl Jitter {
 
         // Every `RandomState` is keyed afresh, so an empty hash is a random
         // `u64` without a random-number crate.
-        let random = std::collections::hash_map::RandomState::new()
-            .build_hasher()
-            .finish();
+        let random = RandomState::new().build_hasher().finish();
         Self(800 + random % 400)
     }
 

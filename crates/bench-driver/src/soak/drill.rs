@@ -30,7 +30,8 @@ use {
     anyhow::{Context, Result, bail},
     krabka_units::prelude::*,
     serde::Serialize,
-    std::{future::Future, path::Path, sync::Arc},
+    std::{fs, future::Future, path::Path, sync::Arc},
+    tokio::time,
 };
 
 /// A disaster-recovery contract's objectives and paths, in the units the
@@ -107,9 +108,9 @@ pub fn objectives(contract: &Contract) -> Result<Objectives> {
 /// The file cannot be written or renamed into place.
 pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     let partial = path.with_extension("partial");
-    std::fs::write(&partial, serde_json::to_vec_pretty(value)?)
+    fs::write(&partial, serde_json::to_vec_pretty(value)?)
         .with_context(|| format!("write {}", partial.display()))?;
-    std::fs::rename(&partial, path).with_context(|| format!("rename to {}", path.display()))
+    fs::rename(&partial, path).with_context(|| format!("rename to {}", path.display()))
 }
 
 /// Read a load record that [`run_load`] wrote.
@@ -118,7 +119,7 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
 ///
 /// The file cannot be read or is not a load record.
 pub fn read_load(path: &Path) -> Result<LoadRecord> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     serde_json::from_str(&text).with_context(|| format!("parse load record {}", path.display()))
 }
 
@@ -153,22 +154,24 @@ pub async fn run_load(
             .build(),
     );
     let started = now_ms();
-    let running = start(&ctx, prepared);
+    let running = start(&ctx, prepared).context("build the drill's latency histograms")?;
     tracing::info!(contract = %contract.name, "drill load started");
     tokio::select! {
         () = &mut lost => {
             ctx.abandon();
             tracing::info!("the source cluster is lost; abandoning the sends in flight");
         }
-        () = tokio::time::sleep(contract.duration.to_std()) => {
+        () = time::sleep(contract.duration.to_std()) => {
             ctx.stop();
             tracing::info!("the load ran its whole duration without a loss");
         }
     }
     let ended = now_ms();
     let trackers = running.trackers.clone();
-    let outcome = running.finish().await;
-    let paths = outcome.measurements(contract, Time::from_millis(ended - started));
+    let outcome = running.finish().await.context("a drill load task failed")?;
+    let paths = outcome
+        .measurements(contract, Time::from_millis(ended - started))
+        .context("build the drill's latency histograms")?;
     Ok(LoadRecord {
         acks: outcome
             .producers

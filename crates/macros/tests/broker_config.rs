@@ -1,11 +1,16 @@
 //! The single struct generator retains configuration fields, attributes and derives.
+#![cfg(test)]
 
-use assert2::assert;
+use {
+    assert2::assert,
+    std::{collections::BTreeMap, path::PathBuf},
+};
 
 mod declared {
+    use std::{collections::BTreeMap, fmt, path::PathBuf};
     krabka_macros::broker_config! {
         /// A generic configuration with an optional field excluded at compile time.
-        pub struct Config<T: Clone + std::fmt::Debug> {
+        pub struct Config<T: Clone + fmt::Debug> {
             /// The first field stays first in derived Debug output.
             pub enabled: bool,
             #[cfg(any())]
@@ -16,8 +21,8 @@ mod declared {
 
     krabka_macros::broker_config! {
         pub struct Qualified {
-            pub root: Option<std::path::PathBuf>,
-            pub nested: Option<std::collections::BTreeMap<String, Vec<std::path::PathBuf>>>,
+            pub root: Option<PathBuf>,
+            pub nested: Option<BTreeMap<String, Vec<PathBuf>>>,
         }
     }
 
@@ -34,11 +39,10 @@ mod declared {
 #[test]
 fn accepts_qualified_types_nested_inside_generic_field_types() {
     let original = declared::Qualified {
-        root: Some(std::path::PathBuf::from("broker")),
-        nested: Some(std::collections::BTreeMap::from([(
-            "logs".to_owned(),
-            vec![std::path::PathBuf::from("data")],
-        )])),
+        root: Some(PathBuf::from("broker")),
+        nested: Some(BTreeMap::from([("logs".to_owned(), vec![PathBuf::from(
+            "data",
+        )])])),
     };
     let cloned = original.clone();
     assert!(cloned.root == original.root);

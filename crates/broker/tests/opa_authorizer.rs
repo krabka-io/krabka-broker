@@ -1,7 +1,4 @@
-// rustc 1.95 clippy::pedantic ICEs on this file family (same upstream
-// body-analysis bug that already fires on `tests/acl_handlers.rs` and
-// `tests/throttle.rs`). Disable pedantic locally; the rest of the
-// workspace still enforces the full pedantic gate.
+#![cfg(test)]
 
 //! End-to-end OPA authorizer enforcement over the wire path.
 //!
@@ -29,10 +26,10 @@ mod support;
 use {
     assert2::assert,
     kafka_wire::single_record_produce_request,
-    krabka_broker::{BrokerHandle, authorizer::opa::OpaAuthorizer},
+    krabka_broker::{BrokerHandle, authorizer::opa::OpaAuthorizer, config::InterBrokerCredentials},
     krabka_protocol::owned::produce_response::ProduceResponse,
     krabka_security::SaslMechanism,
-    std::{io, net::SocketAddr},
+    std::{collections::HashSet, io, net::SocketAddr, sync::Arc},
     tempfile::TempDir,
     wiremock::{Mock, MockServer, ResponseTemplate, matchers::method},
 };
@@ -70,29 +67,29 @@ async fn start_broker_with_opa_authorizer(opa: MockServer) -> OpaFixture {
     let opa_url = format!("{}/v1/data/kafka/authz/allow", opa.uri());
     let (log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
-        .insert("admin".to_string(), "admin-secret".to_string());
+        .insert("admin".to_owned(), "admin-secret".to_owned());
     cfg.plain_credentials
-        .insert("alice".to_string(), "wonderland".to_string());
-    cfg.inter_broker_credentials = Some(krabka_broker::config::InterBrokerCredentials::Plain {
-        username: "admin".to_string(),
-        password: "admin-secret".to_string(),
+        .insert("alice".to_owned(), "wonderland".to_owned());
+    cfg.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
+        username: "admin".to_owned(),
+        password: "admin-secret".to_owned(),
     });
     // Broker-level super-user set (used by handler code that reads
     // `broker.config.super_users` directly, independent of the authorizer
     // trait dispatch — e.g. the act-as gate).
-    cfg.super_users.insert("admin".to_string());
+    cfg.super_users.insert("admin".to_owned());
 
     // OpaAuthorizer carries its own super-user set so it can bypass HTTP
     // before consulting OPA. Building it inside the test means `Handle::
     // try_current()` succeeds (the `#[tokio::test(flavor = "multi_thread")]`
     // attribute on each test guarantees a multi-thread runtime, which is
     // what `block_in_place` requires).
-    let mut super_users = std::collections::HashSet::new();
-    super_users.insert("admin".to_string());
+    let mut super_users = HashSet::new();
+    super_users.insert("admin".to_owned());
     // Clients reach this broker over SASL, but its own heartbeat reaches the
     // PLAINTEXT controller listener as ANONYMOUS; like a Kafka inter-broker
     // principal it needs `ClusterAction`, or the broker never unfences.
-    super_users.insert("ANONYMOUS".to_string());
+    super_users.insert("ANONYMOUS".to_owned());
     let authorizer = OpaAuthorizer::new(
         super_users,
         opa_url,
@@ -108,7 +105,7 @@ async fn start_broker_with_opa_authorizer(opa: MockServer) -> OpaFixture {
         krabka_units::secs(5),
     )
     .expect("OpaAuthorizer::new must succeed inside a tokio runtime");
-    cfg.authorizer = std::sync::Arc::new(authorizer);
+    cfg.authorizer = Arc::new(authorizer);
 
     let (handle, dir, addr) = Box::pin(start_broker(cfg, log_dir)).await;
     OpaFixture {
@@ -152,7 +149,7 @@ async fn create_topic_as_admin(addr: SocketAddr, name: &str) {
         .addr(addr)
         .client_id(CLIENT_ID)
         .topic(ConfiguredTopicSetup {
-            name: name.to_string(),
+            name: name.to_owned(),
             ..Default::default()
         })
         .call()

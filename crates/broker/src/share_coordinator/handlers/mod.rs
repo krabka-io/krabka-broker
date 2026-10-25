@@ -10,11 +10,11 @@
 //! connection. A broker that calls them needs that grant, or super-user
 //! status.
 
-pub(crate) mod delete;
-pub(crate) mod initialize;
-pub(crate) mod read;
-pub(crate) mod read_summary;
-pub(crate) mod write;
+pub mod delete;
+pub mod initialize;
+pub mod read;
+pub mod read_summary;
+pub mod write;
 
 #[cfg(test)]
 mod authorization_tests;
@@ -67,7 +67,7 @@ fn cluster_action_denied(broker: &Broker, ctx: &RequestContext<'_>) -> bool {
 }
 
 #[cfg(test)]
-pub(crate) mod test_support {
+pub mod test_support {
     use {
         crate::{
             broker::Broker,
@@ -93,16 +93,17 @@ pub(crate) mod test_support {
         krabka_protocol::{
             UnknownTaggedFields,
             owned::{
-                delete_share_group_state_response, initialize_share_group_state_response,
-                read_share_group_state_response, read_share_group_state_summary_response,
-                write_share_group_state_response,
+                create_topics_request::CreateTopicsRequest, delete_share_group_state_response,
+                initialize_share_group_state_response, read_share_group_state_response,
+                read_share_group_state_summary_response, write_share_group_state_response,
             },
             primitives::uuid::Uuid as ProtoUuid,
         },
-        std::{fmt::Debug, path::Path, sync::Arc},
+        std::{fmt::Debug, path::Path, sync::Arc, time::Duration},
+        tokio::time::{sleep, timeout},
     };
 
-    pub(crate) fn batch(bounds: std::ops::RangeInclusive<Offset>) -> StateBatch {
+    pub fn batch(bounds: std::ops::RangeInclusive<Offset>) -> StateBatch {
         state_batch()
             .bounds(bounds)
             .delivery(FixtureDeliveryState::Acknowledged)
@@ -110,7 +111,7 @@ pub(crate) mod test_support {
             .call()
     }
 
-    pub(crate) fn open_all_state_partitions(
+    pub fn open_all_state_partitions(
         registry: &PartitionRegistry,
         log_dir: &Path,
         num_partitions: i32,
@@ -120,13 +121,13 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) fn coordinator(log_dir: &Path) -> Arc<ShareCoordinator> {
+    pub fn coordinator(log_dir: &Path) -> Arc<ShareCoordinator> {
         coordinator_with(log_dir, ShareCoordinatorConfig::default())
     }
 
     /// [`coordinator`] with `config`, for a test of a rule that Kafka trunk
     /// added to the share coordinator.
-    pub(crate) fn coordinator_with(
+    pub fn coordinator_with(
         log_dir: &Path,
         config: ShareCoordinatorConfig,
     ) -> Arc<ShareCoordinator> {
@@ -143,7 +144,7 @@ pub(crate) mod test_support {
     use crate::test_support::PartitionCount;
 
     #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-    pub(crate) struct StateFixtureSetup {
+    pub struct StateFixtureSetup {
         #[default(uuid::Uuid::from_bytes([33; 16]))]
         pub topic: uuid::Uuid,
         #[default(PartitionCount(1))]
@@ -154,14 +155,14 @@ pub(crate) mod test_support {
     }
 
     /// A coordinator and the metadata image it runs over.
-    pub(crate) struct StateFixture {
+    pub struct StateFixture {
         pub coordinator: Arc<ShareCoordinator>,
         pub image: krabka_metadata::MetadataImage,
     }
 
     /// A led coordinator with partition state at epoch 17 and start offset 90.
     #[bon::builder]
-    pub(crate) async fn initialized_state(
+    pub async fn initialized_state(
         log_dir: &Path,
         #[builder(default = uuid :: Uuid :: from_bytes ([33 ; 16]))] topic: uuid::Uuid,
         #[builder(into, default = PartitionCount (1))] partitions: PartitionCount,
@@ -207,7 +208,7 @@ pub(crate) mod test_support {
         StateFixture { coordinator, image }
     }
 
-    pub(crate) async fn retain_leadership(coordinator: &Arc<ShareCoordinator>, led: bool) {
+    pub async fn retain_leadership(coordinator: &Arc<ShareCoordinator>, led: bool) {
         if !led {
             coordinator
                 .refresh_leader_partitions(&krabka_metadata::MetadataImage::default())
@@ -218,7 +219,7 @@ pub(crate) mod test_support {
     }
 
     /// One external response's associated topic and partition row schemas.
-    pub(crate) trait StateReply: Sized {
+    pub trait StateReply: Sized {
         type Partition;
         type Topic;
         fn topic(topic: ProtoUuid, partitions: Vec<Self::Partition>) -> Self::Topic;
@@ -234,16 +235,13 @@ pub(crate) mod test_support {
         read_share_group_state_summary_response::ReadShareGroupStateSummaryResponse => read_share_group_state_summary_response::ReadStateSummaryResult, read_share_group_state_summary_response::PartitionResult;
     }
 
-    pub(crate) fn state_response<R: StateReply>(
-        topic: ProtoUuid,
-        partitions: Vec<R::Partition>,
-    ) -> R {
+    pub fn state_response<R: StateReply>(topic: ProtoUuid, partitions: Vec<R::Partition>) -> R {
         R::from_results(vec![R::topic(topic, partitions)])
     }
 
     /// The keyed write-RPC response fields, with explicit caller-selected default topic.
     #[derive(Clone, Copy, Default)]
-    pub(crate) struct StateResponseSetup<'a> {
+    pub struct StateResponseSetup<'a> {
         pub(crate) topic: uuid::Uuid,
         pub(crate) partition: PartitionIndex,
         pub(crate) code: KafkaErrorCode,
@@ -267,14 +265,14 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) struct StoredStateRow<Q, R> {
+    pub struct StoredStateRow<Q, R> {
         pub(crate) led: bool,
         pub(crate) request: Q,
         pub(crate) expected: R,
     }
 
     /// The three empty request shapes that every read RPC answers with no rows.
-    pub(crate) struct EmptyStateRequests<Q> {
+    pub struct EmptyStateRequests<Q> {
         pub(crate) group: Q,
         pub(crate) partitions: Q,
         pub(crate) topics: Q,
@@ -303,7 +301,7 @@ pub(crate) mod test_support {
     }
 
     /// Check read operations sequentially against each independently supplied complete response.
-    pub(crate) async fn check_stored_rows<Q, R: PartialEq + Debug>(
+    pub async fn check_stored_rows<Q, R: PartialEq + Debug>(
         rows: impl IntoIterator<Item = StoredStateRow<Q, R>>,
         topic: uuid::Uuid,
         partitions: i32,
@@ -333,14 +331,14 @@ pub(crate) mod test_support {
     /// A test must not seed the leadership by hand on a live broker: the
     /// metadata reconcile loop applies the image again at any time, and an
     /// image without the topic drops every led partition.
-    pub(crate) async fn lead_share_state_partitions(broker: &Broker) {
+    pub async fn lead_share_state_partitions(broker: &Broker) {
         use crate::{
             auto_topic_creation::creatable_topic,
             codes::{NONE, TOPIC_ALREADY_EXISTS},
         };
 
         let partitions = broker.config.share_coordinator.state_topic_num_partitions;
-        let request = krabka_protocol::owned::create_topics_request::CreateTopicsRequest {
+        let request = CreateTopicsRequest {
             topics: vec![creatable_topic(&broker.config, bootstrap::TOPIC)],
             ..Default::default()
         };
@@ -354,7 +352,7 @@ pub(crate) mod test_support {
                 "create __share_group_state: {row:?}"
             );
         }
-        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        timeout(Duration::from_secs(30), async {
             loop {
                 broker
                     .share_coordinator
@@ -373,7 +371,7 @@ pub(crate) mod test_support {
                 if active {
                     return;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                sleep(Duration::from_millis(10)).await;
             }
         })
         .await

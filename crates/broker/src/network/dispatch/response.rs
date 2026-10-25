@@ -19,6 +19,8 @@ use {
     bytes::{BufMut, Bytes, BytesMut},
     krabka_protocol::api_key::ApiKey,
     krabka_units::{Time, convert::TimeExt},
+    tokio::io::AsyncWrite,
+    tokio_util::codec::Framed,
 };
 
 /// A framed response together with the KIP-219 window the connection must
@@ -51,8 +53,8 @@ impl ThrottledResponse {
 }
 
 /// Write before enforcing the window, and close on exactly the same framing failure.
-pub(super) async fn send_throttled_response<S: tokio::io::AsyncWrite + Unpin>(
-    framed: &mut tokio_util::codec::Framed<S, KafkaCodec>,
+pub(super) async fn send_throttled_response<S: AsyncWrite + Unpin>(
+    framed: &mut Framed<S, KafkaCodec>,
     response: ThrottledResponse,
 ) -> super::AfterResponse {
     use futures_util::SinkExt as _;
@@ -153,7 +155,7 @@ fn set_buried_throttle(
     };
 
     let header_len = response_header_len(api_key, shape.body_flexible);
-    let Some(body) = response_bytes.get(header_len..) else {
+    let Some((header, body)) = response_bytes.split_at_checked(header_len) else {
         return response_bytes;
     };
     let version = shape.version;
@@ -192,7 +194,7 @@ fn set_buried_throttle(
         return response_bytes;
     };
     let mut out = BytesMut::with_capacity(header_len + reencoded.len());
-    out.put_slice(&response_bytes[..header_len]);
+    out.put_slice(header);
     out.put_slice(&reencoded);
     out.freeze()
 }
@@ -434,9 +436,13 @@ fn patch_leading_throttle(
         return resp;
     }
     let mut buf = BytesMut::from(resp.as_ref());
-    let existing = i32::from_be_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
-    let patched = existing.max(delay_ms);
-    buf[off..off + 4].copy_from_slice(&patched.to_be_bytes());
+    let Some(field) = buf.get_mut(off..off + 4) else {
+        return resp;
+    };
+    let Ok(existing) = <[u8; 4]>::try_from(&*field).map(i32::from_be_bytes) else {
+        return resp;
+    };
+    field.copy_from_slice(&existing.max(delay_ms).to_be_bytes());
     buf.freeze()
 }
 

@@ -4,13 +4,15 @@
 //! `String.hashCode` and `Utils.abs`. This adapter delegates those operations
 //! and the partition modulo to the verified kernel.
 
+use krabka_verified::broker::java_string_hash_partition;
+
 /// Checked form of [`partition_for_tid`].
 ///
 /// Returns `None` when `num_partitions` is not positive.
 #[must_use]
 pub fn try_partition_for_tid(transactional_id: &str, num_partitions: i32) -> Option<i32> {
     let utf16: Vec<u16> = transactional_id.encode_utf16().collect();
-    krabka_verified::broker::java_string_hash_partition(&utf16, num_partitions)
+    java_string_hash_partition(&utf16, num_partitions)
 }
 
 /// Map a `transactional_id` to a partition index in `__transaction_state`.

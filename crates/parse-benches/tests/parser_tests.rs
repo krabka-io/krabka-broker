@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use {
     assert2::assert,
     krabka_parse_benches::{
@@ -16,7 +18,7 @@ use {
 };
 
 // Representative 29-metric log engine output fixture matching Criterion bencher format (space-padded, no commas)
-const SAMPLE_CRITERION_BENCHER_OUTPUT: &str = r"
+const SAMPLE_CRITERION_BENCHER_OUTPUT: &str = "
 running 29 tests
 test log/append/1rec_64B ... bench:        2225 ns/iter (+/- 8)
 test log/append/10rec_64B ... bench:        5845 ns/iter (+/- 151)
@@ -271,10 +273,10 @@ fn runs_end_to_end_writing_valid_json() {
     let out_json = results_dir.join("broker-benchmarks.json");
 
     let args = Args {
-        results_dir: results_dir.clone(),
+        results_dir,
         output: Some(out_json.clone()),
-        suite: "krabka-broker".to_string(),
-        commit: Some("deadbeef999".to_string()),
+        suite: "krabka-broker".to_owned(),
+        commit: Some("deadbeef999".to_owned()),
         reference_dir: None,
         candidate_dir: None,
         executables: None,
@@ -299,10 +301,10 @@ fn repeated_summaries(values: &[f64], commit: &str) -> Vec<BenchmarkSummary> {
     values
         .iter()
         .map(|value| BenchmarkSummary {
-            suite: "test".to_string(),
-            commit: commit.to_string(),
-            timestamp: "2026-09-09T00:00:00Z".to_string(),
-            benchmarks: BTreeMap::from([("hot/path".to_string(), BenchmarkMetric {
+            suite: "test".to_owned(),
+            commit: commit.to_owned(),
+            timestamp: "2026-09-09T00:00:00Z".to_owned(),
+            benchmarks: BTreeMap::from([("hot/path".to_owned(), BenchmarkMetric {
                 ns_per_iter: *value,
                 variance_ns: 1.0,
             })]),
@@ -314,7 +316,7 @@ fn repeated_summaries(values: &[f64], commit: &str) -> Vec<BenchmarkSummary> {
 /// A recorded executable in a target directory named after `side`.
 fn executable(side: &str) -> BenchExecutable {
     BenchExecutable {
-        target: "hot".to_string(),
+        target: "hot".to_owned(),
         path: PathBuf::from(format!("/target-{side}/release/deps/hot-0123")),
         sha256: format!("digest-{side}"),
     }

@@ -9,6 +9,7 @@ use {
     crate::{
         auto_topic_creation::creatable_topic,
         broker::Broker,
+        codes,
         config::BrokerConfig,
         coordinator::GroupCoordinator,
         handlers::create_topics,
@@ -25,7 +26,7 @@ use {
     krabka_ids::PartitionIndex,
     krabka_metadata::{MetadataRecord, TopicRecord},
     krabka_protocol::owned::create_topics_request::CreateTopicsRequest,
-    std::sync::Arc,
+    std::{collections::BTreeMap, sync::Arc},
     tempfile::tempdir,
 };
 
@@ -190,7 +191,7 @@ async fn internal_topics_are_created_with_kafkas_topic_configs() {
         .await
         .expect("the controller answers CreateTopics");
     for row in &response.topics {
-        assert!(row.error_code == crate::codes::NONE, "create: {row:?}");
+        assert!(row.error_code == codes::NONE, "create: {row:?}");
     }
 
     let image = handle.controller_image_for_test();
@@ -215,7 +216,7 @@ async fn internal_topics_are_created_with_kafkas_topic_configs() {
             ("segment.bytes", "104857600"),
         ]),
     ] {
-        let expected: std::collections::BTreeMap<String, String> = expected
+        let expected: BTreeMap<String, String> = expected
             .into_iter()
             .map(|(key, value)| (key.to_owned(), value.to_owned()))
             .collect();

@@ -20,47 +20,52 @@ use {
     krabka_protocol::{
         owned::fetch_response::{EpochEndOffset, LeaderIdAndEpoch, PartitionData},
         primitives::uuid::Uuid as WireUuid,
+        records::RecordsPayload,
     },
-    std::sync::Arc,
+    std::{
+        collections::HashSet,
+        sync::{Arc, PoisonError, atomic},
+        time::{Duration, Instant},
+    },
 };
 
 /// Resolved read for a single requested (topic, partition) tuple.
 ///
 /// The handler keeps it so that it can read again after a long-poll wake.
-pub(crate) struct PendingRead {
-    pub(crate) topic_name: Arc<str>,
-    pub(crate) topic_id: WireUuid,
-    pub(crate) partition_index: i32,
+pub struct PendingRead {
+    pub topic_name: Arc<str>,
+    pub topic_id: WireUuid,
+    pub partition_index: i32,
     /// Epoch the follower supplied with the original Fetch request.
-    pub(crate) current_leader_epoch: i32,
+    pub current_leader_epoch: i32,
     /// Epoch of the follower's last fetched record.
-    pub(crate) last_fetched_epoch: i32,
-    pub(crate) fetch_offset: i64,
-    pub(crate) max_bytes: i32,
+    pub last_fetched_epoch: i32,
+    pub fetch_offset: i64,
+    pub max_bytes: i32,
     /// `true` when `isolation_level == 1` on a consumer fetch, and not on a
     /// follower fetch. It causes batch-level LSO filtering and fills
     /// `aborted_transactions` in the response.
-    pub(crate) read_committed: bool,
+    pub read_committed: bool,
     /// `true` when `replica_id >= 0`, that is, when the request comes from a
     /// follower replicator and not from a consumer. Follower fetches see all
     /// records up to LEO and report the leader's HW and LSO, as consumer
     /// fetches do. The handler clamps consumer fetches at HW.
-    pub(crate) is_follower_fetch: bool,
+    pub is_follower_fetch: bool,
     /// `true` when only the partition leader may serve this fetch. Kafka's
     /// `FetchParams.fetchOnlyLeader` is true for a follower fetch, and for a
     /// consumer fetch that carries no client metadata, which is every
     /// consumer fetch below v11. A long-poll wake checks leadership again.
-    pub(crate) fetch_only_leader: bool,
+    pub fetch_only_leader: bool,
     /// What the leader records of the follower once the first read of this
     /// row succeeds. `None` on a consumer fetch, and on a row that is never
     /// read. See [`Partition::record_follower_position`].
-    pub(crate) follower_position: Option<FollowerRead>,
+    pub follower_position: Option<FollowerRead>,
     /// `None` for an unknown topic or partition, or for an out-of-range
     /// offset. The final response is already complete, and the handler does
     /// not read it again on a wake.
-    pub(crate) partition: Option<Arc<Partition>>,
+    pub partition: Option<Arc<Partition>>,
     /// Per-partition output. `do_read` mutates it in place.
-    pub(crate) out: PartitionData,
+    pub out: PartitionData,
     /// Accumulator for the microseconds spent in this partition's `do_read`
     /// calls. It covers the first pass and every long-poll re-read. The
     /// handler measures an `Instant` elapsed delta around each `do_read`. The
@@ -68,7 +73,7 @@ pub(crate) struct PendingRead {
     /// and allocates no `tokio_metrics::TaskMonitor` per partition per fetch.
     /// The response-emit loop drains it into its
     /// `record_partition_cpu_micros` call.
-    pub(crate) cpu_micros: u64,
+    pub cpu_micros: u64,
 }
 
 impl PendingRead {
@@ -101,10 +106,10 @@ impl PendingRead {
 
 /// A follower observation and its Fetch-only quota decision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FollowerRead {
-    pub(crate) position: FollowerPosition,
+pub struct FollowerRead {
+    pub position: FollowerPosition,
     /// Whether this replica is on the leader's throttled list and outside its ISR.
-    pub(crate) leader_throttled: bool,
+    pub leader_throttled: bool,
 }
 
 /// Chooses a preferred read replica, or `-1` for "read from the leader".
@@ -130,13 +135,12 @@ async fn preferred_read_replica(
     let Some(record) = image.partition(topic, partition_index) else {
         return -1;
     };
-    let isr: std::collections::HashSet<krabka_metadata::NodeId> =
-        record.isr.iter().copied().collect();
+    let isr: HashSet<krabka_metadata::NodeId> = record.isr.iter().copied().collect();
     // The leader's own view is its log end and zero time since caught up, as
     // Kafka builds it. Read before the replica state lock, so the log's
     // mutex is never taken under it.
     let leader_log_end = partition.log_end_offset();
-    let now = std::time::Instant::now();
+    let now = Instant::now();
     let replicas: Vec<ReplicaView> = {
         let state = partition.replica_state.lock().await;
         record
@@ -157,9 +161,8 @@ async fn preferred_read_replica(
                     in_isr: isr.contains(&node_id),
                     is_witness: resolve_broker_witness(image, node_id),
                     log_end_offset: log_end_offset.0,
-                    time_since_caught_up: last_caught_up.map_or(std::time::Duration::MAX, |at| {
-                        now.saturating_duration_since(at)
-                    }),
+                    time_since_caught_up: last_caught_up
+                        .map_or(Duration::MAX, |at| now.saturating_duration_since(at)),
                 }
             })
             .collect()
@@ -189,9 +192,10 @@ struct OffsetSnapshot {
 /// first.
 async fn preferred_replica_snapshot(partition: &Partition) -> OffsetSnapshot {
     let hw = partition.high_watermark().await;
-    let mut log = partition.log.lock().expect("log mutex poisoned");
+    let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
     let log_start = log.reported_log_start();
     let last_stable_offset = log.last_stable_offset(hw);
+    drop(log);
     OffsetSnapshot {
         high_watermark: hw.0,
         last_stable_offset: last_stable_offset.0,
@@ -225,9 +229,7 @@ pub(super) fn refused_read(partition_index: i32, error_code: i16) -> PartitionDa
         log_start_offset: -1,
         aborted_transactions: None,
         preferred_read_replica: -1,
-        records: Some(krabka_protocol::records::RecordsPayload::Raw(
-            bytes::Bytes::new(),
-        )),
+        records: Some(RecordsPayload::Raw(bytes::Bytes::new())),
         ..Default::default()
     }
 }
@@ -273,10 +275,7 @@ pub(super) fn leader_refusal(
     required_leader: Option<krabka_metadata::NodeId>,
 ) -> Option<PartitionData> {
     let node_id = required_leader?;
-    let installed = partition
-        .current_leader
-        .load(std::sync::atomic::Ordering::Acquire)
-        == node_id.0;
+    let installed = partition.current_leader.load(atomic::Ordering::Acquire) == node_id.0;
     let committed_elsewhere = image
         .partition(topic, partition_index)
         .is_some_and(|record| record.leader != node_id);
@@ -380,7 +379,7 @@ pub(super) async fn apply_epoch_checks(
     // high watermark, `min(LSO, HW)` and log start, as every Fetch row does.
     let high_watermark = partition.high_watermark().await;
     let (log_start_offset, established_log_start, found_epoch, end_offset, last_stable_offset) = {
-        let mut log = partition.log.lock().expect("log mutex poisoned");
+        let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
         let (found_epoch, end_offset) = log.epoch_checkpoint().epoch_and_offset_for(
             LeaderEpoch(request.last_fetched_epoch),
             log.log_end_offset(),
@@ -741,16 +740,12 @@ pub(super) async fn plan_partition_read(
     }
     // Kafka's `ReplicaManager.findPreferredReadReplica` names a read replica
     // only on the leader.
-    let leads = partition.as_ref().is_some_and(|partition| {
-        partition
-            .current_leader
-            .load(std::sync::atomic::Ordering::Acquire)
-            == node_id.0
-    });
-    if !context.mode.is_follower_fetch && leads {
-        let leader_partition = partition
-            .as_ref()
-            .expect("`leads` implies a local partition");
+    let leader_partition = partition
+        .as_ref()
+        .filter(|partition| partition.current_leader.load(atomic::Ordering::Acquire) == node_id.0);
+    if !context.mode.is_follower_fetch
+        && let Some(leader_partition) = leader_partition
+    {
         output.preferred_read_replica = preferred_read_replica(
             context.broker,
             context.image,
@@ -771,9 +766,7 @@ pub(super) async fn plan_partition_read(
             output.high_watermark = snapshot.high_watermark;
             output.last_stable_offset = snapshot.last_stable_offset;
             output.log_start_offset = snapshot.log_start_offset;
-            output.records = Some(krabka_protocol::records::RecordsPayload::Raw(
-                bytes::Bytes::new(),
-            ));
+            output.records = Some(RecordsPayload::Raw(bytes::Bytes::new()));
             return PlannedRead {
                 slot: ResponseSlot::Read,
                 read: PendingRead {
@@ -792,6 +785,9 @@ pub(super) async fn plan_partition_read(
             };
         }
     }
+    // The leader checks are done: the replication-target guard held through
+    // them is released here, with the read planned.
+    drop(transition);
     PlannedRead {
         slot: ResponseSlot::Read,
         read: PendingRead {
@@ -910,7 +906,7 @@ mod tests {
         assert2::assert,
         krabka_ids::PartitionIndex,
         krabka_log::{Log, LogConfig},
-        std::sync::Arc,
+        std::{collections::HashSet, fs, path::Path, sync::Arc, time::Instant},
     };
 
     /// A three-site image: node 1 leads `orders` from `dc-a`, node 2 replicates
@@ -978,23 +974,23 @@ mod tests {
         let broker_handle = Broker::start(config).await.expect("start broker");
         let broker = broker_handle.broker_arc_for_test();
         let part_dir = dir.path().join(format!("{TOPIC}-0"));
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        fs::create_dir_all(&part_dir).expect("partition dir");
         broker.partitions.insert(
             TOPIC.into(),
             PartitionIndex(0),
             spawn_partition(
-                TOPIC.to_string(),
+                TOPIC.to_owned(),
                 PartitionIndex(0),
                 dir.path().to_path_buf(),
                 Log::open(&part_dir, LogConfig::default()).expect("open partition log"),
                 broker.log_dir_status.clone(),
-                broker.producer_state.clone(),
+                Arc::clone(&broker.producer_state),
                 false,
             ),
         );
         let image = broker.controller.current_image();
         let consumer = super::FetchAuthorization::Consumer {
-            denied_topics: std::collections::HashSet::new(),
+            denied_topics: HashSet::new(),
         };
         let request = super::EffectivePartition {
             partition: 0,
@@ -1098,13 +1094,13 @@ mod tests {
                     &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
                     &[krabka_raft::NodeId(1), krabka_raft::NodeId(2)],
                     krabka_raft::NodeId(1),
-                    std::time::Instant::now(),
+                    Instant::now(),
                 );
                 state.update_follower_leo(
                     krabka_raft::NodeId(2),
                     super::Offset(follower_leo),
                     super::Offset(follower_leo.max(fetch_offset)),
-                    std::time::Instant::now(),
+                    Instant::now(),
                 );
                 state.record_follower_log_start(
                     krabka_raft::NodeId(2),
@@ -1136,14 +1132,14 @@ mod tests {
         rack.broker.partitions.insert(
             "orders".into(),
             PartitionIndex(0),
-            std::sync::Arc::clone(&rack.partition),
+            Arc::clone(&rack.partition),
         );
         rack.partition
             .install_replication_target(None, rack.broker.config.node_id.0, 0)
             .await;
         let image = stretch_image(&[]);
         let consumer = super::FetchAuthorization::Consumer {
-            denied_topics: std::collections::HashSet::new(),
+            denied_topics: HashSet::new(),
         };
         let context = super::PendingPlanContext {
             broker: &rack.broker,
@@ -1177,7 +1173,7 @@ mod tests {
         .await;
 
         assert!(read.out.preferred_read_replica == 2);
-        assert!(read.out.error_code == crate::codes::NONE);
+        assert!(read.out.error_code == NONE);
         assert!(
             matches!(read.out.records, Some(ref r) if r.payload_len() == 0),
             "empty records, not absent ones: {:?}",
@@ -1246,14 +1242,11 @@ mod tests {
         );
     }
 
-    fn epoch_checks_partition(dir: &std::path::Path) -> Arc<Partition> {
+    fn epoch_checks_partition(dir: &Path) -> Arc<Partition> {
         epoch_checks_partition_with_storage(dir, StorageMode::Local)
     }
 
-    fn epoch_checks_partition_with_storage(
-        dir: &std::path::Path,
-        storage: StorageMode,
-    ) -> Arc<Partition> {
+    fn epoch_checks_partition_with_storage(dir: &Path, storage: StorageMode) -> Arc<Partition> {
         spawn_standalone_partition()
             .log_dir(dir)
             .log(Log::open(dir, LogConfig::default()).expect("open partition log"))
@@ -1263,7 +1256,7 @@ mod tests {
     }
 
     /// Epochs 0, 1 and 2 of two records each, with the log start moved to 5.
-    fn trimmed_partition(dir: &std::path::Path, storage: StorageMode) -> Arc<Partition> {
+    fn trimmed_partition(dir: &Path, storage: StorageMode) -> Arc<Partition> {
         let partition = epoch_checks_partition_with_storage(dir, storage);
         {
             let mut log = partition.log.lock().expect("log mutex poisoned");

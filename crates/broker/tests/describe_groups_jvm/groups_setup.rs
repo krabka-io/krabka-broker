@@ -11,10 +11,13 @@ use {
         groups_docker::{docker_logs, exec, exec_detached},
     },
     assert2::assert,
-    std::time::{Duration, Instant},
+    std::{
+        thread,
+        time::{Duration, Instant},
+    },
 };
 
-pub(crate) fn wait_for_broker(api_versions_tool: &str) {
+pub fn wait_for_broker(api_versions_tool: &str) {
     let deadline = Instant::now() + Duration::from_mins(2);
     while Instant::now() < deadline {
         if exec(&[api_versions_tool, "--bootstrap-server", "localhost:9092"])
@@ -25,7 +28,7 @@ pub(crate) fn wait_for_broker(api_versions_tool: &str) {
             return;
         }
         // intentional: polls the external JVM cp-kafka container via its admin CLI; no in-process krabka metric/image to await.
-        std::thread::sleep(Duration::from_secs(2));
+        thread::sleep(Duration::from_secs(2));
     }
     panic!(
         "Kafka never became ready within 120s.\ncontainer logs:\n{}",
@@ -56,7 +59,7 @@ fn wait_for_group_stable(group: &str, consumer_groups_tool: &str) {
             return;
         }
         // intentional: polls the external JVM broker's group state via kafka-consumer-groups; no in-process krabka metric/image to await.
-        std::thread::sleep(Duration::from_secs(2));
+        thread::sleep(Duration::from_secs(2));
     }
     panic!(
         "group {group} never reached Stable within 60s.\nlast --state:\n{last}\nlogs:\n{}",
@@ -64,7 +67,7 @@ fn wait_for_group_stable(group: &str, consumer_groups_tool: &str) {
     );
 }
 
-pub(crate) fn prepare_classic_groups() {
+pub fn prepare_classic_groups() {
     prepare_topic("kafka-topics", "kafka-console-producer");
     exec_detached(&format!(
         "kafka-console-consumer --bootstrap-server localhost:9092 --topic {TOPIC} --group {GROUP} \
@@ -92,7 +95,7 @@ pub(crate) fn prepare_classic_groups() {
     );
 }
 
-pub(crate) fn prepare_next_gen_group() {
+pub fn prepare_next_gen_group() {
     prepare_topic(
         "/opt/kafka/bin/kafka-topics.sh",
         "/opt/kafka/bin/kafka-console-producer.sh",

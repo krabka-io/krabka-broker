@@ -12,19 +12,23 @@ use {
     krabka_remote_storage_topic::{KeyedEvent, MetadataEventLog, PartitionStart},
     std::{
         collections::HashMap,
+        num::NonZeroU32,
         sync::{
-            Arc, Mutex as StdMutex, Weak,
+            Arc, Mutex as StdMutex, PoisonError, Weak,
             atomic::{AtomicBool, Ordering},
         },
         time::Duration,
     },
-    tokio::sync::{Mutex, OwnedMutexGuard, watch},
+    tokio::{
+        sync::{Mutex, OwnedMutexGuard, watch},
+        time,
+    },
 };
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 
-pub(crate) const DISKLESS_WAL_INDEX_TOPIC: &str = "__diskless_wal_index";
+pub const DISKLESS_WAL_INDEX_TOPIC: &str = "__diskless_wal_index";
 
 /// How far the pump has walked the replay it started with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +43,7 @@ struct ReplayProgress {
 }
 
 #[derive(Clone)]
-pub(crate) struct DisklessIndexLog {
+pub struct DisklessIndexLog {
     log: Arc<dyn MetadataEventLog>,
     cache: Arc<Mutex<WalIndexCache>>,
     progress: watch::Receiver<ReplayProgress>,
@@ -91,7 +95,9 @@ impl DisklessIndexLog {
             .map_err(|error| BrokerError::Txn(format!("diskless index end offsets: {error}")))?;
         let mut pending = HashMap::new();
         for partition in 0..log.partition_count() {
-            let index = usize::try_from(partition).expect("partition non-negative");
+            let index = usize::try_from(partition).map_err(|_| {
+                BrokerError::Txn(format!("diskless index partition {partition} is negative"))
+            })?;
             if high_water_marks.get(index).copied().unwrap_or(0) == 0 {
                 continue;
             }
@@ -115,7 +121,7 @@ impl DisklessIndexLog {
         let (applied_tx, applied_rx) = watch::channel(0u64);
         let valid = Arc::new(AtomicBool::new(true));
 
-        let pump_cache = cache.clone();
+        let pump_cache = Arc::clone(&cache);
         let pump_valid = Arc::clone(&valid);
         let object_fences = Arc::new(StdMutex::new(ObjectFences::default()));
         let pump_object_fences = Arc::clone(&object_fences);
@@ -256,7 +262,7 @@ impl DisklessIndexLog {
             if state.caught_up {
                 return true;
             }
-            match tokio::time::timeout(stall_timeout, progress.changed()).await {
+            match time::timeout(stall_timeout, progress.changed()).await {
                 Ok(Ok(())) => {}
                 Ok(Err(_)) | Err(_) => return false,
             }
@@ -264,7 +270,7 @@ impl DisklessIndexLog {
     }
 
     #[must_use]
-    pub(crate) fn cache(&self) -> Arc<Mutex<WalIndexCache>> { self.cache.clone() }
+    pub(crate) fn cache(&self) -> Arc<Mutex<WalIndexCache>> { Arc::clone(&self.cache) }
 
     /// Fence a projection addition against reclamation of `object_key`.
     ///
@@ -294,7 +300,7 @@ impl DisklessIndexLog {
         timeout: Duration,
     ) -> bool {
         let mut applied = self.applied.clone();
-        tokio::time::timeout(timeout, async {
+        time::timeout(timeout, async {
             loop {
                 if self.cache.lock().await.contains_record(record) {
                     return true;
@@ -337,7 +343,7 @@ impl DisklessIndexLog {
                 .to_bytes()
                 .map_err(BrokerError::Txn)?;
                 Ok(KeyedEvent {
-                    partition: index_partition(&key, partitions),
+                    partition: index_partition(&key, partitions)?,
                     key,
                     event: Some(event),
                 })
@@ -346,15 +352,20 @@ impl DisklessIndexLog {
         let mut offsets = vec![-1; events.len()];
         for wave in publication_waves(&record.entries) {
             for group in wave.chunks(INDEX_PUBLISH_GROUP_MAX) {
-                let published = self
-                    .log
-                    .publish_keyed_group(group.iter().map(|&index| events[index].clone()).collect())
-                    .await
-                    .map_err(|error| {
-                        BrokerError::Txn(format!("diskless index publish: {error}"))
+                let batch = group
+                    .iter()
+                    .map(|&index| events.get(index).cloned())
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| {
+                        BrokerError::Txn("diskless index publication wave is out of range".into())
                     })?;
+                let published = self.log.publish_keyed_group(batch).await.map_err(|error| {
+                    BrokerError::Txn(format!("diskless index publish: {error}"))
+                })?;
                 for (&index, offset) in group.iter().zip(published) {
-                    offsets[index] = offset;
+                    if let Some(slot) = offsets.get_mut(index) {
+                        *slot = offset;
+                    }
                 }
             }
         }
@@ -393,7 +404,7 @@ impl DisklessIndexLog {
         let key_bytes = key.to_bytes();
         self.log
             .publish_keyed(
-                index_partition(&key_bytes, self.log.partition_count()),
+                index_partition(&key_bytes, self.log.partition_count())?,
                 key_bytes,
                 Some(bytes),
             )
@@ -401,7 +412,7 @@ impl DisklessIndexLog {
             .map_err(|error| BrokerError::Txn(format!("diskless delete floor publish: {error}")))?;
 
         let mut applied = self.applied.clone();
-        tokio::time::timeout(timeout, async {
+        time::timeout(timeout, async {
             loop {
                 if self.cache.lock().await.delete_floor(topic_id, partition) >= floor {
                     return true;
@@ -420,7 +431,7 @@ impl DisklessIndexLog {
     async fn publish_tombstone(&self, bytes: Bytes, context: &str) -> Result<(), BrokerError> {
         self.log
             .publish_keyed(
-                index_partition(&bytes, self.log.partition_count()),
+                index_partition(&bytes, self.log.partition_count())?,
                 bytes,
                 None,
             )
@@ -500,7 +511,7 @@ async fn lock_object_fence(
 ) -> OwnedMutexGuard<()> {
     let fence = fences
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .get(object_key);
     fence.lock_owned().await
 }
@@ -551,12 +562,17 @@ fn publication_waves(entries: &[WalIndexEntry]) -> Vec<Vec<usize>> {
     waves
 }
 
-fn index_partition(key: &[u8], partitions: i32) -> i32 {
+fn index_partition(key: &[u8], partitions: i32) -> Result<i32, BrokerError> {
     let hash = key.iter().copied().fold(0u32, |acc, byte| {
         acc.wrapping_mul(31).wrapping_add(u32::from(byte))
     });
-    i32::try_from(hash % u32::try_from(partitions).expect("positive partition count"))
-        .expect("index partition fits i32")
+    let partitions = u32::try_from(partitions)
+        .ok()
+        .and_then(NonZeroU32::new)
+        .ok_or_else(|| BrokerError::Txn("diskless index topic has no partitions".into()))?;
+    // The remainder is below `partitions`, which came from an `i32`.
+    i32::try_from(hash % partitions)
+        .map_err(|_| BrokerError::Txn("diskless index partition exceeds i32".into()))
 }
 
 #[cfg(test)]
@@ -577,7 +593,7 @@ mod tests {
             MetadataLogError, PartitionStart,
         },
         std::sync::atomic::{AtomicBool, Ordering},
-        tokio::time::timeout,
+        tokio::{task, time::timeout},
         uuid::Uuid,
     };
 
@@ -707,18 +723,22 @@ mod tests {
     async fn two_range_backlog(partitions: i32) -> Backlog {
         let event_log = InProcessMetadataEventLog::new(partitions);
         let topic_id = Uuid::from_u128(7);
-        let seed = seeded_index(event_log.clone(), topic_id, &[
-            SeededRange {
-                object_key: "object-a",
-                first_offset: 0,
-                last_offset: 3,
-            },
-            SeededRange {
-                object_key: "object-b",
-                first_offset: 4,
-                last_offset: 7,
-            },
-        ])
+        let seed = seeded_index(
+            Arc::<InProcessMetadataEventLog>::clone(&event_log),
+            topic_id,
+            &[
+                SeededRange {
+                    object_key: "object-a",
+                    first_offset: 0,
+                    last_offset: 3,
+                },
+                SeededRange {
+                    object_key: "object-b",
+                    first_offset: 4,
+                    last_offset: 7,
+                },
+            ],
+        )
         .await;
         Backlog {
             event_log,
@@ -782,7 +802,7 @@ mod tests {
         let metrics = BrokerMetrics::new();
         let failures = metrics.diskless_wal_index_decode_failures_total.clone();
         let cache = Arc::new(Mutex::new(WalIndexCache::default()));
-        let index = DisklessIndexLog::start_with_cache(event_log, cache.clone(), metrics)
+        let index = DisklessIndexLog::start_with_cache(event_log, Arc::clone(&cache), metrics)
             .await
             .unwrap();
 
@@ -849,11 +869,15 @@ mod tests {
     #[tokio::test]
     async fn catch_up_gives_up_when_the_replay_stops_making_progress() {
         let event_log = InProcessMetadataEventLog::new(1);
-        let _seed = seeded_index(event_log.clone(), Uuid::from_u128(7), &[SeededRange {
-            object_key: "object-a",
-            first_offset: 0,
-            last_offset: 3,
-        }])
+        let _seed = seeded_index(
+            Arc::<InProcessMetadataEventLog>::clone(&event_log),
+            Uuid::from_u128(7),
+            &[SeededRange {
+                object_key: "object-a",
+                first_offset: 0,
+                last_offset: 3,
+            }],
+        )
         .await;
 
         // A silent-but-open stream is what a dead partition fetch loop leaves
@@ -893,11 +917,15 @@ mod tests {
     async fn catch_up_covers_a_record_appended_while_the_subscription_opens() {
         let event_log = InProcessMetadataEventLog::new(1);
         let topic_id = Uuid::from_u128(7);
-        let _seed = seeded_index(event_log.clone(), topic_id, &[SeededRange {
-            object_key: "object-a",
-            first_offset: 0,
-            last_offset: 3,
-        }])
+        let _seed = seeded_index(
+            Arc::<InProcessMetadataEventLog>::clone(&event_log),
+            topic_id,
+            &[SeededRange {
+                object_key: "object-a",
+                first_offset: 0,
+                last_offset: 3,
+            }],
+        )
         .await;
 
         // The previous leader's in-flight flush lands while this projection is
@@ -937,18 +965,25 @@ mod tests {
     async fn a_delete_floor_survives_a_rebuilt_projection() {
         let event_log = InProcessMetadataEventLog::new(1);
         let topic_id = Uuid::from_u128(7);
-        let seed = seeded_index(event_log.clone(), topic_id, &[SeededRange {
-            object_key: "object-a",
-            first_offset: 0,
-            last_offset: 7,
-        }])
+        let seed = seeded_index(
+            Arc::<InProcessMetadataEventLog>::clone(&event_log),
+            topic_id,
+            &[SeededRange {
+                object_key: "object-a",
+                first_offset: 0,
+                last_offset: 7,
+            }],
+        )
         .await;
         seed.publish_delete_floor(topic_id, 0, 4, Duration::from_secs(5))
             .await
             .unwrap();
         assert!(seed.cache().lock().await.delete_floor(topic_id, 0) == 4);
 
-        let restarted = DisklessIndexLog::start(event_log.clone()).await.unwrap();
+        let restarted =
+            DisklessIndexLog::start(Arc::<InProcessMetadataEventLog>::clone(&event_log))
+                .await
+                .unwrap();
         assert!(restarted.wait_until_caught_up(Duration::from_secs(5)).await);
 
         let cache = restarted.cache();
@@ -1020,7 +1055,7 @@ mod tests {
                 if index.cache().lock().await.flushed_frontier(topic_id, 0) == Some(4) {
                     break;
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
@@ -1109,7 +1144,9 @@ mod tests {
         let log = GroupAckLog::build()
             .inner(InProcessMetadataEventLog::new(3))
             .call();
-        let index = DisklessIndexLog::start(log.clone()).await.unwrap();
+        let index = DisklessIndexLog::start(Arc::<GroupAckLog>::clone(&log))
+            .await
+            .unwrap();
         let record = mixed_flush();
 
         index.publish_flush(&record).await.unwrap();
@@ -1138,10 +1175,12 @@ mod tests {
         let inner = InProcessMetadataEventLog::new(3);
         let record = mixed_flush();
         let log = GroupAckLog::build()
-            .inner(inner.clone())
+            .inner(Arc::<InProcessMetadataEventLog>::clone(&inner))
             .failing(vec![WalIndexKey::from(&record.entries[4])])
             .call();
-        let index = DisklessIndexLog::start(log.clone()).await.unwrap();
+        let index = DisklessIndexLog::start(Arc::<GroupAckLog>::clone(&log))
+            .await
+            .unwrap();
         let topic_id = Uuid::from_u128(7);
 
         let error = index.publish_flush(&record).await.unwrap_err();
@@ -1216,7 +1255,7 @@ mod tests {
             index,
             topic_id,
             record: _record,
-        } = projected_first_object(transport.clone()).await;
+        } = projected_first_object(Arc::<TogglePublishLog>::clone(&transport)).await;
 
         transport.set_outcome(PublishOutcome::Fail);
 
@@ -1241,13 +1280,13 @@ mod tests {
             index,
             topic_id,
             record,
-        } = projected_first_object(transport.clone()).await;
+        } = projected_first_object(Arc::<InProcessMetadataEventLog>::clone(&transport)).await;
         let key = WalIndexKey::from(&record.entries[0]);
 
         let bytes = key.to_bytes();
         transport
             .publish_keyed(
-                index_partition(&bytes, transport.partition_count()),
+                index_partition(&bytes, transport.partition_count()).unwrap(),
                 bytes,
                 None,
             )
@@ -1256,7 +1295,7 @@ mod tests {
 
         timeout(Duration::from_secs(1), async {
             while index.cache().lock().await.lookup(topic_id, 0, 0).is_some() {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await

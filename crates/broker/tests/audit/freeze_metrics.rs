@@ -17,6 +17,7 @@ use {
         },
     },
     assert2::check,
+    krabka_broker::codes,
     krabka_protocol::owned::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest},
 };
 
@@ -139,7 +140,7 @@ async fn the_kfc9_gauges_and_counters_move_on_real_requests() {
         ..Default::default()
     };
     let deleted = alice.send(req).await.expect("DeleteTopics");
-    check!(deleted.responses[0].error_code == krabka_broker::codes::POLICY_VIOLATION);
+    check!(deleted.responses[0].error_code == codes::POLICY_VIOLATION);
     check!(
         refusals(
             cluster.broker.metrics(),

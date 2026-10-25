@@ -1,5 +1,5 @@
 //! Ready topic fixtures for the three two-directory integration binaries.
-pub(crate) use crate::support::storage::PartitionReadiness;
+pub use crate::support::storage::PartitionReadiness;
 use {
     crate::{
         kafka_wire::create_configured_topic_plaintext,
@@ -14,17 +14,17 @@ use {
 };
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct Setup<'a> {
+pub struct Setup<'a> {
     #[default("krabka-jbod-test")]
     pub client_id: &'a str,
     #[default("t")]
     pub topic: &'a str,
-    #[default(crate::support::topics::TopicPartitionCount(1))]
+    #[default(TopicPartitionCount(1))]
     pub partitions: TopicPartitionCount,
     pub readiness: PartitionReadiness,
 }
 
-pub(crate) async fn create_and_wait(handle: &BrokerHandle, address: SocketAddr, setup: Setup<'_>) {
+pub async fn create_and_wait(handle: &BrokerHandle, address: SocketAddr, setup: Setup<'_>) {
     create_configured_topic_plaintext()
         .addr(address)
         .client_id(setup.client_id)
@@ -52,11 +52,10 @@ pub(crate) async fn create_and_wait(handle: &BrokerHandle, address: SocketAddr, 
 }
 
 #[bon::builder]
-pub(crate) async fn start(
+pub async fn start(
     #[builder(default = "krabka-jbod-test")] client_id: &'_ str,
     #[builder(default = "t")] topic: &'_ str,
-    #[builder(into, default = crate :: support :: topics :: TopicPartitionCount (1))]
-    partitions: TopicPartitionCount,
+    #[builder(into, default = TopicPartitionCount(1))] partitions: TopicPartitionCount,
     #[builder(default)] readiness: PartitionReadiness,
 ) -> (BrokerHandle, TempDir, TempDir, SocketAddr) {
     let setup = Setup {

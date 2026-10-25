@@ -78,8 +78,8 @@ impl Stack {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Stack::Krabka => "krabka",
-            Stack::Kafka => "kafka",
+            Self::Krabka => "krabka",
+            Self::Kafka => "kafka",
         }
     }
 
@@ -94,10 +94,10 @@ impl Stack {
             // single-pool naming (`demo-brokers-0`, pool `brokers`) and the
             // multi-pool bench topology (`demo-broker-0-0`, pools `broker-0/1/2`)
             // — `failover.rs` uses it via `starts_with`, `prom.rs` as a regex.
-            Stack::Krabka => "^demo-broker",
+            Self::Krabka => "^demo-broker",
             // Strimzi StatefulSets are `<kafka>-<pool>` with pool typically
             // `kafka` for the broker pool.
-            Stack::Kafka => "^demo-kafka-",
+            Self::Kafka => "^demo-kafka-",
         }
     }
 }
@@ -122,9 +122,9 @@ pub enum Acks {
 impl Acks {
     pub(crate) fn into_producer(self) -> krabka_client_producer::Acks {
         match self {
-            Acks::None => krabka_client_producer::Acks::Zero,
-            Acks::Leader => krabka_client_producer::Acks::One,
-            Acks::All => krabka_client_producer::Acks::All,
+            Self::None => krabka_client_producer::Acks::Zero,
+            Self::Leader => krabka_client_producer::Acks::One,
+            Self::All => krabka_client_producer::Acks::All,
         }
     }
 }
@@ -144,11 +144,11 @@ pub enum Compression {
 impl Compression {
     pub(crate) fn into_producer(self) -> krabka_client_producer::Compression {
         match self {
-            Compression::None => krabka_client_producer::Compression::None,
-            Compression::Gzip => krabka_client_producer::Compression::Gzip,
-            Compression::Snappy => krabka_client_producer::Compression::Snappy,
-            Compression::Lz4 => krabka_client_producer::Compression::Lz4,
-            Compression::Zstd => krabka_client_producer::Compression::Zstd,
+            Self::None => krabka_client_producer::Compression::None,
+            Self::Gzip => krabka_client_producer::Compression::Gzip,
+            Self::Snappy => krabka_client_producer::Compression::Snappy,
+            Self::Lz4 => krabka_client_producer::Compression::Lz4,
+            Self::Zstd => krabka_client_producer::Compression::Zstd,
         }
     }
 }
@@ -181,7 +181,7 @@ pub struct FailoverSpec {
     pub target: String,
 }
 
-fn default_failover_target() -> String { "partition0_leader".to_string() }
+fn default_failover_target() -> String { "partition0_leader".to_owned() }
 
 /// The scenario configuration. The driver loads it from YAML and
 /// echoes it back into `RunOutput.scenario` for the report.
@@ -253,10 +253,11 @@ fn default_warmup() -> Time { secs(10) }
 
 // ── Output schema ───────────────────────────────────────────────────────────
 
-/// Latency percentiles as measured extents, encoded as whole nanoseconds. The
-/// driver records latencies at microsecond resolution, and the report renders
-/// them in milliseconds to three decimal places. A millisecond integer would
-/// round both away.
+/// Latency percentiles as measured extents, encoded as whole nanoseconds.
+///
+/// The driver records latencies at microsecond resolution, and the report
+/// renders them in milliseconds to three decimal places. A millisecond integer
+/// would round both away.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LatencyPercentiles {
     #[serde(with = "serde_units::numeric::nanos_i64")]
@@ -337,7 +338,7 @@ pub struct Disturbance {
     pub latency_spike_max: Time,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Topology {
     pub partitions: i32,
     pub replication_factor: i16,
@@ -345,10 +346,12 @@ pub struct Topology {
 }
 
 /// One time-series sample of client-side throughput and latency over a fixed
-/// interval of the measurement window. The default interval is 2s. This lets the
-/// report graph values *over the test* and not only end-of-run aggregates. The
-/// latency percentiles cover this window only and are not cumulative, so a
-/// latency-vs-time curve shows real movement.
+/// interval of the measurement window.
+///
+/// The default interval is 2s. This lets the report graph values *over the
+/// test* and not only end-of-run aggregates. The latency percentiles cover this
+/// window only and are not cumulative, so a latency-vs-time curve shows real
+/// movement.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Sample {
     /// Milliseconds since the measurement window started.
@@ -368,9 +371,10 @@ pub struct Sample {
 }
 
 /// One time-series sample of broker resource usage, scraped from Prometheus
-/// as a range query over the run window. The default step is 15s, which is the
-/// scrape interval. This covers the full wallclock window, warmup and
-/// measurement.
+/// as a range query over the run window.
+///
+/// The default step is 15s, which is the scrape interval. This covers the full
+/// wallclock window, warmup and measurement.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BrokerSample {
     /// Milliseconds since `wallclock_start_unix_ms`.
@@ -555,7 +559,7 @@ mod tests {
 
     #[test]
     fn scenario_yaml_reads_the_operator_form() {
-        let y = r"
+        let y = "
 name: small-msg-saturate
 mode_tag: ci
 msg_size: 100B
@@ -590,7 +594,7 @@ warmup: 10s
 
     #[test]
     fn scenario_yaml_defaults_every_omitted_field() {
-        let y = r"
+        let y = "
 name: bare
 mode:
   kind: saturate
@@ -603,7 +607,7 @@ mode:
 
     #[test]
     fn scenario_yaml_rejects_a_size_without_a_unit() {
-        let y = r"
+        let y = "
 name: unitless
 msg_size: 100
 mode:
@@ -669,7 +673,7 @@ mode:
 
     #[test]
     fn fixed_rate_yaml_parses_an_event_rate() {
-        let y = r"
+        let y = "
 name: fixed-rate
 mode:
   kind: fixed_rate
@@ -686,7 +690,7 @@ mode:
 
     #[test]
     fn failover_yaml_parses_a_kill_offset() {
-        let y = r"
+        let y = "
 name: failover
 mode:
   kind: saturate
@@ -753,11 +757,9 @@ pub(crate) mod fixture {
     use super::*;
     krabka_macros::benchmark_scenario_fixture!(default_scenario);
 
-    pub(crate) fn scenario(name: &str) -> Scenario {
-        default_scenario(name, krabka_units::bytes(100))
-    }
+    pub fn scenario(name: &str) -> Scenario { default_scenario(name, krabka_units::bytes(100)) }
 
-    pub(crate) struct RunSetup<'a> {
+    pub struct RunSetup<'a> {
         pub scenario: &'a str,
         pub stack: Stack,
         pub topology: Topology,
@@ -786,7 +788,7 @@ pub(crate) mod fixture {
     }
 
     #[bon::builder]
-    pub(crate) fn empty_run(
+    pub fn empty_run(
         #[builder(default = RunSetup::default().scenario)] scenario: &'_ str,
         #[builder(default = RunSetup::default().stack)] stack: Stack,
         #[builder(default = RunSetup::default().topology)] topology: Topology,
@@ -845,7 +847,7 @@ pub(crate) mod fixture {
         }
     }
 
-    pub(crate) fn short_scenario(replication_factor: i16) -> Scenario {
+    pub fn short_scenario(replication_factor: i16) -> Scenario {
         Scenario {
             partitions: 1,
             replication_factor,

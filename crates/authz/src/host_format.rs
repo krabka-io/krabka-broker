@@ -34,7 +34,7 @@ pub fn jdk_host_address(ip: IpAddr) -> String {
 /// True when [`jdk_host_address`] of `ip` equals `text`, decided without
 /// allocating: the rendering is streamed into a comparator that consumes
 /// `text` piece by piece.
-pub(crate) fn jdk_host_address_is(ip: IpAddr, text: &str) -> bool {
+pub fn jdk_host_address_is(ip: IpAddr, text: &str) -> bool {
     let mut rest = PrefixMatcher { rest: text };
     write_jdk_host_address(ip, &mut rest).is_ok() && rest.rest.is_empty()
 }

@@ -16,13 +16,17 @@ use {
     bytes::Bytes,
     krabka_client_consumer::{AutoOffsetReset, Consumer},
     krabka_client_producer::Producer,
-    std::time::{Duration, Instant},
+    std::{
+        fs,
+        path::Path,
+        time::{Duration, Instant},
+    },
 };
 
 fn target_dir_opposite_to_partition_0<'a>(
     primary: &'a tempfile::TempDir,
     extra: &'a tempfile::TempDir,
-) -> &'a std::path::Path {
+) -> &'a Path {
     if primary.path().join("t-0").exists() {
         extra.path()
     } else {
@@ -72,7 +76,7 @@ async fn alter_replica_log_dirs_moves_partitions_to_target_dir() {
     assert!(count_topic_dirs(source_dir, "t") == 0);
     // No future dirs should remain anywhere.
     for d in [primary.path(), extra.path()] {
-        for entry in std::fs::read_dir(d).unwrap().flatten() {
+        for entry in fs::read_dir(d).unwrap().flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             assert!(
@@ -105,58 +109,61 @@ async fn alter_replica_log_dirs_preserves_records_across_move() {
     let (handle, primary, extra, addr) = start().client_id(CLIENT_ID).call().await;
 
     let bootstrap = addr.to_string();
-    let producer = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .build()
-        .await
-        .expect("producer build");
-    enqueue_unkeyed_values(
-        &producer,
-        "t",
-        (0..50i32).map(|i| Bytes::from(format!("v{i}"))),
-    )
-    .await;
-    producer.flush().await.expect("flush");
-
-    let target_dir = target_dir_opposite_to_partition_0(&primary, &extra);
-
-    let resp = alter_replica_log_dirs(addr, target_dir, "t", vec![0]).await;
-    let topic = resp
-        .results
-        .iter()
-        .find(|t| t.topic_name == "t")
-        .expect("topic");
-    assert!(topic.partitions[0].error_code == 0);
-    wait_for_move_complete(addr, target_dir, "t", &[0]).await;
-
-    let mut consumer = Consumer::builder()
-        .bootstrap(bootstrap)
-        .group_id("arld-move-consumer")
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .subscribe(["t".to_string()])
-        .build()
-        .await
-        .expect("consumer build");
-
-    let mut received_values: Vec<String> = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while received_values.len() < 50 && Instant::now() < deadline {
-        for r in consumer
-            .poll(krabka_units::millis(200))
+    let consumer = {
+        let producer = Producer::builder()
+            .bootstrap(bootstrap.clone())
+            .build()
             .await
-            .expect("poll")
-        {
-            if let Some(v) = r.value {
-                received_values.push(String::from_utf8(v.to_vec()).unwrap());
+            .expect("producer build");
+        enqueue_unkeyed_values(
+            &producer,
+            "t",
+            (0..50i32).map(|i| Bytes::from(format!("v{i}"))),
+        )
+        .await;
+        producer.flush().await.expect("flush");
+
+        let target_dir = target_dir_opposite_to_partition_0(&primary, &extra);
+
+        let resp = alter_replica_log_dirs(addr, target_dir, "t", vec![0]).await;
+        let topic = resp
+            .results
+            .iter()
+            .find(|t| t.topic_name == "t")
+            .expect("topic");
+        assert!(topic.partitions[0].error_code == 0);
+        wait_for_move_complete(addr, target_dir, "t", &[0]).await;
+
+        let mut consumer = Consumer::builder()
+            .bootstrap(bootstrap)
+            .group_id("arld-move-consumer")
+            .auto_offset_reset(AutoOffsetReset::Earliest)
+            .subscribe(["t".to_owned()])
+            .build()
+            .await
+            .expect("consumer build");
+
+        let mut received_values: Vec<String> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while received_values.len() < 50 && Instant::now() < deadline {
+            for r in consumer
+                .poll(krabka_units::millis(200))
+                .await
+                .expect("poll")
+            {
+                if let Some(v) = r.value {
+                    received_values.push(String::from_utf8(v.to_vec()).unwrap());
+                }
             }
         }
-    }
-    received_values.sort();
-    let mut expected: Vec<String> = (0..50).map(|i| format!("v{i}")).collect();
-    expected.sort();
-    assert!(received_values == expected, "all records survived the move");
+        received_values.sort();
+        let mut expected: Vec<String> = (0..50).map(|i| format!("v{i}")).collect();
+        expected.sort();
+        assert!(received_values == expected, "all records survived the move");
 
-    producer.close().await.unwrap();
+        producer.close().await.map(|()| consumer)
+    }
+    .unwrap();
     consumer.close().await.unwrap();
     handle.shutdown().await;
 }

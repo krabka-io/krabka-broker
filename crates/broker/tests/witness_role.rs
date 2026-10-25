@@ -27,6 +27,7 @@
 //! 30s bound; the loops in this file wrap theirs in `tokio::time::timeout`, so
 //! a stuck cluster reports in seconds instead of hitting CI's 600s kill, which
 //! is reported as TIMEOUT with no cause.
+#![cfg(test)]
 
 use {
     std::{future::Future, time::Duration},

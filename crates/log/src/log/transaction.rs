@@ -200,6 +200,7 @@ mod tests {
         },
         bytes::Bytes,
         krabka_ids::LeaderEpoch,
+        std::fs,
         tempfile::tempdir,
     };
 
@@ -358,7 +359,7 @@ mod tests {
         log.set_config(tiny_segments());
         let (marker_base, _) = log.append(&mut abort_marker(1000, 0)).unwrap();
         log.append(&mut sample_batch(1)).unwrap();
-        std::fs::remove_file(name::txnindex_path(dir.path(), marker_base.0)).unwrap();
+        fs::remove_file(name::txnindex_path(dir.path(), marker_base.0)).unwrap();
 
         assert2::assert!(log.aborted_in_range(Offset(0), marker_base) == [aborted_txn().call()]);
     }

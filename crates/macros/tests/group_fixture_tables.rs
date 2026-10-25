@@ -1,4 +1,5 @@
 //! Native member fields and concrete topology traversal use real protocol types.
+#![cfg(test)]
 
 use {
     assert2::assert,

@@ -1,4 +1,5 @@
 //! The derive preserves epoch wire bytes and passes codec errors through.
+#![cfg(test)]
 
 use assert2::assert;
 
@@ -6,21 +7,21 @@ use assert2::assert;
 mod error;
 
 mod coordinator {
-    pub(crate) mod unified {
-        pub(crate) mod persistence {
+    pub mod unified {
+        pub mod persistence {
             use crate::error::{BrokerError, take};
 
-            pub(crate) fn get_i32(buf: &mut &[u8]) -> Result<i32, BrokerError> {
+            pub fn get_i32(buf: &mut &[u8]) -> Result<i32, BrokerError> {
                 Ok(i32::from_be_bytes(take(buf)?))
             }
 
-            pub(crate) mod flex {
+            pub mod flex {
                 use {
                     crate::error::{BrokerError, take},
                     bytes::{BufMut, BytesMut},
                 };
 
-                pub(crate) fn get_value_version(
+                pub fn get_value_version(
                     buf: &mut &[u8],
                     highest: i16,
                     record: &'static str,
@@ -33,7 +34,7 @@ mod coordinator {
                     }
                 }
 
-                pub(crate) fn put_tag0_i64(buf: &mut BytesMut, value: i64) {
+                pub fn put_tag0_i64(buf: &mut BytesMut, value: i64) {
                     if value == 0 {
                         buf.put_u8(0);
                     } else {
@@ -42,7 +43,7 @@ mod coordinator {
                     }
                 }
 
-                pub(crate) fn get_tag0_i64(buf: &mut &[u8]) -> Result<i64, BrokerError> {
+                pub fn get_tag0_i64(buf: &mut &[u8]) -> Result<i64, BrokerError> {
                     // shortcut: fixture tags and sizes fit one byte; use protocol helpers for wider values.
                     let [count] = take(buf)?;
                     let mut value = 0;

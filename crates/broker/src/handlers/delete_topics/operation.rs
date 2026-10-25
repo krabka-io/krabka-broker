@@ -25,7 +25,7 @@ use {
     },
     krabka_raft::RaftError,
     krabka_verified::FreezeMutationKind,
-    std::{future::Future, sync::Arc},
+    std::{future::Future, slice, sync::Arc},
     uuid::Uuid,
 };
 
@@ -114,7 +114,7 @@ async fn complete_topic_deletion(
     let local = broker.partitions.partitions_of(name);
     let cleanup = LocalDeletion::snapshot(broker, name, Uuid::from_bytes(wire_topic_id.0), &local);
     let tiered = tiered_partitions(broker, &broker.partitions, &image, name, &local);
-    let controller = broker.controller.clone();
+    let controller = Arc::clone(&broker.controller);
     let reader = broker.remote_reader.clone();
     let broker_id = broker.config.broker_id;
     let archive = ArchiveMode::from_worm(broker.config.remote_storage_worm.as_ref());
@@ -144,7 +144,7 @@ fn completion_audit(
     topic_id: WireUuid,
     proposal_id: Option<Uuid>,
 ) -> impl FnOnce() + Send + 'static + use<> {
-    let audit = broker.audit_log.clone();
+    let audit = Arc::clone(&broker.audit_log);
     let config = broker.config.break_glass.clone();
     let principal = ctx.principal.clone();
     let peer = *ctx.peer;
@@ -160,11 +160,7 @@ fn completion_audit(
             reason: "topic deleted",
         });
         let row = delete_topic_result(Some(name), topic_id, codes::NONE);
-        audit_deleted_topics(
-            &audit,
-            &ctx,
-            deleted_topic_resources(std::slice::from_ref(&row)),
-        );
+        audit_deleted_topics(&audit, &ctx, deleted_topic_resources(slice::from_ref(&row)));
     }
 }
 
@@ -262,8 +258,13 @@ mod tests {
         krabka_metadata::{BrokerConfigRecord, TopicRecord},
         krabka_raft::{NodeId, SubmitChangeResult},
         std::{
+            fs,
             sync::atomic::{AtomicBool, Ordering},
             time::Duration,
+        },
+        tokio::{
+            sync::oneshot,
+            time::{Instant, timeout},
         },
         uuid::Uuid,
     };
@@ -290,15 +291,15 @@ mod tests {
             .expect("ungated deletion");
         let dir = tempfile::tempdir().unwrap();
         let canonical = dir.path().join("orders-0");
-        std::fs::create_dir(&canonical).unwrap();
-        std::fs::write(canonical.join("old-records"), b"deleted generation").unwrap();
-        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        let (commit_tx, commit_rx) = tokio::sync::oneshot::channel();
-        let (cleaned_tx, cleaned_rx) = tokio::sync::oneshot::channel();
+        fs::create_dir(&canonical).unwrap();
+        fs::write(canonical.join("old-records"), b"deleted generation").unwrap();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (commit_tx, commit_rx) = oneshot::channel();
+        let (cleaned_tx, cleaned_rx) = oneshot::channel();
         let submit_source = Arc::clone(&source);
         let cleanup_dir = canonical.clone();
         let waiter = tokio::spawn(async move {
-            tokio::time::timeout(
+            timeout(
                 Duration::from_millis(1),
                 owned_commit(
                     async move {
@@ -307,7 +308,7 @@ mod tests {
                         submit_source.submit_change_if_image(records, image).await
                     },
                     move || {
-                        std::fs::remove_dir_all(cleanup_dir).unwrap();
+                        fs::remove_dir_all(cleanup_dir).unwrap();
                         cleaned_tx.send(()).unwrap();
                     },
                 ),
@@ -321,7 +322,7 @@ mod tests {
 
         // A durable completion after the client deadline still owns cleanup.
         commit_tx.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(1), cleaned_rx)
+        timeout(Duration::from_secs(1), cleaned_rx)
             .await
             .expect("detached deletion completion")
             .unwrap();
@@ -362,7 +363,7 @@ mod tests {
             let id = WireUuid(Uuid::from_u128(1).into_bytes());
             let result = guarded_operation_on_source(
                 &source,
-                tokio::time::Instant::now() + Duration::from_secs(1),
+                Instant::now() + Duration::from_secs(1),
                 |image| {
                     let source = &source;
                     async move {

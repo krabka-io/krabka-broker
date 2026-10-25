@@ -4,6 +4,7 @@
 //! carries only the topic id. Kafka's `KafkaApis.handleFetchRequest` answers
 //! `UNKNOWN_TOPIC_ID` on every partition row of a topic whose id does not
 //! resolve to a name. The zero id is such an id.
+#![cfg(test)]
 use {
     crate::support::{
         fetch::{FetchLimits, RequestWaitMillis, fetch_request_for},

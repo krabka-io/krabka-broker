@@ -32,9 +32,9 @@ pub(super) enum Filter {
 impl Filter {
     pub(super) fn allows(&self, topic: &str, partition: i32) -> bool {
         match self {
-            Filter::All => true,
-            Filter::Partitions(set) => set.contains(&TopicPartition {
-                topic: topic.to_string(),
+            Self::All => true,
+            Self::Partitions(set) => set.contains(&TopicPartition {
+                topic: topic.to_owned(),
                 partition,
             }),
         }

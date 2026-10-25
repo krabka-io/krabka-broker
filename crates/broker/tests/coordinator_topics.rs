@@ -13,6 +13,7 @@
 //! `__consumer_offsets` has a replica on every broker. The second proves the
 //! replication factor is never lowered to fit the cluster. The third proves
 //! that a broker stopped by a controlled shutdown still counts toward it.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -28,6 +29,7 @@ use {
     krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse,
     std::time::{Duration, Instant},
     tempfile::TempDir,
+    tokio::time,
 };
 
 mod support;
@@ -85,7 +87,7 @@ async fn coordinator_of(client: &Client, key_type: i8, key: &str, excluded: Opti
         assert!(Instant::now() < deadline, "FindCoordinator: {found:?}");
         // intentional: a client has no awaiter for the creation or the
         // failover; it retries, as Kafka's clients do.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -160,7 +162,7 @@ async fn a_replication_factor_above_the_broker_count_leaves_the_coordinator_unav
         check!(found.coordinators[0].error_code == COORDINATOR_NOT_AVAILABLE);
         // intentional: each lookup asks for the topic again, and each
         // creation must be refused.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
     for (handle, _, _) in &cluster {
         check!(

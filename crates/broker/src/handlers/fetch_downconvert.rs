@@ -20,7 +20,7 @@ use {
 /// control batch on the legacy path. It returns `Err(error_code)` for a hard
 /// down-conversion failure that the caller should report as a per-partition
 /// error.
-pub(crate) fn down_convert_for_fetch(
+pub fn down_convert_for_fetch(
     batch: &RecordBatch,
     request_version: i16,
 ) -> Result<Option<RecordsPayload>, i16> {
@@ -64,7 +64,7 @@ pub(crate) fn down_convert_for_fetch(
 /// here, the only place that parses `Raw`, and only for legacy clients. It
 /// returns `Ok(None)` when it dropped every batch, for example when they are
 /// all control batches.
-pub(crate) fn down_convert_payload_for_fetch(
+pub fn down_convert_payload_for_fetch(
     payload: &RecordsPayload,
     request_version: i16,
 ) -> Result<Option<RecordsPayload>, i16> {
@@ -72,12 +72,12 @@ pub(crate) fn down_convert_payload_for_fetch(
         RecordsPayload::V2(b) => Cow::Borrowed(b),
         RecordsPayload::Raw(bytes) => match RecordsPayload::from_bytes(bytes.clone()) {
             Ok(RecordsPayload::V2(b)) => Cow::Owned(b),
-            _ => return Err(crate::codes::CORRUPT_MESSAGE),
+            _ => return Err(codes::CORRUPT_MESSAGE),
         },
         RecordsPayload::Legacy(_) => return Ok(Some(payload.clone())),
         // Unreachable: the zero-copy `FileRegions` payload is only emitted for
         // Fetch v4+, which never down-converts (down-conversion is a v0–v3 path).
-        RecordsPayload::FileRegions(_) => return Err(crate::codes::CORRUPT_MESSAGE),
+        RecordsPayload::FileRegions(_) => return Err(codes::CORRUPT_MESSAGE),
     } };
 
     let mut out = BytesMut::new();

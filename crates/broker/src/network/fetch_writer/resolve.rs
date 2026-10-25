@@ -9,11 +9,13 @@
 
 use {
     super::WriteOp, crate::error::BrokerError, bytes::BytesMut,
-    krabka_protocol::records::RecordsPayload,
+    krabka_protocol::records::RecordsPayload, std::io,
 };
 
 /// Portable (Increment C) records resolver: emit the records payload as a
-/// single inline segment. For `RecordsPayload::Raw` this function hands the
+/// single inline segment.
+///
+/// For `RecordsPayload::Raw` this function hands the
 /// verbatim `.log` `Bytes` to the socket directly. That is a refcounted view
 /// and copies no records bytes. For parsed and legacy payloads it encodes them
 /// into a fresh buffer, which is the rare non-passthrough path. For a
@@ -46,14 +48,15 @@ fn encode_payload(payload: &RecordsPayload) -> Result<bytes::Bytes, BrokerError>
     let mut buf = BytesMut::with_capacity(payload.payload_len());
     payload
         .encode_to(&mut buf)
-        .map_err(|error| BrokerError::Io(std::io::Error::other(error.to_string())))?;
+        .map_err(|error| BrokerError::Io(io::Error::other(error.to_string())))?;
     Ok(buf.freeze())
 }
 
 /// Plaintext-sendfile (Increments D + E) records resolver: emit each
 /// `FileRegion` of a `FileRegions` payload as its own [`WriteOp::File`],
-/// one per contributing segment, for the kernel `sendfile` drain. Every
-/// other payload kind defers to [`resolve_records_inline`], as does a
+/// one per contributing segment, for the kernel `sendfile` drain.
+///
+/// Every other payload kind defers to [`resolve_records_inline`], as does a
 /// `FileRegions` payload that arrives here on a non-sendfile path. This
 /// function compiles on the SENDFILE alias (Linux + Apple +
 /// FreeBSD/DragonFly).

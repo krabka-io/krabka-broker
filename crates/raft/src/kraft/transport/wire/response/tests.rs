@@ -15,7 +15,7 @@ fn vote_naming_leader_two() -> PeerResponse {
             leader_id: Some(NodeId(2)),
             epoch: 3,
             endpoint: Some(LeaderEndpoint {
-                host: "127.0.0.1".to_string(),
+                host: "127.0.0.1".to_owned(),
                 port: 9_093,
             }),
         },
@@ -79,7 +79,7 @@ fn decodes_a_jvm_vote_response() {
     let resp = VoteResponse {
         error_code: 0,
         topics: vec![vote_resp::TopicData {
-            topic_name: METADATA_TOPIC.to_string(),
+            topic_name: METADATA_TOPIC.to_owned(),
             partitions: vec![vote_resp::PartitionData {
                 partition_index: METADATA_PARTITION,
                 error_code: 0,
@@ -93,13 +93,13 @@ fn decodes_a_jvm_vote_response() {
         node_endpoints: vec![
             vote_resp::NodeEndpoint {
                 node_id: 5,
-                host: "other".to_string(),
+                host: "other".to_owned(),
                 port: 1,
                 ..Default::default()
             },
             vote_resp::NodeEndpoint {
                 node_id: 4,
-                host: "leader".to_string(),
+                host: "leader".to_owned(),
                 port: 9_094,
                 ..Default::default()
             },
@@ -116,7 +116,7 @@ fn decodes_a_jvm_vote_response() {
                     leader_id: Some(NodeId(4)),
                     epoch: 7,
                     endpoint: Some(LeaderEndpoint {
-                        host: "leader".to_string(),
+                        host: "leader".to_owned(),
                         port: 9_094,
                     }),
                 },
@@ -175,7 +175,7 @@ fn fetch_snapshot_response_round_trips_error_code() {
 
 fn leader_endpoint(host: &str, port: u16) -> LeaderEndpoint {
     LeaderEndpoint {
-        host: host.to_string(),
+        host: host.to_owned(),
         port,
     }
 }
@@ -214,7 +214,7 @@ fn kafka_empty_fetch_response(
 ) -> FetchResponse {
     FetchResponse {
         responses: vec![fetch_resp::FetchableTopicResponse {
-            topic: METADATA_TOPIC.to_string(),
+            topic: METADATA_TOPIC.to_owned(),
             topic_id: METADATA_TOPIC_ID,
             partitions: vec![fetch_resp::PartitionData {
                 partition_index: METADATA_PARTITION,
@@ -314,7 +314,7 @@ fn a_refused_fetch_is_kafkas_empty_fetch_response(
 fn a_node_endpoint_for_another_node_is_not_the_leaders() {
     let response = FetchResponse {
         responses: vec![fetch_resp::FetchableTopicResponse {
-            topic: METADATA_TOPIC.to_string(),
+            topic: METADATA_TOPIC.to_owned(),
             topic_id: METADATA_TOPIC_ID,
             partitions: vec![fetch_resp::PartitionData {
                 error_code: NOT_LEADER_OR_FOLLOWER,
@@ -354,7 +354,7 @@ fn fetch_snapshot_answer_with_partition_preserves_top_level_error() {
     use krabka_protocol::{Decode, owned::fetch_snapshot_response::FetchSnapshotResponse};
 
     let partition = FetchSnapshotPartition {
-        topic: METADATA_TOPIC.to_string(),
+        topic: METADATA_TOPIC.to_owned(),
         index: METADATA_PARTITION,
         error_code: 0,
         current_leader: false,

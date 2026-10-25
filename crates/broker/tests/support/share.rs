@@ -2,13 +2,13 @@
 use {
     crate::support::{
         client::{connect as connect_client, create_topic_with},
-        configs::{incremental_config, incremental_request, incremental_resource},
+        configs::{ConfigOperation, incremental_config, incremental_request, incremental_resource},
         heartbeat_config,
         records::{batch_from_records, value_record},
         topics::{CreateTopicSetup, TopicPartitionCount},
     },
     assert2::assert,
-    krabka_broker::{BrokerConfig, NodeId},
+    krabka_broker::{BrokerConfig, NodeId, testing},
     krabka_client_core::Client,
     krabka_protocol::{
         owned::{
@@ -16,19 +16,25 @@ use {
                 AcknowledgePartition, AcknowledgeTopic, AcknowledgementBatch as AckAckBatch,
                 ShareAcknowledgeRequest,
             },
-            share_acknowledge_response::ShareAcknowledgeResponse,
+            share_acknowledge_response::{self, ShareAcknowledgeResponse},
             share_fetch_request::{
                 AcknowledgementBatch as FetchAckBatch, FetchPartition, FetchTopic, ForgottenTopic,
                 ShareFetchRequest,
             },
+            share_fetch_response::{self, ShareFetchResponse},
             share_group_heartbeat_request::ShareGroupHeartbeatRequest,
         },
         primitives::uuid::Uuid as WireUuid,
         records::{Record, RecordBatch},
     },
     std::{
+        path::PathBuf,
         sync::{Arc, OnceLock},
         time::Duration,
+    },
+    tokio::{
+        sync::{OwnedSemaphorePermit, Semaphore},
+        time,
     },
 };
 const SHARE_STATE_PARTITIONS: i32 = 1;
@@ -36,7 +42,7 @@ const MAX_CONCURRENT_TEST_BROKERS: usize = 3;
 const RESOURCE_TYPE_GROUP: i8 = 32;
 
 pub type ShareBrokerFixture = (
-    tokio::sync::OwnedSemaphorePermit,
+    OwnedSemaphorePermit,
     krabka_broker::BrokerHandle,
     Arc<Client>,
     tempfile::TempDir,
@@ -55,18 +61,16 @@ pub fn topic_id(broker: &krabka_broker::BrokerHandle, topic: &str) -> uuid::Uuid
 
 pub fn wire(tid: uuid::Uuid) -> WireUuid { WireUuid(*tid.as_bytes()) }
 
-pub async fn broker_test_permit() -> tokio::sync::OwnedSemaphorePermit {
-    static GATE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+pub async fn broker_test_permit() -> OwnedSemaphorePermit {
+    static GATE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
-    Arc::clone(
-        GATE.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_TEST_BROKERS))),
-    )
-    .acquire_owned()
-    .await
-    .expect("broker test concurrency gate remains open")
+    Arc::clone(GATE.get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_TEST_BROKERS))))
+        .acquire_owned()
+        .await
+        .expect("broker test concurrency gate remains open")
 }
 
-pub fn broker_config(log_dir: std::path::PathBuf) -> BrokerConfig {
+pub fn broker_config(log_dir: PathBuf) -> BrokerConfig {
     // These fixtures keep one broker alive; member session/lock expiry is
     // configured independently from the broker's own heartbeat session.
     let mut config = heartbeat_config(log_dir);
@@ -99,7 +103,7 @@ pub async fn set_auto_offset_reset(client: &Client, group: &str, value: &str) {
                     vec![incremental_config(
                         "share.auto.offset.reset",
                         Some(value.into()),
-                        crate::support::configs::ConfigOperation::Set,
+                        ConfigOperation::Set,
                     )],
                 )])
                 .call(),
@@ -189,7 +193,7 @@ pub async fn produce_batch(client: &Client, batch: RecordBatch) {
     let partition = partition.0;
     for _ in 0..40 {
         let resp = client
-            .send(krabka_broker::testing::single_partition_produce_request(
+            .send(testing::single_partition_produce_request(
                 topic,
                 topic_id,
                 partition,
@@ -208,7 +212,7 @@ pub async fn produce_batch(client: &Client, batch: RecordBatch) {
             // intentional: bounded produce-retry backoff while the partition
             // leader materializes; this helper has no BrokerHandle to await on
             // and mirrors a real producer's retry.
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
             continue;
         }
         panic!("produce failed: {p:?}");
@@ -277,7 +281,7 @@ pub async fn permitted_topic_fixture(
     #[builder(default = Box::new(no_share_customization) as ShareConfigCustomization)]
     customize: ShareConfigCustomization,
 ) -> (
-    tokio::sync::OwnedSemaphorePermit,
+    OwnedSemaphorePermit,
     krabka_broker::BrokerHandle,
     Arc<Client>,
     tempfile::TempDir,
@@ -460,7 +464,7 @@ pub fn share_fetch_req(
         ..Default::default()
     }
 }
-pub fn acquired_count(p: &krabka_protocol::owned::share_fetch_response::PartitionData) -> i64 {
+pub fn acquired_count(p: &share_fetch_response::PartitionData) -> i64 {
     p.acquired_records
         .iter()
         .map(|r| r.last_offset - r.first_offset + 1)
@@ -532,7 +536,7 @@ impl<'a> ShareAck<'a> {
 pub async fn share_ack(
     client: &Client,
     ack: ShareAck<'_>,
-) -> krabka_protocol::owned::share_acknowledge_response::PartitionData {
+) -> share_acknowledge_response::PartitionData {
     let count = usize::try_from(ack.last.0 - ack.first.0 + 1).unwrap();
     let req = acknowledge_request()
         .maybe_group_id(Some(Some(ack.session.group.into())))
@@ -573,10 +577,9 @@ pub async fn fetch_row(
     client: &Client,
     req: ShareFetchRequest,
     mode: FetchSessionMode,
-) -> krabka_protocol::owned::share_fetch_response::PartitionData {
+) -> share_fetch_response::PartitionData {
     let partition = req.topics[0].partitions[0].partition_index;
-    let resp: krabka_protocol::owned::share_fetch_response::ShareFetchResponse =
-        client.send(req).await.expect("ShareFetch");
+    let resp: ShareFetchResponse = client.send(req).await.expect("ShareFetch");
     assert!(
         resp.error_code == 0,
         "ShareFetch top-level error: {}",
@@ -587,12 +590,10 @@ pub async fn fetch_row(
             .first()
             .and_then(|t| t.partitions.first())
             .cloned()
-            .unwrap_or_else(
-                || krabka_protocol::owned::share_fetch_response::PartitionData {
-                    partition_index: partition,
-                    ..Default::default()
-                },
-            )
+            .unwrap_or_else(|| share_fetch_response::PartitionData {
+                partition_index: partition,
+                ..Default::default()
+            })
     } else {
         resp.responses[0].partitions[0].clone()
     }
@@ -603,13 +604,13 @@ pub async fn fetch_until_acquired(
     client: &Client,
     req: ShareFetchRequest,
     mode: FetchSessionMode,
-) -> krabka_protocol::owned::share_fetch_response::PartitionData {
+) -> share_fetch_response::PartitionData {
     for _ in 0..40 {
         let row = fetch_row(client, req.clone(), mode).await;
         if row.error_code == 0 && acquired_count(&row) > 0 {
             return row;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
     panic!("share fetch never acquired any records: {req:?}");
 }
@@ -700,7 +701,7 @@ pub async fn crash_follower(
 /// # Panics
 /// Panics if the broker or client cannot restart from the supplied directory.
 pub async fn rejoin_group(
-    log_dir: std::path::PathBuf,
+    log_dir: PathBuf,
     group: &str,
 ) -> (krabka_broker::BrokerHandle, Arc<Client>) {
     let (broker, client) = restart_broker(log_dir).await;
@@ -713,9 +714,7 @@ pub async fn rejoin_group(
 ///
 /// # Panics
 /// Panics if the broker or client cannot restart from the supplied directory.
-pub async fn restart_broker(
-    log_dir: std::path::PathBuf,
-) -> (krabka_broker::BrokerHandle, Arc<Client>) {
+pub async fn restart_broker(log_dir: PathBuf) -> (krabka_broker::BrokerHandle, Arc<Client>) {
     let mut cfg = broker_config(log_dir);
     cfg.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     let broker = krabka_broker::Broker::start(cfg).await.unwrap();
@@ -762,16 +761,16 @@ pub struct RefetchSetup<'a> {
 #[bon::builder]
 pub async fn refetch_while_empty(
     client: &Client,
-    mut row: krabka_protocol::owned::share_fetch_response::PartitionData,
+    mut row: share_fetch_response::PartitionData,
     #[builder(default)] session: ShareSessionSetup<'_>,
     #[builder(default)] epochs: RetryEpochs,
-) -> krabka_protocol::owned::share_fetch_response::PartitionData {
+) -> share_fetch_response::PartitionData {
     let setup = RefetchSetup { session, epochs };
     for epoch in setup.epochs.start.0..setup.epochs.end.0 {
         if acquired_count(&row) > 0 {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
         row = fetch_row(
             client,
             share_fetch_req()
@@ -930,11 +929,11 @@ pub async fn wait_for_share_init(
     member_epoch: i32,
     tid: uuid::Uuid,
 ) {
-    let res = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let res = time::timeout(Duration::from_secs(30), async {
         loop {
             // Send a steady-state heartbeat to trigger the lifecycle hook.
             let _ = client
-                .send(krabka_protocol::owned::share_group_heartbeat_request::ShareGroupHeartbeatRequest {
+                .send(ShareGroupHeartbeatRequest {
                     group_id: "g1".into(),
                     member_id: member_id.into(),
                     member_epoch,
@@ -978,9 +977,9 @@ pub struct ConsumptionSetup {
 
 /// Owners and initialized membership for a fresh g1/t consume session.
 pub struct ConsumptionFixture {
-    pub _permit: tokio::sync::OwnedSemaphorePermit,
+    pub _permit: OwnedSemaphorePermit,
     pub broker: krabka_broker::BrokerHandle,
-    pub client: std::sync::Arc<krabka_client_core::Client>,
+    pub client: Arc<krabka_client_core::Client>,
     pub _dir: tempfile::TempDir,
     pub tid: uuid::Uuid,
     pub member: String,

@@ -41,6 +41,6 @@ pub(super) fn set_topic_config(
     let TopicConfigSetup { topic, key, value } = setup;
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: topic.into(),
-        overrides: maplit::btreemap! {key.to_string() => value.to_string()},
+        overrides: maplit::btreemap! {key.to_owned() => value.to_owned()},
     }));
 }

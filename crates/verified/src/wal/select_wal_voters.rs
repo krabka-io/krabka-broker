@@ -27,7 +27,7 @@ pub(super) fn contains(values: &[u64], value: u64) -> bool {
     #[cfg_attr(creusot, invariant(forall<k: Int> 0 <= k && k < i@ ==> values@[k] != value))]
     #[cfg_attr(creusot, variant(values@.len() - i@))]
     while i < values.len() {
-        if values[i] == value {
+        if matches!(values.get(i), Some(&candidate) if candidate == value) {
             return true;
         }
         i += 1;
@@ -81,7 +81,7 @@ pub fn select_wal_voter_index(
         voter_blocked(candidates@[k], used_nodes@, used_racks@, local_node, require_local))]
     #[variant(candidates@.len() - i@)]
     while i < candidates.len() {
-        let candidate = candidates[i];
+        let &candidate = candidates.get(i)?;
         if !contains(used_nodes, candidate.0)
             && !contains(used_racks, candidate.1)
             && (!require_local || candidate.0 == local_node)
@@ -100,7 +100,10 @@ pub fn select_wal_voter_index(
     && crate::sequence::distinct(voters@)))]
 #[must_use]
 pub fn wal_voter_set_valid(voters: &[u64], local_node: u64, expected: usize) -> bool {
-    if expected == 0 || voters.len() != expected || voters[0] != local_node {
+    if expected == 0
+        || voters.len() != expected
+        || !matches!(voters.first(), Some(&first) if first == local_node)
+    {
         return false;
     }
     let mut i = 0usize;
@@ -108,7 +111,9 @@ pub fn wal_voter_set_valid(voters: &[u64], local_node: u64, expected: usize) -> 
     #[invariant(forall<j: Int, k: Int> 0 <= j && j < k && k < i@ ==> voters@[j] != voters@[k])]
     #[variant(voters@.len() - i@)]
     while i < voters.len() {
-        if contains(&voters[..i], voters[i]) {
+        if let (Some(seen), Some(&voter)) = (voters.get(..i), voters.get(i))
+            && contains(seen, voter)
+        {
             return false;
         }
         i += 1;
@@ -197,7 +202,9 @@ pub fn select_wal_voters(
         ) else {
             return selected;
         };
-        let candidate = candidates[index];
+        let Some(&candidate) = candidates.get(index) else {
+            return selected;
+        };
         selected.push(candidate);
         nodes.push(candidate.0);
         racks.push(candidate.1);

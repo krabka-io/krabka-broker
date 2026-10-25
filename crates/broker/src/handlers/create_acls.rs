@@ -110,7 +110,7 @@ fn count_new_acls(image: &MetadataImage, to_submit: &[ValidCreation]) -> usize {
     new.len()
 }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: CreateAclsRequest,
     _version: ApiVersion,

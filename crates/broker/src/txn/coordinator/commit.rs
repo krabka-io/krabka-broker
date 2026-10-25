@@ -31,7 +31,10 @@ use {
     krabka_log::Offset,
     krabka_metadata::{LeaderEpoch, MetadataImage, NodeId},
     krabka_protocol::records::RecordBatch,
-    std::{sync::Arc, time::Duration},
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
     tokio::sync::watch,
 };
 
@@ -159,7 +162,15 @@ impl TxnCoordinator {
         &self,
         partition: PartitionIndex,
     ) -> Result<StateTerm, BrokerError> {
-        let leaders = self.leader_partitions.read().await;
+        Self::loaded_term_in(&*self.leader_partitions.read().await, partition)
+    }
+
+    /// The loaded term of `partition` in `leaders`, or the error of a write to
+    /// it.
+    fn loaded_term_in(
+        leaders: &leadership::StatePartitionLeaders,
+        partition: PartitionIndex,
+    ) -> Result<StateTerm, BrokerError> {
         let loaded = leaders.get(&partition).and_then(|leadership| {
             leadership
                 .term
@@ -170,7 +181,7 @@ impl TxnCoordinator {
                     leader_epoch: leadership.leader_epoch,
                 })
         });
-        loaded.ok_or_else(|| Self::term_error(&leaders, partition))
+        loaded.ok_or_else(|| Self::term_error(leaders, partition))
     }
 
     /// The error of a write whose term is not, or is no longer, the loaded
@@ -279,7 +290,7 @@ impl TxnCoordinator {
         timeout: Duration,
     ) -> Result<(), BrokerError> {
         let lost = || uncommitted(term.partition, codes::NOT_LEADER_OR_FOLLOWER);
-        let deadline = std::time::Instant::now() + timeout;
+        let deadline = Instant::now() + timeout;
         let committed = part.await_hw_at_least(end_offset, deadline);
         tokio::pin!(committed);
         loop {

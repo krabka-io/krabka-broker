@@ -35,7 +35,7 @@ impl Parse for ForwardingEntry {
     }
 }
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     let requests: List<ForwardingEntry, Token![,]> = List::parse_all(&parser)?;
     if requests.is_empty() {

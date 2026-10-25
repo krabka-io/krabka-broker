@@ -6,9 +6,10 @@ use {
         token::{Spanner, TokenStream, TokenTree},
     },
     proc_macro::{Group, TokenStream as NativeTokenStream, TokenTree as NativeTokenTree},
+    std::mem,
 };
 
-pub(crate) fn expand_native(
+pub fn expand_native(
     input: NativeTokenStream,
     unthrottled: bool,
 ) -> Result<NativeTokenStream, ParseError> {
@@ -51,7 +52,7 @@ fn validate(input: &TokenStream) -> Result<bool, ParseError> {
         ));
     }
     // Validate only the header; rustc handles closure patterns and other field expressions.
-    let fields = std::mem::take(&mut body.tokens);
+    let fields = mem::take(&mut body.tokens);
     let header = TokenStream::from(tokens);
     let parser = Parser::from_tokens(&header);
     let Expr::Struct(_) = Expr::parse(&parser)? else {

@@ -3,7 +3,7 @@
 //! for on that same endpoint.
 
 use {
-    crate::support::start_n_node_client, assert2::check,
+    crate::support::start_n_node_client, assert2::check, krabka_broker::codes,
     krabka_protocol::owned::describe_cluster_request::DescribeClusterRequest,
 };
 
@@ -37,7 +37,7 @@ async fn describe_cluster_endpoint_type_controllers_is_rejected() {
         .await
         .expect("describe_cluster controllers");
     check!(
-        resp.error_code == krabka_broker::codes::MISMATCHED_ENDPOINT_TYPE,
+        resp.error_code == codes::MISMATCHED_ENDPOINT_TYPE,
         "describe_cluster error_code"
     );
     // Kafka's error response does not echo the requested endpoint_type back;

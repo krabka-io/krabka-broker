@@ -1,7 +1,11 @@
 use {
     super::*,
     crate::transaction::unique_aborted_transaction_rows,
-    std::{collections::BTreeSet, vec},
+    proptest::collection,
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        vec,
+    },
 };
 
 pub(super) fn visible_rows(
@@ -19,7 +23,7 @@ pub(super) fn visible_rows(
 }
 
 pub(super) fn index(
-    rows: std::collections::BTreeMap<i64, (i64, i64)>,
+    rows: BTreeMap<i64, (i64, i64)>,
 ) -> (Vec<RestoreAbortedTxn>, RestoreSegmentExtent) {
     let owner = RestoreSegmentExtent {
         base_offset: rows.keys().next().copied().unwrap_or(0),
@@ -61,8 +65,8 @@ fn later_marker_fixture() -> (RestoreAbortedTxn, RestoreSegmentExtent, FetchWate
 proptest! {
     #[test]
     fn complete_sources_match_an_independent_interval_and_set_oracle(
-        remote in proptest::collection::btree_map(0_i64..=i64::MAX, (0_i64..=i64::MAX, 0_i64..=i64::MAX), 0..12),
-        local in proptest::collection::btree_map(0_i64..=i64::MAX, (0_i64..=i64::MAX, 0_i64..=i64::MAX), 0..12),
+        remote in collection::btree_map(0_i64..=i64::MAX, (0_i64..=i64::MAX, 0_i64..=i64::MAX), 0..12),
+        local in collection::btree_map(0_i64..=i64::MAX, (0_i64..=i64::MAX, 0_i64..=i64::MAX), 0..12),
         from in 0_i64..=i64::MAX, cut in any::<i64>(), hw in 0_i64..=i64::MAX,
         lso in 0_i64..=i64::MAX, deliverable in 0_i64..=i64::MAX, corrupt in any::<bool>(),
     ) {

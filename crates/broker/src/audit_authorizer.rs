@@ -8,15 +8,17 @@ use {
         time_util::now_ms,
     },
     krabka_audit::{AuditEndpoint, AuditEvent, AuditLog, AuditPrincipal},
-    std::sync::Arc,
+    std::{net, sync::Arc, time::Duration},
 };
 
-/// Wraps an [`Authorizer`]. It forwards decisions, bumps
-/// `authorization_denied_total` and emits an audit record on every Deny of
-/// [`Authorizer::authorize`]. [`Authorizer::authorize_quiet`] forwards the
-/// decision and leaves neither behind, for the checks that Kafka makes with
-/// `logIfDenied = false`. The handlers audit Allow decisions for admin
-/// operations separately (Task 8), so this decorator does not duplicate them.
+/// Wraps an [`Authorizer`].
+///
+/// It forwards decisions, bumps `authorization_denied_total` and emits an audit
+/// record on every Deny of [`Authorizer::authorize`].
+/// [`Authorizer::authorize_quiet`] forwards the decision and leaves neither
+/// behind, for the checks that Kafka makes with `logIfDenied = false`. The
+/// handlers audit Allow decisions for admin operations separately (Task 8), so
+/// this decorator does not duplicate them.
 ///
 /// The broker installs it whether or not audit is enabled: with
 /// `audit.enabled=false` the [`AuditLog`] is the disabled one and drops the
@@ -61,7 +63,7 @@ impl Authorizer for AuditingAuthorizer {
                     port: req.host.port(),
                 },
                 resource_type: format!("{:?}", req.resource_type),
-                resource_name: req.resource_name.to_string(),
+                resource_name: req.resource_name.to_owned(),
                 operation: format!("{:?}", req.operation),
                 time_ms: now_ms(),
             });
@@ -92,7 +94,7 @@ impl Authorizer for AuditingAuthorizer {
     /// Forward the wrapped authorizer's answer, for the same reason as
     /// `is_configured`: this decorator adds auditing around a decision, it
     /// does not change how long that decision stays fresh.
-    fn decision_ttl(&self) -> Option<std::time::Duration> { self.inner.decision_ttl() }
+    fn decision_ttl(&self) -> Option<Duration> { self.inner.decision_ttl() }
 
     /// Forward the wrapped authorizer's answer. This resource-type-wide check
     /// is not per-resource, so `authorize` above (which audits Deny) never
@@ -102,7 +104,7 @@ impl Authorizer for AuditingAuthorizer {
         &self,
         source: &dyn krabka_authz::AclSource,
         principal: &krabka_security::Principal,
-        host: &std::net::SocketAddr,
+        host: &net::SocketAddr,
         resource_type: krabka_metadata::ResourceType,
         operation: krabka_metadata::AclOperation,
     ) -> AuthorizationResult {
@@ -172,8 +174,8 @@ mod tests {
 
     fn denied_label() -> AuthorizationDeniedLabel {
         AuthorizationDeniedLabel {
-            operation: "Write".to_string(),
-            resource_type: "Topic".to_string(),
+            operation: "Write".to_owned(),
+            resource_type: "Topic".to_owned(),
         }
     }
 
@@ -257,7 +259,7 @@ mod tests {
     /// A fake authorizer that reports a fixed [`Authorizer::decision_ttl`],
     /// standing in for `OpaAuthorizer` without pulling in its HTTP setup.
     #[derive(Debug)]
-    struct FixedTtl(std::time::Duration);
+    struct FixedTtl(Duration);
 
     impl Authorizer for FixedTtl {
         fn authorize(
@@ -268,7 +270,7 @@ mod tests {
             AuthorizationResult::Allow
         }
 
-        fn decision_ttl(&self) -> Option<std::time::Duration> { Some(self.0) }
+        fn decision_ttl(&self) -> Option<Duration> { Some(self.0) }
     }
 
     /// This decorator adds auditing around a decision, not a cache; it must
@@ -277,7 +279,7 @@ mod tests {
     #[test]
     fn decision_ttl_follows_the_wrapped_authorizer() {
         let metrics = BrokerMetrics::new();
-        let ttl = std::time::Duration::from_secs(42);
+        let ttl = Duration::from_secs(42);
         let over_fixed_ttl = AuditingAuthorizer::new(
             Arc::new(FixedTtl(ttl)),
             krabka_audit::AuditLog::disabled(),

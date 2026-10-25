@@ -11,6 +11,7 @@ use {
     krabka_units::{Time, convert::TimeExt as _},
     std::{
         collections::HashMap,
+        sync::atomic::AtomicU64,
         time::{Duration, Instant},
     },
     tokio::sync::Mutex,
@@ -18,7 +19,7 @@ use {
 
 /// Per-broker liveness state as seen by the controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BrokerLivenessState {
+pub enum BrokerLivenessState {
     /// Broker has sent a heartbeat within the timeout window.
     Alive,
     /// No heartbeat received within the timeout window.
@@ -28,7 +29,7 @@ pub(crate) enum BrokerLivenessState {
 /// An edge transition emitted by [`ControllerLivenessState::tick`] or
 /// [`ControllerLivenessState::record_fenced_heartbeat`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LivenessTransition {
+pub enum LivenessTransition {
     /// Broker was `Dead`; this heartbeat revived it.
     DeadToAlive(u64),
     /// Broker crossed the deadline; marked `Dead`.
@@ -85,7 +86,7 @@ impl BrokerEntry {
 /// [`record_fenced_heartbeat`](Self::record_fenced_heartbeat) on every incoming
 /// `BrokerHeartbeat` RPC. The liveness ticker calls [`tick`](Self::tick)
 /// every second to expire stale entries.
-pub(crate) struct ControllerLivenessState {
+pub struct ControllerLivenessState {
     pub(super) timeout: Duration,
     pub(super) clock: Clock,
     pub(super) brokers: Mutex<HashMap<u64, BrokerEntry>>,
@@ -94,7 +95,7 @@ pub(crate) struct ControllerLivenessState {
     pub(super) registrations: Mutex<()>,
     /// The controller term the registry was last seeded for, or `u64::MAX`
     /// before the first seed. See [`seed_term`](Self::seed_term).
-    pub(super) seeded_term: std::sync::atomic::AtomicU64,
+    pub(super) seeded_term: AtomicU64,
 }
 
 impl ControllerLivenessState {
@@ -108,7 +109,7 @@ impl ControllerLivenessState {
             clock,
             brokers: Mutex::new(HashMap::new()),
             registrations: Mutex::new(()),
-            seeded_term: std::sync::atomic::AtomicU64::new(u64::MAX),
+            seeded_term: AtomicU64::new(u64::MAX),
         }
     }
 

@@ -7,7 +7,14 @@
 use crate::{error::BrokerError, metrics::BrokerMetrics};
 use {
     crate::broker::{Broker, BrokerHandle, TEST_AWAITER_TIMEOUT},
-    std::sync::Arc,
+    krabka_raft::reconfig::{ReconfigOutcome, RemoveVoter},
+    std::{
+        collections::BTreeSet,
+        future::{self, Future},
+        panic::Location,
+        sync::Arc,
+    },
+    tokio::{sync::watch, time},
 };
 
 impl BrokerHandle {
@@ -53,7 +60,7 @@ impl BrokerHandle {
     /// `topic_config` directly without adding per-field accessors.
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn controller_image_for_test(&self) -> std::sync::Arc<krabka_metadata::MetadataImage> {
+    pub fn controller_image_for_test(&self) -> Arc<krabka_metadata::MetadataImage> {
         self.broker.controller.current_image()
     }
 
@@ -65,7 +72,7 @@ impl BrokerHandle {
     /// cluster.
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn fenced_broker_ids_for_test(&self) -> std::collections::BTreeSet<u64> {
+    pub fn fenced_broker_ids_for_test(&self) -> BTreeSet<u64> {
         use crate::heartbeat::fencing::fenced_node_ids;
 
         fenced_node_ids(&self.broker.controller.current_image())
@@ -105,7 +112,7 @@ impl BrokerHandle {
     /// broker-internal background routines directly.
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn broker_arc_for_test(&self) -> Arc<Broker> { self.broker.clone() }
+    pub fn broker_arc_for_test(&self) -> Arc<Broker> { Arc::clone(&self.broker) }
 
     /// Test-only: the controller voter set's size as seen by this broker's
     /// committed `MetadataImage`. KIP-853 dynamic-voters tests poll this to
@@ -128,7 +135,7 @@ impl BrokerHandle {
     /// to pick a follower to remove.
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn voter_ids_for_test(&self) -> std::collections::BTreeSet<krabka_raft::NodeId> {
+    pub fn voter_ids_for_test(&self) -> BTreeSet<krabka_raft::NodeId> {
         self.broker.controller.current_image().voters().ids()
     }
 
@@ -156,8 +163,8 @@ impl BrokerHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn remove_voter_for_test(
         &self,
-        req: krabka_raft::reconfig::RemoveVoter,
-    ) -> Result<krabka_raft::reconfig::ReconfigOutcome, krabka_raft::RaftError> {
+        req: RemoveVoter,
+    ) -> Result<ReconfigOutcome, krabka_raft::RaftError> {
         self.broker.controller.remove_voter(req).await
     }
 
@@ -169,7 +176,7 @@ impl BrokerHandle {
     pub async fn finalize_kraft_version_for_test(
         &self,
         version: u16,
-    ) -> Result<krabka_raft::reconfig::ReconfigOutcome, krabka_raft::RaftError> {
+    ) -> Result<ReconfigOutcome, krabka_raft::RaftError> {
         self.broker.controller.finalize_kraft_version(version).await
     }
 
@@ -189,9 +196,7 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn watch_leader_for_test(
-        &self,
-    ) -> tokio::sync::watch::Receiver<Option<krabka_raft::NodeId>> {
+    pub fn watch_leader_for_test(&self) -> watch::Receiver<Option<krabka_raft::NodeId>> {
         self.broker.controller.watch_leader()
     }
 
@@ -206,7 +211,7 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     #[track_caller]
-    pub fn wait_for_image<F>(&self, pred: F) -> impl std::future::Future<Output = ()>
+    pub fn wait_for_image<F>(&self, pred: F) -> impl Future<Output = ()>
     where
         F: Fn(&krabka_metadata::MetadataImage) -> bool,
     {
@@ -249,7 +254,7 @@ impl BrokerHandle {
     where
         F: FnMut(&BrokerMetrics) -> bool,
     {
-        let held = super::await_until(|| std::future::ready(predicate(&self.broker.metrics))).await;
+        let held = super::await_until(|| future::ready(predicate(&self.broker.metrics))).await;
         assert2::assert!(
             held,
             "wait_for_metrics({what}) timed out after {TEST_AWAITER_TIMEOUT:?}"
@@ -261,7 +266,7 @@ impl BrokerHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_controller_leader(&self) -> krabka_raft::NodeId {
         let mut rx = self.watch_leader_for_test();
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
+        let res = time::timeout(TEST_AWAITER_TIMEOUT, async {
             loop {
                 if let Some(id) = *rx.borrow_and_update()
                     && id != krabka_raft::NodeId(0)
@@ -292,7 +297,7 @@ impl BrokerHandle {
     #[doc(hidden)]
     #[cfg(any(test, feature = "test-helpers"))]
     #[track_caller]
-    pub fn wait_until_brokers_registered(&self, n: usize) -> impl std::future::Future<Output = ()> {
+    pub fn wait_until_brokers_registered(&self, n: usize) -> impl Future<Output = ()> {
         self.wait_for_image(move |img| img.brokers().filter(|broker| !broker.fenced).count() >= n)
     }
 
@@ -365,7 +370,7 @@ impl BrokerHandle {
     #[cfg(any(test, feature = "test-helpers"))]
     pub async fn wait_until_metadata_offset_at_least(&self, offset: i64) {
         let applied = super::await_until(|| {
-            std::future::ready(self.broker.controller.current_metadata_offset() >= offset)
+            future::ready(self.broker.controller.current_metadata_offset() >= offset)
         })
         .await;
         assert2::assert!(
@@ -384,7 +389,7 @@ impl BrokerHandle {
         &self,
         topic: &str,
         partition: i32,
-    ) -> impl std::future::Future<Output = ()> {
+    ) -> impl Future<Output = ()> {
         self.wait_for_image(move |img| img.partition(topic, partition).is_some())
     }
 
@@ -398,7 +403,7 @@ impl BrokerHandle {
         topic: &str,
         partition: i32,
         exclude: krabka_raft::NodeId,
-    ) -> impl std::future::Future<Output = ()> {
+    ) -> impl Future<Output = ()> {
         self.wait_for_image(move |img| {
             img.partition(topic, partition).is_some_and(|p| {
                 p.leader != krabka_raft::NodeId(0)
@@ -417,7 +422,7 @@ impl BrokerHandle {
         topic: &str,
         partition: i32,
         len: usize,
-    ) -> impl std::future::Future<Output = ()> {
+    ) -> impl Future<Output = ()> {
         self.wait_for_image(move |img| {
             img.partition(topic, partition)
                 .is_some_and(|p| p.isr.len() == len)
@@ -430,7 +435,7 @@ impl BrokerHandle {
 #[cfg(any(test, feature = "test-helpers"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ImageWaitTimeout {
-    caller: &'static std::panic::Location<'static>,
+    caller: &'static Location<'static>,
 }
 
 #[cfg(any(test, feature = "test-helpers"))]
@@ -454,15 +459,15 @@ impl ImageWaitTimeout {
 #[cfg(any(test, feature = "test-helpers"))]
 #[track_caller]
 fn image_awaiter<F>(
-    mut rx: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
+    mut rx: watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
     pred: F,
-) -> impl std::future::Future<Output = Result<(), ImageWaitTimeout>>
+) -> impl Future<Output = Result<(), ImageWaitTimeout>>
 where
     F: Fn(&krabka_metadata::MetadataImage) -> bool,
 {
     let caller = std::panic::Location::caller();
     async move {
-        tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
+        time::timeout(TEST_AWAITER_TIMEOUT, async {
             loop {
                 // Scope the borrow so it is dropped before the await.
                 if pred(&rx.borrow_and_update()) {

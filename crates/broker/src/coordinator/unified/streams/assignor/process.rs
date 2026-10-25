@@ -11,7 +11,7 @@
 use {
     super::types::{AssignorMember, Task},
     std::{
-        cmp::Ordering,
+        cmp::{Ordering, Reverse},
         collections::{BTreeMap, BTreeSet, HashMap},
     },
 };
@@ -156,7 +156,7 @@ impl LocalState {
             // A current standby or warmup owner ranks ahead of a member known
             // only through its reported offsets; the most caught-up state
             // comes first within each group. The sort is stable.
-            ranked.sort_by_key(|c| (!c.is_prev_standby, std::cmp::Reverse(c.offset_sum)));
+            ranked.sort_by_key(|c| (!c.is_prev_standby, Reverse(c.offset_sum)));
             state
                 .standby_task_to_prev_members
                 .insert(task, ranked.into_iter().map(|c| c.member).collect());
@@ -197,7 +197,9 @@ impl LocalState {
     ) -> Option<Member> {
         let mut candidate: Option<LoadedMember<'_>> = None;
         for member in members? {
-            let process = &self.processes[&member.process_id];
+            let Some(process) = self.processes.get(&member.process_id) else {
+                continue;
+            };
             if standby_task.is_some_and(|task| process.has_task(task)) {
                 continue;
             }
@@ -218,13 +220,9 @@ impl LocalState {
 
     /// The process ids in ascending load order, the smaller id on a tie.
     pub(super) fn processes_by_load(&self) -> Vec<String> {
-        let mut ids: Vec<&String> = self.processes.keys().collect();
-        ids.sort_by(|a, b| {
-            self.processes[*a]
-                .cmp_load(&self.processes[*b])
-                .then(a.cmp(b))
-        });
-        ids.into_iter().cloned().collect()
+        let mut processes: Vec<_> = self.processes.iter().collect();
+        processes.sort_by(|(a_id, a), (b_id, b)| a.cmp_load(b).then(a_id.cmp(b_id)));
+        processes.into_iter().map(|(id, _)| id.clone()).collect()
     }
 
     /// Places `task` on `member` and returns the member's new task count.

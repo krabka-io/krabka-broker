@@ -5,7 +5,10 @@
 //! per-partition mutex guards. They sit in their own file because every other
 //! part of the tracker reads or writes them.
 
-use {crate::partition::LogOffset, krabka_log::ProducerId, std::collections::HashMap};
+use {
+    crate::partition::LogOffset, krabka_log::ProducerId,
+    krabka_verified::producer::producer_completion_window, std::collections::HashMap,
+};
 
 /// Kafka's `ProducerStateEntry.NUM_BATCHES_TO_RETAIN`: the number of a
 /// producer's most recent batches whose retry answers as a duplicate.
@@ -93,14 +96,14 @@ impl ProducerEntry {
 
 /// Whether a completed append is accepted, and the earlier batches it leaves
 /// retained when it is.
-pub(crate) struct Completion {
+pub struct Completion {
     pub(crate) accepted: bool,
     pub(crate) earlier: EarlierBatches,
 }
 
 /// The shared live/model completion projection, keeping metadata by physical
 /// offset instead of asynchronous acknowledgement order.
-pub(crate) fn earlier_after_completion(
+pub fn earlier_after_completion(
     existing: Option<ProducerEntry>,
     epoch: i16,
     incoming: RetainedBatch,
@@ -114,28 +117,33 @@ pub(crate) fn earlier_after_completion(
     let mut retained = [incoming; NUM_BATCHES_TO_RETAIN];
     let mut ends = [0; NUM_BATCHES_TO_RETAIN];
     let mut count = 0;
-    for batch in existing
-        .into_iter()
-        .flat_map(|entry| entry.retained_batches().into_iter().flatten())
-    {
-        retained[count] = batch;
-        ends[count] = batch.last_offset;
+    for ((slot, end), batch) in retained.iter_mut().zip(&mut ends).zip(
+        existing
+            .into_iter()
+            .flat_map(|entry| entry.retained_batches().into_iter().flatten()),
+    ) {
+        *slot = batch;
+        *end = batch.last_offset;
         count += 1;
     }
-    let (accepted, selected) = krabka_verified::producer::producer_completion_window(
+    // `count` is at most `NUM_BATCHES_TO_RETAIN`, the length of `ends`.
+    let (accepted, selected) = producer_completion_window(
         existing.map(|entry| entry.epoch),
         epoch,
-        &ends[..count],
+        ends.get(..count).unwrap_or_default(),
         incoming.last_offset,
     );
     let mut earlier = NO_EARLIER_BATCHES;
     if accepted {
-        for (slot, &source) in selected.iter().take(selected.len() - 1).enumerate() {
-            earlier[slot] = Some(if source == count {
-                incoming
+        for (slot, &source) in earlier
+            .iter_mut()
+            .zip(selected.iter().take(selected.len() - 1))
+        {
+            *slot = if source == count {
+                Some(incoming)
             } else {
-                retained[source]
-            });
+                retained.get(source).copied()
+            };
         }
     }
     Completion { accepted, earlier }

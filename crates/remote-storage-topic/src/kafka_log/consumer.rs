@@ -18,15 +18,18 @@ use {
     },
     krabka_client_core::{
         Client, ClientFrameMax, ConnectionDispatchQueueCapacity, FetchMinBytes, IsolatedFetch,
+        security::ClientSecurity,
     },
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
     krabka_units::prelude::{ByteSize, Time, TimeExt as _},
     std::{
         collections::HashMap,
+        fmt,
         future::Future,
-        sync::{Arc, Mutex as StdMutex},
+        sync::{Arc, Mutex as StdMutex, PoisonError},
+        time::Duration,
     },
-    tokio::sync::mpsc,
+    tokio::{sync::mpsc, time},
     tokio_util::sync::CancellationToken,
     tracing::{instrument, warn},
 };
@@ -36,7 +39,7 @@ use {
 pub(super) struct ConsumerState {
     pub(super) bootstrap: String,
     pub(super) client_id: String,
-    pub(super) security: Option<krabka_client_core::security::ClientSecurity>,
+    pub(super) security: Option<ClientSecurity>,
     pub(super) topic: String,
     pub(super) topic_id: WireUuid,
     pub(super) tx: mpsc::Sender<MetadataEventRecord>,
@@ -51,12 +54,14 @@ pub(super) struct ConsumerState {
 
 impl ConsumerState {
     pub(super) fn spawn_partition(self: &Arc<Self>, start: PartitionStart) {
-        let mut tasks = self.tasks.lock().expect("metadata tasks mutex poisoned");
-        if tasks.contains_key(&start.partition) {
-            return; // already assigned
-        }
         let cancel = CancellationToken::new();
-        tasks.insert(start.partition, cancel.clone());
+        {
+            let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
+            if tasks.contains_key(&start.partition) {
+                return; // already assigned
+            }
+            tasks.insert(start.partition, cancel.clone());
+        }
         tokio::spawn(partition_fetch_loop(
             Arc::clone(self),
             start.partition,
@@ -66,18 +71,18 @@ impl ConsumerState {
     }
 
     fn cancel_partition(&self, partition: i32) {
-        if let Some(tok) = self
+        let task = self
             .tasks
             .lock()
-            .expect("metadata tasks mutex poisoned")
-            .remove(&partition)
-        {
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&partition);
+        if let Some(tok) = task {
             tok.cancel();
         }
     }
 
     pub(super) fn cancel_all(&self) {
-        let mut tasks = self.tasks.lock().expect("metadata tasks mutex poisoned");
+        let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
         for (_, tok) in tasks.drain() {
             tok.cancel();
         }
@@ -98,7 +103,7 @@ impl AssignmentHandle for KafkaAssignmentHandle {
             .state
             .tasks
             .lock()
-            .expect("metadata tasks mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .keys()
             .copied()
             .collect();
@@ -120,11 +125,11 @@ pub(super) fn metadata_event_channel(capacity: MetadataEventQueueCapacity) -> Me
 
 async fn connect_with_retry<T, E, F, Fut>(
     cancel: &CancellationToken,
-    backoff: std::time::Duration,
+    backoff: Duration,
     mut connect: F,
 ) -> Option<T>
 where
-    E: std::fmt::Display,
+    E: fmt::Display,
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, E>>,
 {
@@ -141,7 +146,7 @@ where
         tokio::select! {
             biased;
             () = cancel.cancelled() => return None,
-            () = tokio::time::sleep(backoff) => {}
+            () = time::sleep(backoff) => {}
         }
     }
 }
@@ -179,32 +184,35 @@ async fn partition_fetch_loop(
     let mut next_offset = start_offset.max(0);
     let mut leader = None;
     loop {
-        if leader.is_none() {
+        let current_leader = if let Some(current_leader) = leader {
+            current_leader
+        } else {
             match client.refresh_metadata().await {
                 Ok(metadata) => {
                     leader = partition_leader(&metadata, &state.topic, partition);
-                    if leader.is_none() {
+                    let Some(current_leader) = leader else {
                         warn!(
                             partition,
                             "metadata consumer: partition leader is unavailable"
                         );
-                        tokio::time::sleep(state.fetch_retry_backoff.to_std()).await;
+                        time::sleep(state.fetch_retry_backoff.to_std()).await;
                         continue;
-                    }
+                    };
+                    current_leader
                 }
                 Err(error) => {
                     warn!(%error, partition, "metadata consumer: metadata refresh failed");
-                    tokio::time::sleep(state.fetch_retry_backoff.to_std()).await;
+                    time::sleep(state.fetch_retry_backoff.to_std()).await;
                     continue;
                 }
             }
-        }
+        };
         tokio::select! {
             biased;
             () = cancel.cancelled() => {
                 return;
             }
-            res = client.fetch_partition_with_isolation_on(leader.expect("leader resolved above"), IsolatedFetch {
+            res = client.fetch_partition_with_isolation_on(current_leader, IsolatedFetch {
                 topic: &state.topic,
                 topic_id: state.topic_id,
                 partition,
@@ -252,7 +260,7 @@ async fn partition_fetch_loop(
                     Err(e) => {
                         warn!(error = %e, partition, "metadata consumer: fetch failed; retrying");
                         leader = None;
-                        tokio::time::sleep(state.fetch_retry_backoff.to_std()).await;
+                        time::sleep(state.fetch_retry_backoff.to_std()).await;
                     }
                 }
             }
@@ -267,15 +275,17 @@ mod tests {
         crate::kafka_log::config::METADATA_TOPIC,
         assert2::{assert, check},
         krabka_units::prelude::{mebibytes, millis},
+        std::{future, time::Duration},
+        tokio::{sync::Notify, task},
     };
 
     #[tokio::test]
     async fn initial_connection_retries_without_reassignment() {
         let cancel = CancellationToken::new();
         let mut attempts = 0;
-        let client = connect_with_retry(&cancel, std::time::Duration::ZERO, || {
+        let client = connect_with_retry(&cancel, Duration::ZERO, || {
             attempts += 1;
-            std::future::ready(if attempts == 1 {
+            future::ready(if attempts == 1 {
                 Err("temporary connection failure")
             } else {
                 Ok(42)
@@ -291,28 +301,25 @@ mod tests {
         let cancel = CancellationToken::new();
         let pending = connect_with_retry::<(), &str, _, _>(
             &cancel,
-            std::time::Duration::from_secs(3600),
-            std::future::pending,
+            Duration::from_secs(3600),
+            future::pending,
         );
         tokio::pin!(pending);
         tokio::select! {
             biased;
             result = &mut pending => panic!("pending connection completed: {result:?}"),
-            () = tokio::task::yield_now() => {}
+            () = task::yield_now() => {}
         }
         cancel.cancel();
         assert!(pending.await.is_none());
 
         let cancel = CancellationToken::new();
-        let started = tokio::sync::Notify::new();
-        let retrying = connect_with_retry::<(), _, _, _>(
-            &cancel,
-            std::time::Duration::from_secs(3600),
-            || {
+        let started = Notify::new();
+        let retrying =
+            connect_with_retry::<(), _, _, _>(&cancel, Duration::from_secs(3600), || {
                 started.notify_one();
-                std::future::ready(Err("temporary connection failure"))
-            },
-        );
+                future::ready(Err("temporary connection failure"))
+            });
         tokio::pin!(retrying);
         tokio::select! {
             biased;

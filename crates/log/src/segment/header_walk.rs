@@ -209,8 +209,8 @@ impl Segment {
             buf.clear();
             read_range(pos, &mut buf, window)?;
             let mut at = 0usize;
-            while at + HEADER_LEN <= buf.len() {
-                let header = RecordBatchHeader::ref_from_bytes(&buf[at..at + HEADER_LEN])
+            while let Some(header_bytes) = buf.get(at..at + HEADER_LEN) {
+                let header = RecordBatchHeader::ref_from_bytes(header_bytes)
                     .map_err(|_| LogError::Corrupt("record batch header".into()))?;
                 // Wire values from the fixed v2 header stay raw `i64`.
                 let batch_len = usize::try_from(header.batch_length.get().max(0)).unwrap_or(0);
@@ -253,7 +253,8 @@ mod tests {
                 sample_batch, seeded_fixture,
             },
         },
-        std::ops::ControlFlow,
+        krabka_units::prelude::ByteSize,
+        std::{iter, ops::ControlFlow},
         tempfile::tempdir,
     };
 
@@ -480,10 +481,7 @@ mod tests {
     /// A segment of `count` three-record batches from offset 10, whose
     /// payloads grow so that batch boundaries fall at varied places in a
     /// window, and the position of each batch.
-    fn varied_segment(
-        count: usize,
-        interval: krabka_units::prelude::ByteSize,
-    ) -> (TempSegment, Vec<u64>) {
+    fn varied_segment(count: usize, interval: ByteSize) -> (TempSegment, Vec<u64>) {
         three_record_segment(count, interval, true)
     }
 
@@ -493,7 +491,7 @@ mod tests {
     /// record's value, so batch boundaries fall at varied places in a window.
     fn three_record_segment(
         count: usize,
-        interval: krabka_units::prelude::ByteSize,
+        interval: ByteSize,
         varied: bool,
     ) -> (TempSegment, Vec<u64>) {
         use bytes::Bytes;
@@ -583,7 +581,7 @@ mod tests {
         let (_, reads) = walk(&seg, 0, first, None);
 
         let max = max_header_walk_window();
-        let expected: Vec<usize> = std::iter::successors(Some(first), |window| {
+        let expected: Vec<usize> = iter::successors(Some(first), |window| {
             Some(window.saturating_mul(2).min(max))
         })
         .take(reads.len())

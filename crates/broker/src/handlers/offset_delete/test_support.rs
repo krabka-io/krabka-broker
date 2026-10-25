@@ -26,7 +26,7 @@ pub(super) fn expected_topic(
     partitions: Vec<OffsetDeleteResponsePartition>,
 ) -> OffsetDeleteResponseTopic {
     krabka_macros::tagged_wire!(OffsetDeleteResponseTopic {
-        name: name.to_string(),
+        name: name.to_owned(),
         partitions,
     })
 }
@@ -42,11 +42,11 @@ pub(super) struct RequestTopic<'a> {
 /// topics.
 pub(super) fn req_with_topics(topics: &[RequestTopic<'_>]) -> OffsetDeleteRequest {
     OffsetDeleteRequest {
-        group_id: "g".to_string(),
+        group_id: "g".to_owned(),
         topics: topics
             .iter()
             .map(|topic| OffsetDeleteRequestTopic {
-                name: topic.name.to_string(),
+                name: topic.name.to_owned(),
                 partitions: topic
                     .partitions
                     .iter()

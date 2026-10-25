@@ -8,7 +8,7 @@ use {
         schema_validation::SchemaValidator,
     },
     krabka_units::{Time, convert::TimeExt as _},
-    std::sync::Arc,
+    std::{fs, sync::Arc},
 };
 
 /// Acquire clients and secrets from the final settings. An absent section keeps
@@ -80,7 +80,7 @@ fn schema_validator(
         (None, None) => None,
         (Some(username), Some(path)) => Some((
             username.clone(),
-            std::fs::read_to_string(path)
+            fs::read_to_string(path)
                 .map_err(|error| {
                     FileConfigError::InvalidConfig(format!(
                         "[schema_registry]: failed to read basic_auth_password_path {}: {error}",
@@ -133,7 +133,7 @@ mod tests {
             test_support::{peer, sasl_principal},
         },
         krabka_metadata::{AclOperation, MetadataImage, ResourceType},
-        std::collections::HashSet,
+        std::{collections::HashSet, sync},
     };
 
     #[yare::parameterized(
@@ -144,7 +144,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("password");
         if invalid_utf8 {
-            std::fs::write(&path, [0xff]).unwrap();
+            fs::write(&path, [0xff]).unwrap();
         }
         let file: FileConfig = toml::from_str(&format!(
             "[schema_registry]\nurl = 'http://localhost:8081'\nbasic_auth_username = 'broker'\nbasic_auth_password_path = '{}'\n",
@@ -198,7 +198,7 @@ mod tests {
             assert2::assert!(cfg.authorizer.authorize(&image, &request) == want, "{name}");
         }
         assert2::assert!(cfg.authorizer.is_configured());
-        let authorizer = cfg.authorizer.clone();
+        let authorizer = sync::Arc::clone(&cfg.authorizer);
         assemble(&mut cfg).unwrap();
         assert2::assert!(Arc::ptr_eq(&authorizer, &cfg.authorizer));
     }
@@ -219,7 +219,7 @@ mod tests {
             )),
             ..BrokerConfig::default()
         };
-        let authorizer = cfg.authorizer.clone();
+        let authorizer = sync::Arc::clone(&cfg.authorizer);
         let validator = cfg.schema_validator.clone().unwrap();
         assemble(&mut cfg).unwrap();
         assert2::assert!(Arc::ptr_eq(&authorizer, &cfg.authorizer));

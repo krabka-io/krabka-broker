@@ -38,7 +38,7 @@ struct Registry {
 /// An in-memory [`PeerSender`]. It routes the encoded request body to the target
 /// engine's [`KraftController::deliver`] and awaits the oneshot reply.
 #[derive(Clone)]
-pub(crate) struct SimNet {
+pub struct SimNet {
     registry: Arc<Mutex<Registry>>,
     /// The node whose outbound sends this handle carries, when it was made by
     /// [`SimNet::as_peer`]. The registry handle the test itself holds has none,

@@ -91,6 +91,7 @@ struct Outcome {
 
 /// A batch of one record with `value`.
 use crate::test_support::single_value_batch as batch;
+use tokio::time::{sleep, timeout};
 
 /// Create `topic` with replicas 1 and 2, led by this broker, wait until node
 /// 2 is in the ISR, and append two batches.
@@ -187,7 +188,7 @@ pub(super) async fn fetch(broker: &BrokerHandle, request: &FetchRequest) -> Fetc
 /// batch arrives while the fetch parks or just before it parks.
 async fn append_after_the_position(partition: Arc<Partition>) {
     while partition.high_watermark().await < Offset(LOG_END) {
-        tokio::time::sleep(Duration::from_millis(1)).await;
+        sleep(Duration::from_millis(1)).await;
     }
     partition
         .produce_batch(batch(b"third"))
@@ -271,7 +272,7 @@ async fn a_follower_learns_the_high_watermark_it_moved_one_fetch_later() {
 
         let appender = (row.case.answer == Answer::Wake)
             .then(|| tokio::spawn(append_after_the_position(Arc::clone(&partition))));
-        let response = tokio::time::timeout(
+        let response = timeout(
             Duration::from_secs(5),
             fetch(&broker, &request(&row.topic, row.case)),
         )

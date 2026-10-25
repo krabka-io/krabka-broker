@@ -19,12 +19,23 @@
 //! On non-Linux targets the whole kTLS feature is `#[cfg]`-compiled out, and
 //! the probe is a constant `false`.
 
+#[cfg(all(test, target_os = "linux"))]
+use std::{
+    io::{Error, ErrorKind},
+    sync::{Mutex, PoisonError},
+};
+#[cfg(target_os = "linux")]
+use {
+    rustls::{pki_types::PrivateKeyDer, version::TLS13},
+    std::error,
+};
+
 /// Probe whether this host supports Linux kTLS TX. Returns `true` only when a
 /// full loopback TLS handshake and then `ktls::config_ktls_server` succeed.
 /// That means the kernel `tls` module is present and the socket's
 /// `crypto_info` accepts the negotiated cipher suite.
 #[cfg(target_os = "linux")]
-pub(crate) async fn probe_ktls_support() -> bool {
+pub async fn probe_ktls_support() -> bool {
     #[cfg(test)]
     if let Some(result) = take_test_probe_result() {
         return ktls_probe_result_to_bool(result);
@@ -39,7 +50,7 @@ pub(crate) async fn probe_ktls_support() -> bool {
 pub(crate) fn probe_ktls_support() -> std::future::Ready<bool> { std::future::ready(false) }
 
 #[cfg(target_os = "linux")]
-async fn try_probe_ktls() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn try_probe_ktls() -> Result<(), Box<dyn error::Error + Send + Sync>> {
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
@@ -48,7 +59,7 @@ async fn try_probe_ktls() -> Result<(), Box<dyn std::error::Error + Send + Sync>
     // 1. Throwaway self-signed cert (ECDSA P-256) with a `localhost` SAN so the
     //    loopback client can verify the server name. Never persisted.
     let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)?;
-    let params = rcgen::CertificateParams::new(vec!["localhost".to_string()])?;
+    let params = rcgen::CertificateParams::new(vec!["localhost".to_owned()])?;
     let cert = params.self_signed(&key)?;
     let key_der = rustls::pki_types::PrivateKeyDer::try_from(key.serialize_der())
         .map_err(|e| format!("probe key der: {e}"))?;
@@ -73,7 +84,7 @@ async fn try_probe_ktls() -> Result<(), Box<dyn std::error::Error + Send + Sync>
         // Keep the connection open until the server finishes the probe.
         let mut buf = [0u8; 1];
         let _ = tls.read(&mut buf).await;
-        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        Ok::<(), Box<dyn error::Error + Send + Sync>>(())
     });
 
     // 4. Server side: accept inside a `CorkStream` (the only way `ktls` can
@@ -96,22 +107,20 @@ async fn try_probe_ktls() -> Result<(), Box<dyn std::error::Error + Send + Sync>
 #[cfg(target_os = "linux")]
 pub(super) fn tls13_pair(
     cert: &rcgen::Certificate,
-    key_der: rustls::pki_types::PrivateKeyDer<'static>,
+    key_der: PrivateKeyDer<'static>,
 ) -> Result<(tokio_rustls::TlsAcceptor, tokio_rustls::TlsConnector), rustls::Error> {
     use std::sync::Arc;
     let cert_der = rustls::pki_types::CertificateDer::from(cert.der().to_vec());
-    let mut server_cfg =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(vec![cert_der.clone()], key_der)?;
+    let mut server_cfg = rustls::ServerConfig::builder_with_protocol_versions(&[&TLS13])
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der.clone()], key_der)?;
     server_cfg.enable_secret_extraction = true;
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_cfg));
     let mut roots = rustls::RootCertStore::empty();
     roots.add(cert_der)?;
-    let client_cfg =
-        rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+    let client_cfg = rustls::ClientConfig::builder_with_protocol_versions(&[&TLS13])
+        .with_root_certificates(roots)
+        .with_no_client_auth();
     Ok((
         acceptor,
         tokio_rustls::TlsConnector::from(Arc::new(client_cfg)),
@@ -119,7 +128,7 @@ pub(super) fn tls13_pair(
 }
 
 #[cfg(target_os = "linux")]
-fn ktls_probe_result_to_bool(result: Result<(), Box<dyn std::error::Error + Send + Sync>>) -> bool {
+fn ktls_probe_result_to_bool(result: Result<(), Box<dyn error::Error + Send + Sync>>) -> bool {
     match result {
         Ok(()) => true,
         Err(e) => {
@@ -130,7 +139,7 @@ fn ktls_probe_result_to_bool(result: Result<(), Box<dyn std::error::Error + Send
 }
 
 #[cfg(all(test, target_os = "linux"))]
-static TEST_PROBE_RESULT: std::sync::Mutex<Option<TestProbeResult>> = std::sync::Mutex::new(None);
+static TEST_PROBE_RESULT: Mutex<Option<TestProbeResult>> = Mutex::new(None);
 
 #[cfg(all(test, target_os = "linux"))]
 enum TestProbeResult {
@@ -140,22 +149,23 @@ enum TestProbeResult {
 
 #[cfg(all(test, target_os = "linux"))]
 fn set_test_probe_result(result: TestProbeResult) {
-    *TEST_PROBE_RESULT.lock().expect("test probe mutex") = Some(result);
+    *TEST_PROBE_RESULT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(result);
 }
 
 #[cfg(all(test, target_os = "linux"))]
-fn take_test_probe_result() -> Option<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+fn take_test_probe_result() -> Option<Result<(), Box<dyn error::Error + Send + Sync>>> {
     TEST_PROBE_RESULT
         .lock()
-        .expect("test probe mutex")
+        .unwrap_or_else(PoisonError::into_inner)
         .take()
         .map(|result| match result {
             TestProbeResult::Success => Ok(()),
-            TestProbeResult::Failure => Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
+            TestProbeResult::Failure => Err(Box::new(Error::new(
+                ErrorKind::Unsupported,
                 "kTLS unavailable",
-            ))
-                as Box<dyn std::error::Error + Send + Sync>),
+            )) as Box<dyn error::Error + Send + Sync>),
         })
 }
 

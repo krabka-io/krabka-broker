@@ -37,7 +37,7 @@ mod response;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::{
+pub use self::{
     creation::TopicCreation,
     placement::{
         InitialLeadership, automatic_leaderships, automatic_placement_exclusions, inactive_brokers,
@@ -48,6 +48,7 @@ pub(crate) use self::{
 use {
     self::{
         authorization::{authorize_create_topics, describe_configs_denied},
+        creation::NewTopic,
         name::CLUSTER_METADATA_TOPIC,
         response::{
             creatable_topic_configs, create_topics_response, finish_response, topic_error_result,
@@ -67,13 +68,17 @@ use {
         metadata_source::MetadataSource,
         wal::quorum::placement::select_voters_from_sorted_racks,
     },
+    std::{
+        collections::{BTreeMap, HashSet},
+        sync::Arc,
+    },
 };
 
 /// Leader epoch that a freshly created partition starts at. The committed
 /// `PartitionRecord` and the handler-side leader-cache install must agree.
-pub(crate) const INITIAL_LEADER_EPOCH: i32 = 0;
+pub const INITIAL_LEADER_EPOCH: i32 = 0;
 
-pub(crate) fn diskless_wal_placement_error(
+pub fn diskless_wal_placement_error(
     image: &krabka_metadata::MetadataImage,
     config: &BrokerConfig,
     first_partition: i32,
@@ -108,8 +113,7 @@ pub(crate) fn diskless_wal_placement_error(
         })
 }
 
-#[allow(clippy::too_many_lines)]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: CreateTopicsRequest,
     version: ApiVersion,
@@ -117,20 +121,82 @@ pub(crate) async fn handle(
 ) -> Result<CreateTopicsResponse, BrokerError> {
     // ── ACL preamble ────────────────────────────────────────
     let image = broker.controller.current_image();
+    let AdmittedTopics {
+        effective,
+        trailing,
+    } = admit_topics(broker, &image, ctx, &req.topics);
 
+    // Kafka's `validateTotalNumberOfPartitions` refuses the whole request
+    // when the topics the controller sees add up to more partitions than one
+    // metadata batch may carry. The failure answers every requested row, as
+    // `CreateTopicsRequest.getErrorResponse` does, and creates nothing.
+    if total_partitions(&effective, broker.config.num_partitions) > MAX_PARTITIONS_PER_REQUEST {
+        return Ok(too_many_partitions_response(broker, &req.topics));
+    }
+
+    // KIP-599: Kafka's controller charges each topic with the partitions it
+    // creates, after every other check on it has passed
+    // (`ReplicationControlManager.createTopic`). A strict version (v6+)
+    // refuses the topic that finds the bucket negative, and every topic
+    // after it.
+    let mut quota = ctx.controller_mutation_quota(broker, &image, version >= 6);
+
+    let mut results: Vec<CreatableTopicResult> = Vec::with_capacity(req.topics.len());
+    // KIP-108: a validate-only request runs every check and commits nothing,
+    // so the policy below sees it exactly as it sees a committing one.
+    let validate_only = req.validate_only;
+    let creation = TopicCreation::new(broker, &image, validate_only);
+
+    for topic_req in effective {
+        let created = match creation.create(topic_req, &mut quota).await {
+            Ok(created) => created,
+            Err(failure) => {
+                results.push(*failure);
+                continue;
+            }
+        };
+        results.push(created_topic_result(broker, ctx, &image, version, created));
+    }
+    results.extend(trailing);
+
+    Ok(finish_response(
+        broker,
+        ctx,
+        results,
+        validate_only,
+        quota.delay(),
+    ))
+}
+
+/// The request rows split by whether the controller sees them.
+struct AdmittedTopics {
+    /// The rows the controller creates, in request order.
+    effective: Vec<CreatableTopic>,
+    /// The rows the request answers without the controller, in Kafka's order.
+    trailing: Vec<CreatableTopicResult>,
+}
+
+/// Split the request into the rows the controller sees and the rows answered
+/// before it: duplicated names, the protected raft metadata topic, and the
+/// topics denied `Create`.
+fn admit_topics(
+    broker: &Broker,
+    image: &krabka_metadata::MetadataImage,
+    ctx: &RequestContext<'_>,
+    topics: &[CreatableTopic],
+) -> AdmittedTopics {
     // Kafka removes duplicate names from the request before authorizing
     // (`ControllerApis.createTopics`): every row that shares a duplicated
     // name leaves the request, and the name answers one INVALID_REQUEST row
     // after the controller's rows.
-    let duplicate_names = duplicate_names(&req.topics);
+    let duplicate_names = duplicate_names(topics);
 
     // Cluster `Create` is a shortcut; on Deny, `authorize_create_topics`
     // falls back to topic-level `Create` per surviving name, so a principal
     // with only a topic-scoped ACL can still create the topics it covers.
     // Duplicate and protected names are excluded here exactly as Kafka
     // excludes them from `allowedTopicNames` before authorizing.
-    let candidate_names: Vec<&str> = req
-        .topics
+    let candidate_names: Vec<&str> = topics
         .iter()
         .map(|topic| topic.name.as_str())
         .filter(|name| {
@@ -138,8 +204,8 @@ pub(crate) async fn handle(
                 && *name != CLUSTER_METADATA_TOPIC
         })
         .collect();
-    let denied_names: std::collections::HashSet<String> =
-        authorize_create_topics(broker, &image, ctx, candidate_names.iter().copied())
+    let denied_names: HashSet<String> =
+        authorize_create_topics(broker, image, ctx, candidate_names.iter().copied())
             .into_iter()
             .filter(|(_, result)| *result == AuthorizationResult::Deny)
             .map(|(name, _)| name.to_owned())
@@ -159,8 +225,8 @@ pub(crate) async fn handle(
             )
         })
         .collect();
-    let mut effective: Vec<CreatableTopic> = Vec::with_capacity(req.topics.len());
-    for topic in &req.topics {
+    let mut effective: Vec<CreatableTopic> = Vec::with_capacity(topics.len());
+    for topic in topics {
         if duplicate_names.contains(&topic.name) {
             continue;
         }
@@ -185,81 +251,63 @@ pub(crate) async fn handle(
             effective.push(topic.clone());
         }
     }
-
-    // Kafka's `validateTotalNumberOfPartitions` refuses the whole request
-    // when the topics the controller sees add up to more partitions than one
-    // metadata batch may carry. The failure answers every requested row, as
-    // `CreateTopicsRequest.getErrorResponse` does, and creates nothing.
-    if total_partitions(&effective, broker.config.num_partitions) > MAX_PARTITIONS_PER_REQUEST {
-        let message = too_many_partitions_message(broker.config.features.unstable_api_versions);
-        let results = req
-            .topics
-            .iter()
-            .map(|topic| {
-                topic_error_result(
-                    topic.name.clone(),
-                    codes::POLICY_VIOLATION,
-                    Some(message.into()),
-                )
-            })
-            .collect();
-        return Ok(create_topics_response(results, 0));
+    AdmittedTopics {
+        effective,
+        trailing,
     }
+}
 
-    // KIP-599: Kafka's controller charges each topic with the partitions it
-    // creates, after every other check on it has passed
-    // (`ReplicationControlManager.createTopic`). A strict version (v6+)
-    // refuses the topic that finds the bucket negative, and every topic
-    // after it.
-    let mut quota = ctx.controller_mutation_quota(broker, &image, version >= 6);
+/// The whole-request refusal for too many partitions: a `POLICY_VIOLATION`
+/// row for every requested topic.
+fn too_many_partitions_response(
+    broker: &Broker,
+    topics: &[CreatableTopic],
+) -> CreateTopicsResponse {
+    let message = too_many_partitions_message(broker.config.features.unstable_api_versions);
+    let results = topics
+        .iter()
+        .map(|topic| {
+            topic_error_result(
+                topic.name.clone(),
+                codes::POLICY_VIOLATION,
+                Some(message.into()),
+            )
+        })
+        .collect();
+    create_topics_response(results, 0)
+}
 
-    let mut results: Vec<CreatableTopicResult> = Vec::with_capacity(req.topics.len());
-    // KIP-108: a validate-only request runs every check and commits nothing,
-    // so the policy below sees it exactly as it sees a committing one.
-    let validate_only = req.validate_only;
-    let creation = TopicCreation::new(broker, &image, validate_only);
-
-    for topic_req in effective {
-        let created = match creation.create(topic_req, &mut quota).await {
-            Ok(created) => created,
-            Err(failure) => {
-                results.push(*failure);
-                continue;
-            }
-        };
-        let mut result = CreatableTopicResult {
-            name: created.name,
-            topic_id: ProtoUuid(created.topic_id.into_bytes()),
-            error_code: codes::NONE,
-            // Kafka sets the message to null on a created row
-            // (`ReplicationControlManager.createTopic`), not to the
-            // empty string the generated default carries.
-            error_message: None,
-            ..Default::default()
-        };
-        disclose_created_topic(
-            broker,
-            ctx,
-            &image,
-            version,
-            &CreatedTopic {
-                controller: &broker.controller,
-                assignments: &created.assignments,
-                overrides: &created.overrides,
-            },
-            &mut result,
-        );
-        results.push(result);
-    }
-    results.extend(trailing);
-
-    Ok(finish_response(
+/// The row for a topic the create made, with what KIP-525 discloses about it.
+fn created_topic_result(
+    broker: &Broker,
+    ctx: &RequestContext<'_>,
+    image: &krabka_metadata::MetadataImage,
+    version: ApiVersion,
+    created: NewTopic,
+) -> CreatableTopicResult {
+    let mut result = CreatableTopicResult {
+        name: created.name,
+        topic_id: ProtoUuid(created.topic_id.into_bytes()),
+        error_code: codes::NONE,
+        // Kafka sets the message to null on a created row
+        // (`ReplicationControlManager.createTopic`), not to the
+        // empty string the generated default carries.
+        error_message: None,
+        ..Default::default()
+    };
+    disclose_created_topic(
         broker,
         ctx,
-        results,
-        validate_only,
-        quota.delay(),
-    ))
+        image,
+        version,
+        &CreatedTopic {
+            controller: &broker.controller,
+            assignments: &created.assignments,
+            overrides: &created.overrides,
+        },
+        &mut result,
+    );
+    result
 }
 
 /// The most partitions one `CreateTopics` request may create. Kafka 4.3.1
@@ -325,9 +373,7 @@ fn topic_exists_result(name: String) -> CreatableTopicResult {
 /// `INVALID_REPLICATION_FACTOR` for a replication factor of 0 or below -1,
 /// else `INVALID_PARTITIONS` for a partition count of 0 or below -1. The
 /// messages are Kafka's.
-fn invalid_topic_shape(
-    topic: &krabka_protocol::owned::create_topics_request::CreatableTopic,
-) -> Option<(i16, &'static str)> {
+fn invalid_topic_shape(topic: &CreatableTopic) -> Option<(i16, &'static str)> {
     if topic.replication_factor < -1 || topic.replication_factor == 0 {
         Some((
             codes::INVALID_REPLICATION_FACTOR,
@@ -364,9 +410,9 @@ fn resolve_default<T: From<i8> + PartialEq>(requested: T, default: T) -> T {
 /// assignment the row's counts come from, and the override map the request
 /// carried.
 struct CreatedTopic<'a> {
-    controller: &'a std::sync::Arc<dyn MetadataSource>,
+    controller: &'a Arc<dyn MetadataSource>,
     assignments: &'a [Vec<krabka_raft::NodeId>],
-    overrides: &'a std::collections::BTreeMap<String, String>,
+    overrides: &'a BTreeMap<String, String>,
 }
 
 fn disclose_created_topic(

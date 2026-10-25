@@ -14,8 +14,9 @@ use {
     },
     assert2::assert,
     krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId},
-    std::{net::SocketAddr, time::Duration},
+    std::{io, net::SocketAddr, path::Path, time::Duration},
     tempfile::TempDir,
+    tokio::{net::TcpListener, task::JoinHandle, time},
 };
 
 #[derive(derive_more::From, derive_more::Into)]
@@ -26,7 +27,7 @@ use {
 #[derive(Clone, Copy, Default)]
 pub struct NodeIndex(pub usize);
 
-pub fn node_config(index: NodeIndex, log_dir: &std::path::Path) -> BrokerConfig {
+pub fn node_config(index: NodeIndex, log_dir: &Path) -> BrokerConfig {
     let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
     cfg.broker_id = i32::try_from(index.0 + 1).unwrap();
     cfg.node_id = NodeId(u64::try_from(index.0 + 1).unwrap());
@@ -43,9 +44,9 @@ pub fn controller_voters(voters: &[(u64, SocketAddr)]) -> Vec<(NodeId, String)> 
 
 /// Pair held data and controller listeners in their original node order.
 pub fn listener_pairs(
-    clients: Vec<tokio::net::TcpListener>,
-    controllers: Vec<tokio::net::TcpListener>,
-) -> impl Iterator<Item = (usize, (tokio::net::TcpListener, tokio::net::TcpListener))> {
+    clients: Vec<TcpListener>,
+    controllers: Vec<TcpListener>,
+) -> impl Iterator<Item = (usize, (TcpListener, TcpListener))> {
     clients.into_iter().zip(controllers).enumerate()
 }
 
@@ -54,7 +55,7 @@ pub fn listener_pairs(
 /// # Errors
 /// Returns the broker's startup error, or a Startup error when its task panics.
 pub async fn await_broker_start(
-    start: tokio::task::JoinHandle<Result<BrokerHandle, BrokerError>>,
+    start: JoinHandle<Result<BrokerHandle, BrokerError>>,
 ) -> Result<BrokerHandle, BrokerError> {
     start
         .await
@@ -74,7 +75,7 @@ struct StaticVoterSetup {
 
 #[bon::builder]
 fn static_voter_broker_config(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     #[builder(default)] node: AddressedNodeSetup,
     #[builder(default)] voters: Vec<(NodeId, String)>,
 ) -> BrokerConfig {
@@ -136,17 +137,17 @@ pub async fn start_n_node_with(
     let mut client_listeners = Vec::with_capacity(n_usize);
     let mut controller_listeners = Vec::with_capacity(n_usize);
     for _ in 0..n_usize {
-        client_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
-        controller_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
+        client_listeners.push(TcpListener::bind("127.0.0.1:0").await?);
+        controller_listeners.push(TcpListener::bind("127.0.0.1:0").await?);
     }
     let client_addrs: Vec<SocketAddr> = client_listeners
         .iter()
-        .map(tokio::net::TcpListener::local_addr)
-        .collect::<std::io::Result<_>>()?;
+        .map(TcpListener::local_addr)
+        .collect::<io::Result<_>>()?;
     let controller_addrs: Vec<SocketAddr> = controller_listeners
         .iter()
-        .map(tokio::net::TcpListener::local_addr)
-        .collect::<std::io::Result<_>>()?;
+        .map(TcpListener::local_addr)
+        .collect::<io::Result<_>>()?;
 
     // The shared static voter set every node is configured with.
     let voters: Vec<_> = (0..n_usize)
@@ -203,7 +204,7 @@ pub async fn start_n_node_with(
     // `wait_until_controller_leader()` helper, because a timeout here must return
     // `Err` so `start_n_node_with_retry` can retry (a panic would not be retried).
     let mut leader_rx = out[0].0.watch_leader_for_test();
-    let elected = tokio::time::timeout(
+    let elected = time::timeout(
         Duration::from_secs(30),
         leader_rx.wait_for(|l| matches!(l, Some(id) if *id != 0)),
     )
@@ -213,6 +214,7 @@ pub async fn start_n_node_with(
         Ok(Err(_recv_err)) => true, // watch channel closed unexpectedly
         Ok(Ok(_)) => false,
     };
+    drop(elected);
     if timed_out {
         let counts: Vec<usize> = out
             .iter()

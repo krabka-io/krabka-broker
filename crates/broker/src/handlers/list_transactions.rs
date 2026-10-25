@@ -31,6 +31,7 @@ use {
         list_transactions_request::ListTransactionsRequest,
         list_transactions_response::{ListTransactionsResponse, TransactionState},
     },
+    std::collections::HashSet,
 };
 
 /// Every state name Kafka's `TransactionState.fromName` resolves. The handler
@@ -71,7 +72,7 @@ fn compile_transactional_id_pattern(pattern: Option<&str>) -> Result<Option<rege
         .transpose()
 }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ListTransactionsRequest,
     _version: ApiVersion,
@@ -116,10 +117,8 @@ pub(crate) async fn handle(
     // Snapshot every coordinator-local txn entry.
     let entries = broker.txn_coordinator.snapshot().await;
 
-    let state_filter: std::collections::HashSet<String> =
-        req.state_filters.iter().cloned().collect();
-    let pid_filter: std::collections::HashSet<i64> =
-        req.producer_id_filters.iter().copied().collect();
+    let state_filter: HashSet<String> = req.state_filters.iter().cloned().collect();
+    let pid_filter: HashSet<i64> = req.producer_id_filters.iter().copied().collect();
     let now_ms = now_millis();
 
     // KIP-664: if filtered states include a string the broker doesn't
@@ -128,7 +127,7 @@ pub(crate) async fn handle(
     // Kafka turns the filter list into a Set in `KafkaApis`, so each unknown
     // name is reported once. `ALL_TXN_STATE_NAMES` is eight entries, so a
     // linear scan beats hashing it into a set on every request.
-    let mut seen_unknown = std::collections::HashSet::new();
+    let mut seen_unknown = HashSet::new();
     let unknown_state_filters: Vec<String> = req
         .state_filters
         .iter()
@@ -186,7 +185,7 @@ pub(crate) async fn handle(
             transactional_id: entry.transactional_id.clone(),
             // Unwrap into the raw-`i64` wire field.
             producer_id: entry.producer_id.get(),
-            transaction_state: state.to_string(),
+            transaction_state: state.to_owned(),
             ..Default::default()
         });
     }
@@ -211,6 +210,7 @@ mod tests {
             test_support::dispatch_wire,
         },
         assert2::assert,
+        krabka_protocol::owned::{list_transactions_request, list_transactions_response},
     };
 
     #[yare::parameterized(
@@ -292,7 +292,7 @@ mod tests {
     ) -> ListTransactionsResponse {
         dispatch_wire(
             broker,
-            krabka_protocol::owned::list_transactions_request::API_KEY,
+            list_transactions_request::API_KEY,
             version,
             req,
             ctx,
@@ -314,7 +314,7 @@ mod tests {
     async fn filters_follow_wire_versions_and_keep_matching_entries() {
         use {crate::txn::state::TxnEntry, krabka_log::ProducerId};
 
-        let max_ver = krabka_protocol::owned::list_transactions_response::MAX_VERSION;
+        let max_ver = list_transactions_response::MAX_VERSION;
         krabka_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
@@ -326,7 +326,7 @@ mod tests {
         let coord = &broker.txn_coordinator;
         lead_transaction_state_partitions(&broker_handle, &[coord.partition_for(tid)]).await;
 
-        let entry = TxnEntry::new_empty(tid.to_string(), ProducerId(100), 0, 60_000, 0);
+        let entry = TxnEntry::new_empty(tid.to_owned(), ProducerId(100), 0, 60_000, 0);
         coord
             .put(entry, TxnVersion::Classic)
             .await
@@ -415,7 +415,7 @@ mod tests {
 
     #[tokio::test]
     async fn handler_reports_unknown_state_filters_and_top_level_fields() {
-        let version = krabka_protocol::owned::list_transactions_response::MAX_VERSION;
+        let version = list_transactions_response::MAX_VERSION;
         allow_all_broker_setup!((broker_handle, _dir, broker, ctx), start_broker, "admin");
         let req = ListTransactionsRequest {
             state_filters: vec!["Ongoing".into(), "MysteryState".into()],
@@ -429,7 +429,7 @@ mod tests {
 
         let expected = krabka_macros::unthrottled_wire!(ListTransactionsResponse {
             error_code: codes::NONE,
-            unknown_state_filters: vec!["MysteryState".to_string()],
+            unknown_state_filters: vec!["MysteryState".to_owned()],
             transaction_states: vec![],
         });
         assert!(resp == expected);
@@ -443,7 +443,7 @@ mod tests {
     async fn dead_transactions_are_never_listed_and_unknown_filters_are_unique() {
         use {crate::txn::state::TxnEntry, krabka_log::ProducerId};
 
-        let version = krabka_protocol::owned::list_transactions_response::MAX_VERSION;
+        let version = list_transactions_response::MAX_VERSION;
         krabka_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
@@ -460,7 +460,7 @@ mod tests {
             let dead = tid == dead_id;
             let producer_id = if dead { 200 } else { 100 };
             let mut entry =
-                TxnEntry::new_empty(tid.to_string(), ProducerId(producer_id), 0, 60_000, 0);
+                TxnEntry::new_empty(tid.to_owned(), ProducerId(producer_id), 0, 60_000, 0);
             entry.state = if dead {
                 TxnState::Dead
             } else {
@@ -478,17 +478,13 @@ mod tests {
         };
         // (state filters, listed ids, unknown filters)
         let cases = [
-            (Vec::new(), vec![ongoing_id.to_string()], Vec::new()),
-            (vec!["Dead".to_string()], Vec::new(), Vec::new()),
+            (Vec::new(), vec![ongoing_id.to_owned()], Vec::new()),
+            (vec!["Dead".to_owned()], Vec::new(), Vec::new()),
+            (vec!["PrepareEpochFence".to_owned()], Vec::new(), Vec::new()),
             (
-                vec!["PrepareEpochFence".to_string()],
+                vec!["Nope".to_owned(), "Nope".to_owned()],
                 Vec::new(),
-                Vec::new(),
-            ),
-            (
-                vec!["Nope".to_string(), "Nope".to_string()],
-                Vec::new(),
-                vec!["Nope".to_string()],
+                vec!["Nope".to_owned()],
             ),
         ];
         let mut expected = Vec::new();

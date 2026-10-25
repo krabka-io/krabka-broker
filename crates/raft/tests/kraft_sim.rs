@@ -9,6 +9,7 @@
 //!
 //! The harness itself lives in `tests/sim_harness/mod.rs` and is shared with
 //! `kraft_log_sim.rs`, which runs the same core over a real on-disk `KraftLog`.
+#![cfg(test)]
 
 mod sim_harness;
 

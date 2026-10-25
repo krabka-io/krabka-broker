@@ -23,6 +23,7 @@ use {
     },
     krabka_ids::PartitionIndex,
     krabka_metadata::MetadataImage,
+    std::{future::Future, sync::Arc},
 };
 
 /// The partitions of `topic` that `node` leads, or `None` while `topic` is
@@ -63,8 +64,8 @@ impl BrokerHandle {
 
     async fn await_coordinator_ready<F, Fut>(&self, topic: &str, partitions: i32, loaded: F) -> bool
     where
-        F: Fn(std::sync::Arc<MetadataImage>, Vec<i32>) -> Fut,
-        Fut: std::future::Future<Output = bool>,
+        F: Fn(Arc<MetadataImage>, Vec<i32>) -> Fut,
+        Fut: Future<Output = bool>,
     {
         super::await_until(|| async {
             let image = self.broker.controller.current_image();

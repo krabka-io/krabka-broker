@@ -101,7 +101,7 @@ pub(super) fn validate_commit_message(
 /// `commitTransactionalOffset`. For a simple consumer (empty `member_id`, no
 /// `group_instance_id`, epoch -1) neither protocol fences, so the broker never
 /// fences a producer that supplies no group metadata.
-pub(crate) async fn validate_commit(
+pub async fn validate_commit(
     handle: &GroupActorHandle,
     commit: CommitRequest,
 ) -> Option<ErrorCode> {
@@ -138,7 +138,7 @@ mod tests {
         // UpdateCommitted then FetchOffsets round-trips on the kind-agnostic Group.
         rpc::update_committed_offset(&handle, Offset(42), 1).await;
         let committed = rpc::fetch_offsets(&handle).await.committed;
-        assert!(committed.get(&("t".to_string(), 0)).unwrap().offset == 42);
+        assert!(committed[&("t".to_owned(), 0)].offset == 42);
 
         // Classic offset-commit validate: a simple consumer (no member/instance)
         // is allowed. `ValidateCommit` dispatches on the live (classic) kind.
@@ -170,7 +170,7 @@ mod tests {
 
         // RemoveCommitted clears the entry.
         let rx = rpc::begin(&handle, |tx| GroupActorMessage::RemoveCommitted {
-            keys: vec![("t".to_string(), 0)],
+            keys: vec![("t".to_owned(), 0)],
             reply: tx,
         })
         .await;

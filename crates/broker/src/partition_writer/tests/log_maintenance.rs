@@ -5,8 +5,17 @@ use {
     super::*,
     crate::partition_writer::test_support::{sample_batch, spawn_default_writer},
     assert2::assert,
-    krabka_log::{LogConfig, Offset},
+    krabka_log::{LogConfig, Offset, name},
+    std::{
+        fs,
+        fs::File,
+        io,
+        path::Path,
+        sync::Condvar,
+        time::{Duration, SystemTime},
+    },
     tempfile::tempdir,
+    tokio::{sync::oneshot, time},
 };
 
 #[tokio::test]
@@ -21,9 +30,9 @@ async fn writer_trim_to_offset_advances_log_start() {
             .expect("append");
     }
 
-    let (tx, writer) = spawn_default_writer(dir.path(), log.clone());
+    let (tx, writer) = spawn_default_writer(dir.path(), Arc::clone(&log));
 
-    let (trim_ack, ack_rx) = tokio::sync::oneshot::channel();
+    let (trim_ack, ack_rx) = oneshot::channel();
     let msg = WriterMessage::TrimToOffset {
         new_start: Offset(3),
         ack: trim_ack,
@@ -38,10 +47,10 @@ async fn writer_trim_to_offset_advances_log_start() {
 }
 
 #[derive(Debug)]
-struct ObserveFlush(std::sync::Arc<tokio::sync::Notify>);
+struct ObserveFlush(Arc<Notify>);
 
 impl krabka_log::LogIo for ObserveFlush {
-    fn sync_data(&self, file: &std::fs::File) -> std::io::Result<()> {
+    fn sync_data(&self, file: &File) -> io::Result<()> {
         file.sync_data()?;
         self.0.notify_one();
         Ok(())
@@ -62,16 +71,16 @@ async fn writer_flush_timer_runs_after_a_live_config_change_without_another_appe
     ] {
         let dir = tempdir().unwrap();
         let log = open_default_log(dir.path());
-        let flushed = std::sync::Arc::new(tokio::sync::Notify::new());
+        let flushed = Arc::new(Notify::new());
         {
             let mut log = log.lock().unwrap();
             log.append(&mut sample_batch().count(2).call()).unwrap();
-            log.test_set_io(std::sync::Arc::new(ObserveFlush(flushed.clone())));
+            log.test_set_io(Arc::new(ObserveFlush(Arc::clone(&flushed))));
         }
-        let (tx, writer) = spawn_default_writer(dir.path(), log.clone());
+        let (tx, writer) = spawn_default_writer(dir.path(), Arc::clone(&log));
         log.lock().unwrap().set_config(config);
         tx.send(WriterMessage::ConfigChanged).await.unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(2), flushed.notified())
+        time::timeout(Duration::from_secs(2), flushed.notified())
             .await
             .expect("idle partition flushes after the live threshold changes");
         drop(tx);
@@ -83,32 +92,30 @@ async fn writer_flush_timer_runs_after_a_live_config_change_without_another_appe
 /// started.
 #[derive(Debug)]
 struct GatedUnlink {
-    started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    released: std::sync::Mutex<bool>,
-    changed: std::sync::Condvar,
+    started: Mutex<Option<oneshot::Sender<()>>>,
+    released: Mutex<bool>,
+    changed: Condvar,
 }
 
 impl GatedUnlink {
-    fn release(&self) {
+    fn release_unlink(&self) {
         *self.released.lock().unwrap() = true;
         self.changed.notify_all();
     }
 }
 
 impl krabka_log::LogIo for GatedUnlink {
-    fn remove_file(
-        &self,
-        _target: krabka_log::IoTarget,
-        path: &std::path::Path,
-    ) -> std::io::Result<()> {
-        if let Some(started) = self.started.lock().unwrap().take() {
+    fn remove_file(&self, _target: krabka_log::IoTarget, path: &Path) -> io::Result<()> {
+        let started = self.started.lock().unwrap().take();
+        if let Some(started) = started {
             let _ = started.send(());
-            let mut released = self.released.lock().unwrap();
-            while !*released {
-                released = self.changed.wait(released).unwrap();
-            }
+            drop(
+                self.changed
+                    .wait_while(self.released.lock().unwrap(), |released| !*released)
+                    .unwrap(),
+            );
         }
-        std::fs::remove_file(path)
+        fs::remove_file(path)
     }
 }
 
@@ -130,40 +137,40 @@ async fn a_produce_completes_while_retired_files_are_being_deleted() {
     log.append(&mut sample_batch().call()).unwrap();
     log.append(&mut sample_batch().call()).unwrap();
     log.trim_to_offset(Offset(1)).unwrap();
-    let retired = krabka_log::name::log_path(dir.path(), 0);
-    let tombstones: Vec<_> = std::fs::read_dir(dir.path())
+    let retired = name::log_path(dir.path(), 0);
+    let tombstones: Vec<_> = fs::read_dir(dir.path())
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| path.to_string_lossy().ends_with(".deleted"))
         .collect();
     assert!(!retired.exists());
     assert!(!tombstones.is_empty());
-    let (started, unlink_started) = tokio::sync::oneshot::channel();
-    let gate = std::sync::Arc::new(GatedUnlink {
-        started: std::sync::Mutex::new(Some(started)),
-        released: std::sync::Mutex::new(false),
-        changed: std::sync::Condvar::new(),
+    let (started, unlink_started) = oneshot::channel();
+    let gate = Arc::new(GatedUnlink {
+        started: Mutex::new(Some(started)),
+        released: Mutex::new(false),
+        changed: Condvar::new(),
     });
-    log.test_set_io(gate.clone());
-    let log = std::sync::Arc::new(std::sync::Mutex::new(log));
-    let (tx, writer) = spawn_default_writer(dir.path(), log.clone());
+    log.test_set_io(Arc::<GatedUnlink>::clone(&gate));
+    let log = Arc::new(Mutex::new(log));
+    let (tx, writer) = spawn_default_writer(dir.path(), Arc::clone(&log));
 
-    let wait = std::time::Duration::from_secs(5);
-    tokio::time::timeout(wait, unlink_started)
+    let wait = Duration::from_secs(5);
+    time::timeout(wait, unlink_started)
         .await
         .expect("the writer deletes the retired files once their delay passes")
         .unwrap();
     let ack = queue_batch(&tx, sample_batch().call()).await;
-    let appended = tokio::time::timeout(wait, ack).await;
-    gate.release();
+    let appended = time::timeout(wait, ack).await;
+    gate.release_unlink();
     let appended = appended
         .expect("a produce completes while the unlink is held")
         .unwrap()
         .unwrap();
     assert!(appended.base_offset == Offset(2));
-    tokio::time::timeout(wait, async {
+    time::timeout(wait, async {
         while tombstones.iter().any(|path| path.exists()) {
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -179,7 +186,7 @@ async fn a_produce_completes_while_retired_files_are_being_deleted() {
 #[tokio::test]
 async fn an_idle_writer_checkpoints_the_start_retention_moved_once_it_is_due() {
     let dir = tempdir().unwrap();
-    let checkpoint = krabka_log::name::log_start_offset_checkpoint_path(dir.path());
+    let checkpoint = name::log_start_offset_checkpoint_path(dir.path());
     let mut log = Log::open(dir.path(), LogConfig {
         segment_size: krabka_units::bytes(1),
         retention_size: Some(krabka_units::bytes(0)),
@@ -192,15 +199,15 @@ async fn an_idle_writer_checkpoints_the_start_retention_moved_once_it_is_due() {
         log.append(&mut sample_batch().call()).unwrap();
     }
     log.set_log_start_offset(Offset(1)).unwrap();
-    log.tick(std::time::SystemTime::now(), Offset(2)).unwrap();
+    log.tick(SystemTime::now(), Offset(2)).unwrap();
     assert!(log.log_start_offset() == Offset(2));
-    assert!(std::fs::read_to_string(&checkpoint).unwrap() == "0\n1\n");
-    let log = std::sync::Arc::new(std::sync::Mutex::new(log));
-    let (tx, writer) = spawn_default_writer(dir.path(), log.clone());
+    assert!(fs::read_to_string(&checkpoint).unwrap() == "0\n1\n");
+    let log = Arc::new(Mutex::new(log));
+    let (tx, writer) = spawn_default_writer(dir.path(), Arc::clone(&log));
 
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while std::fs::read_to_string(&checkpoint).unwrap() != "0\n2\n" {
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    time::timeout(Duration::from_secs(5), async {
+        while fs::read_to_string(&checkpoint).unwrap() != "0\n2\n" {
+            time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await

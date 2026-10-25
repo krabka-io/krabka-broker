@@ -22,6 +22,7 @@ use {
         time::{Duration, Instant},
     },
     tempfile::TempDir,
+    tokio::time,
 };
 
 /// The tiered topic every read in the suite goes to.
@@ -108,7 +109,7 @@ async fn await_partition_config(
             Instant::now() <= deadline,
             "the topic config never reached the partition: {config:?}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -146,7 +147,7 @@ impl TieredPartition {
                 Instant::now() <= deadline,
                 "the tier never reached offset {end}: {segments:?}"
             );
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
         }
     }
 
@@ -174,7 +175,7 @@ impl TieredPartition {
                 Instant::now() <= deadline,
                 "the local log start stayed at {start}, not {local_start}"
             );
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
         }
     }
 

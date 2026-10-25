@@ -476,6 +476,7 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_security::ListenerProtocol,
+        krabka_telemetry::profiling::ProfilingConfig,
         krabka_units::{Time, bytes, millis},
     };
 
@@ -499,7 +500,7 @@ mod tests {
             let mut config = BrokerConfig::default();
             config.broker_id = broker_id;
             config.node_id = krabka_raft::NodeId(node_id);
-            config.controller_quorum_voters = vec![(config.node_id, "127.0.0.1:9093".to_string())];
+            config.controller_quorum_voters = vec![(config.node_id, "127.0.0.1:9093".to_owned())];
             let got = match config.validate() {
                 Ok(()) => None,
                 Err(BrokerError::BrokerIdNodeIdMismatch { broker_id, node_id }) => {
@@ -526,7 +527,7 @@ mod tests {
             let mut config = BrokerConfig::default();
             config
                 .super_users
-                .extend(super_users.iter().map(|user| (*user).to_string()));
+                .extend(super_users.iter().map(|user| (*user).to_owned()));
             assert!(config.validate().is_ok(), "{super_users:?}");
         }
     }
@@ -643,7 +644,7 @@ mod tests {
                 controller_listener_protocol: protocol,
                 enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
                 plain_credentials: if credentials {
-                    [("admin".to_string(), "admin-secret".to_string())]
+                    [("admin".to_owned(), "admin-secret".to_owned())]
                         .into_iter()
                         .collect()
                 } else {
@@ -910,9 +911,9 @@ mod tests {
         assert!(enabled.validate().is_ok());
 
         let invalid_policy = BrokerConfig {
-            profiling: krabka_telemetry::profiling::ProfilingConfig {
+            profiling: ProfilingConfig {
                 profiling_cpu_default_duration: krabka_units::secs(61),
-                ..krabka_telemetry::profiling::ProfilingConfig::default()
+                ..ProfilingConfig::default()
             },
             ..enabled
         };

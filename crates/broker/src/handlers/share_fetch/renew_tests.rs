@@ -51,6 +51,7 @@ const RENEW: i8 = 4;
 type Batch = WireAckBatch<'static>;
 
 use crate::{
+    authorizer::AuthorizationResult,
     handlers::test_support::start_share_allow_all_no_audit as start,
     test_support::{start_broker_no_audit_with, tolerate_starved_heartbeats},
 };
@@ -151,7 +152,7 @@ async fn disable_renew(broker: &BrokerHandle, group: &str) {
         .broker_arc_for_test()
         .controller
         .submit_change(vec![MetadataRecord::V1GroupConfig(GroupConfigRecord {
-            group_id: group.to_string(),
+            group_id: group.to_owned(),
             configs: maplit::btreemap! {
                 "share.renew.acknowledge.enable".to_owned() => "false".to_owned()
             },
@@ -405,9 +406,9 @@ krabka_macros::test_authorizer!(DenyTopicReadToOne, request; {
         && request.resource_type == krabka_metadata::ResourceType::Topic
         && request.operation == krabka_metadata::AclOperation::Read;
     if denied {
-        crate::authorizer::AuthorizationResult::Deny
+        AuthorizationResult::Deny
     } else {
-        crate::authorizer::AuthorizationResult::Allow
+        AuthorizationResult::Allow
     }
 });
 

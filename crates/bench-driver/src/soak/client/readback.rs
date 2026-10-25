@@ -21,12 +21,13 @@ use {
     },
     bytes::Bytes,
     krabka_client_consumer::{Consumer, ConsumerError, ConsumerRecord},
-    krabka_client_producer::{Acks, Producer, ProducerRecord},
+    krabka_client_producer::{Acks, Producer, ProducerError, ProducerRecord, RecordMetadata},
     krabka_units::prelude::*,
     std::{
         collections::{BTreeMap, HashMap},
         time::{Duration, Instant},
     },
+    tokio::time::sleep,
 };
 
 /// How long one read-back pass may take before it gives up and reports what
@@ -104,7 +105,7 @@ where
             }
             Err(error) => last = error.to_string(),
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(1)).await;
     }
     Err(last)
 }
@@ -150,7 +151,7 @@ pub async fn wait_stable(endpoint: &Endpoint, path: &LoadPath, limit: Time) {
             );
             return;
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(1)).await;
     }
 }
 
@@ -208,7 +209,7 @@ async fn scan(
                     "soak-contract: read-back of {} at {isolation}: {error}",
                     path.name
                 );
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                sleep(Duration::from_millis(500)).await;
             }
         }
     };
@@ -240,7 +241,7 @@ pub async fn read_back(
             repeated.insert(seq);
         }
         if let (Some(keys), Some(key)) = (path.key_space, record.key.as_deref()) {
-            let index = key_index(key).unwrap_or(seq % keys.max(1));
+            let index = key_index(key).unwrap_or_else(|| seq % keys.max(1));
             let latest = latest_by_key.entry(index).or_insert(seq);
             *latest = (*latest).max(seq);
         }
@@ -255,8 +256,9 @@ pub async fn read_back(
             path.name
         );
     }
-    let mut duplicates = Vec::new();
-    if !repeated.is_empty() {
+    let duplicates = if repeated.is_empty() {
+        Vec::new()
+    } else {
         let mut positions: HashMap<u64, Vec<(i32, i64)>> = HashMap::new();
         let second = scan(endpoint, path, isolation, |record| {
             if let Some((owner, seq)) = record.value.as_deref().and_then(parse_record_tag)
@@ -273,14 +275,14 @@ pub async fn read_back(
         if let Err(error) = second {
             eprintln!("soak-contract: {error}");
         }
-        duplicates = repeated
+        repeated
             .iter()
             .map(|seq| DuplicateRead {
                 seq,
                 positions: positions.remove(&seq).unwrap_or_default(),
             })
-            .collect();
-    }
+            .collect()
+    };
     ReaderLedger {
         path: path.name.clone(),
         isolation,
@@ -373,6 +375,17 @@ pub async fn commit_checks(
         .collect()
 }
 
+/// Send `record` with `producer`, then close the producer whatever the send
+/// returned.
+async fn send_once(
+    producer: Producer,
+    record: ProducerRecord,
+) -> Result<RecordMetadata, ProducerError> {
+    let sent = producer.send(record).await;
+    let _ = producer.close().await;
+    sent
+}
+
 /// Produce one record to `topic`-`partition` with `acks=all`, then read it
 /// back at the offset it was acknowledged at, and return that offset.
 ///
@@ -384,28 +397,28 @@ pub async fn commit_checks(
 /// Returns why the write or the read failed, or that the record did not come
 /// back within a minute.
 pub async fn round_trip(endpoint: &Endpoint, topic: &str, partition: i32) -> Result<i64, String> {
-    let producer = Producer::builder()
-        .bootstrap(endpoint.bootstrap.clone())
-        .maybe_security(endpoint.security.clone())
-        .client_id("soak-drill-probe".to_owned())
-        .acks(Acks::All)
-        .enable_idempotence(true)
-        .request_timeout(Duration::from_secs(10))
-        .delivery_timeout(Duration::from_secs(30))
-        .build()
-        .await
-        .map_err(|error| format!("build a producer: {error}"))?;
     let value = format!("soak-drill-probe/{};", now_ms());
-    let sent = producer
-        .send(ProducerRecord {
+    let sent = send_once(
+        Producer::builder()
+            .bootstrap(endpoint.bootstrap.clone())
+            .maybe_security(endpoint.security.clone())
+            .client_id("soak-drill-probe".to_owned())
+            .acks(Acks::All)
+            .enable_idempotence(true)
+            .request_timeout(Duration::from_secs(10))
+            .delivery_timeout(Duration::from_secs(30))
+            .build()
+            .await
+            .map_err(|error| format!("build a producer: {error}"))?,
+        ProducerRecord {
             topic: topic.to_owned(),
             partition: Some(partition),
             value: Some(Bytes::from(value.clone())),
             ..Default::default()
-        })
-        .await
-        .map_err(|error| format!("produce to {topic}-{partition}: {error}"));
-    let _ = producer.close().await;
+        },
+    )
+    .await
+    .map_err(|error| format!("produce to {topic}-{partition}: {error}"));
     let offset = sent?.offset;
     let assignment = [(topic.to_owned(), partition)];
     let mut consumer = groupless(endpoint, Isolation::ReadUncommitted)

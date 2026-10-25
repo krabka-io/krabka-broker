@@ -37,7 +37,7 @@ impl ClassicGroup {
                 .insert(instance_id.clone(), member.id.clone());
         }
         if self.members.is_empty() {
-            self.protocol_type = Some(protocol_type.to_string());
+            self.protocol_type = Some(protocol_type.to_owned());
         }
         if self.leader_id.is_none() {
             self.leader_id = Some(member.id.clone());
@@ -66,7 +66,7 @@ impl ClassicGroup {
     /// Records that `member_id` waits in `JoinGroup` for this round, Kafka's
     /// `isAwaitingJoin`.
     pub fn mark_awaiting_join(&mut self, member_id: &str) {
-        self.joined_this_round.insert(member_id.to_string());
+        self.joined_this_round.insert(member_id.to_owned());
     }
 
     /// Kafka's `ClassicGroup.replaceStaticMember`. The member of `instance_id`
@@ -85,16 +85,16 @@ impl ClassicGroup {
         self.joined_this_round.remove(old_member_id);
         // The replacement owes the `SyncGroup` the old id did.
         if self.pending_sync_members.remove(old_member_id) {
-            self.pending_sync_members.insert(new_member_id.to_string());
+            self.pending_sync_members.insert(new_member_id.to_owned());
         }
-        member.id = new_member_id.to_string();
+        new_member_id.clone_into(&mut member.id);
         member.is_new = false;
-        self.members.insert(new_member_id.to_string(), member);
+        self.members.insert(new_member_id.to_owned(), member);
         if self.leader_id.as_deref() == Some(old_member_id) {
-            self.leader_id = Some(new_member_id.to_string());
+            self.leader_id = Some(new_member_id.to_owned());
         }
         self.static_members
-            .insert(instance_id.to_string(), new_member_id.to_string());
+            .insert(instance_id.to_owned(), new_member_id.to_owned());
     }
 
     /// Add or refresh a member.
@@ -427,7 +427,7 @@ mod tests {
         ];
         for row in rows {
             let mut g = ClassicGroup::new("g");
-            let mut m = sample_member("m1").with_instance_id(row.instance_id.map(str::to_string));
+            let mut m = sample_member("m1").with_instance_id(row.instance_id.map(str::to_owned));
             m.session_timeout = Duration::from_millis(1);
             if row.timed_out {
                 m.last_heartbeat = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
@@ -468,7 +468,7 @@ mod tests {
         g.state = GroupState::Stable;
 
         let dropped = g.expire_dead_members(Instant::now(), Duration::from_secs(3));
-        check!(dropped == vec!["dyn-1".to_string()]);
+        check!(dropped == vec!["dyn-1".to_owned()]);
         check!(g.state == GroupState::PreparingRebalance);
         check!(g.members.contains_key("static-1"));
     }
@@ -499,7 +499,7 @@ mod tests {
             let now = Instant::now();
             let dropped = g.expire_dead_members(now, delay);
 
-            check!(dropped == vec!["stale".to_string()], "{name}");
+            check!(dropped == vec!["stale".to_owned()], "{name}");
             check!(g.state == GroupState::PreparingRebalance, "{name}");
             check!(!g.rebalance_from_empty, "{name}");
             check!(g.initial_join.is_none(), "{name}");
@@ -545,7 +545,7 @@ mod tests {
         g.complete_rebalance("range");
         g.state = GroupState::Stable;
         let dropped = g.expire_dead_members(Instant::now(), Duration::from_secs(3));
-        assert!(dropped == vec!["m1".to_string()]);
+        assert!(dropped == vec!["m1".to_owned()]);
         assert!(g.state == GroupState::Empty);
     }
 
@@ -566,7 +566,7 @@ mod tests {
 
         let dropped = g.expire_dead_members(Instant::now(), Duration::from_secs(3));
 
-        check!(dropped == vec!["m1".to_string()]);
+        check!(dropped == vec!["m1".to_owned()]);
         check!(g.state == GroupState::Empty);
         check!(g.leader_id.is_none());
         check!(g.protocol_name.is_none());
@@ -647,7 +647,7 @@ mod tests {
         g.add_pending_member("late".into(), now);
         g.add_pending_member("waiting".into(), now + Duration::from_secs(10));
         let expired = g.expire_pending_members(now + Duration::from_secs(1));
-        check!(expired == vec!["late".to_string()]);
+        check!(expired == vec!["late".to_owned()]);
         check!(g.pending_members.keys().collect::<Vec<_>>() == vec!["waiting"]);
     }
 }

@@ -51,7 +51,7 @@ use {
         pki_types::{CertificateDer, ServerName, pem::PemObject as _},
     },
     std::{collections::BTreeMap, sync::Arc, time::Duration},
-    tokio::net::TcpStream,
+    tokio::{net::TcpStream, time},
     tokio_rustls::TlsConnector,
 };
 
@@ -72,7 +72,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The CAs of a run, and the issuance of each node's certificate.
 #[derive(Debug, Default)]
-pub(crate) struct CertAuthority {
+pub struct CertAuthority {
     /// Every CA the run has issued from, oldest first, PEM.
     cas: Vec<String>,
 }
@@ -121,7 +121,7 @@ impl CertAuthority {
 
 /// What a lifecycle check waits to observe.
 #[derive(Debug, Clone)]
-pub(crate) enum Expect {
+pub enum Expect {
     /// The node's TLS listener, at this host address, serves a chain that
     /// verifies against this CA alone.
     Certificate { address: String, ca: String },
@@ -134,7 +134,7 @@ pub(crate) enum Expect {
 }
 
 /// The dynamic listener keys a rotation sets, by name and value.
-pub(crate) fn rotation_configs() -> Vec<(String, String)> {
+pub fn rotation_configs() -> Vec<(String, String)> {
     let prefix = format!("listener.name.{}.ssl", TLS_LISTENER.to_ascii_lowercase());
     vec![
         (format!("{prefix}.keystore.type"), "PEM".to_owned()),
@@ -155,7 +155,7 @@ pub(crate) fn rotation_configs() -> Vec<(String, String)> {
 /// target's replica is replaced, in place, by the lowest node that holds no
 /// replica of the partition. A partition the target does not hold, or one no
 /// other node can take, is left out.
-pub(crate) fn reassignment_plan(
+pub fn reassignment_plan(
     states: &[PartitionState],
     topic: &str,
     target: i32,
@@ -185,7 +185,7 @@ pub(crate) fn reassignment_plan(
 /// in the planned order, or which partition is not yet. The order is part of
 /// the plan: the first replica is the preferred leader, and the drained
 /// broker's replacement takes its position.
-pub(crate) fn on_planned_replicas(
+pub fn on_planned_replicas(
     states: &[PartitionState],
     topic: &str,
     plan: &BTreeMap<i32, Vec<i32>>,
@@ -206,7 +206,7 @@ pub(crate) fn on_planned_replicas(
 }
 
 /// Inject a rotation or a reassignment on `node`.
-pub(crate) async fn inject(
+pub async fn inject(
     kind: &FaultKind,
     node: &Node,
     nodes: &Nodes,
@@ -354,7 +354,7 @@ async fn reassign(node: &Node, nodes: &Nodes, path: &str) -> Result<(Injected, E
 }
 
 /// Whether the cluster shows what `expect` waits for, or what it shows instead.
-pub(crate) async fn observed(nodes: &Nodes, expect: &Expect) -> Result<(), String> {
+pub async fn observed(nodes: &Nodes, expect: &Expect) -> Result<(), String> {
     match expect {
         Expect::Certificate { address, ca } => handshake(address, ca).await,
         Expect::Reassigned { topic, plan } => {
@@ -425,7 +425,7 @@ async fn handshake(address: &str, ca: &str) -> Result<(), String> {
             .map(drop)
             .map_err(|error| format!("handshake with {address}: {error}"))
     };
-    tokio::time::timeout(HANDSHAKE_TIMEOUT, attempt)
+    time::timeout(HANDSHAKE_TIMEOUT, attempt)
         .await
         .map_err(|_| format!("no handshake with {address} within {HANDSHAKE_TIMEOUT:?}"))?
 }

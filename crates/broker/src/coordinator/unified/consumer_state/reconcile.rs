@@ -154,10 +154,9 @@ impl GroupState {
             return false;
         };
 
-        let member = self
-            .members
-            .get_mut(member_id)
-            .expect("member exists in reconcile_member");
+        let Some(member) = self.members.get_mut(member_id) else {
+            return false;
+        };
         let left = member.member_epoch;
         let changed = member.previous_member_epoch != left
             || member.member_epoch != rebuilt.epoch
@@ -433,7 +432,7 @@ impl GroupState {
 /// the `pending` partitions, or reports nothing at all.
 /// Kafka's `Assignment.equals`: the same partitions of the same topics,
 /// whatever their order.
-pub(crate) fn same_assignment(a: &Partitions, b: &Partitions) -> bool {
+pub fn same_assignment(a: &Partitions, b: &Partitions) -> bool {
     let set = |assignment: &Partitions| -> HashSet<TopicIdPartition> {
         assignment
             .iter()
@@ -611,7 +610,7 @@ mod tests {
         b.assigned_partitions = parts(other.assigned);
         b.partitions_pending_revocation = parts(other.pending);
         g.members.insert("b".into(), b);
-        g.install_target([("a".to_string(), parts(target))].into());
+        g.install_target([("a".to_owned(), parts(target))].into());
         g
     }
 
@@ -1064,7 +1063,7 @@ mod tests {
                 name: "an unrevoked member that owns its pending set keeps it without a change",
                 before: unrevoked_5_4_shape(),
                 target: topic_parts(ONE_PARTITION_PER_TOPIC),
-                owned: Some(owning_everything.clone()),
+                owned: Some(owning_everything),
                 after: unrevoked_5_4_shape(),
                 ..Default::default()
             },
@@ -1222,7 +1221,7 @@ mod tests {
             b.member_epoch = TARGET_EPOCH;
             b.assigned_partitions = r.other;
             g.members.insert("b".into(), b);
-            g.install_target([("a".to_string(), r.target)].into());
+            g.install_target([("a".to_owned(), r.target)].into());
 
             let changed = g.reconcile_member(
                 "a",

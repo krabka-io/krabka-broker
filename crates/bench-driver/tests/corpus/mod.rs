@@ -6,7 +6,7 @@
 
 #![allow(dead_code)]
 
-use {assert2::assert, std::path::PathBuf};
+use std::{env, fs, path::PathBuf};
 
 /// Where `bench/<name>` is, under whichever runner started this test.
 ///
@@ -25,23 +25,24 @@ use {assert2::assert, std::path::PathBuf};
 /// Cargo sets no `TEST_SRCDIR`, and it runs a test with the crate directory as
 /// the working directory, so the relative form is right there.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics when neither Bazel's pair nor Cargo's variable is set, which means
-/// the test was launched by something that stages data differently again.
-pub fn bench_dir(name: &str) -> PathBuf {
-    if let Ok(srcdir) = std::env::var("TEST_SRCDIR") {
-        let workspace =
-            std::env::var("TEST_WORKSPACE").expect("TEST_WORKSPACE accompanies TEST_SRCDIR");
-        return [srcdir.as_str(), workspace.as_str(), "bench", name]
+/// When neither Bazel's pair nor Cargo's variable is set, which means the test
+/// was launched by something that stages data differently again.
+pub fn bench_dir(name: &str) -> Result<PathBuf, String> {
+    if let Ok(srcdir) = env::var("TEST_SRCDIR") {
+        let workspace = env::var("TEST_WORKSPACE")
+            .map_err(|error| format!("TEST_WORKSPACE accompanies TEST_SRCDIR: {error}"))?;
+        return Ok([srcdir.as_str(), workspace.as_str(), "bench", name]
             .iter()
-            .collect();
+            .collect());
     }
-    let manifest = std::env::var("CARGO_MANIFEST_DIR")
-        .expect("TEST_SRCDIR (bazel) or CARGO_MANIFEST_DIR (cargo) must be set");
-    [manifest.as_str(), "..", "..", "bench", name]
+    let manifest = env::var("CARGO_MANIFEST_DIR").map_err(|error| {
+        format!("TEST_SRCDIR (bazel) or CARGO_MANIFEST_DIR (cargo) must be set: {error}")
+    })?;
+    Ok([manifest.as_str(), "..", "..", "bench", name]
         .iter()
-        .collect()
+        .collect())
 }
 
 /// Every `*.yaml` file under [`bench_dir`]`(name)`, sorted so the trial order
@@ -50,30 +51,27 @@ pub fn bench_dir(name: &str) -> PathBuf {
 /// `Path::is_file` reads the metadata of the link target, so a file that Bazel
 /// staged as a symbolic link counts the same as a plain file.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics when the directory cannot be read or holds no YAML file. An empty
-/// corpus is almost always a wrong path, and a harness that ran zero trials
-/// would pass silently.
-pub fn yaml_files(name: &str) -> Vec<PathBuf> {
-    let root = bench_dir(name);
-    let entries = std::fs::read_dir(&root)
-        .unwrap_or_else(|error| panic!("cannot read {}: {error}", root.display()));
-    let mut paths: Vec<PathBuf> = entries
-        .map(|entry| {
-            entry
-                .unwrap_or_else(|error| {
-                    panic!("cannot read an entry in {}: {error}", root.display())
-                })
-                .path()
-        })
-        .filter(|path| path.extension().is_some_and(|ext| ext == "yaml") && path.is_file())
-        .collect();
+/// When the directory cannot be read or holds no YAML file. An empty corpus is
+/// almost always a wrong path, and a harness that ran zero trials would pass
+/// silently.
+pub fn yaml_files(name: &str) -> Result<Vec<PathBuf>, String> {
+    let root = bench_dir(name)?;
+    let entries =
+        fs::read_dir(&root).map_err(|error| format!("cannot read {}: {error}", root.display()))?;
+    let mut paths = Vec::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|error| format!("cannot read an entry in {}: {error}", root.display()))?
+            .path();
+        if path.extension().is_some_and(|ext| ext == "yaml") && path.is_file() {
+            paths.push(path);
+        }
+    }
     paths.sort();
-    assert!(
-        !paths.is_empty(),
-        "no YAML file found in {}",
-        root.display()
-    );
-    paths
+    if paths.is_empty() {
+        return Err(format!("no YAML file found in {}", root.display()));
+    }
+    Ok(paths)
 }

@@ -5,9 +5,12 @@
 //! embeds the restore keeps the structured error.
 
 use {
-    krabka_log::LogError, krabka_object_store::ObjectStoreError,
-    krabka_protocol::records::RecordsError, krabka_remote_storage::RemoteStorageError,
-    std::path::PathBuf, uuid::Uuid,
+    krabka_log::LogError,
+    krabka_object_store::ObjectStoreError,
+    krabka_protocol::records::RecordsError,
+    krabka_remote_storage::RemoteStorageError,
+    std::{io::Error, path::PathBuf},
+    uuid::Uuid,
 };
 
 /// Exit codes:
@@ -193,7 +196,7 @@ pub enum RestoreError {
 
     /// A local filesystem operation failed.
     #[error("I/O: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] Error),
 }
 
 impl RestoreError {
@@ -323,7 +326,7 @@ mod tests {
             ),
             (RestoreError::Format { code: 3 }, EXIT_MATERIALIZE),
             (
-                RestoreError::Io(std::io::Error::other("disk full")),
+                RestoreError::Io(Error::other("disk full")),
                 EXIT_MATERIALIZE,
             ),
         ];
@@ -349,7 +352,7 @@ mod tests {
 
     #[test]
     fn io_errors_convert_without_a_string_hop() {
-        let error: RestoreError = std::io::Error::other("boom").into();
+        let error: RestoreError = Error::other("boom").into();
         check!(matches!(error, RestoreError::Io(_)));
     }
 }

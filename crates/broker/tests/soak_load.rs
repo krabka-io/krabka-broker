@@ -8,6 +8,7 @@
 //! record reads back once, under each declared isolation level. A transaction
 //! aborted on purpose stays invisible to `read_committed`. Each committing
 //! group's offset is where its last acknowledged commit put it.
+#![cfg(test)]
 
 mod support;
 
@@ -33,6 +34,7 @@ use {
     },
     krabka_units::prelude::*,
     std::{collections::BTreeMap, sync::Arc, time::Duration},
+    tokio::time,
 };
 
 /// Long enough that every consumer group has joined and had a commit
@@ -67,11 +69,11 @@ async fn an_undisturbed_load_reads_back_once_and_hides_what_it_aborted() {
             .windows(Arc::new(Windows::new(Vec::new())))
             .build(),
     );
-    let running = start(&ctx, prepared);
+    let running = start(&ctx, prepared).expect("start the load");
     let trackers = running.trackers.clone();
-    tokio::time::sleep(LOAD).await;
+    time::sleep(LOAD).await;
     ctx.stop();
-    let outcome = running.finish().await;
+    let outcome = running.finish().await.expect("the load tasks finish");
 
     let mut readers = Vec::new();
     for path in &contract.paths {
@@ -134,21 +136,24 @@ async fn a_record_stored_twice_is_read_back_at_both_offsets_and_a_stranger_is_sk
         .unwrap();
     create_topic(&admin, &path.name, path.partitions).await;
     let producer = producer_name(&path.name);
-    let sender = default_producer(bootstrap.clone()).await;
-    for _ in 0..2 {
-        let value = record_value(&producer, 0, path.payload.bytes_usize());
-        sender
-            .send(
-                producer_record()
-                    .topic(path.name.clone())
-                    .maybe_partition(Some(0))
-                    .value(Some(value))
-                    .call(),
-            )
-            .await
-            .unwrap();
+    {
+        let sender = default_producer(bootstrap.clone()).await;
+        for _ in 0..2 {
+            let value = record_value(&producer, 0, path.payload.bytes_usize());
+            sender
+                .send(
+                    producer_record()
+                        .topic(path.name.clone())
+                        .maybe_partition(Some(0))
+                        .value(Some(value))
+                        .call(),
+                )
+                .await
+                .unwrap();
+        }
+        sender.close().await
     }
-    sender.close().await.unwrap();
+    .unwrap();
     let endpoint = Endpoint::plaintext(bootstrap);
     // The drill's probe: a value no soak producer writes.
     check!(round_trip(&endpoint, &path.name, 0).await == Ok(2));

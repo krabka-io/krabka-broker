@@ -460,7 +460,7 @@
 use {
     moxy::{
         ast::{ItemEnum, ItemStruct, ParseError},
-        token::TokenStream,
+        token::{Span, TokenStream},
     },
     proc_macro::TokenStream as NativeTokenStream,
 };
@@ -556,10 +556,10 @@ pub fn retained_timestamp_bounds(
 ) -> Result<NativeTokenStream, ParseError> {
     let expanded = wire_fixtures::retained_timestamp_bounds(floor, item.into())?;
     // Creusot captures and MIR bindings must share one identifier context.
-    Ok(expanded
+    expanded
         .to_string()
         .parse()
-        .expect("valid timestamp bounds expansion"))
+        .map_err(|_| ParseError::new(Span::call_site(), "invalid timestamp bounds expansion"))
 }
 
 /// Derives `unregistered` and `register` for a struct of metric handles. The
@@ -2074,10 +2074,10 @@ pub fn validate_archive_rows(tokens: NativeTokenStream) -> Result<NativeTokenStr
     // Creusot matches logical captures to MIR locals by identifier context.
     // Reparse the complete function together so generated and supplied annotations
     // share the same context as the local bindings they describe.
-    Ok(expanded
+    expanded
         .to_string()
         .parse()
-        .expect("valid archive walk expansion"))
+        .map_err(|_| ParseError::new(Span::call_site(), "invalid archive walk expansion"))
 }
 
 #[cfg(test)]

@@ -21,7 +21,12 @@ use {
         test_support::start_broker_with,
     },
     assert2::{assert, check},
-    std::sync::Arc,
+    std::{
+        collections::{BTreeMap, HashMap},
+        sync::Arc,
+        time::Duration,
+    },
+    tokio::time,
 };
 
 fn consumer_group_seed(member_id: &str) -> GroupSeed {
@@ -31,12 +36,12 @@ fn consumer_group_seed(member_id: &str) -> GroupSeed {
         ..Default::default()
     };
     seed.members
-        .insert(member_id.to_string(), MemberMetadataValue {
+        .insert(member_id.to_owned(), MemberMetadataValue {
             instance_id: None,
             rack_id: None,
-            client_id: "client".to_string(),
-            client_host: "127.0.0.1".to_string(),
-            subscribed_topic_names: vec!["orders".to_string()],
+            client_id: "client".to_owned(),
+            client_host: "127.0.0.1".to_owned(),
+            subscribed_topic_names: vec!["orders".to_owned()],
             subscribed_topic_regex: None,
             server_assignor: None,
             rebalance_timeout_ms: 60_000,
@@ -47,66 +52,66 @@ fn consumer_group_seed(member_id: &str) -> GroupSeed {
 
 fn classic_group_with_member(group_id: &str, member_id: &str) -> Box<CoordinatorGroup> {
     let mut classic = ClassicGroup::new(group_id);
-    classic.protocol_type = Some("consumer".to_string());
+    classic.protocol_type = Some("consumer".to_owned());
     classic.generation_id = 1;
     let member = Member::new(
         member_id,
         "client",
         "127.0.0.1",
-        std::time::Duration::from_secs(30),
-        std::time::Duration::from_mins(1),
-        vec![("range".to_string(), bytes::Bytes::from_static(b"metadata"))],
+        Duration::from_secs(30),
+        Duration::from_mins(1),
+        vec![("range".to_owned(), bytes::Bytes::from_static(b"metadata"))],
     );
     let _ = classic.add_member(member);
     Box::new(CoordinatorGroup::seeded(
         group_id,
         GroupKind::Classic(classic),
-        std::collections::HashMap::new(),
+        HashMap::new(),
     ))
 }
 
 fn streams_group_seed(member_id: &str) -> StreamsGroupSeed {
-    let mut active = std::collections::BTreeMap::new();
-    active.insert("subtopology-0".to_string(), vec![0, 1]);
+    let mut active = BTreeMap::new();
+    active.insert("subtopology-0".to_owned(), vec![0, 1]);
 
-    let mut members = std::collections::HashMap::new();
-    members.insert(member_id.to_string(), StreamsGroupMemberMetadataValue {
+    let mut members = HashMap::new();
+    members.insert(member_id.to_owned(), StreamsGroupMemberMetadataValue {
         instance_id: None,
         rack_id: None,
-        client_id: "streams-client".to_string(),
-        client_host: "127.0.0.1".to_string(),
-        process_id: "process-1".to_string(),
+        client_id: "streams-client".to_owned(),
+        client_host: "127.0.0.1".to_owned(),
+        process_id: "process-1".to_owned(),
         user_endpoint: None,
         client_tags: Vec::new(),
         rebalance_timeout_ms: 60_000,
         topology_epoch: 0,
     });
 
-    let mut target_per_member = std::collections::HashMap::new();
+    let mut target_per_member = HashMap::new();
     target_per_member.insert(
-        member_id.to_string(),
+        member_id.to_owned(),
         StreamsGroupTargetAssignmentMemberValue {
             active: active.clone(),
-            standby: std::collections::BTreeMap::new(),
-            warmup: std::collections::BTreeMap::new(),
+            standby: BTreeMap::new(),
+            warmup: BTreeMap::new(),
         },
     );
 
-    let mut current_per_member = std::collections::HashMap::new();
+    let mut current_per_member = HashMap::new();
     current_per_member.insert(
-        member_id.to_string(),
+        member_id.to_owned(),
         StreamsGroupCurrentMemberAssignmentValue {
             member_epoch: 5,
             previous_member_epoch: 4,
             state: StreamsMemberWireState::Stable,
             active,
-            standby: std::collections::BTreeMap::new(),
-            warmup: std::collections::BTreeMap::new(),
-            active_pending_revocation: std::collections::BTreeMap::new(),
-            standby_pending_revocation: std::collections::BTreeMap::new(),
-            warmup_pending_revocation: std::collections::BTreeMap::new(),
-            active_epochs: std::collections::BTreeMap::new(),
-            active_pending_revocation_epochs: std::collections::BTreeMap::new(),
+            standby: BTreeMap::new(),
+            warmup: BTreeMap::new(),
+            active_pending_revocation: BTreeMap::new(),
+            standby_pending_revocation: BTreeMap::new(),
+            warmup_pending_revocation: BTreeMap::new(),
+            active_epochs: BTreeMap::new(),
+            active_pending_revocation_epochs: BTreeMap::new(),
         },
     );
 
@@ -114,7 +119,7 @@ fn streams_group_seed(member_id: &str) -> StreamsGroupSeed {
         group_epoch: 5,
         metadata_hash: 0,
         validated_topology_epoch: 0,
-        last_assignment_configs: std::collections::BTreeMap::new(),
+        last_assignment_configs: BTreeMap::new(),
         description_epochs: DescriptionEpochs::default(),
         assignment_epoch: 6,
         assignment_timestamp_ms: 0,
@@ -142,8 +147,8 @@ async fn assert_streams_group_helpers_observe_live_actor_view(
         .await
         .expect("seed streams group");
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
+        time::timeout(
+            Duration::from_secs(1),
             handle.wait_until_streams_group_member_count(streams_group_id, 1),
         )
         .await
@@ -154,8 +159,8 @@ async fn assert_streams_group_helpers_observe_live_actor_view(
         .await
         .expect("streams group describe");
     let expected_active = {
-        let mut active = std::collections::BTreeMap::new();
-        active.insert("subtopology-0".to_string(), vec![0, 1]);
+        let mut active = BTreeMap::new();
+        active.insert("subtopology-0".to_owned(), vec![0, 1]);
         active
     };
     check!(streams.group_id.as_str() == streams_group_id);
@@ -163,8 +168,8 @@ async fn assert_streams_group_helpers_observe_live_actor_view(
     check!(streams.members[0].member_id.as_str() == streams_member_id);
     check!(streams.members[0].active == expected_active);
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(75),
+        time::timeout(
+            Duration::from_millis(75),
             handle.wait_until_streams_group_empty(streams_group_id),
         )
         .await
@@ -176,8 +181,8 @@ async fn assert_streams_group_helpers_observe_live_actor_view(
         .group_coordinator
         .get_or_create_streams(empty_streams_group_id);
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
+        time::timeout(
+            Duration::from_secs(1),
             handle.wait_until_streams_group_empty(empty_streams_group_id),
         )
         .await
@@ -204,8 +209,8 @@ async fn group_handle_helpers_observe_live_actor_views() {
         .await
         .expect("seed next-gen group");
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
+        time::timeout(
+            Duration::from_secs(1),
             handle.wait_until_group_member_count(group_id, 1),
         )
         .await
@@ -219,8 +224,8 @@ async fn group_handle_helpers_observe_live_actor_views() {
     check!(described.members.len() == 1);
     check!(described.members[0].member_id.as_str() == member_id);
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(75),
+        time::timeout(
+            Duration::from_millis(75),
             handle.wait_until_group_empty(group_id),
         )
         .await
@@ -232,8 +237,8 @@ async fn group_handle_helpers_observe_live_actor_views() {
         .group_coordinator
         .get_or_create_group(empty_group_id, GroupKindTag::Consumer);
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
+        time::timeout(
+            Duration::from_secs(1),
             handle.wait_until_group_empty(empty_group_id),
         )
         .await
@@ -243,8 +248,8 @@ async fn group_handle_helpers_observe_live_actor_views() {
     let classic_group_id = "handle-classic-group-mutant";
     let classic_member_id = "classic-member-1";
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(75),
+        time::timeout(
+            Duration::from_millis(75),
             handle.wait_until_classic_group_member_count(classic_group_id, 1),
         )
         .await
@@ -255,8 +260,8 @@ async fn group_handle_helpers_observe_live_actor_views() {
         classic_group_with_member(classic_group_id, classic_member_id),
     );
     assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
+        time::timeout(
+            Duration::from_secs(1),
             handle.wait_until_classic_group_member_count(classic_group_id, 1),
         )
         .await
@@ -294,10 +299,7 @@ async fn group_handle_helpers_observe_live_actor_views() {
     broker
         .group_coordinator
         .mark_classic(marked_classic_group_id);
-    assert!(
-        handle.group_type_for_test(marked_classic_group_id)
-            == Some(crate::coordinator::unified::GroupType::Classic)
-    );
+    assert!(handle.group_type_for_test(marked_classic_group_id) == Some(GroupType::Classic));
 
     assert_streams_group_helpers_observe_live_actor_view(&broker, &handle).await;
 

@@ -1,4 +1,4 @@
-// Rust 1.95 annotate-snippets ICE on clippy::pedantic in test files.
+#![cfg(test)]
 
 //! KIP-664 `DescribeProducers` admin RPC (`api_key` 61). It reports the
 //! producer state of the partition log.

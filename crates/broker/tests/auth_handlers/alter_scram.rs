@@ -119,8 +119,8 @@ async fn alter_scram_creds_super_user_can_provision_sha256() {
 async fn alter_scram_creds_non_super_user_rejected() {
     let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
-        .insert("bob".to_string(), wrong_scram_password());
-    cfg.super_users = maplit::hashset! {"admin".to_string()};
+        .insert("bob".to_owned(), wrong_scram_password());
+    cfg.super_users = maplit::hashset! {"admin".to_owned()};
     // Install `SimpleAclAuthorizer` so the cluster-Alter gate
     // fires for non-super principals; the default `AllowAllAuthorizer`
     // would let alice through.

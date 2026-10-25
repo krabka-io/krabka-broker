@@ -5,7 +5,7 @@
 //! stateright properties, and the proptest fuzz all check the same code rather
 //! than three restatements of it.
 
-use crate::coordinator::unified::classic_state::ClassicGroup;
+use {crate::coordinator::unified::classic_state::ClassicGroup, std::collections::HashSet};
 
 /// Every index entry points at a live member that carries the matching instance
 /// id, and every static member has a matching index entry. The two mirror each
@@ -30,7 +30,7 @@ pub(super) fn index_coherent(g: &ClassicGroup) -> bool {
 /// No two live members share a `group.instance.id`, so nothing bypasses
 /// fencing.
 pub(super) fn single_owner(g: &ClassicGroup) -> bool {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     for m in g.members.values() {
         if let Some(iid) = &m.group_instance_id
             && !seen.insert(iid.clone())

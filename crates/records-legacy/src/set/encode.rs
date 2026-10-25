@@ -76,15 +76,15 @@ pub fn encode_compressed_message_set<B: BufMut>(
             "zstd compression not representable in v0/v1".into(),
         ));
     }
-    if records.is_empty() {
+    let (Some(first), Some(last)) = (records.first(), records.last()) else {
         // Nothing to wrap. Encode as a zero-message wrapper would be
         // ambiguous; emit nothing instead.
         return Ok(());
-    }
+    };
 
     // Build inner uncompressed MessageSet.
     let mut inner = BytesMut::new();
-    let base_offset = records[0].offset.0;
+    let base_offset = first.offset.0;
     for r in records {
         let inner_offset = match magic {
             Magic::V0 => r.offset.0,
@@ -128,7 +128,7 @@ pub fn encode_compressed_message_set<B: BufMut>(
     // v1 = absolute offset of last inner record.
     let wrapper_offset = match magic {
         Magic::V0 => 0,
-        Magic::V1 => records[records.len() - 1].offset.0,
+        Magic::V1 => last.offset.0,
     };
     buf.put_i64(wrapper_offset);
     buf.put_i32(i32::try_from(wrapper_len).unwrap_or(i32::MAX));

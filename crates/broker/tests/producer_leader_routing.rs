@@ -20,6 +20,7 @@
 //!
 //! Windows-gated like the other multi-broker tests, because openraft's
 //! `debug_assert!` races on the hosted Windows scheduler.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -86,91 +87,93 @@ async fn producer_routes_to_non_bootstrap_leaders() {
     // partition's Produce to that partition's leader. For partitions led by
     // nodes 2 and 3 the bootstrap broker has NO replica (rf=1), so a
     // bootstrap-only producer's send would fail with UNKNOWN_TOPIC_OR_PARTITION.
-    let producer = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .client_id("routing-producer-rf1")
-        .enable_idempotence(true)
-        .acks(Acks::All)
-        .linger(Duration::from_millis(5))
-        // Bound retries so a genuine misroute fails fast instead of retrying
-        // for i32::MAX cycles (the build default), which would hang the test.
-        .retries(8)
-        .retry_backoff(Duration::from_millis(150))
-        .build()
-        .await
-        .expect("producer build");
-
-    // Produce one record per partition, pinning the partition explicitly so
-    // every partition (incl. those on non-bootstrap leaders) is exercised.
-    let mut futs = Vec::with_capacity(usize::try_from(n_partitions).unwrap_or(0));
-    let mut expected: HashSet<String> = HashSet::new();
-    for p in 0..n_partitions {
-        let v = format!("p{p}");
-        let rx = producer
-            .enqueue(
-                producer_record()
-                    .topic((topic).into())
-                    .maybe_partition(Some(p))
-                    .maybe_value(Some(Some(Bytes::from(v.clone()))))
-                    .call(),
-            )
+    {
+        let producer = Producer::builder()
+            .bootstrap(bootstrap.clone())
+            .client_id("routing-producer-rf1")
+            .enable_idempotence(true)
+            .acks(Acks::All)
+            .linger(Duration::from_millis(5))
+            // Bound retries so a genuine misroute fails fast instead of retrying
+            // for i32::MAX cycles (the build default), which would hang the test.
+            .retries(8)
+            .retry_backoff(Duration::from_millis(150))
+            .build()
             .await
-            .expect("enqueue record");
-        futs.push((p, rx));
-        expected.insert(v);
-    }
-    producer.flush().await.expect("flush");
+            .expect("producer build");
 
-    // Every record must be acked OK — including those for partitions led by
-    // non-bootstrap brokers. A misroute to a non-hosting broker (rf=1) returns
-    // UNKNOWN_TOPIC_OR_PARTITION, which (after the bounded re-route budget)
-    // surfaces as a Server error here.
-    for (p, rx) in futs {
-        let meta = rx
-            .await
-            .unwrap_or_else(|e| panic!("record for partition {p} failed: {e:?}"));
-        assert!(meta.partition == p, "ack partition mismatch: {meta:?}");
-    }
+        // Produce one record per partition, pinning the partition explicitly so
+        // every partition (incl. those on non-bootstrap leaders) is exercised.
+        let mut futs = Vec::with_capacity(usize::try_from(n_partitions).unwrap_or(0));
+        let mut expected: HashSet<String> = HashSet::new();
+        for p in 0..n_partitions {
+            let v = format!("p{p}");
+            let rx = producer
+                .enqueue(
+                    producer_record()
+                        .topic((topic).into())
+                        .maybe_partition(Some(p))
+                        .maybe_value(Some(Some(Bytes::from(v.clone()))))
+                        .call(),
+                )
+                .await
+                .expect("enqueue record");
+            futs.push((p, rx));
+            expected.insert(v);
+        }
+        producer.flush().await.expect("flush");
 
-    // Durability check: consume every record back through a native consumer
-    // (which routes per-leader). For partitions on non-bootstrap leaders the
-    // records can only be present if the producer actually stored them there.
-    let mut consumer = routing_consumer(
-        &bootstrap,
-        "routing-consumer-rf1",
-        "routing-producer-grp-rf1",
-        topic,
-        AutoOffsetReset::Earliest,
-    )
-    .await;
+        // Every record must be acked OK — including those for partitions led by
+        // non-bootstrap brokers. A misroute to a non-hosting broker (rf=1) returns
+        // UNKNOWN_TOPIC_OR_PARTITION, which (after the bounded re-route budget)
+        // surfaces as a Server error here.
+        for (p, rx) in futs {
+            let meta = rx
+                .await
+                .unwrap_or_else(|e| panic!("record for partition {p} failed: {e:?}"));
+            assert!(meta.partition == p, "ack partition mismatch: {meta:?}");
+        }
 
-    // Track which partition each consumed record came from so we can prove the
-    // non-bootstrap partitions are durably stored on their leaders.
-    let mut seen_partitions: HashMap<i32, String> = HashMap::new();
-    let seen = collect_routing_values(&mut consumer, expected.len(), |partition, value| {
-        seen_partitions.insert(partition, value);
-    })
-    .await;
-    assert!(
-        seen == expected,
-        "consumer must read back every produced record (incl. those on non-bootstrap leaders);\n\
+        // Durability check: consume every record back through a native consumer
+        // (which routes per-leader). For partitions on non-bootstrap leaders the
+        // records can only be present if the producer actually stored them there.
+        let mut consumer = routing_consumer(
+            &bootstrap,
+            "routing-consumer-rf1",
+            "routing-producer-grp-rf1",
+            topic,
+            AutoOffsetReset::Earliest,
+        )
+        .await;
+
+        // Track which partition each consumed record came from so we can prove the
+        // non-bootstrap partitions are durably stored on their leaders.
+        let mut seen_partitions: HashMap<i32, String> = HashMap::new();
+        let seen = collect_routing_values(&mut consumer, expected.len(), |partition, value| {
+            seen_partitions.insert(partition, value);
+        })
+        .await;
+        assert!(
+            seen == expected,
+            "consumer must read back every produced record (incl. those on non-bootstrap leaders);\n\
          missing: {:?}\n\
          non-bootstrap partitions: {non_bootstrap_partitions:?}",
-        expected.difference(&seen).collect::<Vec<_>>()
-    );
-
-    // Explicit: every non-bootstrap partition's record was stored and read back
-    // from its correct leader. This is the load-bearing assertion — it can only
-    // hold if the producer routed those Produces off the bootstrap connection.
-    for &p in &non_bootstrap_partitions {
-        assert!(
-            seen_partitions.get(&p) == Some(&format!("p{p}")),
-            "partition {p} (led by a non-bootstrap broker) was not durably stored on its leader; \
-             seen_partitions = {seen_partitions:?}"
+            expected.difference(&seen).collect::<Vec<_>>()
         );
-    }
 
-    consumer.close().await.unwrap();
-    producer.close().await.unwrap();
+        // Explicit: every non-bootstrap partition's record was stored and read back
+        // from its correct leader. This is the load-bearing assertion — it can only
+        // hold if the producer routed those Produces off the bootstrap connection.
+        for &p in &non_bootstrap_partitions {
+            assert!(
+                seen_partitions.get(&p) == Some(&format!("p{p}")),
+                "partition {p} (led by a non-bootstrap broker) was not durably stored on its leader; \
+             seen_partitions = {seen_partitions:?}"
+            );
+        }
+
+        consumer.close().await.unwrap();
+        producer.close().await
+    }.unwrap();
     shutdown_cluster(cluster).await;
 }

@@ -15,18 +15,24 @@ use {
     krabka_ids::LeaderEpoch,
     krabka_log::Offset,
     krabka_raft::NodeId,
-    krabka_verified::isr::{
-        CaughtUpCredit, HighWatermarkFacts, HwmReplica, IsrEligibilityFacts, leader_high_watermark,
+    krabka_verified::{
+        isr,
+        isr::{
+            CaughtUpCredit, HighWatermarkFacts, HwmReplica, IsrEligibilityFacts,
+            leader_high_watermark,
+        },
     },
     std::{
+        cmp,
         collections::{HashMap, HashSet},
+        mem,
         time::{Duration, Instant},
     },
 };
 
 /// What the leader knows of one follower's progress, Kafka's `ReplicaState`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct FollowerStats {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FollowerStats {
     /// The follower's fetch offset, clamped to the leader's log end offset.
     pub(crate) leo: Offset,
     /// Kafka's `lastFetchTimeMs`: when the leader received the follower's
@@ -83,7 +89,7 @@ impl FollowerStats {
     /// Kafka's `Replica.updateFetchStateOrThrow` for a fetch at `fetch_offset`
     /// received at `now`, while the leader's log ended at `leader_leo`.
     fn record_fetch(&mut self, fetch_offset: Offset, leader_leo: Offset, now: Instant) {
-        let credited = match krabka_verified::isr::follower_caught_up_credit(
+        let credited = match isr::follower_caught_up_credit(
             fetch_offset.0,
             leader_leo.0,
             self.last_fetch_leader_leo.0,
@@ -103,7 +109,7 @@ impl FollowerStats {
 /// One replica's standing in the leader's metadata image, the metadata-cache
 /// half of Kafka's `Partition.isReplicaIsrEligible`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct BrokerStanding {
+pub struct BrokerStanding {
     /// Kafka's `metadataCache.isBrokerFenced`: the broker's registration is
     /// fenced.
     pub(crate) fenced: bool,
@@ -118,8 +124,8 @@ pub(crate) struct BrokerStanding {
 /// What the leader's high-watermark and ISR rules read from outside the
 /// partition. The ISR maintenance scan refreshes it from the metadata image
 /// on every pass over a partition this broker leads.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct LeaderPolicy {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaderPolicy {
     /// Kafka's `Partition.effectiveMinIsr`: `min.insync.replicas` capped by
     /// the replica count.
     pub(crate) effective_min_isr: usize,
@@ -188,8 +194,8 @@ impl LeaderPolicy {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ReplicaState {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplicaState {
     pub(crate) isr: HashSet<NodeId>,
     replicas: HashSet<NodeId>,
     pub(crate) per_follower: HashMap<NodeId, FollowerStats>,
@@ -246,7 +252,7 @@ impl ReplicaState {
         now: Instant,
     ) {
         self.leader = Some(leader);
-        let previous_isr = std::mem::replace(&mut self.isr, isr.iter().copied().collect());
+        let previous_isr = mem::replace(&mut self.isr, isr.iter().copied().collect());
         for removed in previous_isr.difference(&self.isr) {
             if let Some(stats) = self.per_follower.get_mut(removed) {
                 stats.fetched_since_isr_exit = false;
@@ -352,7 +358,7 @@ impl ReplicaState {
                     .copied()
                     .unwrap_or(Offset(-1))
             })
-            .fold(leader_log_start, std::cmp::min)
+            .fold(leader_log_start, cmp::min)
     }
 
     pub(crate) fn leader_and_replicas(&self) -> (Option<NodeId>, &HashSet<NodeId>) {
@@ -509,7 +515,10 @@ mod tests {
             BrokerConfigRecord, BrokerRegistrationRecord, DEFAULT_BROKER_CONFIG_NODE_ID,
             MetadataImage, MetadataRecord, PartitionRecord, TopicConfigRecord,
         },
-        std::time::{Duration, Instant},
+        std::{
+            iter,
+            time::{Duration, Instant},
+        },
     };
 
     /// Shorthand for wrapping a raw offset in the test asserts below.
@@ -1006,12 +1015,11 @@ mod tests {
                 "a fenced follower does not",
                 Some(7),
                 LeaderPolicy {
-                    brokers: [(NodeId(3), BrokerStanding {
+                    brokers: iter::once((NodeId(3), BrokerStanding {
                         fenced: true,
                         shutting_down: false,
                         alive_epoch: None,
-                    })]
-                    .into_iter()
+                    }))
                     .collect(),
                     ..policy(1)
                 },
@@ -1072,16 +1080,14 @@ mod tests {
                 fenced,
                 in_controlled_shutdown,
                 broker_epoch,
-                host: "localhost".to_string(),
+                host: "localhost".to_owned(),
                 ..broker_registration(krabka_raft::NodeId(node))
             })
         };
         let mut image = policy_image();
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "t".into(),
-            overrides: [(MIN_INSYNC_REPLICAS.to_string(), "2".to_string())]
-                .into_iter()
-                .collect(),
+            overrides: iter::once((MIN_INSYNC_REPLICAS.to_owned(), "2".to_owned())).collect(),
         }));
         image.apply(&register(1, 11, false, false));
         image.apply(&register(2, 12, false, true));
@@ -1154,8 +1160,8 @@ mod tests {
         for (node, value) in [(DEFAULT_BROKER_CONFIG_NODE_ID, "2"), (NodeId(1), "3")] {
             image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
                 node_id: node,
-                config_name: MIN_INSYNC_REPLICAS.to_string(),
-                config_value: Some(value.to_string()),
+                config_name: MIN_INSYNC_REPLICAS.to_owned(),
+                config_value: Some(value.to_owned()),
             }));
         }
         let lag = Duration::from_secs(30);

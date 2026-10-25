@@ -25,21 +25,26 @@ use {
     krabka_units::{Time, convert::TimeExt as _},
     qubit_clock::{ManualMonotonicClock, WallClock},
     std::{
+        fs::create_dir_all,
         sync::{
             Arc, Mutex,
             atomic::{AtomicI32, AtomicU64},
         },
         time::{Duration, SystemTime, UNIX_EPOCH},
     },
-    tokio::sync::{Notify, mpsc},
+    tokio::{
+        sync,
+        sync::{Notify, mpsc},
+        task::{spawn_blocking, yield_now},
+    },
 };
 
 /// A fixed clock reading, so a schedule in a test is exact rather than nearly
 /// right.
-pub(crate) const NOW_MS: i64 = 1_700_000_000_000;
+pub const NOW_MS: i64 = 1_700_000_000_000;
 
 /// The default clock-confidence bound, in milliseconds.
-pub(crate) const BOUND_MS: i64 = 250;
+pub const BOUND_MS: i64 = 250;
 
 /// The wall-clock instant that `epoch_ms` names.
 ///
@@ -52,12 +57,12 @@ pub(crate) const BOUND_MS: i64 = 250;
 ///
 /// Panics if `epoch_ms` is negative. Every constant here names an instant well
 /// after the epoch.
-pub(crate) fn wall_at(epoch_ms: i64) -> SystemTime {
+pub fn wall_at(epoch_ms: i64) -> SystemTime {
     UNIX_EPOCH + Duration::from_millis(u64::try_from(epoch_ms).expect("a post-epoch instant"))
 }
 
 /// A two-record batch whose activation time is `activation_ms`.
-pub(crate) fn batch_at(activation_ms: i64) -> RecordBatch {
+pub fn batch_at(activation_ms: i64) -> RecordBatch {
     let mut batch = RecordBatch {
         base_timestamp: activation_ms,
         max_timestamp: activation_ms,
@@ -82,7 +87,7 @@ pub(crate) fn batch_at(activation_ms: i64) -> RecordBatch {
 /// [`DeliveryHandles`] read `clock`, so an append and the scheduler agree on
 /// one timeline.
 #[derive(Clone)]
-pub(crate) struct ScheduleSetup<'a> {
+pub struct ScheduleSetup<'a> {
     pub topic: &'a str,
     pub policy: DeliveryPolicy,
     pub activations: Vec<UnixMillis>,
@@ -101,7 +106,7 @@ impl Default for ScheduleSetup<'_> {
 }
 
 #[bon::builder]
-pub(crate) fn scheduled_partition(
+pub fn scheduled_partition(
     dir: &tempfile::TempDir,
     clock: &Arc<dyn WallClock>,
     #[builder(default = ScheduleSetup::default().topic)] topic: &'_ str,
@@ -141,7 +146,7 @@ pub(crate) fn scheduled_partition(
 /// A partition over a log with `config` that holds `batches`, registered
 /// under `topic` with this broker as its leader. The high watermark is the
 /// log end offset.
-pub(crate) struct DeliveryPartitionSetup<'a> {
+pub struct DeliveryPartitionSetup<'a> {
     pub topic: &'a str,
     pub config: LogConfig,
     pub batches: Vec<RecordBatch>,
@@ -160,7 +165,7 @@ impl Default for DeliveryPartitionSetup<'_> {
 }
 
 #[bon::builder]
-pub(crate) fn partition_with_batches(
+pub fn partition_with_batches(
     dir: &tempfile::TempDir,
     clock: &Arc<dyn WallClock>,
     #[builder(default = DeliveryPartitionSetup::default().topic)] topic: &'_ str,
@@ -181,7 +186,7 @@ pub(crate) fn partition_with_batches(
         leader,
     } = setup;
     let partition_dir = partition_dir(dir.path(), topic, 0);
-    std::fs::create_dir_all(&partition_dir).expect("create the partition directory");
+    create_dir_all(&partition_dir).expect("create the partition directory");
     let mut log = Log::open(&partition_dir, config).expect("open the log");
     for mut batch in batches {
         log.append(&mut batch).expect("append a batch");
@@ -214,7 +219,7 @@ pub(crate) fn partition_with_batches(
         writer_gate: WriterGate::shared(false),
         marker_materialization: empty_marker_materialization(),
         append_notify: Arc::new(Notify::new()),
-        replica_state: Arc::new(tokio::sync::Mutex::new(replica_state)),
+        replica_state: Arc::new(sync::Mutex::new(replica_state)),
         hw_advance_notify: Arc::new(Notify::new()),
         delivery,
         current_leader: Arc::new(AtomicU64::new(leader.0)),
@@ -227,7 +232,7 @@ pub(crate) fn partition_with_batches(
 }
 
 /// Register `partition` under its own topic name.
-pub(crate) fn register(registry: &PartitionRegistry, partition: &Arc<Partition>) {
+pub fn register(registry: &PartitionRegistry, partition: &Arc<Partition>) {
     registry.insert(
         partition.topic.as_str().into(),
         partition.index,
@@ -237,7 +242,7 @@ pub(crate) fn register(registry: &PartitionRegistry, partition: &Arc<Partition>)
 
 /// What one [`DeliveryMetrics`] call reported.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum MetricEvent {
+pub enum MetricEvent {
     Watermark(String, PartitionIndex, PartitionDelivery),
     Late(i64),
     Wakeup,
@@ -245,7 +250,7 @@ pub(crate) enum MetricEvent {
 
 /// A watermark advance the scheduler reported.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ReportedWatermark {
+pub struct ReportedWatermark {
     pub(crate) topic: String,
     pub(crate) partition: PartitionIndex,
     pub(crate) delivery: PartitionDelivery,
@@ -254,7 +259,7 @@ pub(crate) struct ReportedWatermark {
 /// A [`DeliveryMetrics`] that keeps every call, so a test asserts on what the
 /// scheduler reported instead of on a live registry.
 #[derive(Default)]
-pub(crate) struct RecordingMetrics {
+pub struct RecordingMetrics {
     events: Mutex<Vec<MetricEvent>>,
 }
 
@@ -328,12 +333,12 @@ impl DeliveryMetrics for RecordingMetrics {
 
 /// Poll `done` until it holds, yielding between tries so a task on the same
 /// current-thread runtime gets to run. Reports whether it held.
-pub(crate) async fn wait_until(mut done: impl FnMut() -> bool) -> bool {
+pub async fn wait_until(mut done: impl FnMut() -> bool) -> bool {
     for _ in 0..1_000 {
         if done() {
             return true;
         }
-        tokio::task::yield_now().await;
+        yield_now().await;
     }
     false
 }
@@ -344,9 +349,9 @@ pub(crate) async fn wait_until(mut done: impl FnMut() -> bool) -> bool {
 /// runtime that has to drive the scheduler task to its next park. The
 /// five-second bound is a hang guard against a task that never parks, not a
 /// timeout a passing test ever reaches.
-pub(crate) async fn wait_parked(clock: &Arc<ManualMonotonicClock>, count: usize) -> bool {
+pub async fn wait_parked(clock: &Arc<ManualMonotonicClock>, count: usize) -> bool {
     let clock = Arc::clone(clock);
-    tokio::task::spawn_blocking(move || clock.wait_for_waiters(count, Duration::from_secs(5)))
+    spawn_blocking(move || clock.wait_for_waiters(count, Duration::from_secs(5)))
         .await
         .expect("the timeline wait finishes")
 }

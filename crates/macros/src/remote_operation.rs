@@ -82,7 +82,7 @@ fn instrumentation(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream
     })
 }
 
-pub(crate) fn expand(
+pub fn expand(
     meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {

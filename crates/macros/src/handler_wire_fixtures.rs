@@ -5,7 +5,7 @@ use moxy::{
     token::{Ident, Spanner, TokenStream},
 };
 
-pub(crate) fn empty_match_acl_filter(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn empty_match_acl_filter(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let target: Path = moxy::parse!({ input })?;
     Ok(moxy::template! {
         {{ target }} {
@@ -21,7 +21,7 @@ pub(crate) fn empty_match_acl_filter(input: &TokenStream) -> Result<TokenStream,
     })
 }
 
-pub(crate) fn token_refusal_result(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn token_refusal_result(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     let target = Path::parse(&parser)?;
     if !target.last().is_some_and(|segment| {

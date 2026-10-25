@@ -17,12 +17,12 @@ use {
     bytes::BytesMut,
     krabka_log::{LogConfig, Offset},
     krabka_raft::RaftError,
-    std::sync::atomic::Ordering,
+    std::{path::Path, sync::atomic::Ordering, time::Duration},
     tempfile::tempdir,
-    tokio::sync::oneshot,
+    tokio::{sync::oneshot, time},
 };
 
-fn seeded_log(path: &std::path::Path) -> Arc<Mutex<Log>> {
+fn seeded_log(path: &Path) -> Arc<Mutex<Log>> {
     let log = open_default_log(path);
     log.lock()
         .expect("lock")
@@ -102,10 +102,10 @@ async fn a_reservation_refused_during_a_controller_election_answers_not_leader()
                 .build(),
         );
         let sequencer: Arc<dyn OffsetSequencer> = Arc::new(ControllerSequencer::new(controller));
-        let wal: SharedWal = Arc::new(LocalFsyncWal::new(log.clone()));
+        let wal: SharedWal = Arc::new(LocalFsyncWal::new(Arc::clone(&log)));
         let log_dir_status = LogDirRegistry::default();
         let (tx, rx) = mpsc::channel(1);
-        let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions {
+        let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
             log_dir_status: log_dir_status.clone(),
             wal: Some(wal),
             sequencer: Some(sequencer),
@@ -136,7 +136,7 @@ async fn diskless_writer_acks_all_gates_on_durable_hw() {
     let (wal, sync_started_rx, release_sync_tx) = GatedWal::gated_channel();
     let wal: Option<SharedWal> = Some(wal);
     let (tx, rx) = mpsc::channel(1);
-    let observed = observed_single_replica_writer(dir.path(), log.clone(), rx, |options| {
+    let observed = observed_single_replica_writer(dir.path(), Arc::clone(&log), rx, |options| {
         options.wal = wal;
         options.sequencer = Some(test_sequencer());
     })
@@ -149,20 +149,20 @@ async fn diskless_writer_acks_all_gates_on_durable_hw() {
 
     let assigned = ack_rx.await.expect("ack recv").expect("append ok");
     assert!(assigned.base_offset == 0);
-    tokio::time::timeout(std::time::Duration::from_secs(1), sync_started_rx)
+    time::timeout(Duration::from_secs(1), sync_started_rx)
         .await
         .expect("wal sync_durable did not start")
         .expect("sync start signal sent");
 
     assert!(observed.replica_state.lock().await.hw == 0);
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(10), &mut hw_waiter)
+        time::timeout(Duration::from_millis(10), &mut hw_waiter)
             .await
             .is_err()
     );
 
     release_sync_tx.send(()).expect("release sync");
-    tokio::time::timeout(std::time::Duration::from_secs(1), &mut hw_waiter)
+    time::timeout(Duration::from_secs(1), &mut hw_waiter)
         .await
         .expect("hw_advance_notify did not fire");
     assert!(observed.replica_state.lock().await.hw == 3);
@@ -176,13 +176,13 @@ async fn diskless_acked_record_survives_reopen() {
     let dir = tempdir().expect("tempdir");
     {
         let log = open_default_log(dir.path());
-        let wal: Option<SharedWal> = Some(Arc::new(LocalFsyncWal::new(log.clone())));
+        let wal: Option<SharedWal> = Some(Arc::new(LocalFsyncWal::new(Arc::clone(&log))));
         let (tx, rx) = mpsc::channel(1);
         let append_notify = Arc::new(Notify::new());
         let replica_state = replica_with_isr(&[1]).await;
-        let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions {
+        let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
             append_notify,
-            replica_state: replica_state.clone(),
+            replica_state: Arc::clone(&replica_state),
             wal,
             sequencer: Some(test_sequencer()),
             ..Default::default()
@@ -194,7 +194,7 @@ async fn diskless_acked_record_survives_reopen() {
         assert2::assert!((assigned.base_offset) == (0));
 
         drop(tx);
-        tokio::time::timeout(std::time::Duration::from_secs(10), writer)
+        time::timeout(Duration::from_secs(10), writer)
             .await
             .expect("writer did not drain after local fsync")
             .expect("writer join");
@@ -215,9 +215,9 @@ async fn diskless_writer_keeps_wal_and_local_trim_frontiers_equal() {
         _sync_started_rx,
         _release_sync_tx,
     } = trim_wal(0);
-    let wal: SharedWal = gated_wal.clone();
+    let wal: SharedWal = Arc::<GatedWal>::clone(&gated_wal);
     let (tx, rx) = mpsc::channel(1);
-    let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions {
+    let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
         wal: Some(wal),
         ..Default::default()
     });
@@ -247,9 +247,9 @@ async fn diskless_trim_retry_finishes_after_wal_failure() {
         _sync_started_rx,
         _release_sync_tx,
     } = trim_wal(1);
-    let wal: SharedWal = gated_wal.clone();
+    let wal: SharedWal = Arc::<GatedWal>::clone(&gated_wal);
     let (tx, rx) = mpsc::channel(2);
-    let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions {
+    let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
         wal: Some(wal),
         ..Default::default()
     });
@@ -308,12 +308,12 @@ async fn diskless_writer_invalidates_hot_tail_after_log_rewrite() {
     cache.insert_run(topic_id, partition, &encoded);
     let gated_wal = Arc::new(
         GatedWal::new(sync_started_tx, release_sync_rx).with_hot_tail(
-            cache.clone(),
+            Arc::clone(&cache),
             topic_id,
             partition,
         ),
     );
-    let wal: SharedWal = gated_wal.clone();
+    let wal: SharedWal = Arc::<GatedWal>::clone(&gated_wal);
     let (tx, rx) = mpsc::channel(1);
     let writer = spawn_writer(dir.path(), log, rx, WriterOptions {
         partition,

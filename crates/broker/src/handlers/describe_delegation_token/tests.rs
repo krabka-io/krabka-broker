@@ -12,6 +12,7 @@ use {
     super::handle,
     crate::{
         authorizer::{AllowAllAuthorizer, Authorizer, SimpleAclAuthorizer},
+        codes,
         handlers::delegation_token_test_support::{
             TokenFixture, anonymous, authed, kp, seed_token, test_controller, token_authed,
         },
@@ -31,7 +32,7 @@ use {
     },
     krabka_raft::ControllerHandle,
     krabka_security::SecretBytes,
-    std::net::SocketAddr,
+    std::{collections::HashSet, net::SocketAddr},
     tempfile::TempDir,
 };
 
@@ -63,7 +64,7 @@ fn describe(
     authentication: Option<&'_ ConnectionAuth>,
     secret: Option<&'_ SecretBytes>,
     #[builder(default)] assert_success: bool,
-) -> krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse {
+) -> DescribeDelegationTokenResponse {
     let setup = DescribeTokenSetup {
         request,
         authentication,
@@ -91,7 +92,7 @@ fn describe_unrestricted(
     request: Option<&'_ DescribeDelegationTokenRequest>,
     authentication: Option<&'_ ConnectionAuth>,
     secret: Option<&'_ SecretBytes>,
-) -> krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse {
+) -> DescribeDelegationTokenResponse {
     let setup = DescribeTokenSetup {
         request,
         authentication,
@@ -106,10 +107,8 @@ fn describe_unrestricted(
         .call()
 }
 
-fn check_refused_token_description(
-    response: &krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse,
-) {
-    assert!(response.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+fn check_refused_token_description(response: &DescribeDelegationTokenResponse) {
+    assert!(response.error_code == codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
     assert!(
         response.tokens.is_empty(),
         "refused caller must never see any token HMAC, got {:?}",
@@ -143,9 +142,7 @@ fn peer() -> SocketAddr { "127.0.0.1:0".parse().unwrap() }
 /// `DelegationToken:<token_id>`. With [`crate::authorizer::AllowAllAuthorizer`]
 /// every token would surface, which is correct under "allow everything" but
 /// does not exercise the ACL filter these tests are written against.
-fn simple_authz() -> SimpleAclAuthorizer {
-    SimpleAclAuthorizer::new(std::collections::HashSet::new())
-}
+fn simple_authz() -> SimpleAclAuthorizer { SimpleAclAuthorizer::new(HashSet::new()) }
 
 async fn seed_acl(controller: &ControllerHandle, entry: AclEntry) {
     controller
@@ -175,18 +172,13 @@ fn no_owner_filter() -> DescribeDelegationTokenRequest {
     }
 }
 
-fn token_ids(
-    resp: &krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse,
-) -> std::collections::HashSet<&str> {
+fn token_ids(resp: &DescribeDelegationTokenResponse) -> HashSet<&str> {
     resp.tokens.iter().map(|t| t.token_id.as_str()).collect()
 }
 
-fn check_visible_token_ids(
-    response: &krabka_protocol::owned::describe_delegation_token_response::DescribeDelegationTokenResponse,
-    expected: &[&str],
-) {
+fn check_visible_token_ids(response: &DescribeDelegationTokenResponse, expected: &[&str]) {
     assert!(response.error_code == 0);
-    let expected: std::collections::HashSet<_> = expected.iter().copied().collect();
+    let expected: HashSet<_> = expected.iter().copied().collect();
     assert!(token_ids(response) == expected);
 }
 
@@ -200,7 +192,7 @@ async fn returns_auth_disabled_when_no_secret_key() {
         .authorizer(&simple_authz())
         .maybe_request(Some(&req))
         .call();
-    assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_AUTH_DISABLED);
+    assert!(resp.error_code == codes::DELEGATION_TOKEN_AUTH_DISABLED);
     controller.cancel().await;
 }
 
@@ -262,7 +254,7 @@ async fn token_authed_caller_gets_request_not_allowed_before_auth_disabled() {
         .maybe_authentication(Some(&token_authed("alice")))
         .call();
 
-    assert!(resp.error_code == crate::codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
+    assert!(resp.error_code == codes::DELEGATION_TOKEN_REQUEST_NOT_ALLOWED);
     controller.cancel().await;
 }
 
@@ -365,7 +357,7 @@ async fn filter_token_matches_owner_renewer_or_token_id_acl() {
             .maybe_secret(Some(&secret))
             .call();
         assert!(resp.error_code == 0, "{name}");
-        let expected: std::collections::HashSet<&str> = expected.iter().copied().collect();
+        let expected: HashSet<&str> = expected.iter().copied().collect();
         assert!(token_ids(&resp) == expected, "{name}");
         controller.cancel().await;
     }
@@ -449,7 +441,7 @@ async fn describe_acl_on_token_id_grants_exactly_that_token() {
         .assert_success(true)
         .call();
     assert!(
-        token_ids(&resp) == std::collections::HashSet::from(["t-a"]),
+        token_ids(&resp) == HashSet::from(["t-a"]),
         "an ACL on t-a must not also surface t-b, same owner or not; got {:?}",
         token_ids(&resp)
     );
@@ -599,11 +591,7 @@ async fn describe_tokens_acl_on_the_owner_grants_all_of_their_tokens() {
             .assert_success(true)
             .call();
         assert!(
-            token_ids(&resp)
-                == expected
-                    .iter()
-                    .copied()
-                    .collect::<std::collections::HashSet<_>>(),
+            token_ids(&resp) == expected.iter().copied().collect::<HashSet<_>>(),
             "{operations:?}, {principal}, default={default_allow}"
         );
         controller.cancel().await;
@@ -721,8 +709,8 @@ async fn requester_of_a_token_minted_for_another_owner_finds_and_sees_it() {
             authentication: Some(&authed(caller)),
             secret: Some(&secret),
         });
-        let visible: std::collections::HashSet<&str> = token_ids(&resp);
-        let expected: std::collections::HashSet<&str> = expected.iter().copied().collect();
+        let visible: HashSet<&str> = token_ids(&resp);
+        let expected: HashSet<&str> = expected.iter().copied().collect();
         assert!(
             (resp.error_code, visible) == (0, expected),
             "caller {caller}, owners {owners:?}"

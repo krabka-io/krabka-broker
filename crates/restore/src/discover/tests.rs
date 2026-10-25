@@ -16,9 +16,10 @@ use {
     assert2::check,
     krabka_ids::{Offset, PartitionIndex},
     krabka_remote_storage::kafka_uuid,
+    std::{fs, path},
 };
 
-async fn scan_archive(root: &std::path::Path) -> ArchiveInventory {
+async fn scan_archive(root: &path::Path) -> ArchiveInventory {
     let args = args_from(root, &[]);
     let store = open_archive(&args).expect("store");
     inventory(&store, &args).await.expect("inventory")
@@ -233,10 +234,10 @@ async fn a_topic_filter_narrows_the_selection_and_the_rest_lands_in_unrecognized
 async fn malformed_keys_land_in_unrecognized_not_dropped_and_not_an_error() {
     let SingleSegmentArchive { dir: archive, .. } = single_segment_archive(Offset(0));
     // Wrong number of path components: a key directly under the root.
-    std::fs::write(archive.path().join("not-a-valid-key.log"), b"junk").expect("write");
+    fs::write(archive.path().join("not-a-valid-key.log"), b"junk").expect("write");
     // Two components, but the directory name does not decode.
-    std::fs::create_dir_all(archive.path().join("weird-dir")).expect("mkdir");
-    std::fs::write(
+    fs::create_dir_all(archive.path().join("weird-dir")).expect("mkdir");
+    fs::write(
         archive
             .path()
             .join("weird-dir")
@@ -335,9 +336,9 @@ async fn a_scan_past_the_sample_limit_keeps_the_sample_and_the_exact_total() {
 
     let junk = UNRECOGNIZED_SAMPLE_LIMIT + 6;
     let dir = archive.path().join("not-a-partition-dir");
-    std::fs::create_dir_all(&dir).expect("create the junk dir");
+    fs::create_dir_all(&dir).expect("create the junk dir");
     for index in 0..junk {
-        std::fs::write(dir.join(format!("{index:04}.log")), b"junk").expect("write a junk key");
+        fs::write(dir.join(format!("{index:04}.log")), b"junk").expect("write a junk key");
     }
 
     let result = scan_archive(archive.path()).await;

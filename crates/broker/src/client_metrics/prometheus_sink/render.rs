@@ -8,9 +8,14 @@
 //! encoded, and that grouping is this module's whole reason to exist.
 
 use {
-    super::collector::{ClientMetricsCollector, StoredPoint},
+    super::collector::{ClientMetricsCollector, SeriesKey, StoredPoint},
     prometheus_client::{collector::Collector, encoding::DescriptorEncoder},
-    std::{collections::HashMap, time::Instant},
+    std::{
+        collections::HashMap,
+        fmt,
+        sync::{Arc, PoisonError},
+        time::{Duration, Instant},
+    },
 };
 
 /// A live series of one metric name: the client that reported it, and its
@@ -22,73 +27,85 @@ struct LiveSeries<'a> {
 }
 
 impl Collector for ClientMetricsCollector {
-    fn encode(&self, mut encoder: DescriptorEncoder) -> Result<(), std::fmt::Error> {
-        let now = Instant::now();
-        let guard = self.points.lock().expect("prom sink mutex poisoned");
-
-        // Group live series by sanitized metric name so that encode_descriptor
-        // is called exactly once per name. prometheus-client 0.24 emits a
-        // # HELP / # TYPE line on every encode_descriptor call, so calling it
-        // N times for N series sharing the same name would produce duplicate
-        // descriptor lines → invalid OpenMetrics output.
-        let mut by_name: HashMap<String, Vec<LiveSeries<'_>>> = HashMap::new();
-        for (key, sp) in guard.iter() {
-            if !Self::is_live(now.duration_since(sp.at), self.ttl) {
-                continue;
-            }
-            by_name
-                .entry(sanitize(&key.metric))
-                .or_default()
-                .push(LiveSeries {
-                    instance: key.client_instance_id.as_str(),
-                    client: key.client_id.as_str(),
-                    point: sp,
-                });
-        }
-
-        for (name, series) in &by_name {
-            let Some(LiveSeries { point: first, .. }) = series.first() else {
-                continue;
-            };
-            let mut metric_encoder = encoder.encode_descriptor(
-                name,
-                "client-reported metric (KIP-714)",
-                None,
-                first.value.metric_type(),
-            )?;
-            for LiveSeries {
-                instance,
-                client,
-                point,
-            } in series
-            {
-                if !point.value.same_type(&first.value) {
-                    continue;
-                }
-                let mut labels = vec![
-                    ("client_instance_id".to_string(), (*instance).to_string()),
-                    ("client_id".to_string(), (*client).to_string()),
-                ];
-                labels.extend(point.attributes.clone());
-                let family_encoder = metric_encoder.encode_family(&labels)?;
-                point.value.encode(family_encoder)?;
-            }
-        }
-        Ok(())
+    fn encode(&self, encoder: DescriptorEncoder) -> Result<(), fmt::Error> {
+        encode_live(
+            &self.points.lock().unwrap_or_else(PoisonError::into_inner),
+            self.ttl,
+            encoder,
+        )
     }
+}
+
+/// [`Collector::encode`] over the locked series map.
+fn encode_live(
+    guard: &HashMap<SeriesKey, StoredPoint>,
+    ttl: Duration,
+    mut encoder: DescriptorEncoder,
+) -> Result<(), fmt::Error> {
+    let now = Instant::now();
+
+    // Group live series by sanitized metric name so that encode_descriptor
+    // is called exactly once per name. prometheus-client 0.24 emits a
+    // # HELP / # TYPE line on every encode_descriptor call, so calling it
+    // N times for N series sharing the same name would produce duplicate
+    // descriptor lines → invalid OpenMetrics output.
+    let mut by_name: HashMap<String, Vec<LiveSeries<'_>>> = HashMap::new();
+    for (key, sp) in guard {
+        if !ClientMetricsCollector::is_live(now.duration_since(sp.at), ttl) {
+            continue;
+        }
+        by_name
+            .entry(sanitize(&key.metric))
+            .or_default()
+            .push(LiveSeries {
+                instance: key.client_instance_id.as_str(),
+                client: key.client_id.as_str(),
+                point: sp,
+            });
+    }
+
+    for (name, series) in &by_name {
+        let Some(LiveSeries { point: first, .. }) = series.first() else {
+            continue;
+        };
+        let mut metric_encoder = encoder.encode_descriptor(
+            name,
+            "client-reported metric (KIP-714)",
+            None,
+            first.value.metric_type(),
+        )?;
+        for LiveSeries {
+            instance,
+            client,
+            point,
+        } in series
+        {
+            if !point.value.same_type(&first.value) {
+                continue;
+            }
+            let mut labels = vec![
+                ("client_instance_id".to_owned(), (*instance).to_owned()),
+                ("client_id".to_owned(), (*client).to_owned()),
+            ];
+            labels.extend(point.attributes.clone());
+            let family_encoder = metric_encoder.encode_family(&labels)?;
+            point.value.encode(family_encoder)?;
+        }
+    }
+    Ok(())
 }
 
 /// Newtype wrapper around `Arc<ClientMetricsCollector>` that implements
 /// `prometheus_client::collector::Collector`. It lets `register_collector` add
 /// the shared collector to a `Registry`.
 #[derive(Debug)]
-pub(crate) struct SharedClientMetricsCollector(pub std::sync::Arc<ClientMetricsCollector>);
+pub struct SharedClientMetricsCollector(pub Arc<ClientMetricsCollector>);
 
-impl prometheus_client::collector::Collector for SharedClientMetricsCollector {
+impl Collector for SharedClientMetricsCollector {
     fn encode(
         &self,
         encoder: prometheus_client::encoding::DescriptorEncoder,
-    ) -> Result<(), std::fmt::Error> {
+    ) -> Result<(), fmt::Error> {
         self.0.encode(encoder)
     }
 }
@@ -114,7 +131,8 @@ mod tests {
     use {
         super::{super::test_support::data_point, *},
         crate::client_metrics::prometheus_sink::{DataPoint, PointValue},
-        std::time::Duration,
+        prometheus_client::encoding::text,
+        std::{sync::Arc, time::Duration},
     };
 
     fn encode_collector(collector: impl Collector + 'static) -> String {
@@ -122,7 +140,7 @@ mod tests {
         let mut registry = Registry::default();
         registry.register_collector(Box::new(collector));
         let mut output = String::new();
-        prometheus_client::encoding::text::encode(&mut output, &registry).unwrap();
+        text::encode(&mut output, &registry).unwrap();
         output
     }
 
@@ -187,7 +205,7 @@ mod tests {
 
     #[test]
     fn multiple_series_same_metric_encode_once() {
-        let sink = ClientMetricsCollector::new(std::time::Duration::from_mins(1));
+        let sink = ClientMetricsCollector::new(Duration::from_mins(1));
         sink.ingest(&[
             DataPoint {
                 metric: "org.apache.kafka.consumer.fetch.size".into(),
@@ -255,7 +273,7 @@ mod tests {
 
     #[test]
     fn shared_wrapper_delegates_encoding_and_sanitize_preserves_valid_punctuation() {
-        let sink = std::sync::Arc::new(ClientMetricsCollector::new(Duration::from_mins(1)));
+        let sink = Arc::new(ClientMetricsCollector::new(Duration::from_mins(1)));
         sink.ingest(&[DataPoint {
             metric: "valid_name:total-bad".into(),
             client_instance_id: "i".into(),

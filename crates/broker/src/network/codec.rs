@@ -8,17 +8,13 @@ use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 use {
     bytes::{BufMut, Bytes, BytesMut},
+    std::io,
     tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec},
 };
 
-pub(crate) fn validate_frame_length(
-    frame_body_len: usize,
-    max_frame_bytes: usize,
-) -> std::io::Result<()> {
+pub fn validate_frame_length(frame_body_len: usize, max_frame_bytes: usize) -> io::Result<()> {
     if frame_body_len > max_frame_bytes {
-        return Err(std::io::Error::other(
-            "frame exceeds configured maximum size",
-        ));
+        return Err(io::Error::other("frame exceeds configured maximum size"));
     }
     Ok(())
 }
@@ -29,18 +25,16 @@ pub(crate) fn validate_frame_length(
 /// `maxSize` of the `NetworkReceive` that reads a request, and
 /// `Processor.sendResponse` writes a `NetworkSend` of any size. The one bound
 /// a response has is the signed int32 its size prefix is written as.
-pub(crate) fn response_frame_length(frame_body_len: usize) -> std::io::Result<u32> {
+pub fn response_frame_length(frame_body_len: usize) -> io::Result<u32> {
     i32::try_from(frame_body_len)
         .map(i32::cast_unsigned)
-        .map_err(|_| std::io::Error::other("response frame exceeds the int32 size prefix"))
+        .map_err(|_| io::Error::other("response frame exceeds the int32 size prefix"))
 }
 
 /// Whether `error` is the codec's refusal of a size prefix over the request
 /// limit: Kafka's `InvalidReceiveException`. Every other decode error is a
 /// broken transport.
-pub(crate) fn is_invalid_receive(error: &std::io::Error) -> bool {
-    error.kind() == std::io::ErrorKind::InvalidData
-}
+pub fn is_invalid_receive(error: &io::Error) -> bool { error.kind() == io::ErrorKind::InvalidData }
 
 /// Kafka's length-prefixed framing.
 ///
@@ -66,22 +60,22 @@ impl KafkaCodec {
 }
 
 impl Decoder for KafkaCodec {
-    type Error = std::io::Error;
+    type Error = io::Error;
     type Item = BytesMut;
 
-    fn decode(&mut self, src: &mut BytesMut) -> std::io::Result<Option<BytesMut>> {
+    fn decode(&mut self, src: &mut BytesMut) -> io::Result<Option<BytesMut>> {
         self.requests.decode(src)
     }
 
-    fn decode_eof(&mut self, buf: &mut BytesMut) -> std::io::Result<Option<BytesMut>> {
+    fn decode_eof(&mut self, buf: &mut BytesMut) -> io::Result<Option<BytesMut>> {
         self.requests.decode_eof(buf)
     }
 }
 
 impl Encoder<Bytes> for KafkaCodec {
-    type Error = std::io::Error;
+    type Error = io::Error;
 
-    fn encode(&mut self, frame: Bytes, dst: &mut BytesMut) -> std::io::Result<()> {
+    fn encode(&mut self, frame: Bytes, dst: &mut BytesMut) -> io::Result<()> {
         let size_prefix = response_frame_length(frame.len())?;
         dst.reserve(4 + frame.len());
         dst.put_u32(size_prefix);

@@ -17,8 +17,12 @@ use {
     },
     assert2::assert,
     krabka_client_core::Client,
-    krabka_protocol::owned::share_group_heartbeat_request::ShareGroupHeartbeatRequest,
-    std::time::Duration,
+    krabka_protocol::owned::{
+        share_fetch_response::PartitionData,
+        share_group_heartbeat_request::ShareGroupHeartbeatRequest,
+    },
+    std::{path::PathBuf, sync::Arc, time::Duration},
+    tokio::{sync::OwnedSemaphorePermit, time},
 };
 
 pub const NONE: i16 = 0;
@@ -65,7 +69,7 @@ pub async fn join(client: &Client, group: &str, topic: &str) -> MemberSession {
         // intentional: paces steady-state heartbeats to drive the membership
         // reconciliation / lifecycle hook forward; this drives the protocol rather
         // than waiting on a single observable state (share init is awaited separately).
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
     MemberSession {
         member: member_id,
@@ -100,14 +104,9 @@ krabka_macros::share_consumption_driver!(
 /// Initialize the persisted topic/group fixture before a restart scenario.
 #[bon::builder]
 pub async fn initialized_topic(
-    log_dir: std::path::PathBuf,
+    log_dir: PathBuf,
     #[builder(into, default = ShareRecordCount(3))] count: ShareRecordCount,
-) -> (
-    krabka_broker::BrokerHandle,
-    std::sync::Arc<Client>,
-    uuid::Uuid,
-    String,
-) {
+) -> (krabka_broker::BrokerHandle, Arc<Client>, uuid::Uuid, String) {
     let (broker, client, tid) = start_topic().cfg(broker_config(log_dir)).call().await;
     let MemberSession { member, .. } = initialize_consumption(&broker, &client, ConsumptionSetup {
         topic_id: tid,
@@ -122,9 +121,9 @@ pub async fn initialized_topic(
 pub async fn seeded_empty_group(
     #[builder(into, default = ShareRecordCount(3))] count: ShareRecordCount,
 ) -> (
-    tokio::sync::OwnedSemaphorePermit,
+    OwnedSemaphorePermit,
     krabka_broker::BrokerHandle,
-    std::sync::Arc<Client>,
+    Arc<Client>,
     tempfile::TempDir,
     uuid::Uuid,
 ) {
@@ -141,9 +140,9 @@ pub async fn seeded_empty_group(
 
 /// Owners for a restart fixture whose caller reopens the same data directory.
 pub struct RestartDirectory {
-    pub permit: tokio::sync::OwnedSemaphorePermit,
+    pub permit: OwnedSemaphorePermit,
     pub dir: tempfile::TempDir,
-    pub path: std::path::PathBuf,
+    pub path: PathBuf,
 }
 
 pub async fn restart_directory() -> RestartDirectory {
@@ -155,13 +154,13 @@ pub async fn restart_directory() -> RestartDirectory {
 
 /// Join g1, seed three records, and acquire its first partition.
 pub async fn acquired_topic() -> (
-    tokio::sync::OwnedSemaphorePermit,
+    OwnedSemaphorePermit,
     krabka_broker::BrokerHandle,
-    std::sync::Arc<Client>,
+    Arc<Client>,
     tempfile::TempDir,
     uuid::Uuid,
     String,
-    krabka_protocol::owned::share_fetch_response::PartitionData,
+    PartitionData,
 ) {
     let ConsumptionFixture {
         _permit: permit,
@@ -180,15 +179,10 @@ pub async fn acquired_topic() -> (
 
 /// Retain the directory and permit across both boots of an initialized-topic test.
 pub struct InitializedRestartFixture {
-    pub _permit: tokio::sync::OwnedSemaphorePermit,
+    pub _permit: OwnedSemaphorePermit,
     pub _dir: tempfile::TempDir,
-    pub log_dir: std::path::PathBuf,
-    pub topic: (
-        krabka_broker::BrokerHandle,
-        std::sync::Arc<Client>,
-        uuid::Uuid,
-        String,
-    ),
+    pub log_dir: PathBuf,
+    pub topic: (krabka_broker::BrokerHandle, Arc<Client>, uuid::Uuid, String),
 }
 
 #[bon::builder]

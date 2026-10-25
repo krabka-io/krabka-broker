@@ -22,7 +22,10 @@ use {
         },
         primitives::uuid::Uuid as WireUuid,
     },
-    std::collections::{HashMap, HashSet},
+    std::{
+        collections::{HashMap, HashSet},
+        mem,
+    },
 };
 
 /// One requested topic: the name resolved from the metadata image (`None` when
@@ -91,7 +94,7 @@ pub(super) fn resolve_topic_names(
             (Some(name), true) => references.push(Reference::Name(name)),
             (Some(name), false) => {
                 invalid.push(invalid_topic_result(
-                    Some(name.to_string()),
+                    Some(name.to_owned()),
                     state.topic_id,
                     NAME_AND_ID,
                 ));
@@ -118,13 +121,13 @@ pub(super) fn resolve_topic_names(
     let mut seen_duplicate_ids: HashSet<WireUuid> = HashSet::new();
     for reference in references {
         match reference {
-            Reference::Name(name) if name_rows[name] > 1 => {
+            Reference::Name(name) if name_rows.get(name).is_some_and(|&rows| rows > 1) => {
                 if seen_duplicate_names.insert(name) {
                     duplicate_names.push(name);
                 }
             }
-            Reference::Name(name) => topics.push((Some(name.to_string()), false, WireUuid::ZERO)),
-            Reference::Id(id) if id_rows[&id] > 1 => {
+            Reference::Name(name) => topics.push((Some(name.to_owned()), false, WireUuid::ZERO)),
+            Reference::Id(id) if id_rows.get(&id).is_some_and(|&rows| rows > 1) => {
                 if seen_duplicate_ids.insert(id) {
                     duplicate_ids.push(id);
                 }
@@ -138,7 +141,7 @@ pub(super) fn resolve_topic_names(
         }
     }
     invalid.extend(duplicate_names.iter().map(|name| {
-        invalid_topic_result(Some((*name).to_string()), WireUuid::ZERO, DUPLICATE_NAME)
+        invalid_topic_result(Some((*name).to_owned()), WireUuid::ZERO, DUPLICATE_NAME)
     }));
     invalid.extend(
         duplicate_ids
@@ -174,7 +177,7 @@ impl ValidatedTopics {
             .collect();
         let mut dropped_ids = HashSet::new();
         let mut kept = Vec::with_capacity(self.topics.len());
-        for row in std::mem::take(&mut self.topics) {
+        for row in mem::take(&mut self.topics) {
             let (Some(name), false, _) = &row else {
                 kept.push(row);
                 continue;
@@ -210,6 +213,7 @@ mod tests {
         assert2::assert,
         krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord},
         krabka_protocol::owned::delete_topics_request::DeleteTopicState,
+        std::iter,
     };
 
     const ORDERS_ID: WireUuid = WireUuid([7; 16]);
@@ -228,14 +232,14 @@ mod tests {
 
     fn state(name: Option<&str>, topic_id: WireUuid) -> DeleteTopicState {
         DeleteTopicState {
-            name: name.map(str::to_string),
+            name: name.map(str::to_owned),
             topic_id,
             ..Default::default()
         }
     }
 
     fn invalid(name: Option<&str>, topic_id: WireUuid, message: &str) -> DeletableTopicResult {
-        invalid_topic_result(name.map(str::to_string), topic_id, message)
+        invalid_topic_result(name.map(str::to_owned), topic_id, message)
     }
 
     /// One scenario: the request rows, the topics denied `Delete`, and the
@@ -301,8 +305,8 @@ mod tests {
             },
             Case {
                 label: "a duplicate name answers once and deletes nothing",
-                request: v6((0..3)
-                    .map(|_| state(Some("orders"), WireUuid::ZERO))
+                request: v6(iter::repeat_with(|| state(Some("orders"), WireUuid::ZERO))
+                    .take(3)
                     .collect()),
                 denied: &[],
                 topics: Vec::new(),
@@ -395,7 +399,7 @@ mod tests {
             let allowed: HashSet<String> = ["orders", "other", "a", "b", "c"]
                 .into_iter()
                 .filter(|name| !case.denied.contains(name))
-                .map(str::to_string)
+                .map(str::to_owned)
                 .collect();
             let access = TopicAccess::Topics {
                 describable: allowed.clone(),

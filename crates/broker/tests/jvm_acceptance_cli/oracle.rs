@@ -40,22 +40,25 @@ use {
     },
     assert2::assert,
     std::{
+        fs,
         io::Write as _,
         process::{Command, ExitStatus, Output, Stdio},
+        thread,
         time::{Duration, Instant},
     },
+    tokio::task,
 };
 
 /// The release both halves of every differential run: the oracle broker is
 /// this image, and so is the client aimed at krabka.
-pub(crate) const ORACLE_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
+pub const ORACLE_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";
 
 /// Where the tools live inside [`ORACLE_IMAGE`]. They are not on `PATH`.
 const BIN: &str = "/opt/kafka/bin";
 
 /// The listener the oracle's own tools bootstrap against, from inside its
 /// container.
-pub(crate) const ORACLE_BOOTSTRAP: &str = "localhost:9092";
+pub const ORACLE_BOOTSTRAP: &str = "localhost:9092";
 
 /// How long a container gets to boot, and a cluster to settle.
 const READY_BUDGET: Duration = Duration::from_secs(120);
@@ -70,7 +73,7 @@ const POLL_GAP: Duration = Duration::from_secs(1);
 /// needed -- so a run is captured rather than asserted on, and each case
 /// decides what the exit status means.
 #[derive(Debug, Clone)]
-pub(crate) struct CliRun {
+pub struct CliRun {
     /// Which side ran it, for the panic message when a case is disappointed.
     pub(crate) side: String,
     status: ExitStatus,
@@ -140,7 +143,7 @@ impl CliRun {
 ///
 /// The two sides put it there differently -- krabka's tool gets a bind mount,
 /// the oracle's gets a write into its container -- and a case says neither.
-pub(crate) struct ToolFile {
+pub struct ToolFile {
     /// The absolute path inside the container the tool runs in.
     pub(crate) container_path: String,
     pub(crate) contents: String,
@@ -156,7 +159,7 @@ impl ToolFile {
 }
 
 /// One half of a differential: something that runs a 4.3.1 admin tool.
-pub(crate) enum Side<'a> {
+pub enum Side<'a> {
     /// krabka on the host, reached from a throwaway container.
     Krabka {
         /// What the tool passes to `--bootstrap-server`.
@@ -167,7 +170,7 @@ pub(crate) enum Side<'a> {
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct AssignedTopicCommandSetup<'a> {
+pub struct AssignedTopicCommandSetup<'a> {
     #[default("orders")]
     pub topic: &'a str,
     #[default("1")]
@@ -346,7 +349,7 @@ fn run_against_host(
 /// the tool reports as a missing file.
 fn host_tempfile(contents: &str) -> tempfile::NamedTempFile {
     let tmp = tempfile::NamedTempFile::new().expect("tempfile");
-    std::fs::write(tmp.path(), contents).expect("write tool file");
+    fs::write(tmp.path(), contents).expect("write tool file");
     #[cfg(unix)]
     {
         use crate::support::chmod_for_container;
@@ -382,7 +385,7 @@ fn feed(mut command: Command, stdin: Option<&str>) -> Output {
 ///
 /// Dropping it removes the container, so a case that panics leaves nothing
 /// behind for the next run to collide with.
-pub(crate) struct Oracle {
+pub struct Oracle {
     name: String,
 }
 
@@ -520,7 +523,7 @@ impl Oracle {
                 "{ORACLE_IMAGE} did not answer within {READY_BUDGET:?}:\n{}",
                 self.logs(),
             );
-            std::thread::sleep(POLL_GAP);
+            thread::sleep(POLL_GAP);
         }
     }
 
@@ -533,7 +536,7 @@ impl Drop for Oracle {
 }
 
 /// A tool left running in its own container, removed when this is dropped.
-pub(crate) struct DetachedTool {
+pub struct DetachedTool {
     name: String,
 }
 
@@ -542,7 +545,7 @@ impl Drop for DetachedTool {
 }
 
 /// Stock-first brokers for CLI differential scenarios.
-pub(crate) struct OracleComparison {
+pub struct OracleComparison {
     bootstrap: String,
     _dir: tempfile::TempDir,
     pub(crate) broker: krabka_broker::BrokerHandle,
@@ -551,7 +554,7 @@ pub(crate) struct OracleComparison {
 
 impl OracleComparison {
     pub(crate) async fn start(label: &'static str) -> Self {
-        let oracle = tokio::task::spawn_blocking(move || Oracle::start(label))
+        let oracle = task::spawn_blocking(move || Oracle::start(label))
             .await
             .expect("oracle boot");
         let (broker, dir) = start_host_broker().await;
@@ -573,13 +576,13 @@ impl OracleComparison {
 }
 
 /// A CLI side and its optional client properties.
-pub(crate) struct SecuredSide<'a, 'b> {
+pub struct SecuredSide<'a, 'b> {
     pub(crate) side: &'a Side<'b>,
     pub(crate) props: Option<&'a str>,
 }
 
 /// The two independent CLI sides and their respective optional client properties.
-pub(crate) fn secured_sides<'a, 'b>(
+pub fn secured_sides<'a, 'b>(
     oracle: &'a Side<'b>,
     krabka: &'a Side<'b>,
     props: &'a str,

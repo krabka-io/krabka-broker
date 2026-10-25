@@ -71,7 +71,7 @@ fn record_type(field: &Field) -> Result<Type, ParseError> {
     }
 }
 
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let options = item.parse_meta::<ReplayOptions>("replay_member_maps")?.ok_or_else(|| {
         ParseError::new(item.ident.span(), "`ReplayMemberMaps` needs `#[replay_member_maps(protocol = \"consumer\" | \"share\" | \"streams\")]`")
     })?;

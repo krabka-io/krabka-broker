@@ -12,6 +12,7 @@ use {
     },
     assert2::check,
     krabka_compression::CompressionType,
+    krabka_protocol::{owned::produce_response::PartitionProduceResponse, primitives::uuid::Uuid},
 };
 
 /// A per-topic cap of 2048 bytes, the value the boundary was settled at
@@ -20,9 +21,9 @@ const CAP: usize = 2048;
 
 async fn check_exact_limit(
     process: &support::InProcess,
-    topic: krabka_protocol::primitives::uuid::Uuid,
+    topic: Uuid,
     limit: usize,
-    refusal: krabka_protocol::owned::produce_response::PartitionProduceResponse,
+    refusal: PartitionProduceResponse,
 ) {
     check!(
         produce_batch_of_wire_len(&process.client, "orders", topic, limit).await == accepted(0, 0)

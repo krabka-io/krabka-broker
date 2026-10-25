@@ -1,20 +1,28 @@
-//! HDR histogram helpers. The driver records latencies in microseconds with
-//! `(min=1us, max=60s, sigfig=3)`. That gives enough resolution from sub-ms up
-//! to degraded-broker timeouts, and it keeps memory use low.
+//! HDR histogram helpers.
+//!
+//! The driver records latencies in microseconds with `(min=1us, max=60s,
+//! sigfig=3)`. That gives enough resolution from sub-ms up to degraded-broker
+//! timeouts, and it keeps memory use low.
 //!
 //! `hdrhistogram` counts raw `u64`s, so microseconds are the histogram's own
 //! unit. [`record`] and [`percentiles`] are the seam that converts to and from
 //! the [`Time`] extents the rest of the driver passes around.
 
-use {crate::scenario::LatencyPercentiles, hdrhistogram::Histogram, krabka_units::prelude::*};
+use {
+    crate::scenario::LatencyPercentiles,
+    hdrhistogram::{CreationError, Histogram},
+    krabka_units::prelude::*,
+};
 
-/// One per-task latency histogram. Use this constructor, because the
-/// bounds matter for accuracy.
-#[must_use]
-/// # Panics
-/// Panics if synchronized state is poisoned or validated input is missing a field required to produce the output.
-pub fn new() -> Histogram<u64> {
-    Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).expect("histogram bounds are valid")
+/// One per-task latency histogram. Use this constructor, or
+/// [`Histogram::new_from`] on a histogram it built, because the bounds matter
+/// for accuracy.
+///
+/// # Errors
+///
+/// The [`CreationError`] `hdrhistogram` returns for the driver's bounds.
+pub fn new() -> Result<Histogram<u64>, CreationError> {
+    Histogram::<u64>::new_with_bounds(1, 60_000_000, 3)
 }
 
 /// Records one measured latency. This clamps to the histogram's microsecond
@@ -49,7 +57,7 @@ mod tests {
 
     #[test]
     fn percentiles_report_recorded_extents() {
-        let mut h = new();
+        let mut h = new().unwrap();
         for v in [millis(1), millis(2), millis(3), millis(4), millis(5)] {
             record(&mut h, v);
         }
@@ -64,7 +72,7 @@ mod tests {
 
     #[test]
     fn sub_millisecond_latencies_keep_their_resolution() {
-        let mut h = new();
+        let mut h = new().unwrap();
         record(&mut h, micros(250));
         let p = percentiles(&h);
         check!(p.p50 >= micros(240));
@@ -73,14 +81,14 @@ mod tests {
 
     #[test]
     fn clamps_above_max_into_range() {
-        let mut h = new();
+        let mut h = new().unwrap();
         record(&mut h, days(1));
         check!(h.len() == 1);
     }
 
     #[test]
     fn clamps_below_min_into_range() {
-        let mut h = new();
+        let mut h = new().unwrap();
         record(&mut h, Time::ZERO);
         check!(h.len() == 1);
     }

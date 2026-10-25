@@ -27,6 +27,7 @@
 //! restart-durability test of the share-state summary, and `first_load` holds
 //! the test of when a share partition's resolved start offset becomes
 //! durable.
+#![cfg(test)]
 
 mod support;
 

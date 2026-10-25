@@ -37,7 +37,7 @@ fn load_binds_every_key_to_its_principal() {
         (
             "alice by id",
             "alice-yubi",
-            Some(("User:alice", alice_public.clone())),
+            Some(("User:alice", alice_public)),
         ),
         ("bob by id", "bob-yubi", Some(("User:bob", bob_public))),
         ("an unconfigured id", "carol-yubi", None),
@@ -45,7 +45,7 @@ fn load_binds_every_key_to_its_principal() {
         let found = keys
             .get(key_id)
             .map(|key| (key.principal().to_owned(), key.public_key().to_vec()));
-        let expected = expected.map(|(principal, public)| (principal.to_owned(), public.clone()));
+        let expected = expected.map(|(principal, public)| (principal.to_owned(), public));
         check!(found == expected, "case {name}");
     }
     check!(keys.get("alice-yubi").map(OperatorKey::key_id) == Some("alice-yubi"));
@@ -107,7 +107,7 @@ fn load_rejects_an_unusable_entry() {
             "a duplicate principal",
             vec![
                 entry("alice-yubi", "User:alice", good.clone()),
-                entry("alice-backup", "User:alice", good.clone()),
+                entry("alice-backup", "User:alice", good),
             ],
             "DuplicatePrincipal",
         ),

@@ -1,4 +1,5 @@
 //! Generated properties retain their declared order and execute native predicates.
+#![cfg(test)]
 
 use {
     assert2::assert,

@@ -7,6 +7,7 @@
 use {
     super::SharePartitionLeaderManager,
     crate::{
+        config::BrokerConfig,
         coordinator::unified::share::config::ShareGroupConfig,
         metadata_source::MetadataSource,
         network::client::InterBrokerClient,
@@ -26,7 +27,7 @@ use {
     std::{path::Path, sync::Arc, time::Duration},
 };
 
-pub(crate) const LOCK: Duration = Duration::from_secs(30);
+pub const LOCK: Duration = Duration::from_secs(30);
 
 /// A metadata source over `image`, with this node reported as the
 /// controller leader.
@@ -52,7 +53,7 @@ pub(super) struct SessionCapacity(pub usize);
 
 #[derive(krabka_macros::FieldDefaults)]
 struct ManagerSetup {
-    #[default(SessionCapacity(crate::config::BrokerConfig::default().share_session_cache_max_when_unlimited))]
+    #[default(SessionCapacity(BrokerConfig::default().share_session_cache_max_when_unlimited))]
     capacity: SessionCapacity,
     #[default(Arc::new(RecordingDlq::default()))]
     dlq: Arc<dyn DlqSink>,
@@ -126,18 +127,18 @@ fn build(
     let ManagerSetup { capacity, dlq } = setup;
     let coord = Arc::new(ShareCoordinator::new(
         krabka_audit::NodeId(1),
-        reg.clone(),
+        Arc::clone(&reg),
         ShareCoordinatorConfig::default(),
     ));
     let client = Arc::new(InterBrokerClient::new(None, None));
     let persister = Arc::new(SharePersister::new(
         krabka_audit::NodeId(1),
         coord,
-        controller.clone(),
+        Arc::clone(&controller),
         Arc::default(),
         client,
         ListenerProtocol::Plaintext,
-        "INTERNAL".to_string(),
+        "INTERNAL".to_owned(),
     ));
     SharePartitionLeaderManager::new(
         krabka_audit::NodeId(1),
@@ -152,14 +153,14 @@ fn build(
 
 /// One timestamped batch of data records.
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct TimedValues<'a> {
+pub struct TimedValues<'a> {
     pub timestamp: UnixMillis,
     #[default(&[b"v"])]
     pub values: &'a [&'static [u8]],
 }
 
 #[derive(krabka_macros::FieldDefaults)]
-pub(crate) struct DataPartitionSetup<'a> {
+pub struct DataPartitionSetup<'a> {
     #[default("t")]
     pub topic: &'a str,
     pub partition: PartitionIndex,
@@ -169,7 +170,7 @@ pub(crate) struct DataPartitionSetup<'a> {
 
 /// Append the selected batches, publish the high watermark, and register a real partition.
 #[bon::builder]
-pub(crate) async fn open_data_partition(
+pub async fn open_data_partition(
     reg: &PartitionRegistry,
     log_dir: &Path,
     #[builder(default = "t")] topic: &'_ str,

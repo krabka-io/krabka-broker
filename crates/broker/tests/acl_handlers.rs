@@ -1,7 +1,4 @@
-// rustc 1.95 clippy::pedantic ICEs on this file (the same upstream bug
-// in clippy's body-analysis / doc lint pass that already triggers on
-// `tests/admin_handlers.rs`). Disable pedantic locally; the rest of the
-// workspace still enforces the full pedantic gate.
+#![cfg(test)]
 
 //! Broker-side ACL integration tests. No Docker.
 //!

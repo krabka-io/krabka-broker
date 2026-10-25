@@ -11,7 +11,7 @@
 use {
     super::{InProcessInner, PartitionCursor},
     crate::log::{AssignmentHandle, PartitionStart},
-    std::sync::Arc,
+    std::sync::{Arc, PoisonError},
 };
 
 pub(super) struct InProcessAssignmentHandle {
@@ -39,7 +39,7 @@ impl AssignmentHandle for InProcessAssignmentHandle {
             .inner
             .subscriptions
             .lock()
-            .expect("metadata-log subscriptions mutex poisoned");
+            .unwrap_or_else(PoisonError::into_inner);
         let Some(state) = subs.get(&self.sub_id).cloned() else {
             return;
         };
@@ -48,16 +48,24 @@ impl AssignmentHandle for InProcessAssignmentHandle {
         // insert bracket every concurrent publish exactly once: a
         // publish either lands in the snapshot we inject here, or it is
         // forwarded live (because `assigned` already contains it).
-        let log = self.inner.log.lock().expect("metadata-log mutex poisoned");
-        let mut assigned = state.assigned.lock().expect("assigned mutex poisoned");
+        let log = self
+            .inner
+            .log
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut assigned = state
+            .assigned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if assigned.contains_key(&start.partition) {
             return; // already assigned: no-op
         }
-        let idx = match usize::try_from(start.partition) {
-            Ok(i) if i < log.len() => i,
-            _ => return, // out of range: ignore
+        let Some(records) = usize::try_from(start.partition)
+            .ok()
+            .and_then(|idx| log.get(idx))
+        else {
+            return; // out of range: ignore
         };
-        let records = &log[idx];
         let begin = usize::try_from(start.start_offset.max(0)).unwrap_or(usize::MAX);
         for record in records.iter().skip(begin) {
             let _ = state.inject.send(record.clone());
@@ -68,11 +76,13 @@ impl AssignmentHandle for InProcessAssignmentHandle {
         // backlog we just pushed above, preserving per-partition publish
         // order: stream::select must not interleave a live record ahead of
         // undrained backlog.
-        let next_live = i64::try_from(records.len()).expect("len fits in i64");
+        let next_live = i64::try_from(records.len()).unwrap_or(i64::MAX);
         assigned.insert(start.partition, PartitionCursor {
             next: next_live,
             via_inject: true,
         });
+        drop(assigned);
+        drop(log);
     }
 
     fn remove(&self, partition: i32) {
@@ -80,12 +90,12 @@ impl AssignmentHandle for InProcessAssignmentHandle {
             .inner
             .subscriptions
             .lock()
-            .expect("metadata-log subscriptions mutex poisoned");
+            .unwrap_or_else(PoisonError::into_inner);
         if let Some(state) = subs.get(&self.sub_id) {
             state
                 .assigned
                 .lock()
-                .expect("assigned mutex poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .remove(&partition);
         }
     }
@@ -95,14 +105,15 @@ impl AssignmentHandle for InProcessAssignmentHandle {
             .inner
             .subscriptions
             .lock()
-            .expect("metadata-log subscriptions mutex poisoned");
-        let Some(state) = subs.get(&self.sub_id) else {
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(state) = subs.get(&self.sub_id).cloned() else {
             return Vec::new();
         };
+        drop(subs);
         let mut v: Vec<i32> = state
             .assigned
             .lock()
-            .expect("assigned mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .keys()
             .copied()
             .collect();

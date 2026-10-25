@@ -15,8 +15,9 @@ use {
         error::BrokerError,
         handlers::{
             ApiVersion, CorrelationId, alter_replica_log_dirs::handle, audit_admin_for,
-            create_delegation_token as token_create, describe_delegation_token as token_describe,
-            expire_delegation_token as token_expire, renew_delegation_token as token_renew,
+            audit_resource, create_delegation_token as token_create,
+            describe_delegation_token as token_describe, expire_delegation_token as token_expire,
+            renew_delegation_token as token_renew,
         },
         network::auth::ConnectionAuth,
     },
@@ -154,7 +155,7 @@ pub(super) async fn describe_delegation_token_adapter(
 fn audit_token_mutation(
     broker: &Broker,
     auth: &ConnectionAuth,
-    peer: &std::net::SocketAddr,
+    peer: &SocketAddr,
     operation: &str,
     token_id: Option<&str>,
     error_code: i16,
@@ -190,7 +191,7 @@ fn token_id_for_hmac(broker: &Broker, hmac: &[u8]) -> Option<String> {
 fn audit_token_operation(
     broker: &Broker,
     auth: &ConnectionAuth,
-    peer: &std::net::SocketAddr,
+    peer: &SocketAddr,
     operation: &str,
     token_id: &str,
 ) {
@@ -201,7 +202,7 @@ fn audit_token_operation(
             peer,
             operation,
             krabka_audit::AuditOutcome::Success,
-            vec![crate::handlers::audit_resource("DelegationToken", token_id)],
+            vec![audit_resource("DelegationToken", token_id)],
         );
     }
 }

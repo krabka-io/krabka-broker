@@ -110,8 +110,8 @@ mod tests {
         assert2::check,
         krabka_metadata::NodeId,
         krabka_protocol::owned::{
-            begin_quorum_epoch_request, end_quorum_epoch_request, fetch_request,
-            fetch_snapshot_request, vote_request,
+            begin_quorum_epoch_request, create_topics_request::API_KEY, end_quorum_epoch_request,
+            fetch_request, fetch_snapshot_request, vote_request,
         },
     };
 
@@ -130,9 +130,7 @@ mod tests {
 
     #[test]
     fn admin_apis_do_not_bypass_the_admin_extension() {
-        assert2::assert!(!is_native_raft_api(
-            krabka_protocol::owned::create_topics_request::API_KEY
-        ));
+        assert2::assert!(!is_native_raft_api(API_KEY));
     }
 
     #[tokio::test]

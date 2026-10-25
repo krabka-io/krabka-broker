@@ -28,7 +28,11 @@
 //! the Basic Multilingual Plane before `U+E000`..`U+FFFF`, where UTF-8 byte
 //! order puts it after. Both sorts here follow Java.
 
-use {krabka_metadata::MetadataImage, std::cmp::Ordering, twox_hash::XxHash3_64};
+use {
+    krabka_metadata::MetadataImage,
+    std::{cmp::Ordering, collections::BTreeSet},
+    twox_hash::XxHash3_64,
+};
 
 /// `Utils.TOPIC_HASH_MAGIC_BYTE`: the version of the topic hash layout.
 const TOPIC_HASH_MAGIC_BYTE: u8 = 0x00;
@@ -63,14 +67,31 @@ pub fn topic_hash<'a>(
     name: &str,
     partition_racks: impl ExactSizeIterator<Item = Vec<&'a str>>,
 ) -> i64 {
-    let (most, least) = topic_id.split_at(8);
+    let [
+        m0,
+        m1,
+        m2,
+        m3,
+        m4,
+        m5,
+        m6,
+        m7,
+        l0,
+        l1,
+        l2,
+        l3,
+        l4,
+        l5,
+        l6,
+        l7,
+    ] = topic_id;
     let mut stream = vec![TOPIC_HASH_MAGIC_BYTE];
     // A Java `long` from `Uuid.getMostSignificantBits` is the big-endian
     // reading of the id's first eight bytes; hash4j writes it little-endian.
-    for half in [most, least] {
-        let mut bits = [0; 8];
-        bits.copy_from_slice(half);
-        stream.extend_from_slice(&u64::from_be_bytes(bits).to_le_bytes());
+    for half in [[m0, m1, m2, m3, m4, m5, m6, m7], [
+        l0, l1, l2, l3, l4, l5, l6, l7,
+    ]] {
+        stream.extend_from_slice(&u64::from_be_bytes(half).to_le_bytes());
     }
     put_string(&mut stream, name);
     let partition_count = i32::try_from(partition_racks.len()).unwrap_or(i32::MAX);
@@ -128,12 +149,7 @@ pub fn image_topic_hash(topic: &str, image: &MetadataImage) -> Option<i64> {
             .filter_map(|broker| broker.rack.as_deref())
             .collect::<Vec<&str>>()
     });
-    let racks: Vec<Vec<&str>> = racks.collect();
-    Some(topic_hash(
-        *record.topic_id.as_bytes(),
-        &record.name,
-        racks.into_iter(),
-    ))
+    Some(topic_hash(*record.topic_id.as_bytes(), &record.name, racks))
 }
 
 /// Kafka's `ModernGroup.computeMetadataHash` and
@@ -145,7 +161,7 @@ pub fn image_metadata_hash<'a>(
     topics: impl IntoIterator<Item = &'a str>,
     image: &MetadataImage,
 ) -> i64 {
-    let topics: std::collections::BTreeSet<&str> = topics.into_iter().collect();
+    let topics: BTreeSet<&str> = topics.into_iter().collect();
     group_hash(topics.into_iter().filter_map(|topic| {
         image_topic_hash(topic, image).map(|hash| NamedTopicHash { name: topic, hash })
     }))

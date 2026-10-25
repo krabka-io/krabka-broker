@@ -75,14 +75,16 @@ fn merge_key_slots(key_slots: Vec<KeySlot>, coordinators: Vec<Coordinator>) -> V
         .into_iter()
         .map(|slot| match slot {
             KeySlot::Rejected(coordinator) => coordinator,
-            KeySlot::Resolve(_) => resolved
+            // Every admitted key has a result; a key without one has no
+            // coordinator to name.
+            KeySlot::Resolve(key) => resolved
                 .next()
-                .expect("one coordinator result per admitted key"),
+                .unwrap_or_else(|| unavailable_coordinator(key)),
         })
         .collect()
 }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: FindCoordinatorRequest,
     version: ApiVersion,

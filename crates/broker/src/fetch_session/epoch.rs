@@ -26,14 +26,17 @@ pub const INVALID_SESSION_ID: FetchSessionId = 0;
 /// and `session_epoch == 0` asks the broker to allocate a new session.
 pub const INITIAL_EPOCH: FetchSessionEpoch = 0;
 
-/// Wire sentinel for "no session" and for "close session". On a request with
-/// `session_id == 0`, `FINAL_EPOCH` means a sessionless full fetch. On a
-/// request with `session_id != 0`, it means close the named session.
+/// Wire sentinel for "no session" and for "close session".
+///
+/// On a request with `session_id == 0`, `FINAL_EPOCH` means a sessionless full
+/// fetch. On a request with `session_id != 0`, it means close the named
+/// session.
 pub const FINAL_EPOCH: FetchSessionEpoch = -1;
 
-/// The first `Fetch` version that names topics by id (KIP-516). A session
-/// remembers whether the request that created it was at this version or
-/// later, and Kafka's `FetchManager.newContext` refuses an incremental fetch
+/// The first `Fetch` version that names topics by id (KIP-516).
+///
+/// A session remembers whether the request that created it was at this version
+/// or later, and Kafka's `FetchManager.newContext` refuses an incremental fetch
 /// of the other kind with `FETCH_SESSION_TOPIC_ID_ERROR`.
 pub const FIRST_TOPIC_ID_FETCH_VERSION: i16 = 13;
 
@@ -43,8 +46,10 @@ pub const FIRST_TOPIC_ID_FETCH_VERSION: i16 = 13;
 pub(super) const FIRST_SESSION_ID: FetchSessionId = 1;
 
 /// Computes the epoch the broker expects on the next request after a
-/// successful incremental fetch. The value wraps from `i32::MAX` back to `1`
-/// and skips the two reserved sentinels: `0` for INITIAL and `-1` for FINAL.
+/// successful incremental fetch.
+///
+/// The value wraps from `i32::MAX` back to `1` and skips the two reserved
+/// sentinels: `0` for INITIAL and `-1` for FINAL.
 #[must_use]
 pub fn next_epoch(prev: FetchSessionEpoch) -> FetchSessionEpoch {
     let n = prev.wrapping_add(1);

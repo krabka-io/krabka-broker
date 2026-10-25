@@ -1,7 +1,9 @@
 //! Item generators for fixtures shared across crate boundaries.
 
 use {
-    crate::meta::{ItemBody, arguments, item_body, mode, required_tokens},
+    crate::meta::{
+        ItemBody, argument_array, arguments, body_group, item_body, mode, required_tokens,
+    },
     moxy::{
         ast::ParseError,
         token::{Ident, Span, TokenStream, TokenTree},
@@ -9,7 +11,7 @@ use {
 };
 
 /// Top-level comma splitting that retains the input's diagnostic span.
-pub(crate) struct CommaArguments {
+pub struct CommaArguments {
     pub(crate) span: Span,
     parts: Vec<Vec<TokenTree>>,
 }
@@ -32,7 +34,7 @@ impl CommaArguments {
     }
 }
 
-pub(crate) fn name(tokens: TokenStream) -> Result<Ident, ParseError> {
+pub fn name(tokens: TokenStream) -> Result<Ident, ParseError> {
     let tokens: Vec<_> = tokens.into_iter().collect();
     match tokens.as_slice() {
         [TokenTree::Ident(name)] => Ok(name.clone()),
@@ -44,7 +46,7 @@ pub(crate) fn name(tokens: TokenStream) -> Result<Ident, ParseError> {
 }
 
 /// Build named fixture items after validating the generator's item name.
-pub(crate) fn named_items(
+pub fn named_items(
     input: TokenStream,
     build: impl FnOnce(Ident) -> TokenStream,
 ) -> Result<TokenStream, ParseError> {
@@ -52,23 +54,30 @@ pub(crate) fn named_items(
 }
 
 /// Parse an item name followed by a fixed number of generator arguments.
-pub(crate) fn named_arguments(
+pub fn named_arguments<const N: usize>(
     input: TokenStream,
-    count: usize,
-) -> Result<(Ident, std::vec::IntoIter<TokenStream>), ParseError> {
-    let mut arguments = arguments(input, count)?.into_iter();
-    let name = self::name(arguments.next().expect("item name argument"))?;
-    Ok((name, arguments))
+) -> Result<(Ident, [TokenStream; N]), ParseError> {
+    let mut arguments = arguments(input, N + 1)?.into_iter();
+    let name = arguments
+        .next()
+        .ok_or_else(|| ParseError::new(Span::call_site(), "expected an item name argument"))?;
+    let rest = arguments.collect::<Vec<_>>().try_into().map_err(|_| {
+        ParseError::new(
+            Span::call_site(),
+            format!("expected {N} arguments after the item name"),
+        )
+    })?;
+    Ok((self::name(name)?, rest))
 }
 
 /// Parse the common item-name and crate-path pair of fixture generators.
-pub(crate) fn named_root(input: TokenStream) -> Result<(Ident, TokenStream), ParseError> {
-    let [name, root]: [TokenStream; 2] = arguments(input, 2)?.try_into().expect("two arguments");
+pub fn named_root(input: TokenStream) -> Result<(Ident, TokenStream), ParseError> {
+    let [name, root]: [TokenStream; 2] = argument_array(input)?;
     Ok((self::name(name)?, root))
 }
 
 /// Assemble a fixture function while leaving its signature and body explicit.
-pub(crate) fn function(
+pub fn function(
     input: TokenStream,
     visibility: &TokenStream,
     parameters: &TokenStream,
@@ -83,7 +92,7 @@ pub(crate) fn function(
     })
 }
 
-pub(crate) fn capture_layer(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn capture_layer(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let tokens: Vec<_> = tokens.into_iter().collect();
     let [
         TokenTree::Ident(name),
@@ -126,9 +135,7 @@ pub(crate) fn capture_layer(tokens: TokenStream) -> Result<TokenStream, ParseErr
     })
 }
 
-pub(crate) fn remote_segment_transition_matrix(
-    tokens: TokenStream,
-) -> Result<TokenStream, ParseError> {
+pub fn remote_segment_transition_matrix(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(tokens)?;
     Ok(moxy::template! {
         fn {{ name }}() -> [[bool; 4]; 4] {
@@ -142,7 +149,7 @@ pub(crate) fn remote_segment_transition_matrix(
     })
 }
 
-pub(crate) fn model_transition(
+pub fn model_transition(
     tokens: proc_macro::TokenStream,
 ) -> Result<proc_macro::TokenStream, ParseError> {
     let tokens: Vec<_> = tokens.into_iter().collect();
@@ -192,7 +199,7 @@ pub(crate) fn model_transition(
     Ok(method)
 }
 
-pub(crate) fn bounded_bfs(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn bounded_bfs(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(tokens)?;
     Ok(moxy::template! {
         /// Search breadth-first to completion and reject either truncation cap.
@@ -211,16 +218,16 @@ pub(crate) fn bounded_bfs(tokens: TokenStream) -> Result<TokenStream, ParseError
     })
 }
 
-pub(crate) fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let (name, full) = if tokens
         .clone()
         .into_iter()
         .any(|token| token.is_punct_comma())
     {
-        let arguments = arguments(tokens, 2)?;
+        let [name_tokens, mode_tokens] = argument_array(tokens)?;
         (
-            name(arguments[0].clone())?,
-            mode(arguments[1].clone(), ["plain", "full"])? == "full",
+            name(name_tokens)?,
+            mode(mode_tokens, ["plain", "full"])? == "full",
         )
     } else {
         (name(tokens)?, true)
@@ -264,10 +271,10 @@ pub(crate) fn compacted_batch(tokens: TokenStream) -> Result<TokenStream, ParseE
 }
 
 /// Generate the first matching header lookup with the caller's UTF-8 policy.
-pub(crate) fn record_header_text(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    let arguments = arguments(tokens, 2)?;
-    let name = name(arguments[0].clone())?;
-    let strict = mode(arguments[1].clone(), ["strict", "lossy"])? == "strict";
+pub fn record_header_text(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    let [name_tokens, mode_tokens] = argument_array(tokens)?;
+    let name = name(name_tokens)?;
+    let strict = mode(mode_tokens, ["strict", "lossy"])? == "strict";
     Ok(moxy::template! {
         fn {{ name }}(record: &::krabka_protocol::records::Record, key: &str) -> Option<String> {
             record.headers.iter()
@@ -282,13 +289,11 @@ pub(crate) fn record_header_text(tokens: TokenStream) -> Result<TokenStream, Par
 }
 
 /// Generate the three DLQ counter reads with explicit caller types and docs.
-pub(crate) fn share_dlq_meters(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    let arguments = arguments(tokens, 3)?;
-    let mut name_tokens = Vec::from(arguments[0].clone());
+pub fn share_dlq_meters(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    let [name_tokens, metrics, label] = argument_array(tokens)?;
+    let mut name_tokens = Vec::from(name_tokens);
     let name = name(name_tokens.pop().into_iter().collect())?;
     let attributes = TokenStream::from(name_tokens);
-    let metrics = &arguments[1];
-    let label = &arguments[2];
     Ok(moxy::template! {
         {{ attributes }}
         fn {{ name }}(metrics: &{{ metrics }}, group: &str) -> (u64, u64, u64) {
@@ -302,7 +307,7 @@ pub(crate) fn share_dlq_meters(tokens: TokenStream) -> Result<TokenStream, Parse
     })
 }
 
-pub(crate) fn record_batch_records(
+pub fn record_batch_records(
     count: &TokenStream,
     fields: &TokenStream,
     value: &TokenStream,
@@ -317,19 +322,23 @@ pub(crate) fn record_batch_records(
     }
 }
 
-pub(crate) fn record_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    let mut args = arguments(tokens.clone(), 1)
-        .or_else(|_| arguments(tokens, 2))?
-        .into_iter();
-    let name = name(args.next().expect("fixture name"))?;
-    let (epoch_field, last_offset) = if let Some(epoch) = args.next() {
-        (
-            moxy::template! { partition_leader_epoch: {{ epoch }}, },
-            moxy::template! { n - 1 },
-        )
+pub fn record_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    let (name_tokens, epoch) = if let Ok([name_tokens]) = argument_array(tokens.clone()) {
+        (name_tokens, None)
     } else {
-        (TokenStream::new(), moxy::template! { (n - 1).max(0) })
+        let [name_tokens, epoch] = argument_array(tokens)?;
+        (name_tokens, Some(epoch))
     };
+    let name = name(name_tokens)?;
+    let (epoch_field, last_offset) = epoch.map_or_else(
+        || (TokenStream::new(), moxy::template! { (n - 1).max(0) }),
+        |epoch| {
+            (
+                moxy::template! { partition_leader_epoch: {{ epoch }}, },
+                moxy::template! { n - 1 },
+            )
+        },
+    );
     let records = record_batch_records(
         &moxy::template! { n },
         &moxy::template! {
@@ -350,7 +359,7 @@ pub(crate) fn record_batch(tokens: TokenStream) -> Result<TokenStream, ParseErro
 }
 
 /// Generate the shared action adapter inside either simulation harness impl.
-pub(crate) fn simulation_actions(root: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn simulation_actions(root: TokenStream) -> Result<TokenStream, ParseError> {
     let root = required_tokens(root, "simulation_actions needs the consensus crate path")?;
     Ok(moxy::template! {
         /// Apply consensus effects, leaving each harness's durability bookkeeping to its hook.
@@ -385,7 +394,7 @@ pub(crate) fn simulation_actions(root: TokenStream) -> Result<TokenStream, Parse
 }
 
 /// Delegate a metadata-log wrapper's unchanged operations before `async_trait` expands it.
-pub(crate) fn metadata_log_delegate(
+pub fn metadata_log_delegate(
     root: TokenStream,
     item: TokenStream,
 ) -> Result<TokenStream, ParseError> {
@@ -420,9 +429,7 @@ pub(crate) fn metadata_log_delegate(
         TokenStream::from(root_tokens),
         "metadata_log_delegate needs the metadata log crate path",
     )?;
-    let TokenTree::Group(group) = &mut tokens[body] else {
-        unreachable!()
-    };
+    let group = body_group(&mut tokens, body)?;
     let candidates = [
         (
             "partition_count",
@@ -444,7 +451,7 @@ pub(crate) fn metadata_log_delegate(
     let existing: Vec<_> = group.tokens.clone().into_iter().collect();
     let has_method = |method: &str| {
         existing.windows(2).any(|tokens| {
-            tokens[0].is_keyword_fn() && tokens[1].as_ident().is_some_and(|name| name == method)
+            matches!(tokens, [keyword, name] if keyword.is_keyword_fn() && name.as_ident().is_some_and(|name| name == method))
         })
     };
     let mut methods = TokenStream::new();
@@ -477,7 +484,7 @@ pub(crate) fn metadata_log_delegate(
     Ok(tokens.into())
 }
 
-pub(crate) fn remote_segment_check(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn remote_segment_check(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(tokens)?;
     Ok(moxy::template! {
         fn {{ name }}(manager: &impl ::krabka_remote_storage::RemoteLogMetadataManager, partition: &::krabka_remote_storage::TopicIdPartition) {
@@ -490,7 +497,7 @@ pub(crate) fn remote_segment_check(tokens: TokenStream) -> Result<TokenStream, P
 }
 
 /// The harness event adapter, shared by browser and storage simulations.
-pub(crate) fn simulation_step(root: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn simulation_step(root: TokenStream) -> Result<TokenStream, ParseError> {
     let root = required_tokens(root, "simulation_step needs the consensus crate path")?;
     Ok(moxy::template! {
         /// Feed one event to the consensus machine, then apply its effects.
@@ -518,7 +525,7 @@ pub(crate) fn simulation_step(root: TokenStream) -> Result<TokenStream, ParseErr
 }
 
 /// Append exactly the topic and partition records used by snapshot compatibility tests.
-pub(crate) fn snapshot_topic(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn snapshot_topic(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(tokens)?;
     Ok(moxy::template! {
         fn {{ name }}(image: &mut ::krabka_metadata::MetadataImage) {
@@ -535,9 +542,8 @@ pub(crate) fn snapshot_topic(tokens: TokenStream) -> Result<TokenStream, ParseEr
     })
 }
 
-pub(crate) fn s3_archive_config(tokens: TokenStream) -> Result<TokenStream, ParseError> {
-    let [name_tokens, config_type]: [TokenStream; 2] =
-        arguments(tokens, 2)?.try_into().expect("two arguments");
+pub fn s3_archive_config(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    let [name_tokens, config_type]: [TokenStream; 2] = argument_array(tokens)?;
     let name = name(name_tokens)?;
     Ok(moxy::template! {
         fn {{ name }}() -> {{ config_type }} {
@@ -551,7 +557,7 @@ pub(crate) fn s3_archive_config(tokens: TokenStream) -> Result<TokenStream, Pars
     })
 }
 
-pub(crate) fn benchmark_latency(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn benchmark_latency(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(tokens)?;
     Ok(moxy::template! {
         fn {{ name }}() -> LatencyPercentiles {
@@ -564,7 +570,7 @@ pub(crate) fn benchmark_latency(tokens: TokenStream) -> Result<TokenStream, Pars
     })
 }
 
-pub(crate) fn benchmark_scenario(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn benchmark_scenario(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(tokens)?;
     Ok(moxy::template! {
         fn {{ name }}(name: &str, msg_size: krabka_units::ByteSize) -> Scenario {
@@ -581,7 +587,7 @@ pub(crate) fn benchmark_scenario(tokens: TokenStream) -> Result<TokenStream, Par
     })
 }
 
-pub(crate) fn simulation_transport(root: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn simulation_transport(root: TokenStream) -> Result<TokenStream, ParseError> {
     let root = required_tokens(root, "simulation_transport needs the consensus crate path")?;
     Ok(moxy::template! {
         fn can_replicate(&self, follower: NodeId, leader: NodeId) -> bool {
@@ -607,9 +613,8 @@ pub(crate) fn simulation_transport(root: TokenStream) -> Result<TokenStream, Par
     })
 }
 
-pub(crate) fn simulation_heartbeat(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let [root, interval]: [TokenStream; 2] =
-        arguments(input, 2)?.try_into().expect("two arguments");
+pub fn simulation_heartbeat(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [root, interval]: [TokenStream; 2] = argument_array(input)?;
     Ok(moxy::template! {
         /// Re-broadcast the leader epoch and re-arm its heartbeat timer.
         fn fire_leader_heartbeat(&mut self, id: {{ root }}::types::NodeId) {
@@ -622,7 +627,7 @@ pub(crate) fn simulation_heartbeat(input: TokenStream) -> Result<TokenStream, Pa
     })
 }
 
-pub(crate) fn delete_topic_request(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn delete_topic_request(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(tokens)?;
     Ok(moxy::template! {
         /// Delete one named topic using both legacy and flexible request fields.

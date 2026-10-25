@@ -4,7 +4,10 @@
 //! [`crate::codes`]. The handler boundary converts a `BrokerError` to a wire
 //! code.
 
-use thiserror::Error;
+use {
+    std::{error, io, net::SocketAddr, path::PathBuf, time::Duration},
+    thiserror::Error,
+};
 
 /// Errors produced by the broker's lifecycle and handlers.
 ///
@@ -17,7 +20,7 @@ pub enum BrokerError {
     /// Filesystem I/O failure, for example when the broker binds the listener
     /// or opens log dirs.
     #[error("I/O: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// Storage-layer error that comes up from [`krabka_log`].
     #[error("log: {0}")]
@@ -76,12 +79,12 @@ pub enum BrokerError {
         /// `metrics`.
         listener: String,
         /// The address the listener tried to bind.
-        addr: std::net::SocketAddr,
+        addr: SocketAddr,
         /// The setting that gave the address, such as
         /// `--controller-listen-addr`.
         setting: &'static str,
         /// Why the bind failed, such as `Address already in use`.
-        source: std::io::Error,
+        source: io::Error,
     },
 
     /// The metadata controller that this node hosts met a fault that Kafka's
@@ -417,10 +420,10 @@ pub enum BrokerError {
     #[error("bootstrap file {path:?}: {source}")]
     BootstrapFile {
         /// Path to the file that could not be read or decoded.
-        path: std::path::PathBuf,
+        path: PathBuf,
         /// Underlying I/O or decode error.
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: Box<dyn error::Error + Send + Sync>,
     },
 
     #[error("invalid leader_imbalance_check_interval = {value}: must be >= 1")]
@@ -431,7 +434,7 @@ pub enum BrokerError {
     InvalidRuntimeConfig(String),
 
     #[error("controlled shutdown did not complete within {0:?}")]
-    ShutdownTimeout(std::time::Duration),
+    ShutdownTimeout(Duration),
 }
 
 impl BrokerError {
@@ -439,9 +442,9 @@ impl BrokerError {
     /// `setting` gave, into a [`BrokerError::ListenerBind`].
     pub fn listener_bind(
         listener: &str,
-        addr: std::net::SocketAddr,
+        addr: SocketAddr,
         setting: &'static str,
-    ) -> impl FnOnce(std::io::Error) -> Self {
+    ) -> impl FnOnce(io::Error) -> Self {
         let listener = listener.to_owned();
         move |source| Self::ListenerBind {
             listener,

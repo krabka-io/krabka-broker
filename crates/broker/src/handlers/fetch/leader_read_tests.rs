@@ -42,7 +42,7 @@ use {
         },
         records::RecordsPayload,
     },
-    std::sync::Arc,
+    std::sync::{Arc, atomic},
 };
 
 /// The node id of the broker under test.
@@ -121,10 +121,7 @@ async fn partition(
         &shared,
         topic,
         async |partition| {
-            partition
-                .current_leader
-                .load(std::sync::atomic::Ordering::Acquire)
-                == leader.0
+            partition.current_leader.load(atomic::Ordering::Acquire) == leader.0
                 && (leader != THIS_NODE
                     || partition
                         .replica_state

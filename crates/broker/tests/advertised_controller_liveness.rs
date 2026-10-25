@@ -17,6 +17,7 @@
 //! `handlers::controller_id`'s own unit test pins the choice given a fenced
 //! set. What is unproven there, and proven here, is that a follower's fenced
 //! set tracks a death it only learns about through the metadata log.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -31,7 +32,8 @@ use {
         describe_cluster_response::DescribeClusterResponse, metadata_response::MetadataResponse,
     },
     krabka_units::convert::TimeExt as _,
-    std::{collections::BTreeSet, time::Duration},
+    std::{collections::BTreeSet, net::TcpListener, time::Duration},
+    tokio::{time, time::Instant},
 };
 
 mod support;
@@ -216,17 +218,17 @@ async fn advertised_over_a_run(client: &Client) -> BTreeSet<i32> {
 /// replicated state would simply hang here instead of failing on the id it
 /// advertises.
 async fn wait_until_fenced_set(handle: &BrokerHandle, expected: &BTreeSet<u64>) {
-    let deadline = tokio::time::Instant::now() + FENCING_DEADLINE;
+    let deadline = Instant::now() + FENCING_DEADLINE;
     loop {
         let fenced = handle.fenced_broker_ids_for_test();
         if fenced == *expected {
             return;
         }
         assert!(
-            tokio::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "the observer's image never settled on fenced brokers {expected:?}; it has {fenced:?}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -257,7 +259,7 @@ async fn a_for_tests_broker_keeps_its_heartbeat_session() {
     let started = session_state(&broker, &config).await;
     broker.shutdown().await;
 
-    let _held = std::net::TcpListener::bind(first_port).expect("hold the first controller port");
+    let _held = TcpListener::bind(first_port).expect("hold the first controller port");
     let mut rejoin = config.clone();
     rejoin.bootstrap_mode = krabka_broker::BootstrapMode::Rejoin;
     let broker = krabka_broker::Broker::start(rejoin)
@@ -291,10 +293,8 @@ async fn session_state(
     broker: &BrokerHandle,
     config: &krabka_broker::BrokerConfig,
 ) -> SessionState {
-    tokio::time::sleep(
-        config.heartbeat_timeout.to_std() * 3 + config.liveness_tick_interval.to_std(),
-    )
-    .await;
+    time::sleep(config.heartbeat_timeout.to_std() * 3 + config.liveness_tick_interval.to_std())
+        .await;
     let published = broker.metrics().controller_fencing_publications_total.get();
     broker
         .wait_for_metrics("a fencing publication after the session window", |m| {

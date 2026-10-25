@@ -31,11 +31,14 @@ use {
     krabka_security::SaslMechanism,
     std::{
         collections::{BTreeMap, BTreeSet},
-        io,
+        io, mem,
         net::{IpAddr, Ipv4Addr, SocketAddr},
         sync::{Arc, Mutex, MutexGuard, PoisonError},
     },
-    tokio::{net::TcpListener, task::JoinHandle},
+    tokio::{
+        net::{self, TcpListener},
+        task::JoinHandle,
+    },
     tokio_util::sync::CancellationToken,
 };
 
@@ -69,7 +72,7 @@ struct State {
 /// Each runs its own accept loop under its own child of the broker's
 /// shutdown token, so one closes alone and the broker's shutdown closes all
 /// of them.
-pub(crate) struct DataPlaneListeners {
+pub struct DataPlaneListeners {
     shutdown: CancellationToken,
     state: Mutex<State>,
 }
@@ -129,10 +132,11 @@ impl DataPlaneListeners {
     /// to await.
     fn stop(&self, names: &[String]) -> Vec<JoinHandle<()>> {
         let mut state = self.state();
-        let (stopped, kept) = std::mem::take(&mut state.running)
+        let (stopped, kept) = mem::take(&mut state.running)
             .into_iter()
             .partition::<Vec<_>, _>(|running| names.contains(&running.key()));
         state.running = kept;
+        drop(state);
         stopped
             .into_iter()
             .map(|running| {
@@ -218,15 +222,12 @@ pub(super) async fn bind_address(endpoint: &Endpoint) -> io::Result<SocketAddr> 
     if let Ok(ip) = host.parse::<IpAddr>() {
         return Ok(SocketAddr::from((ip, port)));
     }
-    tokio::net::lookup_host((host, port))
-        .await?
-        .next()
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("host {host} has no address"),
-            )
-        })
+    net::lookup_host((host, port)).await?.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("host {host} has no address"),
+        )
+    })
 }
 
 /// What a listener that opens while the broker runs is built from.

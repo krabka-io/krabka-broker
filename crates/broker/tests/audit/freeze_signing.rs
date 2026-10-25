@@ -24,7 +24,7 @@ fn put_len_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
 
 /// The fields a freeze record's Ed25519 signature covers.
 #[derive(Clone, Copy)]
-pub(super) struct FreezeBytes<'a> {
+pub struct FreezeBytes<'a> {
     pub(super) cluster_id: &'a str,
     pub(super) pattern_type: i8,
     pub(super) scope: &'a str,
@@ -41,7 +41,7 @@ pub(super) struct FreezeBytes<'a> {
 /// A test that reached for the broker's own `freeze_signing_bytes` would prove
 /// only that the broker agrees with itself. The point of this second
 /// implementation is that it agrees with the *document*.
-pub(super) fn freeze_signing_bytes(input: &FreezeBytes<'_>) -> Vec<u8> {
+pub fn freeze_signing_bytes(input: &FreezeBytes<'_>) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(FREEZE_DOMAIN);
     put_len_prefixed(&mut out, input.cluster_id.as_bytes());
@@ -57,7 +57,7 @@ pub(super) fn freeze_signing_bytes(input: &FreezeBytes<'_>) -> Vec<u8> {
 
 /// The `pattern_type` byte behind the `"<pattern>:"` prefix of an audit
 /// event's target.
-pub(super) fn pattern_type_byte(name: &str) -> i8 {
+pub fn pattern_type_byte(name: &str) -> i8 {
     match name {
         "literal" => PATTERN_TYPE_LITERAL,
         "prefixed" => PATTERN_TYPE_PREFIXED,

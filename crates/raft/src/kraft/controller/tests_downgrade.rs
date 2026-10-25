@@ -17,17 +17,20 @@ use {
         snapshot::{SnapshotReader, SnapshotWriter},
     },
     assert2::assert,
-    krabka_metadata::{FeatureLevelRecord, MetadataRecord},
+    krabka_metadata::{
+        FeatureLevelRecord, MetadataRecord, metadata_version::METADATA_VERSION_FEATURE,
+    },
+    std::{fs, path::PathBuf},
 };
 
 fn metadata_version_update(level: i16) -> Vec<MetadataRecord> {
     vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-        name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+        name: METADATA_VERSION_FEATURE.into(),
         level,
     })]
 }
 
-fn reopen_single_voter(data_dir: std::path::PathBuf) -> Result<KraftController, RaftError> {
+fn reopen_single_voter(data_dir: PathBuf) -> Result<KraftController, RaftError> {
     open_test_controller(data_dir, uuid::Uuid::nil(), voter_set(&[NodeId(1)]))
 }
 
@@ -238,7 +241,7 @@ async fn recovered_image_validation_precedes_downgrade_repair() {
         "{:020}-{:010}.tmp",
         pending.end_offset.0, pending.epoch
     ));
-    std::fs::create_dir(&blocked).expect("block checkpoint repair");
+    fs::create_dir(&blocked).expect("block checkpoint repair");
     let result = open_test_controller_with()
         .data_dir(data_dir.clone())
         .validate_image(|image| {
@@ -254,7 +257,7 @@ async fn recovered_image_validation_precedes_downgrade_repair() {
     assert!(log.log_start_offset() < pending.end_offset);
     drop(log);
 
-    std::fs::remove_dir(blocked).expect("allow checkpoint repair");
+    fs::remove_dir(blocked).expect("allow checkpoint repair");
     let controller = reopen_single_voter(data_dir.clone()).expect("allowed recovery completes");
     assert!(controller.current_image().finalized_metadata_version() == Some(16));
     controller.shutdown().await;
@@ -276,7 +279,7 @@ async fn restart_propagates_persistent_downgrade_recovery_error() {
     // The checkpoints share the metadata partition directory with the log,
     // so the directory itself must stay. A directory where the checkpoint's
     // temporary file goes makes every write of that one checkpoint fail.
-    std::fs::create_dir(data_dir.join(format!(
+    fs::create_dir(data_dir.join(format!(
         "{:020}-{:010}.tmp",
         pending.end_offset.0, pending.epoch
     )))

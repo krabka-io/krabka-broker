@@ -98,7 +98,7 @@ mod tests {
     fn fresh_signer(key_id: &str) -> FreshSigner {
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
         let signer =
-            FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), key_id.to_string()).unwrap();
+            FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), key_id.to_owned()).unwrap();
         let public_key = signer.public_key();
         FreshSigner { signer, public_key }
     }
@@ -109,7 +109,7 @@ mod tests {
             manifest_signing_bytes(signer.key_id(), body.chain.epoch_id, body.chain.seq, head);
         SegmentManifest {
             signature: Some(ManifestSignature {
-                key_id: signer.key_id().to_string(),
+                key_id: signer.key_id().to_owned(),
                 public_key: HexBytes(signer.public_key()),
                 signature: HexBytes(signer.sign(&message)),
             }),
@@ -160,14 +160,14 @@ mod tests {
         let tampered_head = SegmentManifest {
             body: base.clone(),
             signature: Some(ManifestSignature {
-                key_id: KEY_ID.to_string(),
+                key_id: KEY_ID.to_owned(),
                 public_key: HexBytes(public_key.clone()),
                 signature: HexBytes(signer.sign(&wrong_head_message)),
             }),
         };
 
         let mut tampered_key_id = authentic.clone();
-        tampered_key_id.signature.as_mut().unwrap().key_id = "worm-key-2".to_string();
+        tampered_key_id.signature.as_mut().unwrap().key_id = "worm-key-2".to_owned();
 
         let unsigned = SegmentManifest {
             body: base,
@@ -248,7 +248,7 @@ mod tests {
         let cross_purpose = SegmentManifest {
             body,
             signature: Some(ManifestSignature {
-                key_id: KEY_ID.to_string(),
+                key_id: KEY_ID.to_owned(),
                 public_key: HexBytes(public_key.clone()),
                 signature: HexBytes(signer.sign(&checkpoint_bytes)),
             }),

@@ -469,7 +469,7 @@ mod tests {
         receipt = {
             WormChainRecord::request(request_stamp())
             .with_head(head(0x6b))
-            .with_manifest_version(Some("3HL4kqtJlcpXroDTDmjVBH40Nrjfkd".to_string())),
+            .with_manifest_version(Some("3HL4kqtJlcpXroDTDmjVBH40Nrjfkd".to_owned())),
         },
     )]
     fn chain_record_round_trips_through_custom_metadata(record: WormChainRecord) {
@@ -484,7 +484,7 @@ mod tests {
         let full = request
             .clone()
             .with_head(head(0x6b))
-            .with_manifest_version(Some("3HL4kqtJlcpXroDTDmjVBH40Nrjfkd".to_string()));
+            .with_manifest_version(Some("3HL4kqtJlcpXroDTDmjVBH40Nrjfkd".to_owned()));
         check!(
             request
                 == WormChainRecord {

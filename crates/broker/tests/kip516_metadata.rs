@@ -4,6 +4,7 @@
 //! carries a nullable name and a topic id on each request row. Kafka's
 //! `KafkaApis.handleTopicMetadataRequest` describes the requested ids when any
 //! row has a non-zero id, and ignores the names.
+#![cfg(test)]
 use {
     crate::support::{
         discovery::topic_metadata_request,

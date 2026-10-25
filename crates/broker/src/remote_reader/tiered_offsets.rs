@@ -34,7 +34,8 @@ impl RemoteReader {
             finished,
         } = tiered_segment_inputs(&listed);
         Ok(tiered_earliest_finished_index(&starts, &ends, &finished)
-            .map(|index| listed[index].start_offset()))
+            .and_then(|index| listed.get(index))
+            .map(RemoteLogSegmentMetadata::start_offset))
     }
 
     /// Returns the highest offset held by a finished remote segment and the
@@ -49,10 +50,11 @@ impl RemoteReader {
             ends,
             finished,
         } = tiered_segment_inputs(&listed);
-        let Some(index) = tiered_latest_finished_index(&starts, &ends, &finished) else {
+        let Some(metadata) = tiered_latest_finished_index(&starts, &ends, &finished)
+            .and_then(|index| listed.get(index))
+        else {
             return Ok(None);
         };
-        let metadata = &listed[index];
         let offset = metadata.end_offset();
         let epochs = metadata
             .segment_leader_epochs()
@@ -61,17 +63,18 @@ impl RemoteReader {
             .collect::<Vec<_>>();
         let epoch_values = epochs.iter().map(|(epoch, _)| epoch.0).collect::<Vec<_>>();
         let epoch_starts = epochs.iter().map(|(_, start)| *start).collect::<Vec<_>>();
-        let Some(epoch_index) = tiered_owning_epoch_index(
+        let Some((leader_epoch, _)) = tiered_owning_epoch_index(
             &epoch_values,
             &epoch_starts,
             metadata.start_offset(),
             offset,
-        ) else {
+        )
+        .and_then(|epoch_index| epochs.get(epoch_index)) else {
             return Ok(None);
         };
         Ok(Some(TieredOffset {
             offset,
-            leader_epoch: epochs[epoch_index].0,
+            leader_epoch: *leader_epoch,
         }))
     }
 }
@@ -118,7 +121,11 @@ mod tests {
         assert2::assert,
         krabka_ids::LeaderEpoch,
         krabka_remote_storage::{RemoteLogMetadataManager, RemoteLogSegmentMetadataUpdate},
-        std::sync::Arc,
+        std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        },
+        tokio::{runtime, task, time},
         uuid::Uuid,
     };
 
@@ -391,17 +398,14 @@ mod tests {
         tp: &TopicIdPartition,
     ) {
         m.reconcile_assignment(&[mp]).await;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             // `list_remote_log_segments` is the method the list path uses.
             match m.list_remote_log_segments(tp) {
                 Ok(_) => return,
                 Err(RemoteStorageError::NotReady { .. }) => {
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "list path never became ready"
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    assert!(Instant::now() < deadline, "list path never became ready");
+                    time::sleep(Duration::from_millis(5)).await;
                 }
                 Err(e) => panic!("unexpected list error: {e:?}"),
             }
@@ -438,9 +442,9 @@ mod tests {
         {
             let writer = TopicBasedRemoteLogMetadataManager::start(
                 log.clone(),
-                tokio::runtime::Handle::current(),
+                runtime::Handle::current(),
                 writer_snap_dir.path().to_path_buf(),
-                std::time::Duration::from_hours(1),
+                Duration::from_hours(1),
             )
             .unwrap();
             writer
@@ -450,13 +454,13 @@ mod tests {
             let md = synthetic_started_segment(id.clone(), 0, 99, 100);
             let w2 = writer.clone();
             let md2 = md.clone();
-            tokio::task::spawn_blocking(move || {
+            task::spawn_blocking(move || {
                 w2.add_remote_log_segment_metadata(md2).unwrap();
             })
             .await
             .unwrap();
             let w2 = writer.clone();
-            tokio::task::spawn_blocking(move || {
+            task::spawn_blocking(move || {
                 w2.update_remote_log_segment_metadata(
                     krabka_remote_storage::RemoteLogSegmentMetadataUpdate {
                         remote_log_segment_id: id,
@@ -476,9 +480,9 @@ mod tests {
         // A fresh manager that consumes NOTHING until assigned.
         let m = TopicBasedRemoteLogMetadataManager::start(
             log.clone(),
-            tokio::runtime::Handle::current(),
+            runtime::Handle::current(),
             mgr_snap_dir.path().to_path_buf(),
-            std::time::Duration::from_hours(1),
+            Duration::from_hours(1),
         )
         .unwrap();
 

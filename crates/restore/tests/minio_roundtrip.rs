@@ -13,6 +13,7 @@
 //! per-process published port so two container suites can run at once, and
 //! `mc` for the one bucket operation the S3 API of `object_store` does not
 //! expose.
+#![cfg(test)]
 
 #[path = "support/archive_fixture.rs"]
 mod archive_fixture;

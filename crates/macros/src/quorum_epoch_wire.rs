@@ -16,7 +16,7 @@ use {
     std::collections::HashSet,
 };
 
-pub(crate) fn requests(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn requests(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     let attrs = Attributes::parse(&parser)?;
     let visibility = Visibility::parse(&parser)?;
@@ -137,7 +137,7 @@ fn response_body(metadata: &TokenStream, signature: &Signature) -> Result<TokenS
     })
 }
 
-pub(crate) fn encoder(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn encoder(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let BracketedFunction {
         mut header,
         metadata,
@@ -162,7 +162,7 @@ pub(crate) fn encoder(input: NativeTokenStream) -> Result<NativeTokenStream, Par
     Ok(header)
 }
 
-pub(crate) fn voter_endpoints(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn voter_endpoints(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let mut tokens = input.into_iter();
     let Some(TokenTree::Group(source)) = tokens.next() else {
         return Err(ParseError::new(

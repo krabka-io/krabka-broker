@@ -40,11 +40,14 @@ macro_rules! acl_request_filter {
 }
 
 pub(super) use acl_request_filter;
+use {
+    crate::codes, krabka_protocol::owned::delete_acls_response::DeleteAclsMatchingAcl, std::iter,
+};
 
 /// An explicitly configured authorizer with `admin` as its only super user.
 pub(super) fn configured_authorizer() -> Arc<dyn Authorizer> {
     Arc::new(SimpleAclAuthorizer::new(
-        std::iter::once("admin".to_owned()).collect(),
+        iter::once("admin".to_owned()).collect(),
     ))
 }
 
@@ -52,28 +55,25 @@ pub(super) fn configured_authorizer() -> Arc<dyn Authorizer> {
 pub(super) fn alice_orders_acl() -> AclEntry { allow_acl().call() }
 
 /// Independent wire oracle for a successful deletion of the standard orders ACL.
-pub(super) fn expected_deleted_orders_acl()
--> krabka_protocol::owned::delete_acls_response::DeleteAclsMatchingAcl {
-    krabka_macros::tagged_wire!(
-        krabka_protocol::owned::delete_acls_response::DeleteAclsMatchingAcl {
-            error_code: crate::codes::NONE,
-            error_message: None,
-            resource_type: RESOURCE_TYPE_TOPIC,
-            resource_name: "orders".into(),
-            pattern_type: PATTERN_TYPE_LITERAL,
-            principal: "User:alice".into(),
-            host: "*".into(),
-            operation: OPERATION_READ,
-            permission_type: PERMISSION_ALLOW,
-        }
-    )
+pub(super) fn expected_deleted_orders_acl() -> DeleteAclsMatchingAcl {
+    krabka_macros::tagged_wire!(DeleteAclsMatchingAcl {
+        error_code: codes::NONE,
+        error_message: None,
+        resource_type: RESOURCE_TYPE_TOPIC,
+        resource_name: "orders".into(),
+        pattern_type: PATTERN_TYPE_LITERAL,
+        principal: "User:alice".into(),
+        host: "*".into(),
+        operation: OPERATION_READ,
+        permission_type: PERMISSION_ALLOW,
+    })
 }
 
 /// Two independent topic ACLs for matching and deletion fixtures.
 pub(super) fn orders_payments_acls() -> Vec<AclEntry> {
     vec![
         alice_orders_acl(),
-        crate::test_support::allow_acl()
+        allow_acl()
             .resource_name("payments")
             .principal("User:bob")
             .operation(krabka_metadata::AclOperation::Write)
@@ -134,7 +134,7 @@ pub(super) async fn start_security_disabled_acls() -> StartedBroker {
 }
 
 /// Commit the nonempty ACL entries selected by a caller's case.
-pub(crate) async fn seed_case_acls(broker: &Broker, entries: Vec<AclEntry>) {
+pub async fn seed_case_acls(broker: &Broker, entries: Vec<AclEntry>) {
     broker
         .controller
         .submit_change(

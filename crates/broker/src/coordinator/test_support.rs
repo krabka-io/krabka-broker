@@ -32,15 +32,17 @@ use {
         },
         records::{Attributes, Record, RecordBatch},
     },
-    std::sync::Arc,
+    std::{
+        collections::{BTreeMap, HashMap},
+        sync::Arc,
+        time::Duration,
+    },
 };
 
 krabka_macros::single_replica_partition_fixture!(single_replica_partition);
 
 /// Canonical partition/epoch pairs from an optional actual assignment map.
-pub(crate) fn sorted_epoch_pairs(
-    epochs: Option<&std::collections::HashMap<i32, i32>>,
-) -> Vec<(i32, i32)> {
+pub fn sorted_epoch_pairs(epochs: Option<&HashMap<i32, i32>>) -> Vec<(i32, i32)> {
     let mut pairs: Vec<(i32, i32)> =
         epochs.map_or_default(|epochs| epochs.iter().map(|(&p, &e)| (p, e)).collect());
     pairs.sort_unstable();
@@ -49,20 +51,16 @@ pub(crate) fn sorted_epoch_pairs(
 
 /// A configuration key and its value.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ConfigEntry<'a> {
+pub struct ConfigEntry<'a> {
     pub key: &'a str,
     pub value: &'a str,
 }
 
 /// The configuration entry `key` set to `value`.
-pub(crate) fn entry<'a>(key: &'a str, value: &'a str) -> ConfigEntry<'a> {
-    ConfigEntry { key, value }
-}
+pub fn entry<'a>(key: &'a str, value: &'a str) -> ConfigEntry<'a> { ConfigEntry { key, value } }
 
 /// Owned configuration entries by key.
-pub(crate) fn config_map(
-    entries: &[ConfigEntry<'_>],
-) -> std::collections::BTreeMap<String, String> {
+pub fn config_map(entries: &[ConfigEntry<'_>]) -> BTreeMap<String, String> {
     entries
         .iter()
         .map(|entry| (entry.key.to_owned(), entry.value.to_owned()))
@@ -70,7 +68,7 @@ pub(crate) fn config_map(
 }
 
 /// A topic-delta fixture using cluster id one and applying records in order.
-pub(crate) fn metadata_delta_image(
+pub fn metadata_delta_image(
     records: &[krabka_metadata::MetadataRecord],
 ) -> krabka_metadata::MetadataImage {
     krabka_metadata::MetadataImage::from_records(uuid::Uuid::from_u128(1), records)
@@ -78,7 +76,7 @@ pub(crate) fn metadata_delta_image(
 
 /// The offsets topic with id seven, one listed partition, and the supplied replicas.
 /// The image retains a nil cluster id and default partition fields except its leader term.
-pub(crate) fn offsets_partition_image(
+pub fn offsets_partition_image(
     (partition, leader, epoch): (i32, krabka_metadata::NodeId, i32),
     replicas: &[krabka_metadata::NodeId],
 ) -> krabka_metadata::MetadataImage {
@@ -102,7 +100,7 @@ pub(crate) fn offsets_partition_image(
 }
 
 /// An independent expected committed-offset entry with the ordinary fixture fields.
-pub(crate) fn offset_entry(offset: i64) -> OffsetEntry {
+pub fn offset_entry(offset: i64) -> OffsetEntry {
     OffsetEntry {
         offset: Offset(offset),
         leader_epoch: -1,
@@ -115,7 +113,7 @@ pub(crate) fn offset_entry(offset: i64) -> OffsetEntry {
 
 /// A replay fixture with enumerated record offsets and the original protocol
 /// defaults for the remaining batch headers, including leader epoch zero.
-pub(crate) fn replay_offset_batch(producer_id: Option<i64>, records: Vec<Record>) -> RecordBatch {
+pub fn replay_offset_batch(producer_id: Option<i64>, records: Vec<Record>) -> RecordBatch {
     let records: Vec<Record> = records
         .into_iter()
         .zip(0..)
@@ -137,13 +135,13 @@ pub(crate) fn replay_offset_batch(producer_id: Option<i64>, records: Vec<Record>
 /// A record of the offsets topic: its parsed key, and its value or `None` for
 /// a tombstone.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct OffsetsRecord {
+pub struct OffsetsRecord {
     pub key: NextGenKey,
     pub value: Option<Bytes>,
 }
 
 /// Read the keys and values actually persisted in the test log, in record order.
-pub(crate) fn parsed_offset_records(batches: &[RecordBatch]) -> Vec<OffsetsRecord> {
+pub fn parsed_offset_records(batches: &[RecordBatch]) -> Vec<OffsetsRecord> {
     batches
         .iter()
         .flat_map(|batch| &batch.records)
@@ -155,7 +153,7 @@ pub(crate) fn parsed_offset_records(batches: &[RecordBatch]) -> Vec<OffsetsRecor
 }
 
 /// The leader epoch of every encoded batch below `end`, in physical log order.
-pub(crate) fn read_batch_epochs(log: &krabka_log::Log, end: Offset) -> Vec<i32> {
+pub fn read_batch_epochs(log: &krabka_log::Log, end: Offset) -> Vec<i32> {
     let read = log
         .read_raw(Offset(0), end, krabka_units::mebibytes(1))
         .expect("read the log");
@@ -169,26 +167,26 @@ pub(crate) fn read_batch_epochs(log: &krabka_log::Log, end: Offset) -> Vec<i32> 
 }
 
 /// A default log and the directory that must outlive it.
-pub(crate) struct TempLog {
+pub struct TempLog {
     pub dir: tempfile::TempDir,
     pub log: krabka_log::Log,
 }
 
-pub(crate) fn temp_log() -> TempLog {
+pub fn temp_log() -> TempLog {
     let dir = tempfile::tempdir().unwrap();
     let log = krabka_log::Log::open(dir.path(), krabka_log::LogConfig::default()).unwrap();
     TempLog { dir, log }
 }
 
 /// Coordinator fixtures with the broker's unchanged default membership settings.
-pub(crate) fn default_coordinator(
+pub fn default_coordinator(
     metadata: Arc<dyn MetadataProvider>,
     offsets_log: Arc<dyn OffsetsLog>,
 ) -> Arc<GroupCoordinator> {
     coordinator_with_config(NextGenConfig::default(), metadata, offsets_log)
 }
 
-pub(crate) fn coordinator_with_config(
+pub fn coordinator_with_config(
     config: NextGenConfig,
     metadata: Arc<dyn MetadataProvider>,
     offsets_log: Arc<dyn OffsetsLog>,
@@ -207,7 +205,7 @@ pub(crate) fn coordinator_with_config(
 
 /// A nontransactional offset record with the ordinary unversioned fixture fields.
 #[derive(Clone, Copy)]
-pub(crate) struct OffsetRecordSetup<'a> {
+pub struct OffsetRecordSetup<'a> {
     pub group: &'a str,
     pub topic: &'a str,
     pub partition: krabka_ids::PartitionIndex,
@@ -226,7 +224,7 @@ impl Default for OffsetRecordSetup<'_> {
 }
 
 #[derive(Clone, Copy, Default)]
-pub(crate) enum DeletionTarget {
+pub enum DeletionTarget {
     #[default]
     OffsetsOnly,
     Group,
@@ -234,14 +232,14 @@ pub(crate) enum DeletionTarget {
 
 /// A partition of a topic that is named by the topic's name.
 #[derive(Clone, Copy)]
-pub(crate) struct NamedPartition<'a> {
+pub struct NamedPartition<'a> {
     pub topic: &'a str,
     pub partition: krabka_ids::PartitionIndex,
 }
 
 /// An ordered deletion batch, optionally ending with the group's tombstone.
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct DeletionTombstonesSetup<'a> {
+pub struct DeletionTombstonesSetup<'a> {
     #[default("g")]
     pub group: &'a str,
     pub offsets: &'a [NamedPartition<'a>],
@@ -249,7 +247,7 @@ pub(crate) struct DeletionTombstonesSetup<'a> {
 }
 
 #[bon::builder]
-pub(crate) fn deletion_tombstones(
+pub fn deletion_tombstones(
     #[builder(default = "g")] group: &'_ str,
     #[builder(default)] offsets: &'_ [NamedPartition<'_>],
     #[builder(default)] target: DeletionTarget,
@@ -284,7 +282,7 @@ pub(crate) fn deletion_tombstones(
 
 /// Deletion expectations for ordered partitions of a single topic.
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct TopicDeletionTombstonesSetup<'a> {
+pub struct TopicDeletionTombstonesSetup<'a> {
     #[default("g")]
     pub group: &'a str,
     #[default("orders")]
@@ -294,7 +292,7 @@ pub(crate) struct TopicDeletionTombstonesSetup<'a> {
 }
 
 #[bon::builder]
-pub(crate) fn topic_deletion_tombstones(
+pub fn topic_deletion_tombstones(
     #[builder(default = "g")] group: &'_ str,
     #[builder(default = "orders")] topic: &'_ str,
     #[builder(default)] partitions: &'_ [krabka_ids::PartitionIndex],
@@ -322,13 +320,13 @@ pub(crate) fn topic_deletion_tombstones(
 }
 
 #[bon::builder]
-pub(crate) fn offset_record(
+pub fn offset_record(
     #[builder(default = OffsetRecordSetup::default().group)] group: &'_ str,
     #[builder(default = OffsetRecordSetup::default().topic)] topic: &'_ str,
     #[builder(into, default = OffsetRecordSetup::default().partition)]
     partition: krabka_ids::PartitionIndex,
     #[builder(into, default = OffsetRecordSetup::default().offset)] offset: Offset,
-) -> krabka_protocol::records::Record {
+) -> Record {
     let setup = OffsetRecordSetup {
         group,
         topic,
@@ -349,14 +347,14 @@ pub(crate) fn offset_record(
         expire_timestamp_ms: None,
         topic_id: None,
     };
-    krabka_protocol::records::Record {
+    Record {
         key: Some(OffsetCommitValue::encode_key(group, topic, partition.0).unwrap()),
         value: Some(value.encode_value()),
         ..Default::default()
     }
 }
 
-pub(crate) fn commit_request(group: &str, topic: &str, offset: i64) -> OffsetCommitRequest {
+pub fn commit_request(group: &str, topic: &str, offset: i64) -> OffsetCommitRequest {
     OffsetCommitRequest {
         group_id: group.into(),
         generation_id_or_member_epoch: -1,
@@ -374,7 +372,7 @@ pub(crate) fn commit_request(group: &str, topic: &str, offset: i64) -> OffsetCom
     }
 }
 
-pub(crate) async fn fetch_offset(broker: &Broker, group: &str, topic: &str, version: i16) -> i64 {
+pub async fn fetch_offset(broker: &Broker, group: &str, topic: &str, version: i16) -> i64 {
     let request = OffsetFetchRequest {
         group_id: group.into(),
         topics: Some(vec![OffsetFetchRequestTopic {
@@ -395,22 +393,22 @@ pub(crate) async fn fetch_offset(broker: &Broker, group: &str, topic: &str, vers
 
 /// The partition's new leader and leader epoch after it moved.
 #[derive(Clone, Copy)]
-pub(crate) struct LeaderMove {
+pub struct LeaderMove {
     pub leader: u64,
     pub epoch: i32,
 }
 
-pub(crate) struct CommitWaitCase {
+pub struct CommitWaitCase {
     pub what: &'static str,
     pub hw_now: i64,
     pub moves_to: Option<LeaderMove>,
     pub hw_later: Option<i64>,
-    pub timeout: std::time::Duration,
+    pub timeout: Duration,
     pub expected: CommitWaitOutcome,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum CommitWaitOutcome {
+pub enum CommitWaitOutcome {
     Committed,
     NotLeader,
     TimedOut,
@@ -427,7 +425,7 @@ impl CommitWaitOutcome {
     }
 }
 
-pub(crate) fn commit_wait_cases() -> [CommitWaitCase; 6] {
+pub fn commit_wait_cases() -> [CommitWaitCase; 6] {
     use {
         CommitWaitOutcome::{Committed, NotLeader, TimedOut},
         std::time::Duration,

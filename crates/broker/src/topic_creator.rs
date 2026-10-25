@@ -43,7 +43,7 @@ use {
     },
     krabka_units::{Time, convert::TimeExt as _, millis, secs},
     std::{net::IpAddr, sync::Arc},
-    tokio::time::Instant,
+    tokio::{time, time::Instant},
 };
 
 /// How long a request can wait for a response before it fails with
@@ -54,7 +54,7 @@ use {
 /// metrics, config, "forwarding", s"broker-${config.nodeId}-", 60000)`, and
 /// `NodeToControllerRequestThread.generateRequests` fails a queued request
 /// with `onTimeout` once `currentTimeMs - createdTimeMs >= retryTimeoutMs`.
-pub(crate) const RETRY_TIMEOUT: Time = secs(60);
+pub const RETRY_TIMEOUT: Time = secs(60);
 
 /// The pause before the next attempt after a connection failure or a
 /// `NOT_CONTROLLER` answer. This is the default of Kafka's
@@ -74,7 +74,7 @@ const CONTROLLER_SOCKET_TIMEOUT: Time = secs(30);
 /// The client identity that a `CreateTopics` request sent with a principal
 /// carries to the controller in a KIP-590 Envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ForwardedIdentity {
+pub struct ForwardedIdentity {
     pub principal_name: String,
     pub client_address: IpAddr,
     pub client_id: String,
@@ -95,7 +95,7 @@ impl ForwardedIdentity {
 
 /// Why a `CreateTopics` request to the controller got no response.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum TopicCreatorError {
+pub enum TopicCreatorError {
     /// No response within the retry timeout. Kafka completes the future with
     /// `TimeoutException("CreateTopicsRequest to controller timed out")`.
     #[error("CreateTopicsRequest to controller timed out")]
@@ -124,7 +124,7 @@ impl From<ProtocolError> for TopicCreatorError {
 }
 
 /// Sends `CreateTopics` requests to the active controller.
-pub(crate) struct TopicCreator {
+pub struct TopicCreator {
     controller: Arc<dyn MetadataSource>,
     dialer: ControllerDialer,
     client_id: String,
@@ -236,7 +236,7 @@ impl TopicCreator {
                     // intentional: NodeToControllerRequestThread has no
                     // signal for a new controller or a healed connection. It
                     // waits out the reconnect backoff and tries again.
-                    tokio::time::sleep_until(deadline.min(now + backoff.to_std())).await;
+                    time::sleep_until(deadline.min(now + backoff.to_std())).await;
                 }
             }
         }
@@ -259,7 +259,7 @@ impl TopicCreator {
         let setup_deadline = deadline.min(
             Instant::now() + krabka_client_core::DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT.to_std(),
         );
-        let connected = tokio::time::timeout_at(
+        let connected = time::timeout_at(
             setup_deadline,
             self.dialer.outbound_client.connect_as_connection(
                 &host,

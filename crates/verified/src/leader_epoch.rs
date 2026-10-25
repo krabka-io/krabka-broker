@@ -123,30 +123,39 @@ pub fn epoch_and_offset_for_entries(
     #[invariant(forall<j: Int> 0 <= j && j < i@
         ==> entries@[j].epoch.0@ <= requested_epoch.0@)]
     #[variant(entries@.len() - i@)]
-    while i < entries.len() && entries[i].epoch.0 <= requested_epoch.0 {
+    while i < entries.len()
+        && matches!(entries.get(i), Some(entry) if entry.epoch.0 <= requested_epoch.0)
+    {
         i += 1;
     }
 
     if i == entries.len() {
-        if i > 0 && entries[i - 1].epoch.0 == requested_epoch.0 {
-            (requested_epoch, log_end_offset)
-        } else {
-            (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET)
+        if i > 0 && matches!(entries.get(i - 1), Some(last) if last.epoch.0 == requested_epoch.0) {
+            return (requested_epoch, log_end_offset);
         }
-    } else {
-        proof_assert!(higher_entry_at(entries@, requested_epoch.0@, i@));
-        proof_assert!(entries@[entries@.len() - 1].epoch.0@ >= entries@[i@].epoch.0@);
-        if i == 0 {
-            (requested_epoch, entries[i].start_offset)
-        } else {
-            (entries[i - 1].epoch, entries[i].start_offset)
-        }
+        return (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET);
     }
+    proof_assert!(higher_entry_at(entries@, requested_epoch.0@, i@));
+    proof_assert!(entries@[entries@.len() - 1].epoch.0@ >= entries@[i@].epoch.0@);
+    let Some(higher) = entries.get(i) else {
+        return (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET);
+    };
+    if i == 0 {
+        return (requested_epoch, higher.start_offset);
+    }
+    let Some(previous) = entries.get(i - 1) else {
+        return (UNDEFINED_EPOCH, UNDEFINED_EPOCH_OFFSET);
+    };
+    (previous.epoch, higher.start_offset)
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, proptest::prelude::*, std::collections::BTreeMap};
+    use {
+        super::*,
+        proptest::{collection, prelude::*},
+        std::collections::BTreeMap,
+    };
 
     /// Kafka's own `endOffsetFor`, written against a `TreeMap`-shaped index
     /// (`higherEntry` / `floorEntry`) rather than the kernel's linear scan.
@@ -268,7 +277,7 @@ mod tests {
     proptest! {
         #[test]
         fn lookup_matches_tree_map_oracle(
-            epochs in proptest::collection::btree_set(0i32..100, 0..32),
+            epochs in collection::btree_set(0i32..100, 0..32),
             requested in -3i32..110,
             log_end in 0i64..10_000,
         ) {

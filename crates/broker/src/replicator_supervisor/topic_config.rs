@@ -16,7 +16,7 @@ use {
 };
 
 /// Resolve the same effective settings before opening a log and on later updates.
-pub(crate) fn topic_log_config(
+pub fn topic_log_config(
     image: &MetadataImage,
     base: &LogConfig,
     node: krabka_metadata::NodeId,
@@ -48,7 +48,7 @@ pub(crate) fn topic_log_config(
 /// the cluster default, and only when `unstable` says the broker serves trunk's
 /// topic keys: under Kafka 4.3.1 a stored value of it is an unknown key that
 /// nothing reads, so the log runs with no limit.
-pub(crate) async fn push_topic_configs(
+pub async fn push_topic_configs(
     desired: &HashSet<TopicPartition>,
     partitions: &PartitionRegistry,
     image: &MetadataImage,
@@ -57,7 +57,7 @@ pub(crate) async fn push_topic_configs(
     unstable: UnstableApiVersions,
 ) {
     let base = &dynamic_log_base(image, node, base);
-    let empty: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let empty: BTreeMap<String, String> = BTreeMap::new();
     for (topic, partition) in desired {
         let Some(part) = partitions.get(topic, PartitionIndex(*partition)) else {
             continue;
@@ -148,7 +148,7 @@ mod tests {
         // Build an image with a topic + partition record + V1TopicConfig.
         let mut img = single_partition_image("t", Uuid::new_v4(), krabka_raft::NodeId(1));
         let mut overrides = BTreeMap::new();
-        overrides.insert("retention.ms".to_string(), "60000".to_string());
+        overrides.insert("retention.ms".to_owned(), "60000".to_owned());
         img.apply(&MetadataRecord::V1TopicConfig(
             krabka_metadata::TopicConfigRecord {
                 topic: "t".into(),
@@ -237,9 +237,9 @@ mod tests {
             }
             // A retention override rides along so the wait below can tell the
             // push has landed even when the limit stays unset.
-            let mut overrides = BTreeMap::from([("retention.ms".to_string(), "60000".to_string())]);
+            let mut overrides = BTreeMap::from([("retention.ms".to_owned(), "60000".to_owned())]);
             if let Some(value) = topic_override {
-                overrides.insert(KEY.to_string(), value.to_string());
+                overrides.insert(KEY.to_owned(), value.to_owned());
             }
             img.apply(&MetadataRecord::V1TopicConfig(
                 krabka_metadata::TopicConfigRecord {
@@ -304,7 +304,7 @@ mod tests {
         img.apply(&MetadataRecord::V1TopicConfig(
             krabka_metadata::TopicConfigRecord {
                 topic: "t".into(),
-                overrides: BTreeMap::from([("segment.bytes".to_string(), "1048576".to_string())]),
+                overrides: BTreeMap::from([("segment.bytes".to_owned(), "1048576".to_owned())]),
             },
         ));
 

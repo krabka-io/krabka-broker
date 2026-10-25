@@ -265,7 +265,7 @@ struct Registration {
 }
 
 /// Expands `dispatch_table! { ... }`.
-pub(crate) fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let labels = KINDS.map(|kind| kind.label);
     let sections: Vec<Section> = parse_sections(tokens, "=>", &labels)?;
 

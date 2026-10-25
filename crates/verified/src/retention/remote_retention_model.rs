@@ -129,13 +129,15 @@ pub fn local_retention_model(
 #[must_use]
 pub fn local_retention_prefix(segments: &[LocalRetentionSegment], size_debt: Option<u64>) -> usize {
     let limit = match segments.len().checked_sub(1) {
-        Some(newest) if segments[newest].size == 0 => newest,
+        Some(newest) if matches!(segments.get(newest), Some(segment) if segment.size == 0) => {
+            newest
+        }
         _ => segments.len(),
     };
-    let (mut debt, mut sizing) = match size_debt {
-        Some(debt) => (debt, true),
-        None => (0, false),
-    };
+    let (mut debt, mut sizing) = (0, false);
+    if let Some(initial) = size_debt {
+        (debt, sizing) = (initial, true);
+    }
     let mut len = 0usize;
     #[invariant(len@ <= limit@)]
     #[invariant(forall<i: Int> 0 <= i && i < len@ ==> !segments@[i].blocked)]
@@ -155,7 +157,9 @@ pub fn local_retention_prefix(segments: &[LocalRetentionSegment], size_debt: Opt
     })]
     #[variant(limit@ - len@)]
     while len < limit {
-        let segment = segments[len];
+        let Some(&segment) = segments.get(len) else {
+            break;
+        };
         if segment.blocked {
             break;
         }

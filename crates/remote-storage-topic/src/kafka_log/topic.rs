@@ -17,7 +17,7 @@ use {
         IncrementalAlterConfigsOptions, TopicMutationOptions,
     },
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
-    std::collections::BTreeMap,
+    std::{collections::BTreeMap, slice},
     tracing::{debug, instrument, warn},
 };
 
@@ -37,7 +37,7 @@ pub(super) async fn ensure_topic(
     cfg: &KafkaMetadataLogConfig,
 ) -> Result<TopicInfo, MetadataLogError> {
     let mut admin = AdminClient::connect_with_options(
-        std::slice::from_ref(&cfg.bootstrap),
+        slice::from_ref(&cfg.bootstrap),
         kafka_log::connection_options(cfg, "admin"),
     )
     .await
@@ -135,13 +135,13 @@ pub(super) async fn ensure_topic(
 fn creation_configs(cfg: &KafkaMetadataLogConfig) -> BTreeMap<String, String> {
     let mut configs = BTreeMap::from([
         (
-            "cleanup.policy".to_string(),
-            if cfg.compacted { "compact" } else { "delete" }.to_string(),
+            "cleanup.policy".to_owned(),
+            if cfg.compacted { "compact" } else { "delete" }.to_owned(),
         ),
-        ("retention.ms".to_string(), "-1".to_string()),
+        ("retention.ms".to_owned(), "-1".to_owned()),
     ]);
     if let Some(min_isr) = cfg.min_isr {
-        configs.insert("min.insync.replicas".to_string(), min_isr.to_string());
+        configs.insert("min.insync.replicas".to_owned(), min_isr.to_string());
     }
     configs
 }
@@ -215,7 +215,7 @@ mod tests {
     ) {
         let expected = expected
             .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect::<BTreeMap<_, _>>();
         assert2::assert!(creation_configs(&cfg) == expected);
     }

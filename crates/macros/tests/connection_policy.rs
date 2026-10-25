@@ -1,4 +1,5 @@
 //! Opaque builders retain evaluation order and every operator-chosen policy value.
+#![cfg(test)]
 
 use {
     assert2::assert,

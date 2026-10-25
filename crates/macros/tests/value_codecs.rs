@@ -1,4 +1,5 @@
 //! Consumer checks for direct state and array derives, with small codec interfaces.
+#![cfg(test)]
 
 use assert2::assert;
 
@@ -8,6 +9,7 @@ mod error;
 use {
     bytes::{BufMut, BytesMut},
     error::{BrokerError, take},
+    std::iter,
 };
 
 fn get_i32(buf: &mut &[u8]) -> Result<i32, BrokerError> { Ok(i32::from_be_bytes(take(buf)?)) }
@@ -112,7 +114,7 @@ fn hex(text: &str) -> Vec<u8> {
         .flat_map(|part| {
             (0..part.len())
                 .step_by(2)
-                .map(|index| u8::from_str_radix(&part[index..index + 2], 16).unwrap())
+                .map(|index| u8::from_str_radix(part.get(index..index + 2).unwrap(), 16).unwrap())
         })
         .collect()
 }
@@ -170,8 +172,8 @@ fn write_items(buf: &mut BytesMut, items: &[i32]) {
 
 fn read_items(buf: &mut &[u8]) -> Result<Vec<i32>, BrokerError> {
     let [length] = take(buf)?;
-    (0..length.checked_sub(1).ok_or("null array")?)
-        .map(|_| get_i32(buf))
+    iter::repeat_with(|| get_i32(buf))
+        .take(usize::from(length.checked_sub(1).ok_or("null array")?))
         .collect()
 }
 

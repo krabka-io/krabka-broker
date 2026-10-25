@@ -24,7 +24,8 @@ use {
         },
     },
     crate::{
-        metadata_source::MetadataSource, partition_registry::PartitionRegistry,
+        metadata_source::{MetadataSource, next_published_image},
+        partition_registry::PartitionRegistry,
         task_util::shutdown_actor,
     },
     krabka_ids::{LeaderEpoch, PartitionIndex},
@@ -32,15 +33,16 @@ use {
     std::{
         collections::{HashMap, HashSet},
         sync::{
-            Arc,
+            Arc, MutexGuard, PoisonError,
             atomic::{AtomicU64, Ordering},
         },
         time::Duration,
     },
+    tokio::time::sleep,
     tokio_util::sync::CancellationToken,
 };
 
-pub(crate) fn spawn(
+pub fn spawn(
     node_id: NodeId,
     metadata: Arc<dyn MetadataSource>,
     partitions: Arc<PartitionRegistry>,
@@ -59,7 +61,7 @@ pub(crate) fn spawn(
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => break,
-                image = crate::metadata_source::next_published_image(&mut images) => {
+                image = next_published_image(&mut images) => {
                     let Some(image) = image else { break; };
                     let next = led_partitions(&image, node_id);
                     let lost: Vec<PartitionIndex> =
@@ -103,7 +105,7 @@ static NEXT_LOAD_ID: AtomicU64 = AtomicU64::new(0);
 /// and which of them are still replaying. One lock guards both, so a routing
 /// check never sees a term taken up without the load that came with it.
 #[derive(Debug, Default)]
-pub(crate) struct ShardTerms {
+pub struct ShardTerms {
     /// The leader epoch of every offsets partition this broker leads, as the
     /// image watcher last took it up.
     led: HashMap<i32, LeaderEpoch>,
@@ -113,10 +115,10 @@ pub(crate) struct ShardTerms {
 }
 
 impl GroupCoordinator {
-    fn shard_terms(&self) -> std::sync::MutexGuard<'_, ShardTerms> {
+    fn shard_terms(&self) -> MutexGuard<'_, ShardTerms> {
         self.shard_terms
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// `true` while `partition` of `__consumer_offsets`, which the image
@@ -229,7 +231,7 @@ fn spawn_partition_load(
             }
             tokio::select! {
                 () = shutdown.cancelled() => return,
-                () = tokio::time::sleep(Duration::from_millis(25)) => {}
+                () = sleep(Duration::from_millis(25)) => {}
             }
         }
     });
@@ -340,7 +342,7 @@ mod tests {
         super::*,
         crate::{
             broker::Broker,
-            codes::{COORDINATOR_LOAD_IN_PROGRESS, NONE},
+            codes::{self, COORDINATOR_LOAD_IN_PROGRESS, NONE},
             coordinator::{
                 test_support::default_coordinator,
                 unified::{ImageMetadataProvider, offsets_log::fake::InMemoryOffsetsLog},
@@ -447,7 +449,7 @@ mod tests {
             topic: "orders".into(),
             partition: 0,
         };
-        metrics.publish_consumer_group_lag(&std::collections::HashMap::from([(label.clone(), 33)]));
+        metrics.publish_consumer_group_lag(&HashMap::from([(label.clone(), 33)]));
 
         unload_partition(&coordinator, &image, PartitionIndex(0)).await;
 
@@ -731,8 +733,8 @@ mod tests {
                 "{unserved:?}"
             );
         }
-        check!(call(&broker, GroupRpc::JoinGroup).await == crate::codes::MEMBER_ID_REQUIRED);
-        check!(call(&broker, GroupRpc::ListGroups).await == crate::codes::NONE);
+        check!(call(&broker, GroupRpc::JoinGroup).await == codes::MEMBER_ID_REQUIRED);
+        check!(call(&broker, GroupRpc::ListGroups).await == NONE);
         broker_handle.shutdown().await;
     }
 

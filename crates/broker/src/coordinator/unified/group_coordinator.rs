@@ -22,7 +22,13 @@ use {
     },
     dashmap::DashMap,
     krabka_metadata::NodeId,
-    std::sync::Arc,
+    std::{
+        collections::VecDeque,
+        sync::{
+            Arc, Mutex, OnceLock,
+            atomic::{AtomicI64, Ordering},
+        },
+    },
 };
 
 /// Locked protocol identity for a `group_id`.
@@ -73,7 +79,7 @@ pub struct GroupCoordinator {
     /// [`Self::share_persister`] to drive the Initialize and Delete lifecycle
     /// calls after reconcile. It is `None` in the pure-coordinator unit tests,
     /// where the lifecycle hook does nothing.
-    pub(crate) share_persister: std::sync::OnceLock<Arc<SharePersister>>,
+    pub(crate) share_persister: OnceLock<Arc<SharePersister>>,
 
     // ── KIP-1071 streams groups ──────────────────────────────────────────
     pub streams_config: Arc<StreamsGroupConfig>,
@@ -92,38 +98,37 @@ pub struct GroupCoordinator {
     /// for topology resolution and internal-topic creation. It is `None` in
     /// the pure-coordinator unit tests, where reconcile does nothing and
     /// returns `NotReady`.
-    pub(crate) metadata_source: std::sync::OnceLock<MetadataSourceHandle>,
+    pub(crate) metadata_source: OnceLock<MetadataSourceHandle>,
     /// The metric bundle whose per-group lag series this coordinator owns the
     /// lifetime of.
     ///
     /// `Broker::start` sets it once. It is `None` in the pure-coordinator unit
     /// tests, where nothing samples group lag and there is no series to
     /// release.
-    pub(crate) metrics: std::sync::OnceLock<BrokerMetrics>,
+    pub(crate) metrics: OnceLock<BrokerMetrics>,
     /// The latest topic deletions the image watcher saw, as name and topic id,
     /// oldest first. A `__consumer_offsets` partition that finishes loading
     /// after a deletion applies them to its groups. See
     /// `coordinator::topic_deletion`.
-    pub(crate) recent_topic_deletions:
-        std::sync::Mutex<std::collections::VecDeque<(String, uuid::Uuid)>>,
+    pub(crate) recent_topic_deletions: Mutex<VecDeque<(String, uuid::Uuid)>>,
     /// The `__consumer_offsets` leadership terms the image watcher has taken
     /// up, and which of them are still replaying. See
     /// `coordinator::leadership`.
-    pub(crate) shard_terms: std::sync::Mutex<ShardTerms>,
+    pub(crate) shard_terms: Mutex<ShardTerms>,
     /// Kafka's `GroupMetadataManager.lastMetadataImageWithNewTopics`: the
     /// metadata offset of the latest image that can change what a regular
     /// expression of a consumer group resolves to, or `-1` before the image
     /// watcher has read one. A group whose resolutions are older than it
     /// refreshes them at its next heartbeat. See `coordinator::topic_deletion`
     /// for what moves it.
-    pub(crate) regex_refresh_version: std::sync::atomic::AtomicI64,
+    pub(crate) regex_refresh_version: AtomicI64,
     /// The node this coordinator runs on, whose dynamic broker configs layer
     /// over the static group settings.
     ///
     /// The broker sets it once at startup. It is unset in the
     /// pure-coordinator unit tests, where only the cluster-wide dynamic
     /// configs apply.
-    pub(crate) node_id: std::sync::OnceLock<NodeId>,
+    pub(crate) node_id: OnceLock<NodeId>,
 }
 
 /// `Debug`-able wrapper around an `Arc<dyn MetadataSource>` so that it can
@@ -132,7 +137,7 @@ pub struct GroupCoordinator {
 /// The trait object itself is not `Debug`. This wrapper prints an opaque
 /// placeholder.
 #[derive(Clone, derive_more::Debug)]
-pub(crate) struct MetadataSourceHandle(#[debug(skip)] pub(crate) Arc<dyn MetadataSource>);
+pub struct MetadataSourceHandle(#[debug(skip)] pub(crate) Arc<dyn MetadataSource>);
 
 impl GroupCoordinator {
     /// Construct a coordinator with the supplied consumer-group registry.
@@ -159,17 +164,17 @@ impl GroupCoordinator {
             share_seeds: Arc::new(DashMap::new()),
             seeds_cache: Arc::new(DashMap::new()),
             share_seeds_cache: Arc::new(DashMap::new()),
-            share_persister: std::sync::OnceLock::new(),
+            share_persister: OnceLock::new(),
             streams_config: Arc::new(streams_config),
             streams_groups: Arc::new(DashMap::new()),
             streams_seeds: Arc::new(DashMap::new()),
             streams_seeds_cache: Arc::new(DashMap::new()),
-            metadata_source: std::sync::OnceLock::new(),
-            metrics: std::sync::OnceLock::new(),
-            recent_topic_deletions: std::sync::Mutex::default(),
-            shard_terms: std::sync::Mutex::default(),
-            regex_refresh_version: std::sync::atomic::AtomicI64::new(-1),
-            node_id: std::sync::OnceLock::new(),
+            metadata_source: OnceLock::new(),
+            metrics: OnceLock::new(),
+            recent_topic_deletions: Mutex::default(),
+            shard_terms: Mutex::default(),
+            regex_refresh_version: AtomicI64::new(-1),
+            node_id: OnceLock::new(),
         })
     }
 
@@ -215,7 +220,7 @@ impl GroupCoordinator {
     /// `NotReady`.
     #[must_use]
     pub(crate) fn metadata_source(&self) -> Option<Arc<dyn MetadataSource>> {
-        self.metadata_source.get().map(|h| h.0.clone())
+        self.metadata_source.get().map(|h| Arc::clone(&h.0))
     }
 
     /// Name the node this coordinator runs on.
@@ -267,15 +272,14 @@ impl GroupCoordinator {
     /// image watcher has read one: Kafka's `lastMetadataImageWithNewTopics`.
     #[must_use]
     pub(crate) fn regex_refresh_version(&self) -> i64 {
-        self.regex_refresh_version
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.regex_refresh_version.load(Ordering::Acquire)
     }
 
     /// Records that the image at metadata offset `version` can change what a
     /// regular expression resolves to. The version never moves back.
     pub(crate) fn bump_regex_refresh_version(&self, version: i64) {
         self.regex_refresh_version
-            .fetch_max(version, std::sync::atomic::Ordering::AcqRel);
+            .fetch_max(version, Ordering::AcqRel);
     }
 }
 
@@ -303,7 +307,8 @@ mod tests {
     fn debug_wrappers_write_type_names() {
         let source = fixed_source(krabka_metadata::MetadataImage::new(real_uuid(1)));
         assert!(
-            format!("{:?}", MetadataSourceHandle(source.clone())).contains("MetadataSourceHandle")
+            format!("{:?}", MetadataSourceHandle(Arc::clone(&source)))
+                .contains("MetadataSourceHandle")
         );
         assert!(
             format!("{:?}", ImageMetadataProvider::new(source)).contains("ImageMetadataProvider")
@@ -318,14 +323,14 @@ mod tests {
 
         let first_source = fixed_source(krabka_metadata::MetadataImage::new(real_uuid(1)));
         let second_source = fixed_source(krabka_metadata::MetadataImage::new(real_uuid(2)));
-        coord.set_metadata_source(first_source.clone());
+        coord.set_metadata_source(Arc::clone(&first_source));
         coord.set_metadata_source(second_source);
         let got_source = coord.metadata_source().unwrap();
         assert!(Arc::ptr_eq(&got_source, &first_source));
 
-        let first_persister = make_share_persister(first_source.clone());
+        let first_persister = make_share_persister(Arc::clone(&first_source));
         let second_persister = make_share_persister(first_source);
-        coord.set_share_persister(first_persister.clone());
+        coord.set_share_persister(Arc::clone(&first_persister));
         coord.set_share_persister(second_persister);
         let got_persister = coord.share_persister().unwrap();
         assert!(Arc::ptr_eq(got_persister, &first_persister));

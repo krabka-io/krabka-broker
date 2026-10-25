@@ -59,5 +59,6 @@ pub use {
     read::read_capped,
 };
 
-#[cfg(all(test, not(target_family = "wasm")))]
+#[cfg(test)]
+#[cfg(not(target_family = "wasm"))]
 mod test_support;

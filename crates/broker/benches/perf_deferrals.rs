@@ -33,7 +33,7 @@
 use {
     assert2::assert,
     bytes::{Buf, BufMut, Bytes, BytesMut},
-    criterion::{Criterion, Throughput, criterion_group, criterion_main},
+    criterion::{Criterion, Throughput, abs_file, criterion_main},
     futures_util::SinkExt as _,
     krabka_broker::{
         replicate_hot_path::ReplicaSeam,
@@ -41,14 +41,19 @@ use {
     },
     krabka_protocol::{api_key::ApiKey, records::RecordBatch},
     std::{
-        future::Future,
+        env,
+        future::{self, Future},
         hint::black_box,
-        io::IoSlice,
+        io::{self, IoSlice},
         pin::Pin,
+        process,
         task::{Context, Poll, Waker},
         time::{Duration, Instant},
     },
-    tokio::{io::AsyncWrite, runtime::Runtime},
+    tokio::{
+        io::AsyncWrite,
+        runtime::{Builder, Runtime},
+    },
     tokio_util::codec::{Encoder as _, Framed},
 };
 
@@ -93,7 +98,8 @@ struct BodySize {
 
 mod support;
 use support::{
-    BatchShape, BoundedResource, LEADER_EPOCH, LOG_BUDGET, SHAPES, WARMUP, bounded_resource,
+    BatchShape, BenchError, BoundedResource, FirstError, LEADER_EPOCH, LOG_BUDGET, SHAPES, WARMUP,
+    bounded_resource,
 };
 
 // ---------------------------------------------------------------------------
@@ -117,7 +123,7 @@ impl AsyncWrite for NullSink {
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<io::Result<usize>> {
         self.get_mut().written += buf.len();
         Poll::Ready(Ok(buf.len()))
     }
@@ -126,7 +132,7 @@ impl AsyncWrite for NullSink {
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
-    ) -> Poll<std::io::Result<usize>> {
+    ) -> Poll<io::Result<usize>> {
         let total: usize = bufs.iter().map(|slice| slice.len()).sum();
         self.get_mut().written += total;
         Poll::Ready(Ok(total))
@@ -134,11 +140,11 @@ impl AsyncWrite for NullSink {
 
     fn is_write_vectored(&self) -> bool { true }
 
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
 }
@@ -188,61 +194,62 @@ fn frame_prefix(body_len: usize) -> Bytes {
 }
 
 /// Frame one response the way the dispatch loop does and hand it to `framed`.
-fn copy_send(framed: &mut Framed<NullSink, KafkaCodec>, payload: &Bytes) -> Duration {
+fn copy_send(
+    framed: &mut Framed<NullSink, KafkaCodec>,
+    payload: &Bytes,
+) -> Result<Duration, BenchError> {
     let start = Instant::now();
     let response =
-        response_framing::encode_response(API_KEY, CORRELATION_ID, BODY_FLEXIBLE, payload)
-            .expect("a bench body is well under the frame maximum");
+        response_framing::encode_response(API_KEY, CORRELATION_ID, BODY_FLEXIBLE, payload)?;
     // `Framed::send` is `start_send` plus `poll_flush`, which is the pair the
     // dispatch loop drives per response.
-    drive(framed.send(response)).expect("NullSink never fails");
-    start.elapsed()
+    drive(framed.send(response))?;
+    Ok(start.elapsed())
 }
 
 /// Frame the same response as a chained `Buf` and hand it to `sink` as
 /// segments, which is the prototype the PERF note defers.
-fn chained_send(sink: &mut NullSink, payload: &Bytes) -> Duration {
+fn chained_send(sink: &mut NullSink, payload: &Bytes) -> Result<Duration, BenchError> {
     let start = Instant::now();
     let mut plan = frame_prefix(payload.len()).chain(payload.clone());
     while plan.has_remaining() {
         let mut slices = [IoSlice::new(&[]); 2];
         let filled = plan.chunks_vectored(&mut slices);
-        let written = drive(write_vectored(sink, &slices[..filled]));
+        let chunks = slices
+            .get(..filled)
+            .ok_or("chunks_vectored filled more slices than it was given")?;
+        let written = drive(write_vectored(sink, chunks))?;
         plan.advance(written);
     }
-    start.elapsed()
+    Ok(start.elapsed())
 }
 
 /// One vectored write against `sink`, as a future the prototype can await.
-async fn write_vectored(sink: &mut NullSink, slices: &[IoSlice<'_>]) -> usize {
-    std::future::poll_fn(|cx| Pin::new(&mut *sink).poll_write_vectored(cx, slices))
-        .await
-        .expect("NullSink never fails")
+async fn write_vectored(sink: &mut NullSink, slices: &[IoSlice<'_>]) -> io::Result<usize> {
+    future::poll_fn(|cx| Pin::new(&mut *sink).poll_write_vectored(cx, slices)).await
 }
 
 /// The bytes the copy path puts on the wire, taken from the real codec.
-fn copy_path_wire(payload: &Bytes) -> BytesMut {
+fn copy_path_wire(payload: &Bytes) -> Result<BytesMut, BenchError> {
     let response =
-        response_framing::encode_response(API_KEY, CORRELATION_ID, BODY_FLEXIBLE, payload)
-            .expect("a bench body is well under the frame maximum");
+        response_framing::encode_response(API_KEY, CORRELATION_ID, BODY_FLEXIBLE, payload)?;
     let mut wire = BytesMut::new();
-    response_framing::codec(MAX_FRAME_BYTES)
-        .encode(response, &mut wire)
-        .expect("a bench body is well under the frame maximum");
-    wire
+    response_framing::codec(MAX_FRAME_BYTES).encode(response, &mut wire)?;
+    Ok(wire)
 }
 
 /// The prototype is only a fair comparison while it is byte-identical to the
 /// path it would replace. Were the header shape or the frame length to drift
 /// apart, the table would compare two different amounts of work and report a
 /// saving that does not exist. This fails the run instead.
-fn assert_prototype_is_wire_identical(payload: &Bytes) {
+fn assert_prototype_is_wire_identical(payload: &Bytes) -> Result<(), BenchError> {
     let mut prototype = BytesMut::from(&frame_prefix(payload.len())[..]);
     prototype.put_slice(payload);
     assert!(
-        copy_path_wire(payload) == prototype,
+        copy_path_wire(payload)? == prototype,
         "the chained prototype must put the same bytes on the wire as the copy path"
     );
+    Ok(())
 }
 
 /// The two framing paths a body is measured on, in report order.
@@ -256,8 +263,8 @@ enum Framing {
 
 /// Frame and send `payload` `iters` times, returning only the time the framing
 /// and the sends took.
-fn timed_sends(payload: &Bytes, framing: Framing, iters: u64) -> Duration {
-    assert_prototype_is_wire_identical(payload);
+fn timed_sends(payload: &Bytes, framing: Framing, iters: u64) -> Result<Duration, BenchError> {
+    assert_prototype_is_wire_identical(payload)?;
     let mut framed = Framed::new(
         NullSink::default(),
         response_framing::codec(MAX_FRAME_BYTES),
@@ -267,16 +274,16 @@ fn timed_sends(payload: &Bytes, framing: Framing, iters: u64) -> Duration {
         Framing::Chained => chained_send(framed.get_mut(), payload),
     };
     for _ in 0..WARMUP {
-        one(framing);
+        one(framing)?;
     }
     let mut elapsed = Duration::ZERO;
     for _ in 0..iters {
-        elapsed += one(framing);
+        elapsed += one(framing)?;
     }
     // The sink counts what it was handed. Reading it keeps the writes from
     // being anything the optimizer can discard.
     black_box(framed.get_ref().written);
-    elapsed
+    Ok(elapsed)
 }
 
 // ---------------------------------------------------------------------------
@@ -294,10 +301,10 @@ struct ReplicaLog {
 }
 
 impl ReplicaLog {
-    fn new() -> Self {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let seam = ReplicaSeam::spawn(dir.path()).expect("open follower log");
-        Self { _dir: dir, seam }
+    fn new() -> Result<Self, BenchError> {
+        let dir = tempfile::tempdir()?;
+        let seam = ReplicaSeam::spawn(dir.path())?;
+        Ok(Self { _dir: dir, seam })
     }
 }
 
@@ -309,35 +316,38 @@ type BoundedReplica = BoundedResource<ReplicaLog>;
 /// The clone and the offset stamp sit outside the timer: the replicator's
 /// batches arrive owned out of the Fetch response and already carry the
 /// leader's offsets.
-async fn replicate_once(replica: &mut BoundedReplica, template: &RecordBatch) -> Duration {
-    let replica = replica.rotate_if_full(template.encoded_len());
+async fn replicate_once(
+    replica: &mut BoundedReplica,
+    template: &RecordBatch,
+) -> Result<Duration, BenchError> {
+    let replica = replica.rotate_if_full(template.encoded_len())?;
     let mut batch = template.clone();
     batch.base_offset = replica.seam.next_offset().0;
     let start = Instant::now();
-    replica
-        .seam
-        .replicate(batch)
-        .await
-        .expect("the bench shapes are all valid replicated batches");
-    start.elapsed()
+    replica.seam.replicate(batch).await?;
+    Ok(start.elapsed())
 }
 
 /// Replicate `template` `iters` times, returning only the time the appends
 /// took.
-fn timed_replicates(runtime: &Runtime, template: &RecordBatch, iters: u64) -> Duration {
+fn timed_replicates(
+    runtime: &Runtime,
+    template: &RecordBatch,
+    iters: u64,
+) -> Result<Duration, BenchError> {
     runtime.block_on(async {
         let mut replica = bounded_resource()
             .budget(LOG_BUDGET)
             .factory(ReplicaLog::new)
-            .call();
+            .call()?;
         for _ in 0..WARMUP {
-            replicate_once(&mut replica, template).await;
+            replicate_once(&mut replica, template).await?;
         }
         let mut elapsed = Duration::ZERO;
         for _ in 0..iters {
-            elapsed += replicate_once(&mut replica, template).await;
+            elapsed += replicate_once(&mut replica, template).await?;
         }
-        elapsed
+        Ok(elapsed)
     })
 }
 
@@ -357,55 +367,70 @@ fn timed_encoded_len(template: &RecordBatch, iters: u64) -> Duration {
 /// A runtime shaped like the broker's: the writer actor is a spawned task and
 /// its append runs on a blocking thread, so a current-thread runtime would
 /// measure a different hand-off than production does.
-fn replication_runtime() -> Runtime {
-    tokio::runtime::Builder::new_multi_thread()
+fn replication_runtime() -> io::Result<Runtime> {
+    Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()
-        .expect("build the replication runtime")
 }
 
 // ---------------------------------------------------------------------------
 // Criterion entry points.
 // ---------------------------------------------------------------------------
 
-fn bench_response_framing(c: &mut Criterion) {
-    let mut group = c.benchmark_group("broker/response_framing");
+fn bench_response_framing(c: &mut Criterion) -> Result<(), BenchError> {
+    let failure = FirstError::default();
+    {
+        let mut group = c.benchmark_group("broker/response_framing");
 
-    for BodySize { label, size } in BODY_SIZES {
-        let payload = body(PatternedPayloadLength(size));
-        group.throughput(Throughput::Bytes(size as u64));
-        for (case, framing) in [("copy", Framing::Copy), ("chained", Framing::Chained)] {
-            group.bench_function(format!("{label}/{case}"), |b| {
-                b.iter_custom(|iters| timed_sends(&payload, framing, iters));
-            });
+        for BodySize { label, size } in BODY_SIZES {
+            let payload = body(PatternedPayloadLength(size));
+            group.throughput(Throughput::Bytes(size as u64));
+            for (case, framing) in [("copy", Framing::Copy), ("chained", Framing::Chained)] {
+                group.bench_function(format!("{label}/{case}"), |b| {
+                    b.iter_custom(|iters| {
+                        failure
+                            .keep(timed_sends(&payload, framing, iters))
+                            .unwrap_or_default()
+                    });
+                });
+            }
         }
-    }
 
-    group.finish();
+        group.finish();
+    }
+    failure.into_result()
 }
 
-fn bench_replication(c: &mut Criterion) {
-    let runtime = replication_runtime();
-    let mut group = c.benchmark_group("broker/replication");
-
-    for BatchShape {
-        label: shape,
-        records,
-        payload,
-    } in SHAPES
+fn bench_replication(c: &mut Criterion) -> Result<(), BenchError> {
+    let runtime = replication_runtime()?;
+    let failure = FirstError::default();
     {
-        let template = make_batch(records, payload);
-        group.throughput(Throughput::Bytes(template.encoded_len() as u64));
-        group.bench_function(format!("{shape}/encoded_len"), |b| {
-            b.iter_custom(|iters| timed_encoded_len(&template, iters));
-        });
-        group.bench_function(format!("{shape}/replicate_batch"), |b| {
-            b.iter_custom(|iters| timed_replicates(&runtime, &template, iters));
-        });
-    }
+        let mut group = c.benchmark_group("broker/replication");
 
-    group.finish();
+        for BatchShape {
+            label: shape,
+            records,
+            payload,
+        } in SHAPES
+        {
+            let template = make_batch(records, payload);
+            group.throughput(Throughput::Bytes(template.encoded_len() as u64));
+            group.bench_function(format!("{shape}/encoded_len"), |b| {
+                b.iter_custom(|iters| timed_encoded_len(&template, iters));
+            });
+            group.bench_function(format!("{shape}/replicate_batch"), |b| {
+                b.iter_custom(|iters| {
+                    failure
+                        .keep(timed_replicates(&runtime, &template, iters))
+                        .unwrap_or_default()
+                });
+            });
+        }
+
+        group.finish();
+    }
+    failure.into_result()
 }
 
 /// Appends or sends per measurement run.
@@ -420,10 +445,13 @@ const RUNS: u32 = 5;
 
 /// The fastest per-iteration nanosecond figure `measure` reports over [`RUNS`]
 /// runs of [`SAMPLES`] iterations.
-fn fastest(measure: impl Fn(u64) -> Duration) -> f64 {
-    (0..RUNS)
-        .map(|_| measure(u64::from(SAMPLES)).as_secs_f64() * 1.0e9 / f64::from(SAMPLES))
-        .fold(f64::INFINITY, f64::min)
+fn fastest(measure: impl Fn(u64) -> Result<Duration, BenchError>) -> Result<f64, BenchError> {
+    let mut fastest = f64::INFINITY;
+    for _ in 0..RUNS {
+        let elapsed = measure(u64::from(SAMPLES))?;
+        fastest = fastest.min(elapsed.as_secs_f64() * 1.0e9 / f64::from(SAMPLES));
+    }
+    Ok(fastest)
 }
 
 /// Print both deferrals as a table.
@@ -432,7 +460,7 @@ fn fastest(measure: impl Fn(u64) -> Duration) -> f64 {
 /// sibling, so the two numbers this suite exists for — what the chained `Buf`
 /// would save, and what the extra `encoded_len` walk costs — have to be
 /// computed here.
-fn bench_ratio(_c: &mut Criterion) {
+fn bench_ratio(_c: &mut Criterion) -> Result<(), BenchError> {
     println!(
         "\nbroker/response_framing — nanoseconds per response (fastest of {RUNS} runs).\n\
          The sink keeps no bytes, so `saved` is an upper bound on what a chained-Buf\n\
@@ -444,8 +472,8 @@ fn bench_ratio(_c: &mut Criterion) {
     );
     for BodySize { label, size } in BODY_SIZES {
         let payload = body(PatternedPayloadLength(size));
-        let copy = fastest(|iters| timed_sends(&payload, Framing::Copy, iters));
-        let chained = fastest(|iters| timed_sends(&payload, Framing::Chained, iters));
+        let copy = fastest(|iters| timed_sends(&payload, Framing::Copy, iters))?;
+        let chained = fastest(|iters| timed_sends(&payload, Framing::Chained, iters))?;
         println!(
             "{label:<10} {copy:>12.0} {chained:>12.0} {:>12.0} {:>9.1}%",
             copy - chained,
@@ -453,7 +481,7 @@ fn bench_ratio(_c: &mut Criterion) {
         );
     }
 
-    let runtime = replication_runtime();
+    let runtime = replication_runtime()?;
     println!(
         "\nbroker/replication — nanoseconds per batch (fastest of {RUNS} runs).\n\
          `encoded_len` is the walk the replicator adds for the metric; the last column\n\
@@ -470,20 +498,47 @@ fn bench_ratio(_c: &mut Criterion) {
     } in SHAPES
     {
         let template = make_batch(records, payload);
-        let walk = fastest(|iters| timed_encoded_len(&template, iters));
-        let replicate = fastest(|iters| timed_replicates(&runtime, &template, iters));
+        let walk = fastest(|iters| Ok(timed_encoded_len(&template, iters)))?;
+        let replicate = fastest(|iters| timed_replicates(&runtime, &template, iters))?;
         println!(
             "{shape:<14} {walk:>14.0} {replicate:>18.0} {:>21.2}%",
             100.0 * walk / replicate
         );
     }
     println!();
+    Ok(())
 }
 
-criterion_group!(
-    benches,
-    bench_response_framing,
-    bench_replication,
-    bench_ratio
-);
+/// A benchmark target, under the name `criterion_group!` would give it.
+type Target = (&'static str, fn(&mut Criterion) -> Result<(), BenchError>);
+
+/// Every benchmark target, in run order.
+const TARGETS: [Target; 3] = [
+    ("bench_response_framing", bench_response_framing),
+    ("bench_replication", bench_replication),
+    ("bench_ratio", bench_ratio),
+];
+
+/// Runs every target in [`TARGETS`], stopping at the first one that fails.
+fn run_targets(criterion: &mut Criterion) -> Result<(), (&'static str, BenchError)> {
+    for (name, target) in TARGETS {
+        if env::var("CODSPEED_ENV").is_ok() {
+            criterion.set_current_file(abs_file!());
+            criterion.set_macro_group(format!("benches::{name}"));
+        }
+        target(criterion).map_err(|error| (name, error))?;
+    }
+    Ok(())
+}
+
+/// The benchmark group, written out by hand where `criterion_group!` would
+/// generate it, so that a failing target reports its error and stops the run.
+fn benches() {
+    let result = run_targets(&mut Criterion::default().configure_from_args());
+    if let Err((name, error)) = result {
+        eprintln!("{name}: {error}");
+        process::exit(1);
+    }
+}
+
 criterion_main!(benches);

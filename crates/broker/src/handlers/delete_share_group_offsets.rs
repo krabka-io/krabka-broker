@@ -46,7 +46,7 @@ use {
 /// `handleDeleteShareGroupOffsetsRequest` puts on every denied topic row.
 const TOPIC_AUTHORIZATION_FAILED_MESSAGE: &str = "Topic authorization failed.";
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DeleteShareGroupOffsetsRequest,
     _version: ApiVersion,
@@ -122,7 +122,7 @@ pub(crate) async fn handle(
             topic_name: rt.topic_name,
             topic_id: Uuid::default(),
             error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-            error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_string()),
+            error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_owned()),
             ..Default::default()
         })
         .collect();
@@ -750,7 +750,7 @@ mod tests {
                     topic_name: name.into(),
                     topic_id: Uuid::default(),
                     error_code: codes::TOPIC_AUTHORIZATION_FAILED,
-                    error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_string()),
+                    error_message: Some(TOPIC_AUTHORIZATION_FAILED_MESSAGE.to_owned()),
                 })
             };
             let allowed_row = |name: &str, topic_id: uuid::Uuid| {

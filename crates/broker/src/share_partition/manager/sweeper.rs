@@ -7,8 +7,11 @@
 use {
     super::{LeaderKey, SharePartitionLeaderManager},
     crate::share_partition::{group_settings::GroupShareSettings, state::AcquisitionState},
-    std::{sync::Arc, time::Duration},
-    tokio::sync::Mutex,
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::{sync::Mutex, time::interval},
 };
 
 /// A live share partition: its key and its acquisition state.
@@ -34,7 +37,7 @@ impl SharePartitionLeaderManager {
         let mgr = Arc::clone(self);
         let period = (mgr.config.record_lock_duration / 2).max(Duration::from_millis(100));
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(period);
+            let mut tick = interval(period);
             loop {
                 tick.tick().await;
                 // Snapshot keys + cells, releasing all DashMap guards first.
@@ -43,10 +46,10 @@ impl SharePartitionLeaderManager {
                     .iter()
                     .map(|e| LeaderCell {
                         key: e.key().clone(),
-                        cell: e.value().clone(),
+                        cell: Arc::clone(e.value()),
                     })
                     .collect();
-                let now = std::time::Instant::now();
+                let now = Instant::now();
                 let image = mgr.controller.current_image();
                 for LeaderCell {
                     key: (group, topic_id, partition),

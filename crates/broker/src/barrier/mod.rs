@@ -45,22 +45,22 @@
 //! - [`state`] holds the in-memory group entry and the pure decisions over it.
 //! - [`scheduler`] drives the per-group interval.
 
-pub(crate) mod bootstrap;
-pub(crate) mod config;
-pub(crate) mod coordinator;
-pub(crate) mod error;
-pub(crate) mod handlers;
-pub(crate) mod injection;
-pub(crate) mod marker;
-pub(crate) mod metrics;
-pub(crate) mod partitioner;
-pub(crate) mod persistence;
-pub(crate) mod scheduler;
-pub(crate) mod state;
+pub mod bootstrap;
+pub mod config;
+pub mod coordinator;
+pub mod error;
+pub mod handlers;
+pub mod injection;
+pub mod marker;
+pub mod metrics;
+pub mod partitioner;
+pub mod persistence;
+pub mod scheduler;
+pub mod state;
 
 #[cfg(test)]
 mod test_support;
 
 /// The internal topic that carries group definitions, injection-start records,
 /// and cuts.
-pub(crate) const STATE_TOPIC: &str = "__barrier_state";
+pub const STATE_TOPIC: &str = "__barrier_state";

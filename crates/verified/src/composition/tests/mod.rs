@@ -1,4 +1,7 @@
-use {super::*, crate::restore::RestoreContentExclusions, proptest::prelude::*};
+use {
+    super::*, crate::restore::RestoreContentExclusions, proptest::prelude::*,
+    std::collections::BTreeMap,
+};
 
 mod abort_union;
 mod byte_quorum;
@@ -116,11 +119,7 @@ fn recovered_window_row(base: i64, delta: i32, last_sequence: i32) -> ProducerSn
 
 type TimestampRecords = (Vec<u32>, Vec<i64>, Vec<(usize, usize)>);
 
-fn timestamp_records(
-    records: &std::collections::BTreeMap<u32, i64>,
-    step: usize,
-    span: usize,
-) -> TimestampRecords {
+fn timestamp_records(records: &BTreeMap<u32, i64>, step: usize, span: usize) -> TimestampRecords {
     (
         records.keys().copied().collect(),
         records.values().copied().collect(),
@@ -146,10 +145,7 @@ struct IndexedTimestampRecords {
     entries: Vec<TimeEntry>,
 }
 
-fn indexed_timestamp_records(
-    records: &std::collections::BTreeMap<u32, i64>,
-    step: usize,
-) -> IndexedTimestampRecords {
+fn indexed_timestamp_records(records: &BTreeMap<u32, i64>, step: usize) -> IndexedTimestampRecords {
     let (offsets, times, rows) = timestamp_records(records, step, 0);
     let entries = prefix_maxima((&offsets, &times, &rows));
     IndexedTimestampRecords {

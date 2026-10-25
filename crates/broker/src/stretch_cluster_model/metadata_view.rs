@@ -20,7 +20,7 @@ impl StretchModel {
     /// The `PartitionRecord` that the metadata image holds in `state`.
     pub fn record(&self, state: &StretchState) -> PartitionRecord {
         PartitionRecord {
-            topic: TOPIC.to_string(),
+            topic: TOPIC.to_owned(),
             partition: 0,
             leader: state.leader,
             replicas: self.replicas.clone(),
@@ -39,7 +39,7 @@ impl StretchModel {
     pub fn image(&self, state: &StretchState) -> MetadataImage {
         let mut image = MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: TOPIC.to_string(),
+            name: TOPIC.to_owned(),
             topic_id: Uuid::nil(),
             partitions: 1,
             replication_factor: i16::try_from(self.replicas.len())

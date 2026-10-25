@@ -63,19 +63,20 @@
 //! the JVM voter's published port. These tests deliberately do NOT use
 //! `--network host`. It silently fails to share the host loopback on hosted
 //! ubuntu runners. See the `jvm_acceptance.rs` module docs.
+#![cfg(test)]
 
 mod support;
 
 mod test_support {
-    pub(crate) mod truncation {
-        pub(crate) mod prelude {
-            pub(crate) use {
+    pub mod truncation {
+        pub mod prelude {
+            pub use {
                 krabka_metadata::{LeaderEpoch, MetadataRecord},
                 std::time::{Duration, Instant},
             };
         }
 
-        pub(crate) use crate::{
+        pub use crate::{
             docker::{produce_lines_via_jvm, set_container_paused},
             dump_log::{dump_log_in_container, max_offset_in_dump},
             mixed_cluster::{DivergenceDirection, prepare_divergence, single_leader_record},

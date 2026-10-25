@@ -41,12 +41,13 @@ use {
         error::BrokerError,
     },
     krabka_protocol::owned::{
+        common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions,
         consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
         consumer_group_heartbeat_response::{
             Assignment as RespAssignment, ConsumerGroupHeartbeatResponse,
         },
     },
-    std::time::Instant,
+    std::{mem, time::Instant},
     tokio::sync::oneshot,
 };
 
@@ -107,10 +108,7 @@ pub(super) async fn handle_actor_heartbeat(
             ..PendingRecords::default()
         });
         let fresh = GroupState::new(group.group_id.clone());
-        classic_before = Some(std::mem::replace(
-            group.kind_mut(),
-            GroupKind::Consumer(fresh),
-        ));
+        classic_before = Some(mem::replace(group.kind_mut(), GroupKind::Consumer(fresh)));
     } else if let Some(classic) = group.as_classic() {
         // `convertToConsumerGroup`, which refuses a member that
         // `ConsumerGroup.fromClassicGroup` cannot carry over.
@@ -127,7 +125,7 @@ pub(super) async fn handle_actor_heartbeat(
                 }
             };
         prefix = Some(migration::upgrade_pending_records(&new_state));
-        classic_before = Some(std::mem::replace(
+        classic_before = Some(mem::replace(
             group.kind_mut(),
             GroupKind::Consumer(new_state),
         ));
@@ -211,7 +209,7 @@ pub(super) async fn handle_actor_heartbeat(
 
 /// Outcome of the pure heartbeat decision phase: the response to return to the
 /// client and the records the async caller must append to the offsets log.
-pub(crate) struct HeartbeatStep {
+pub struct HeartbeatStep {
     pub response: ConsumerGroupHeartbeatResponse,
     pub pending: PendingRecords,
     /// What the heartbeat's regex resolution found. The caller applies it
@@ -236,7 +234,7 @@ impl HeartbeatStep {
 /// This function holds no `.await` and does no I/O. `handle_heartbeat` calls
 /// it, then flushes `pending` to the log. It is a separate function so that
 /// the reconciliation policy is model-checkable on its own.
-pub(crate) fn step_heartbeat(
+pub fn step_heartbeat(
     state: &mut GroupState,
     config: &NextGenConfig,
     metadata: &dyn MetadataProvider,
@@ -413,10 +411,9 @@ pub(super) fn replace_static_member(
         .get(member_id)
         .cloned()
         .unwrap_or_default();
-    pending.target_per_member.push((
-        member_id.to_string(),
-        Some(target_assignment_value(&target)),
-    ));
+    pending
+        .target_per_member
+        .push((member_id.to_owned(), Some(target_assignment_value(&target))));
     pending
 }
 
@@ -634,10 +631,9 @@ fn build_assignment_resp(
     config: &NextGenConfig,
     include_assignment: bool,
 ) -> ConsumerGroupHeartbeatResponse {
-    let m = state
-        .members
-        .get(member_id)
-        .expect("member exists at build_assignment_resp");
+    let Some(m) = state.members.get(member_id) else {
+        return error_resp(codes::UNKNOWN_MEMBER_ID);
+    };
     // KIP-848: the `assignment` field carries the member's *current* assignment —
     // the partitions it may own right now — NOT the raw target. `reconcile_member`
     // computes this each heartbeat, withholding any target partition still held by
@@ -648,13 +644,11 @@ fn build_assignment_resp(
         topic_partitions: m
             .assigned_partitions
             .iter()
-            .map(
-                |(tid, parts)| krabka_protocol::owned::common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions {
-                    topic_id: *tid,
-                    partitions: parts.clone(),
-                    ..Default::default()
-                },
-            )
+            .map(|(tid, parts)| TopicPartitions {
+                topic_id: *tid,
+                partitions: parts.clone(),
+                ..Default::default()
+            })
             .collect(),
         ..Default::default()
     });

@@ -46,9 +46,11 @@ use {
     krabka_metadata::NodeId,
     krabka_protocol::owned::elect_leaders_request::{ElectLeadersRequest, TopicPartitions},
     std::{
+        ops::Range,
         path::Path,
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// Records produced before the restart. Each is its own batch, so the 1 KiB
@@ -158,7 +160,7 @@ impl Archived {
 
     /// Produce `indexes` and wait until every running replica's high
     /// watermark covers them, so each has fetched from the leader since.
-    async fn produce_and_replicate(&self, indexes: std::ops::Range<usize>) -> i64 {
+    async fn produce_and_replicate(&self, indexes: Range<usize>) -> i64 {
         produce(&self.bootstrap, indexes.clone(), self.compression).await;
         let end = i64::try_from(indexes.end).expect("small count");
         for broker in self.brokers.iter().flatten() {
@@ -292,28 +294,31 @@ async fn a_compressed_archive_reads_back_from_earliest() {
 
 /// Produce one acknowledged record per index, each its own batch, compressed
 /// with `compression`.
-async fn produce(bootstrap: &str, indexes: std::ops::Range<usize>, compression: Compression) {
-    let producer = Producer::builder()
-        .bootstrap(bootstrap)
-        .compression(compression)
-        .build()
-        .await
-        .expect("producer");
-    for index in indexes {
-        let mut value = format!("record-{index}-").into_bytes();
-        value.resize(PAYLOAD, b'x');
-        producer
-            .send(
-                producer_record()
-                    .topic(TOPIC.to_owned())
-                    .partition(0)
-                    .value(Some(bytes::Bytes::from(value)))
-                    .call(),
-            )
+async fn produce(bootstrap: &str, indexes: Range<usize>, compression: Compression) {
+    {
+        let producer = Producer::builder()
+            .bootstrap(bootstrap)
+            .compression(compression)
+            .build()
             .await
-            .expect("acknowledged");
+            .expect("producer");
+        for index in indexes {
+            let mut value = format!("record-{index}-").into_bytes();
+            value.resize(PAYLOAD, b'x');
+            producer
+                .send(
+                    producer_record()
+                        .topic(TOPIC.to_owned())
+                        .partition(0)
+                        .value(Some(bytes::Bytes::from(value)))
+                        .call(),
+                )
+                .await
+                .expect("acknowledged");
+        }
+        producer.close().await
     }
-    producer.close().await.expect("producer close");
+    .expect("producer close");
 }
 
 /// Wait until `broker` sees `leader` lead the partition.
@@ -348,7 +353,7 @@ async fn await_local_eviction(log_dir: &Path) {
             partition_dir.display(),
             local_segment_bases(&partition_dir)
         );
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     }
 }
 
@@ -367,7 +372,7 @@ async fn await_log_start(broker: &BrokerHandle, start: i64) {
             Instant::now() <= deadline,
             "the replica's log start stayed at {current:?}, not {start}"
         );
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     }
 }
 
@@ -420,7 +425,7 @@ async fn read_from_earliest(bootstrap: &str, isolation: IsolationLevel, end: i64
             Ok(records) => offsets.extend(records.iter().map(|record| record.offset)),
             Err(error) => {
                 eprintln!("read-back at {isolation:?}: {error}");
-                tokio::time::sleep(Duration::from_millis(200)).await;
+                time::sleep(Duration::from_millis(200)).await;
             }
         }
     }

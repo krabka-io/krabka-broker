@@ -5,13 +5,20 @@ use {
     super::{ElrPublisher, leaderless_partition_elr, next_partition_elr},
     crate::{
         config_keys::{MIN_INSYNC_REPLICAS, RETENTION_MS},
-        elr::state::{PartitionElr, TopicElr},
+        elr::{
+            state,
+            state::{PartitionElr, TopicElr},
+        },
         test_support::finalize_elr_version,
     },
     assert2::assert,
     krabka_metadata::{
         LeaderEpoch, MetadataImage, MetadataRecord, NodeId, PartitionElrRecord, PartitionRecord,
         PartitionUpdateRecord, TopicConfigRecord, TopicRecord,
+    },
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        iter,
     },
 };
 
@@ -56,13 +63,7 @@ fn check_transition(
     expected: &PartitionElr,
     label: &str,
 ) {
-    let got = next_partition_elr(
-        image,
-        Some(before),
-        after,
-        published,
-        &std::collections::BTreeSet::new(),
-    );
+    let got = next_partition_elr(image, Some(before), after, published, &BTreeSet::new());
     assert!(&got == expected, "{label}");
 }
 
@@ -92,11 +93,10 @@ fn image(
         replication_factor: i16::try_from(current.replicas.len()).expect("rf fits i16"),
     }));
     image.apply(&MetadataRecord::V1Partition(current.clone()));
-    let overrides: std::collections::BTreeMap<String, String> =
-        [min_isr.map(|value| (MIN_INSYNC_REPLICAS.to_string(), value.to_string()))]
-            .into_iter()
-            .flatten()
-            .collect();
+    let overrides: BTreeMap<String, String> = min_isr
+        .map(|value| (MIN_INSYNC_REPLICAS.to_owned(), value.to_owned()))
+        .into_iter()
+        .collect();
     if !overrides.is_empty() {
         image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: TOPIC.into(),
@@ -238,13 +238,7 @@ fn a_new_partition_starts_with_no_elr() {
     let created = three_replica_partition(&[1]);
     let image = image(Some("3"), None, &created);
 
-    let got = next_partition_elr(
-        &image,
-        None,
-        &created,
-        &elr(&[], &[]),
-        &std::collections::BTreeSet::new(),
-    );
+    let got = next_partition_elr(&image, None, &created, &elr(&[], &[]), &BTreeSet::new());
 
     assert!(got == elr(&[], &[]));
 }
@@ -593,7 +587,7 @@ fn a_leaderless_partition_publishes_its_elr_and_its_last_leader_once() {
     publisher.leaderless(&before, vec![]);
     publisher.extend(&mut second);
     assert!(second.is_empty());
-    assert!(crate::elr::state::is_leaderless(
+    assert!(state::is_leaderless(
         &image,
         image.partition(TOPIC, 0).expect("the partition")
     ));
@@ -656,8 +650,8 @@ fn a_partition_change_migrates_legacy_elr_without_losing_it() {
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: TOPIC.into(),
         overrides: [
-            (MIN_INSYNC_REPLICAS.to_string(), "3".to_string()),
-            ("krabka.elr".to_string(), "0:2,3:".to_string()),
+            (MIN_INSYNC_REPLICAS.to_owned(), "3".to_owned()),
+            ("krabka.elr".to_owned(), "0:2,3:".to_owned()),
         ]
         .into_iter()
         .collect(),
@@ -739,8 +733,8 @@ fn the_appended_record_builds_on_a_topic_config_the_batch_already_carries() {
     image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: TOPIC.into(),
         overrides: [
-            (MIN_INSYNC_REPLICAS.to_string(), "2".to_string()),
-            (RETENTION_MS.to_string(), "60000".to_string()),
+            (MIN_INSYNC_REPLICAS.to_owned(), "2".to_owned()),
+            (RETENTION_MS.to_owned(), "60000".to_owned()),
         ]
         .into_iter()
         .collect(),
@@ -748,9 +742,7 @@ fn the_appended_record_builds_on_a_topic_config_the_batch_already_carries() {
     let mut changes = vec![
         MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: TOPIC.into(),
-            overrides: [(MIN_INSYNC_REPLICAS.to_string(), "2".to_string())]
-                .into_iter()
-                .collect(),
+            overrides: iter::once((MIN_INSYNC_REPLICAS.to_owned(), "2".to_owned())).collect(),
         }),
         MetadataRecord::V1Partition(three_replica_partition(&[1])),
     ];
@@ -780,7 +772,7 @@ fn a_deleted_topic_publishes_nothing() {
 fn one_record_carries_every_partition_the_batch_moved() {
     let before = three_replica_partition(&[1, 2, 3]);
     let mut image = image(Some("2"), None, &before);
-    let mut sibling = before.clone();
+    let mut sibling = before;
     sibling.partition = 1;
     image.apply(&MetadataRecord::V1Partition(sibling));
 
@@ -833,9 +825,7 @@ fn the_publisher_appends_nothing_below_feature_level_one() {
             plain.apply(&MetadataRecord::V1Partition(before.clone()));
             plain.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: TOPIC.into(),
-                overrides: [(MIN_INSYNC_REPLICAS.to_string(), "2".to_string())]
-                    .into_iter()
-                    .collect(),
+                overrides: iter::once((MIN_INSYNC_REPLICAS.to_owned(), "2".to_owned())).collect(),
             }));
             plain
         };

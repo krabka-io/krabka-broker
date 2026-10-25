@@ -142,10 +142,11 @@ pub struct StreamsGroupState {
 }
 
 /// The group epoch and target assignment epoch of a new streams group, as
-/// Kafka's `StreamsGroup` constructor sets them. The first join bumps the group
-/// epoch past the assignment epoch. A member that joins while the initial
-/// rebalance delay holds the assignment back so reconciles to epoch 1, and does
-/// not stay at the join epoch 0.
+/// Kafka's `StreamsGroup` constructor sets them.
+///
+/// The first join bumps the group epoch past the assignment epoch. A member
+/// that joins while the initial rebalance delay holds the assignment back so
+/// reconciles to epoch 1, and does not stay at the join epoch 0.
 pub const INITIAL_EPOCH: i32 = INITIAL_GROUP_EPOCH;
 
 impl StreamsGroupState {
@@ -225,7 +226,7 @@ impl StreamsGroupState {
     /// `setShutdownRequestMemberId`).
     pub fn request_shutdown(&mut self, member_id: &str) {
         if self.shutdown_request_member_id.is_none() {
-            self.shutdown_request_member_id = Some(member_id.to_string());
+            self.shutdown_request_member_id = Some(member_id.to_owned());
         }
     }
 
@@ -397,7 +398,7 @@ impl StreamsGroupState {
             || next.active_pending_revocation != member.active_pending_revocation
             || next.standby_pending_revocation != member.standby_pending_revocation
             || next.warmup_pending_revocation != member.warmup_pending_revocation;
-        self.members.insert(member_id.to_string(), next);
+        self.members.insert(member_id.to_owned(), next);
         self.refresh_phase();
         changed
     }
@@ -414,7 +415,7 @@ impl StreamsGroupState {
                 let timeout =
                     Duration::from_millis(u64::try_from(member.rebalance_timeout_ms).unwrap_or(0));
                 self.rebalance_deadlines
-                    .insert(member_id.to_string(), RebalanceDeadline {
+                    .insert(member_id.to_owned(), RebalanceDeadline {
                         deadline: now + timeout,
                         member_epoch: member.member_epoch,
                     });
@@ -534,6 +535,7 @@ mod tests {
         super::{test_support::task_map, *},
         crate::coordinator::unified::test_support::assert_group_epoch_exhaustion,
         assert2::{assert, check},
+        std::iter,
     };
 
     fn clean_member_group() -> StreamsGroupState {
@@ -642,7 +644,7 @@ mod tests {
         let later = Instant::now() + Duration::from_millis(50);
         let mut evicted = g.evict_expired(later, Duration::from_millis(1));
         evicted.sort();
-        check!(evicted == vec!["m1".to_string(), "m2".to_string()]);
+        check!(evicted == vec!["m1".to_owned(), "m2".to_owned()]);
         check!(g.members.is_empty());
         check!(g.dirty);
     }
@@ -934,16 +936,16 @@ mod tests {
         {
             let mut group = StreamsGroupState::new("g");
             group.group_epoch = 2;
-            for member in std::iter::once(m1).chain(other) {
+            for member in iter::once(m1).chain(other) {
                 let mut state = StreamsMemberState::joining(member.id, "c", "h");
-                state.process_id = member.process.to_string();
+                state.process_id = member.process.to_owned();
                 state.assignment_state = member.state;
                 state.member_epoch = member.epoch;
                 state.active = tasks_of(member.active);
                 state.standby = tasks_of(member.standby);
                 state.active_pending_revocation = tasks_of(member.active_pending);
                 state.standby_pending_revocation = tasks_of(member.standby_pending);
-                group.members.insert(member.id.to_string(), state);
+                group.members.insert(member.id.to_owned(), state);
             }
             let mut target = StreamsTargetAssignment::default();
             target.active.insert("m1".into(), tasks_of(target_active));
@@ -988,7 +990,7 @@ mod tests {
     fn a_member_past_its_rebalance_timeout_is_fenced() {
         let rows = [
             ("still unrevoked at the deadline", false, vec![
-                "m1".to_string(),
+                "m1".to_owned(),
             ]),
             ("revoked before the deadline", true, vec![]),
         ];

@@ -9,7 +9,7 @@
 //! type, and every rejection an operator can see is written here.
 
 use {
-    base64::Engine as _,
+    base64::{Engine as _, engine::general_purpose},
     krabka_ids::{Offset, ProducerId},
     krabka_metadata::NodeId,
     regex::Regex,
@@ -78,7 +78,7 @@ pub(super) fn parse_node_id(s: &str) -> Result<NodeId, String> { krabka_format::
 /// `Metadata` and `DescribeCluster` report, e.g. `AQIDBAUGBwgJCgsMDQ4PEA`) or
 /// `java.util.UUID`'s hyphenated form.
 pub(super) fn parse_cluster_id(s: &str) -> Result<Uuid, String> {
-    if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s)
+    if let Ok(bytes) = general_purpose::URL_SAFE_NO_PAD.decode(s)
         && let Ok(bytes) = <[u8; 16]>::try_from(bytes)
     {
         return Ok(Uuid::from_bytes(bytes));

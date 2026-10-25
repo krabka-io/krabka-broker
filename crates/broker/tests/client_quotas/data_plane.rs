@@ -46,8 +46,8 @@ pub async fn drive_add_offsets_to_txn(
     corr_id: i32,
 ) -> AddOffsetsToTxnResponse {
     let req = AddOffsetsToTxnRequest {
-        transactional_id: "krabka-quota-test-no-such-txn".to_string(),
-        group_id: "krabka-quota-test-group".to_string(),
+        transactional_id: "krabka-quota-test-no-such-txn".to_owned(),
+        group_id: "krabka-quota-test-group".to_owned(),
         ..Default::default()
     };
 

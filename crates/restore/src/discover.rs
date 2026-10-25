@@ -41,7 +41,7 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::reconcile::{load_snapshot, reconcile_authenticated_snapshot};
+pub use self::reconcile::{load_snapshot, reconcile_authenticated_snapshot};
 use {
     self::reconcile::reconcile_with_snapshot,
     crate::{
@@ -122,10 +122,11 @@ impl PartitionInventory {
     }
 }
 
-/// How many unattributable keys the scan keeps. Past this many the scan
-/// counts and drops, because the sample is diagnostic: an operator who
-/// pointed `--archive-prefix` at the wrong tree learns it from the first
-/// handful of keys and from the total, not from the millionth key.
+/// How many unattributable keys the scan keeps.
+///
+/// Past this many the scan counts and drops, because the sample is diagnostic:
+/// an operator who pointed `--archive-prefix` at the wrong tree learns it from
+/// the first handful of keys and from the total, not from the millionth key.
 pub const UNRECOGNIZED_SAMPLE_LIMIT: usize = 64;
 
 /// The keys the scan could not attribute to a segment.

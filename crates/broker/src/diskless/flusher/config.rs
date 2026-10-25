@@ -12,7 +12,7 @@ use {
 };
 
 #[derive(Debug, Clone, krabka_macros::FieldDefaults)]
-pub(crate) struct FlushConfig {
+pub struct FlushConfig {
     #[default(DEFAULT_DISKLESS_WAL_FLUSH_INTERVAL.to_std())]
     pub(crate) interval: Duration,
     #[default(DEFAULT_DISKLESS_WAL_FLUSH_MAX_SIZE)]

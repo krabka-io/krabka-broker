@@ -33,6 +33,7 @@
 //! produce one. `dat_activation` covers what a pending record does before its
 //! delivery time, `dat_watermark` covers where the watermark sits while it is
 //! pending, and `dat_restart` covers the watermark a reopened log rederives.
+#![cfg(test)]
 
 mod support;
 

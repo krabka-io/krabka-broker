@@ -13,7 +13,7 @@ use {
         metrics::BrokerMetrics,
         network::{
             codec::{KafkaCodec, response_frame_length},
-            fetch_writer::{SendfileSink, WriteOp, resolve_records_inline, write_fetch_plan},
+            fetch_writer::{self, SendfileSink, WriteOp, resolve_records_inline, write_fetch_plan},
         },
     },
     bytes::{BufMut, Bytes, BytesMut},
@@ -176,7 +176,7 @@ async fn handle_fetch_frame_from_parsed(
                     version,
                     parsed.correlation_id,
                     parsed.body_flexible,
-                    crate::network::fetch_writer::resolve_records_sendfile,
+                    fetch_writer::resolve_records_sendfile,
                 )
                 .map(|operations| FetchPlan {
                     operations,

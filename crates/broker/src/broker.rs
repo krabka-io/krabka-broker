@@ -6,6 +6,8 @@
 //! The startup phases, the handle's methods, and the accept path live in the
 //! child modules declared below.
 
+#[cfg(any(test, feature = "test-helpers"))]
+use std::{sync::atomic::AtomicU64, time::Duration};
 use {
     crate::{
         auto_topic_creation::AutoTopicCreation,
@@ -43,10 +45,15 @@ use {
     krabka_raft::ConnectionLimiter,
     krabka_security::ListenerProtocol,
     std::{
+        collections::HashMap,
         net::SocketAddr,
         sync::{Arc, atomic::AtomicBool},
     },
-    tokio::task::JoinHandle,
+    tokio::{
+        sync::{Mutex, Semaphore, watch},
+        task::JoinHandle,
+        time::Interval,
+    },
     tokio_util::sync::CancellationToken,
 };
 
@@ -57,7 +64,7 @@ mod coordinators;
 mod diskless_index;
 mod dynamic_listeners;
 mod endpoints;
-pub(crate) use endpoints::{leader_listener_endpoint, registered_listener_endpoint};
+pub use endpoints::{leader_listener_endpoint, registered_listener_endpoint};
 mod finish;
 mod gauges;
 mod handle;
@@ -76,10 +83,7 @@ mod startup;
 mod storage;
 mod transport;
 
-pub(crate) async fn tick_or_shutdown(
-    tick: &mut tokio::time::Interval,
-    shutdown: &CancellationToken,
-) -> bool {
+pub async fn tick_or_shutdown(tick: &mut Interval, shutdown: &CancellationToken) -> bool {
     tokio::select! {
         _ = tick.tick() => true,
         () = shutdown.cancelled() => false,
@@ -89,7 +93,7 @@ pub(crate) async fn tick_or_shutdown(
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::partition_spawn::{
+pub use self::partition_spawn::{
     PartitionSpawnConfig, spawn_partition, spawn_partition_with_replication_target,
     try_spawn_partition_with_replication_target, try_spawn_partition_with_sequencer,
 };
@@ -105,9 +109,9 @@ fn inter_broker_listener_protocol(config: &BrokerConfig) -> ListenerProtocol {
 /// Timeout shared by the test-helper `wait_*` awaiters. If a condition
 /// does not hold within this window, the test fails.
 #[cfg(any(test, feature = "test-helpers"))]
-const TEST_AWAITER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const TEST_AWAITER_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(any(test, feature = "test-helpers"))]
-const DISKLESS_FLUSHER_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+const DISKLESS_FLUSHER_READY_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The running broker. Library callers get a [`BrokerHandle`] from
 /// [`Broker::start`]; this struct is the shared internal state.
@@ -146,18 +150,18 @@ pub struct Broker {
     pub(crate) share_coordinator: Arc<ShareCoordinator>,
     pub(crate) barrier_coordinator: Arc<BarrierCoordinator>,
     pub(crate) share_partition_leaders: Arc<SharePartitionLeaderManager>,
-    pub(crate) supervisor_shutdown: tokio_util::sync::CancellationToken,
-    pub(crate) supervisor_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
+    pub(crate) supervisor_shutdown: CancellationToken,
+    pub(crate) supervisor_handle: Mutex<Option<JoinHandle<()>>>,
     /// Handle for the periodic disk-usage scanner spawned when
     /// `BrokerConfig::partition_disk_scan_interval > 0`. Retained on
     /// the struct so [`BrokerHandle::shutdown`] can await it after
     /// cancelling `supervisor_shutdown`. `None` when the scanner is
     /// disabled (interval = 0, typical in tests).
-    pub(crate) disk_scanner_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
+    pub(crate) disk_scanner_handle: Mutex<Option<JoinHandle<()>>>,
     /// The remote-log-manager sweep, when the broker has a remote tier. It
     /// stops on `supervisor_shutdown`, and [`BrokerHandle::shutdown`] joins it
     /// so no copy this broker started is published after it has stopped.
-    pub(crate) remote_log_manager_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
+    pub(crate) remote_log_manager_handle: Mutex<Option<JoinHandle<()>>>,
     pub(crate) liveness: Arc<ControllerLivenessState>,
     /// `Some` when `BrokerConfig::tls_config` is set. Per-listener
     /// accept loops snapshot the current `Arc<ServerConfig>` with
@@ -205,7 +209,7 @@ pub struct Broker {
     /// `BrokerConfig::max_incremental_fetch_session_cache_slots`.
     pub fetch_session_cache: Arc<FetchSessionCache>,
     /// Semaphore limiting queued/in-flight requests per `queued.max.requests` (#412).
-    pub(crate) queued_requests_sem: Arc<tokio::sync::Semaphore>,
+    pub(crate) queued_requests_sem: Arc<Semaphore>,
     /// Byte budget across every connection's in-flight requests, per
     /// `queued.max.request.bytes` (#412). `None` when the knob is off, which
     /// is Kafka's default.
@@ -234,12 +238,12 @@ pub struct Broker {
     /// [`BrokerHandle::controlled_shutdown`]; the heartbeat client reads
     /// this every tick and stamps `want_shut_down=true` onto outbound
     /// `BrokerHeartbeat` requests.
-    pub(crate) want_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
+    pub(crate) want_shutdown: Arc<watch::Sender<bool>>,
     /// Controlled shutdown. Set to `true` by the heartbeat
     /// client when the controller responds `should_shut_down=true`;
     /// [`BrokerHandle::controlled_shutdown`] awaits this before it invokes
     /// the regular shutdown path.
-    pub(crate) should_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
+    pub(crate) should_shutdown: Arc<watch::Sender<bool>>,
     /// KIP-405: shared remote-storage + remote-log-metadata
     /// reader. `Some` when `BrokerConfig::remote_log_storage_dir` is set;
     /// the remote-log-manager copy task and the Fetch/ListOffsets
@@ -276,14 +280,14 @@ pub struct Broker {
     /// in-band `diverging_epoch` and `OFFSET_OUT_OF_RANGE` fetch paths also
     /// detect truncation, but they issue no OFLE.
     #[cfg(any(test, feature = "test-helpers"))]
-    pub(crate) offset_for_leader_epoch_requests: Arc<std::sync::atomic::AtomicU64>,
+    pub(crate) offset_for_leader_epoch_requests: Arc<AtomicU64>,
     /// `FedRAMP` audit pipeline work stream: cloneable handle to the audit pipeline.
     /// Handlers and lifecycle code call `emit` to record events; the
     /// `AuditWriter` background task drains them into the
     /// `KafkaTopicAuditSink`. Disabled (`AuditLog::disabled()`) when
     /// `BrokerConfig::audit_enabled` is `false`.
-    pub(crate) audit_log: std::sync::Arc<krabka_audit::AuditLog>,
-    pub(crate) audit_writer_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
+    pub(crate) audit_log: Arc<krabka_audit::AuditLog>,
+    pub(crate) audit_writer_handle: Mutex<Option<JoinHandle<()>>>,
     handlers: DispatchRegistry,
 }
 
@@ -296,7 +300,7 @@ struct DisklessRuntime {
 impl DisklessRuntime {
     fn new(
         node_id: krabka_raft::NodeId,
-        principal_node_ids: std::collections::HashMap<String, krabka_raft::NodeId>,
+        principal_node_ids: HashMap<String, krabka_raft::NodeId>,
         hot_tail_max_bytes: usize,
         metrics: BrokerMetrics,
     ) -> Self {
@@ -334,21 +338,23 @@ impl Broker {
 
     pub(crate) fn audit_product() -> krabka_audit::ProductInfo {
         krabka_audit::ProductInfo {
-            vendor_name: "Krabka".to_string(),
-            name: "krabka-broker".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            vendor_name: "Krabka".to_owned(),
+            name: "krabka-broker".to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
         }
     }
 
     /// Test-only: clone the controller handle so the `auto_join` unit test can
     /// build `AutoJoinParams` without access to private fields.
     #[cfg(test)]
-    pub(crate) fn controller_for_test(&self) -> Arc<dyn MetadataSource> { self.controller.clone() }
+    pub(crate) fn controller_for_test(&self) -> Arc<dyn MetadataSource> {
+        Arc::clone(&self.controller)
+    }
 
     /// Test-only: clone the shared inter-broker client (same reason).
     #[cfg(test)]
     pub(crate) fn inter_broker_client_for_test(&self) -> Arc<InterBrokerClient> {
-        self.inter_broker_client.clone()
+        Arc::clone(&self.inter_broker_client)
     }
 }
 

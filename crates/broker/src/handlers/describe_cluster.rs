@@ -62,7 +62,7 @@ const ENDPOINT_TYPE_CONTROLLER: i8 = 2;
 #[cfg_attr(test, mutants::skip)]
 fn wire_broker_id(node_id: u64) -> i32 { i32::try_from(node_id).unwrap_or(-1) }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DescribeClusterRequest,
     version: ApiVersion,
@@ -209,7 +209,13 @@ mod tests {
         test_context ["admin-client"];
     }
 
-    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+    use {
+        crate::{
+            cluster_id::encode,
+            test_support::{allow_acl, start_broker_with_authorizer_no_audit as start_broker},
+        },
+        std::collections::HashSet,
+    };
 
     fn request(include_ops: bool) -> DescribeClusterRequest {
         DescribeClusterRequest {
@@ -235,7 +241,7 @@ mod tests {
                         port: 29092,
                         protocol: ListenerProtocol::Plaintext,
                     }],
-                    ..crate::test_support::broker_registration(krabka_raft::NodeId(42))
+                    ..broker_registration(krabka_raft::NodeId(42))
                 },
             )])
             .await
@@ -408,7 +414,7 @@ mod tests {
         let authorizer = Arc::new(AllowAllAuthorizer);
         krabka_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker, ctx);
-            boot [start_broker(Arc::clone(&authorizer) as _)];
+            boot [start_broker(Arc::<AllowAllAuthorizer>::clone(&authorizer))];
             user ["admin"];
         };
 
@@ -435,7 +441,7 @@ mod tests {
     /// does -- it never falls through to computing a partial mask.
     #[tokio::test]
     async fn cluster_authorized_operations_reads_zero_without_describe_even_with_other_acls() {
-        let authorizer = Arc::new(SimpleAclAuthorizer::new(std::collections::HashSet::new()));
+        let authorizer = Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
         let HandlerStartedBroker {
             broker: broker_handle,
             dir: _dir,
@@ -444,7 +450,7 @@ mod tests {
             .broker_arc_for_test()
             .controller
             .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-                crate::test_support::allow_acl()
+                allow_acl()
                     .resource_type(ResourceType::Cluster)
                     .resource_name(CLUSTER_RESOURCE_NAME)
                     .operation(AclOperation::AlterConfigs)
@@ -631,7 +637,7 @@ mod tests {
                 codes::NONE,
                 None,
                 1,
-                crate::cluster_id::encode(broker.controller.current_image().cluster_id()),
+                encode(broker.controller.current_image().cluster_id()),
                 i32::MIN,
                 0
             )

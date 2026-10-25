@@ -18,8 +18,18 @@ use {
         server,
         snapshot::SnapshotReader,
     },
-    std::{collections::BTreeMap, net::SocketAddr, sync::Arc},
-    tokio::sync::{Mutex, watch},
+    krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax,
+    std::{
+        collections::BTreeMap,
+        fs, io,
+        net::SocketAddr,
+        path::Path,
+        sync::{self, Arc},
+    },
+    tokio::{
+        net::TcpListener,
+        sync::{Mutex, watch},
+    },
     tokio_util::sync::CancellationToken,
     tracing::info,
     uuid::Uuid,
@@ -58,13 +68,11 @@ impl Controller {
     )]
     pub async fn start_with_listener(
         config: ControllerConfig,
-        prebound: Option<tokio::net::TcpListener>,
+        prebound: Option<TcpListener>,
     ) -> Result<ControllerHandle, RaftError> {
         let metadata_snapshot_fetch_max =
-            krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax::new(
-                config.metadata_snapshot_fetch_max,
-            )
-            .map_err(RaftError::Startup)?;
+            MetadataSnapshotFetchMax::new(config.metadata_snapshot_fetch_max)
+                .map_err(RaftError::Startup)?;
 
         // First-boot orchestration validates mode against on-disk log state.
         // The metadata log, its checkpoints and the quorum-state file all live
@@ -224,7 +232,7 @@ impl Controller {
             client_frame_max: config.client_frame_max,
             self_node_id: config.node_id,
             voters,
-            staged_learners: std::sync::Mutex::new(BTreeMap::new()),
+            staged_learners: sync::Mutex::new(BTreeMap::new()),
             dialer,
             controller_bound_addr: actual_addr,
         })
@@ -297,7 +305,7 @@ async fn stop_on_fatal_fault(
         if let Some(refusal) = refusal {
             tracing::error!(%refusal, "controller stopping: it replayed an unsupported feature level");
             fatal.send_replace(Some(refusal));
-        } else if let Some(fault) = faults.borrow().clone() {
+        } else if let Some(fault) = current(&faults) {
             // The engine publishes the fault and then stops, so the fault can
             // arrive together with the end of the image channel.
             tracing::error!(%fault, "controller stopping over a fault of its engine");
@@ -313,10 +321,13 @@ async fn stop_on_fatal_fault(
     }
 }
 
+/// The value `receiver` holds now, with its borrow already released.
+fn current<T: Clone>(receiver: &watch::Receiver<T>) -> T { receiver.borrow().clone() }
+
 /// Bind the controller listener on `addr`.
 #[cfg(not(target_os = "wasi"))]
-async fn bind_controller_listener(addr: SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
-    tokio::net::TcpListener::bind(addr).await
+async fn bind_controller_listener(addr: SocketAddr) -> io::Result<TcpListener> {
+    TcpListener::bind(addr).await
 }
 
 /// WASI preview 1 has no `bind`: the embedder adopts a preopened socket and
@@ -339,10 +350,7 @@ fn bind_controller_listener(
 /// WASI preview 1 has no `getsockname`, so there the configured address
 /// stands in. [`Controller::start_with_listener`] requires the two to be
 /// equal.
-fn listener_address(
-    listener: &tokio::net::TcpListener,
-    configured: SocketAddr,
-) -> std::io::Result<SocketAddr> {
+fn listener_address(listener: &TcpListener, configured: SocketAddr) -> io::Result<SocketAddr> {
     if cfg!(target_os = "wasi") {
         Ok(configured)
     } else {
@@ -363,12 +371,12 @@ fn listener_address(
 /// with that segment but no `quorum-state` yet, reads as un-formatted and
 /// re-Bootstraps rather than dying with "Rejoin requires non-empty raft log".
 #[must_use]
-pub fn metadata_log_nonempty(dir: &std::path::Path) -> bool {
+pub fn metadata_log_nonempty(dir: &Path) -> bool {
     let qs = dir.join("quorum-state");
     if qs.exists() {
         return true;
     }
-    std::fs::read_dir(dir).is_ok_and(|entries| {
+    fs::read_dir(dir).is_ok_and(|entries| {
         entries.flatten().any(|e| {
             e.path().extension().is_some_and(|ext| ext == "log")
                 && e.metadata().is_ok_and(|metadata| metadata.len() > 0)
@@ -385,10 +393,12 @@ mod tests {
                 bootstrap_controller, joining_controller, submit_change_with_timeout,
                 wait_for_leader,
             },
-            metadata_partition_dir,
+            metadata_partition_dir, test_support,
             types::NodeId,
         },
+        std::{fs, io::ErrorKind, iter, time::Duration},
         tempfile::TempDir,
+        tokio::{net::TcpListener, time},
     };
 
     #[yare::parameterized(
@@ -404,7 +414,7 @@ mod tests {
     ) {
         let dir = TempDir::new().unwrap();
         if let Some((name, contents)) = file {
-            std::fs::write(dir.path().join(name), contents).unwrap();
+            fs::write(dir.path().join(name), contents).unwrap();
         }
         assert2::assert!(metadata_log_nonempty(dir.path()) == expected);
     }
@@ -425,25 +435,22 @@ mod tests {
         // The committed offset is written to this file on every advance. A
         // directory in its place makes the next write fail with an I/O error.
         let high_watermark = metadata_partition_dir(dir.path()).join("high-watermark");
-        let _ = std::fs::remove_file(&high_watermark);
-        std::fs::create_dir(&high_watermark).unwrap();
+        let _ = fs::remove_file(&high_watermark);
+        fs::create_dir(&high_watermark).unwrap();
 
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+        let _ = time::timeout(
+            Duration::from_secs(5),
             ctrl.submit_change(vec![krabka_metadata::MetadataRecord::V1Topic(
-                crate::test_support::single_partition_topic("after-the-failure", Uuid::new_v4()),
+                test_support::single_partition_topic("after-the-failure", Uuid::new_v4()),
             )]),
         )
         .await;
         let mut fatal = ctrl.watch_fatal();
-        let fault = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            fatal.wait_for(Option::is_some),
-        )
-        .await
-        .expect("the controller publishes a fatal fault")
-        .expect("the fault channel stays open until the fault")
-        .clone();
+        let fault = time::timeout(Duration::from_secs(5), fatal.wait_for(Option::is_some))
+            .await
+            .expect("the controller publishes a fatal fault")
+            .expect("the fault channel stays open until the fault")
+            .clone();
 
         assert2::check!(fault.is_some_and(|fault| fault.starts_with(&format!(
             "the metadata log directory {} has failed: ",
@@ -469,7 +476,7 @@ mod tests {
                 ),
                 // No record creates the topic, so the leader refuses this one.
                 krabka_metadata::MetadataRecord::V1Partition(
-                    crate::test_support::single_replica_partition(
+                    test_support::single_replica_partition(
                         "missing",
                         krabka_ids::PartitionIndex(0),
                         NodeId(1),
@@ -481,14 +488,11 @@ mod tests {
         .await
         .expect("start");
         let mut fatal = ctrl.watch_fatal();
-        let fault = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            fatal.wait_for(Option::is_some),
-        )
-        .await
-        .expect("the controller publishes a fatal fault")
-        .expect("the fault channel stays open until the fault")
-        .clone();
+        let fault = time::timeout(Duration::from_secs(10), fatal.wait_for(Option::is_some))
+            .await
+            .expect("the controller publishes a fatal fault")
+            .expect("the fault channel stays open until the fault")
+            .clone();
 
         assert2::check!(
             fault.as_deref()
@@ -507,7 +511,7 @@ mod tests {
         submit_change_with_timeout(
             &ctrl,
             vec![krabka_metadata::MetadataRecord::V1Topic(
-                crate::test_support::single_partition_topic("seed", Uuid::new_v4()),
+                test_support::single_partition_topic("seed", Uuid::new_v4()),
             )],
             "bootstrap seed",
         )
@@ -533,9 +537,7 @@ mod tests {
     /// not a storage error: the log directory is fine.
     #[tokio::test]
     async fn a_taken_controller_port_fails_with_a_listener_bind_error() {
-        let taken = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
+        let taken = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = taken.local_addr().expect("local address");
         let dir = TempDir::new().unwrap();
         let cfg = ControllerConfig {
@@ -550,7 +552,7 @@ mod tests {
         let message = error.to_string();
         assert2::assert!(let RaftError::ControllerListenerBind { addr: failed, source } = error);
         assert2::check!(failed == addr);
-        assert2::check!(source.kind() == std::io::ErrorKind::AddrInUse);
+        assert2::check!(source.kind() == ErrorKind::AddrInUse);
         assert2::check!(
             message == format!("unable to bind the controller listener to {addr}: {source}")
         );
@@ -585,7 +587,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut cfg = ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf());
         cfg.bootstrap_mode = BootstrapMode::Bootstrap;
-        cfg.initial_voters = krabka_metadata::VoterSet::from_voters(std::iter::empty());
+        cfg.initial_voters = krabka_metadata::VoterSet::from_voters(iter::empty());
         cfg.auto_join = true;
         let ctrl = Controller::start(cfg)
             .await
@@ -627,7 +629,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = ControllerConfig {
             bootstrap_mode: BootstrapMode::Bootstrap,
-            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
+            initial_voters: krabka_metadata::VoterSet::from_voters(iter::empty()),
             auto_join: false,
             bootstrap_servers: vec!["127.0.0.1:1".to_owned()],
             ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
@@ -647,7 +649,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = ControllerConfig {
             bootstrap_mode: mode,
-            initial_voters: krabka_metadata::VoterSet::from_voters(std::iter::empty()),
+            initial_voters: krabka_metadata::VoterSet::from_voters(iter::empty()),
             auto_join,
             ..ControllerConfig::for_tests(NodeId(1), dir.path().to_path_buf())
         };

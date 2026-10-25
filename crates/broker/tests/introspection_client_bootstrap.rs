@@ -14,10 +14,12 @@
 //! install the provider anywhere else. If anyone removes the eager install
 //! inside the client constructor, this test panics on startup, exactly as the
 //! broker binary did in the kind-oauth-introspection e2e job.
+#![cfg(test)]
 
 use {
     assert2::assert,
     krabka_broker::{config::BrokerConfig, file_config::FileConfig},
+    std::fs,
 };
 
 /// A self-contained CA cert. It does not depend on the security crate's
@@ -41,7 +43,7 @@ Shzd0RKUbQ==\n\
 fn introspection_validator_builds_without_an_externally_installed_crypto_provider() {
     let dir = tempfile::tempdir().expect("tempdir");
     let secret_path = dir.path().join("client-secret");
-    std::fs::write(&secret_path, "the-secret").expect("write secret");
+    fs::write(&secret_path, "the-secret").expect("write secret");
     // The kind-oauth-introspection Kafka CR sets `tlsTrustedCertificates`
     // on the listener, which the operator renders to an `idp_tls_trust`
     // PEM path in the broker TOML. That path drives
@@ -51,7 +53,7 @@ fn introspection_validator_builds_without_an_externally_installed_crypto_provide
     // needs to parse — the resulting rustls config never sees the
     // network in this test.
     let ca_path = dir.path().join("idp-ca.pem");
-    std::fs::write(&ca_path, DEV_CERT_PEM).expect("write idp-ca");
+    fs::write(&ca_path, DEV_CERT_PEM).expect("write idp-ca");
 
     let toml = format!(
         r#"

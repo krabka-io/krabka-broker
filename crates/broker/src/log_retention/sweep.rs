@@ -59,7 +59,7 @@ fn freeze_stops_retention(image: Option<&MetadataImage>, topic: &str) -> bool {
     mutation_is_frozen(image, topic, FreezeMutationKind::Retention)
 }
 
-pub(crate) async fn tick_all(
+pub async fn tick_all(
     partitions: &PartitionRegistry,
     image: Option<&MetadataImage>,
     metrics: &BrokerMetrics,

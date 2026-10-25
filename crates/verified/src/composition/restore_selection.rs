@@ -95,7 +95,7 @@ pub(super) fn restore_selection_respects_batch_extent(
             == restore_source_selected(frame, records@[j], offset_bound, timestamp_bound))]
     #[variant(records@.len() - i@)]
     while i < records.len() {
-        let (record, exclusions) = records[i];
+        let &(record, exclusions) = records.get(i)?;
         let (offset, timestamp) = restore_record_coordinates(frame, record)?;
         if restore_record_selected(offset, offset_bound, timestamp, timestamp_bound, exclusions) {
             selected.push(i);

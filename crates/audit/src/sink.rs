@@ -7,7 +7,11 @@ use {
         ocsf::{ProductInfo, to_ocsf},
     },
     async_trait::async_trait,
-    std::sync::Mutex,
+    std::{
+        fmt,
+        sync::{Mutex, PoisonError},
+    },
+    tracing::field::Empty,
 };
 
 /// Record-header key for the per-broker chain sequence number in decimal ASCII.
@@ -35,7 +39,7 @@ impl AuditRecord {
             value: format!(r#"{{"records_lost":{count},"loss_generation":{generation}}}"#)
                 .into_bytes(),
             headers: vec![(
-                "event_class".to_string(),
+                "event_class".to_owned(),
                 AuditEventClass::RecordsLost.as_header().as_bytes().to_vec(),
             )],
         }
@@ -47,9 +51,9 @@ impl AuditRecord {
     /// hex. The writer calls this method, and the writer owns the chain.
     pub fn push_chain_headers(&mut self, seq: u64, prev_head: &[u8; 32]) {
         self.headers
-            .push((HEADER_SEQ.to_string(), seq.to_string().into_bytes()));
+            .push((HEADER_SEQ.to_owned(), seq.to_string().into_bytes()));
         self.headers
-            .push((HEADER_PREV_HASH.to_string(), to_hex(prev_head).into_bytes()));
+            .push((HEADER_PREV_HASH.to_owned(), to_hex(prev_head).into_bytes()));
     }
 
     /// Serialize an event to OCSF JSON and attach the SIEM-filterable headers.
@@ -57,21 +61,21 @@ impl AuditRecord {
     #[tracing::instrument(
         level = "debug",
         skip_all,
-        fields(class = ?event.class(), bytes = tracing::field::Empty)
+        fields(class = ?event.class(), bytes = Empty)
     )]
     pub fn from_event(event: &AuditEvent, product: &ProductInfo) -> Self {
         let class = event.class();
         let value = serde_json::to_vec(&to_ocsf(event, product)).unwrap_or_else(|_| b"{}".to_vec());
         tracing::Span::current().record("bytes", value.len());
         let mut headers = vec![(
-            "event_class".to_string(),
+            "event_class".to_owned(),
             class.as_header().as_bytes().to_vec(),
         )];
         if let Some(PrincipalStatus { principal, status }) = principal_and_status(event) {
-            headers.push(("principal".to_string(), principal.into_bytes()));
-            headers.push(("status".to_string(), status.as_bytes().to_vec()));
+            headers.push(("principal".to_owned(), principal.into_bytes()));
+            headers.push(("status".to_owned(), status.as_bytes().to_vec()));
         }
-        AuditRecord {
+        Self {
             class,
             value,
             headers,
@@ -136,17 +140,19 @@ pub enum AuditError {
 }
 
 fn describe_spool_version(found: Option<i16>) -> String {
-    match found {
-        None => "has no version header; it predates krabka 1.0, so the audit spool \
-                 directory must be emptied (the node reformatted) before this broker starts"
-            .to_owned(),
-        Some(version) => format!("has version {version}, which this build does not read"),
-    }
+    found.map_or_else(
+        || {
+            "has no version header; it predates krabka 1.0, so the audit spool directory must \
+             be emptied (the node reformatted) before this broker starts"
+                .to_owned()
+        },
+        |version| format!("has version {version}, which this build does not read"),
+    )
 }
 
 /// Destination for serialized audit records.
 #[async_trait]
-pub trait AuditSink: Send + Sync + std::fmt::Debug {
+pub trait AuditSink: Send + Sync + fmt::Debug {
     /// Write one record. When `durable` is true, return only after the record
     /// has reached stable storage.
     async fn write(&self, record: AuditRecord, durable: bool) -> Result<(), AuditError>;
@@ -160,12 +166,10 @@ pub struct MemorySink {
 
 impl MemorySink {
     #[must_use]
-    /// # Panics
-    /// Panics if the mutex that holds the records is poisoned.
     pub fn records(&self) -> Vec<AuditRecord> {
         self.records
             .lock()
-            .expect("audit memory sink poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 }
@@ -175,7 +179,7 @@ impl AuditSink for MemorySink {
     async fn write(&self, record: AuditRecord, _durable: bool) -> Result<(), AuditError> {
         self.records
             .lock()
-            .expect("audit memory sink poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .push(record);
         Ok(())
     }
@@ -187,7 +191,7 @@ mod tests {
 
     #[test]
     fn io_error_displays() {
-        let e = AuditError::Io("disk full".to_string());
+        let e = AuditError::Io("disk full".to_owned());
         check!(format!("{e}").contains("disk full"));
     }
 
@@ -198,7 +202,7 @@ mod tests {
                 == AuditRecord {
                     class: AuditEventClass::RecordsLost,
                     value: br#"{"records_lost":3,"loss_generation":7}"#.to_vec(),
-                    headers: vec![("event_class".to_string(), b"records_lost".to_vec())],
+                    headers: vec![("event_class".to_owned(), b"records_lost".to_vec())],
                 }
         );
     }

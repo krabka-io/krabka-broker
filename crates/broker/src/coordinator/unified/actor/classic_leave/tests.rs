@@ -2,21 +2,31 @@
 
 use {
     super::*,
-    crate::coordinator::unified::{
-        ClientIdentity,
-        actor::{
-            GroupActorHandle, GroupActorMessage,
-            member_state::build_member,
-            test_support::{
-                bidirectional_coordinator, bidirectional_with_members, last_classic_metadata,
-                make_coordinator, rpc, seed_completing_classic, seed_stable_classic,
+    crate::{
+        coordinator,
+        coordinator::unified::{
+            ClientIdentity, GroupType,
+            actor::{
+                GroupActorHandle, GroupActorMessage,
+                member_state::build_member,
+                test_support::{
+                    bidirectional_coordinator, bidirectional_with_members, last_classic_metadata,
+                    make_coordinator, rpc, seed_completing_classic, seed_stable_classic,
+                },
             },
+            classic_state::GroupState as ClassicGroupState,
         },
-        classic_state::GroupState as ClassicGroupState,
     },
     assert2::check,
-    krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
-    std::time::Instant,
+    krabka_protocol::owned::{
+        consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+        sync_group_request::SyncGroupRequest,
+    },
+    std::{
+        sync::atomic::Ordering,
+        time::{Duration, Instant},
+    },
+    tokio::{sync::oneshot, time::timeout},
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -53,8 +63,7 @@ async fn classic_leave_legacy_append_failure_rolls_back_and_reports_error() {
     let (coord, log) = make_coordinator();
     let seeded = seed_stable_classic(&coord, &["m1"]);
     let handle = seeded.handle;
-    log.fail_next
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    log.fail_next.store(true, Ordering::SeqCst);
     let result = rpc::classic_leave_request(
         &handle,
         LeaveGroupRequest {
@@ -77,12 +86,11 @@ async fn classic_delete_append_failure_keeps_group_registered() {
     let (coord, log) = make_coordinator();
     let _ = coord.get_or_create_classic("g");
     coord.mark_classic("g");
-    log.fail_next
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    log.fail_next.store(true, Ordering::SeqCst);
 
-    check!(coord.delete_group("g").await == Err(crate::coordinator::DeleteGroupError::Internal));
+    check!(coord.delete_group("g").await == Err(coordinator::DeleteGroupError::Internal));
     check!(coord.describe_group("g").await.is_some());
-    check!(coord.group_type("g") == Some(crate::coordinator::unified::GroupType::Classic));
+    check!(coord.group_type("g") == Some(GroupType::Classic));
     check!(!log.has_classic_group_metadata_tombstone("g").await);
 }
 
@@ -107,14 +115,13 @@ async fn classic_leave_consumer_log_failure_stops_the_actor() {
     let joined = rpc::consumer_heartbeat(&handle, "", 0, None).await;
     check!(joined.error_code == codes::NONE);
     let native = joined.member_id.expect("native member id");
-    log.fail_next
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    log.fail_next.store(true, Ordering::SeqCst);
 
     let result = rpc::classic_leave_member(&handle, &native).await;
     check!(result.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
     check!(result.members.is_empty());
 
-    tokio::time::timeout(std::time::Duration::from_secs(1), handle.tx.closed())
+    timeout(Duration::from_secs(1), handle.tx.closed())
         .await
         .expect("consumer-kind log failure stops the actor");
     check!(handle.tx.is_closed());
@@ -204,7 +211,7 @@ fn consumer_classic_leave_resolves_batch_and_static_identities() {
                 ("m1", None),
             ]
     );
-    check!(removed == vec!["m-static".to_string(), "m1".to_string()]);
+    check!(removed == vec!["m-static".to_owned(), "m1".to_owned()]);
     check!(
         group.members.len() == 2,
         "resolution must not mutate the group"
@@ -217,7 +224,7 @@ fn consumer_classic_leave_resolves_batch_and_static_identities() {
     let ConsumerLeave { responses, removed } = resolve_consumer_classic_leave(&group, &legacy, 2);
     check!(responses.len() == 1);
     check!(responses[0].error_code == codes::NONE);
-    check!(removed == vec!["m1".to_string()]);
+    check!(removed == vec!["m1".to_owned()]);
 }
 
 /// A `TxnOffsetCommit` reserves its keys before its durable append and marks
@@ -245,7 +252,7 @@ async fn delete_tombstones_the_keys_of_an_in_flight_transactional_commit() {
         keys: Vec<(String, i32)>,
         reserve: bool,
     ) -> bool {
-        let (reply, ack) = tokio::sync::oneshot::channel();
+        let (reply, ack) = oneshot::channel();
         handle
             .tx
             .send(GroupActorMessage::TxnOffsetReservation(
@@ -264,7 +271,7 @@ async fn delete_tombstones_the_keys_of_an_in_flight_transactional_commit() {
     let keys = |partitions: &[i32]| -> Vec<(String, i32)> {
         partitions
             .iter()
-            .map(|partition| ("orders".to_string(), *partition))
+            .map(|partition| ("orders".to_owned(), *partition))
             .collect()
     };
     let rows = [
@@ -315,7 +322,7 @@ async fn delete_tombstones_the_keys_of_an_in_flight_transactional_commit() {
             })
             .collect();
         check!(tombstoned == expected, "{name}");
-        tokio::time::timeout(std::time::Duration::from_secs(1), handle.tx.closed())
+        timeout(Duration::from_secs(1), handle.tx.closed())
             .await
             .expect("deleted group actor stops");
         check!(!reservation(&handle, keys(&[3]), true).await, "{name}");
@@ -404,7 +411,7 @@ async fn delete_answers_by_members_for_classic_and_consumer_groups() {
                 coord.mark_next_gen("g");
                 let join = rpc::consumer_heartbeat(&handle, "", 0, Some("t")).await;
                 check!(join.error_code == codes::NONE, "{setup:?}");
-                if let Setup::EmptyConsumer = setup {
+                if setup == Setup::EmptyConsumer {
                     let member = join.member_id.expect("member id");
                     let leave = rpc::consumer_heartbeat(&handle, &member, -1, None).await;
                     check!(leave.error_code == codes::NONE, "{setup:?}");
@@ -452,15 +459,12 @@ async fn classic_leave_in_completing_rebalance_reopens_the_rebalance() {
     let seeded = seed_completing_classic(&coord, &["m1", "m2", "m3"]);
     let handle = seeded.handle;
     let generation = seeded.generation;
-    let sync_rx = rpc::begin_classic_sync(
-        &handle,
-        krabka_protocol::owned::sync_group_request::SyncGroupRequest {
-            group_id: "g".into(),
-            member_id: "m2".into(),
-            generation_id: generation,
-            ..Default::default()
-        },
-    )
+    let sync_rx = rpc::begin_classic_sync(&handle, SyncGroupRequest {
+        group_id: "g".into(),
+        member_id: "m2".into(),
+        generation_id: generation,
+        ..Default::default()
+    })
     .await;
 
     let left = rpc::classic_leave(&handle, "m3").await;

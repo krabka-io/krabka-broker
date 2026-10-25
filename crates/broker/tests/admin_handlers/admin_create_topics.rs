@@ -11,7 +11,7 @@
 use {
     crate::{
         RESOURCE_TYPE_TOPIC,
-        support::{configs::describe_resource, start_n_node_client},
+        support::{configs::describe_resource, start_n_node_client, topics},
     },
     assert2::{assert, check},
     krabka_protocol::owned::{
@@ -74,7 +74,7 @@ async fn create_topics_returns_the_configs_describe_configs_reports() {
 
     let create = CreateTopicsRequest {
         topics: vec![
-            crate::support::topics::creatable_topic_with_configs()
+            topics::creatable_topic_with_configs()
                 .name("t-kip525".into())
                 .configs(vec![CreatableTopicConfig {
                     name: "retention.ms".into(),
@@ -104,8 +104,8 @@ async fn create_topics_returns_the_configs_describe_configs_reports() {
     );
     check!(
         from_create.contains(&ConfigEntry {
-            name: "retention.ms".to_string(),
-            value: Some("60000".to_string()),
+            name: "retention.ms".to_owned(),
+            value: Some("60000".to_owned()),
             source: DYNAMIC_TOPIC_CONFIG,
             is_sensitive: false,
             read_only: false,

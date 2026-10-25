@@ -21,10 +21,12 @@ fn segment_forward_edge(from: RemoteSegmentLifecycle, to: RemoteSegmentLifecycle
     }
 }
 
-/// Kafka's `RemoteLogSegmentState.isValidTransition` for a known source
-/// state: a forward lifecycle edge, or a self transition, which Kafka admits
-/// so retries and failover stay idempotent. A segment with no source state is
-/// the host's add path, which admits only `CopyStarted`.
+/// Kafka's `RemoteLogSegmentState.isValidTransition` for a known source state:
+/// a forward lifecycle edge, or a self transition, which Kafka admits so
+/// retries and failover stay idempotent.
+///
+/// A segment with no source state is the host's add path, which admits only
+/// `CopyStarted`.
 #[ensures(result == (from == to || segment_forward_edge(from, to)))]
 #[must_use]
 pub const fn remote_segment_transition(

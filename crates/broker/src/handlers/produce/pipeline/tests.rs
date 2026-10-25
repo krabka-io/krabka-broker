@@ -4,6 +4,7 @@
 use {
     super::*,
     crate::{
+        codes,
         handlers::{
             produce::{
                 framing::PartitionPayload,
@@ -21,7 +22,7 @@ use {
         owned::produce_response::LeaderIdAndEpoch,
         records::{Record, RecordBatch},
     },
-    std::sync::Arc,
+    std::sync::{Arc, PoisonError},
     wiremock::{Mock, MockServer, ResponseTemplate, matchers::method},
 };
 
@@ -29,7 +30,7 @@ fn append_seed_batch(partition: &Partition) {
     partition
         .log
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .append(&mut seed_batch())
         .expect("seed the partition");
 }
@@ -150,7 +151,7 @@ fn non_leader_image() -> Arc<krabka_metadata::MetadataImage> {
 fn non_leader_row() -> PartitionProduceResponse {
     krabka_macros::tagged_wire!(PartitionProduceResponse {
         index: 0,
-        error_code: crate::codes::NOT_LEADER_OR_FOLLOWER,
+        error_code: codes::NOT_LEADER_OR_FOLLOWER,
         base_offset: -1,
         log_append_time_ms: -1,
         log_start_offset: -1,

@@ -183,7 +183,7 @@ fn append_missing_internal_topics_detail(
     } else {
         statuses.push(Status {
             status_code: topo_status::MISSING_INTERNAL_TOPICS,
-            status_detail: detail.to_string(),
+            status_detail: detail.to_owned(),
             ..Default::default()
         });
     }

@@ -52,8 +52,8 @@ async fn act_as_super_user_mints_token_owned_by_target() {
         // (2) admin mints a token owned by alice. owner_principal_type=User,
         // owner_principal_name=alice, empty renewers, broker-chosen lifetime.
         let create_req = CreateDelegationTokenRequest {
-            owner_principal_type: Some("User".to_string()),
-            owner_principal_name: Some("alice".to_string()),
+            owner_principal_type: Some("User".to_owned()),
+            owner_principal_name: Some("alice".to_owned()),
             max_lifetime_ms: -1,
             renewers: vec![],
             ..Default::default()
@@ -92,8 +92,8 @@ async fn act_as_super_user_mints_token_owned_by_target() {
         let described =
             send_describe_delegation_token(&mut admin, 150, &DescribeDelegationTokenRequest {
                 owners: Some(vec![DescribeDelegationTokenOwner {
-                    principal_type: "User".to_string(),
-                    principal_name: "admin".to_string(),
+                    principal_type: "User".to_owned(),
+                    principal_name: "admin".to_owned(),
                     ..Default::default()
                 }]),
                 ..Default::default()
@@ -145,8 +145,8 @@ async fn act_as_non_super_user_rejected_with_authorization_failed() {
             .map_err(|e| format!("alice PLAIN auth: {e}"))?;
 
         let create_req = CreateDelegationTokenRequest {
-            owner_principal_type: Some("User".to_string()),
-            owner_principal_name: Some("bob".to_string()),
+            owner_principal_type: Some("User".to_owned()),
+            owner_principal_name: Some("bob".to_owned()),
             max_lifetime_ms: -1,
             renewers: vec![],
             ..Default::default()

@@ -9,6 +9,7 @@
 //!
 //! openraft's debug assertions race on the hosted Windows scheduler, so these
 //! tests are gated off Windows, like the other multi-node suites.
+#![cfg(test)]
 
 use {
     assert2::assert,
@@ -20,9 +21,11 @@ use {
     krabka_units::Time,
     std::{
         collections::BTreeSet,
+        net::SocketAddr,
         time::{Duration, Instant},
     },
     tempfile::TempDir,
+    tokio::{net::TcpListener, time},
 };
 
 /// The controller fetch timeout of every node, pinned here rather than
@@ -49,11 +52,11 @@ struct DynamicNode {
 async fn start_dynamic_cluster(n: u64) -> Vec<DynamicNode> {
     let cluster_id = uuid::Uuid::from_u128(853);
     let mut cluster = Vec::new();
-    let mut bootstrap_controller: Option<std::net::SocketAddr> = None;
+    let mut bootstrap_controller: Option<SocketAddr> = None;
 
     for id in 1..=n {
-        let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let data_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let controller_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let data_addr = data_listener.local_addr().unwrap();
         let controller_addr = controller_listener.local_addr().unwrap();
         let dir = TempDir::new().unwrap();
@@ -79,8 +82,8 @@ async fn start_dynamic_cluster(n: u64) -> Vec<DynamicNode> {
             config.controller_quorum_voters = vec![(NodeId(1), controller_addr.to_string())];
         }
 
-        let handle = tokio::time::timeout(
-            std::time::Duration::from_secs(15),
+        let handle = time::timeout(
+            Duration::from_secs(15),
             Broker::start_with_listeners(config, Some(controller_listener), Some(data_listener)),
         )
         .await
@@ -160,7 +163,7 @@ async fn wait_for_leader(cluster: &[DynamicNode]) -> &BrokerHandle {
             Instant::now() <= deadline,
             "no controller leader within 30 s"
         );
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -220,7 +223,7 @@ async fn remove_through_leader(
             .and_then(|id| node(cluster, id))
             .or_else(|| self_reported_leader(cluster))
         else {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
             continue;
         };
         let outcome = handle.remove_voter_for_test(request.clone()).await;
@@ -244,7 +247,7 @@ async fn remove_through_leader(
             }
             Err(error) => panic!("remove_voter RPC: {error:?}; answers: {answers:?}"),
         };
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -313,7 +316,7 @@ async fn remove_voter_shrinks_quorum() {
                 Instant::now() <= deadline,
                 "no voter from {expected:?} leads after the removal of {victim}",
             );
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
         }
 
         // Stop this cluster before the next case starts its own.

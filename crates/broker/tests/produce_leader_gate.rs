@@ -27,6 +27,7 @@
 //!
 //! These tests are Windows-gated like the other multi-broker tests. openraft
 //! `debug_assert!` races on the hosted Windows scheduler.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -64,7 +65,7 @@ fn one_record_batch(v: &str) -> RecordBatch {
         last_offset_delta: 0,
         ..batch_from_records(vec![value_record(
             0,
-            Some(bytes::Bytes::from(v.to_string())),
+            Some(bytes::Bytes::from(v.to_owned())),
         )])
     }
 }

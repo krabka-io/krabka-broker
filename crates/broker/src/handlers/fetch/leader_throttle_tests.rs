@@ -43,6 +43,7 @@ use {
         sync::Arc,
         time::{Duration, Instant},
     },
+    tokio::time::timeout,
 };
 
 const TOPIC: &str = "throttled";
@@ -95,9 +96,7 @@ async fn throttled_partition(broker: &BrokerHandle) -> Arc<Partition> {
         }),
         MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: TOPIC.to_owned(),
-            overrides: [(LEADER_THROTTLED_REPLICAS_KEY.to_owned(), "*".to_owned())]
-                .into_iter()
-                .collect(),
+            overrides: [(LEADER_THROTTLED_REPLICAS_KEY.to_owned(), "*".to_owned())].into(),
         }),
     ] {
         broker
@@ -148,7 +147,7 @@ struct Answered {
 
 async fn answered(broker: &BrokerHandle, fetch_offset: i64) -> Answered {
     let started = Instant::now();
-    let response: FetchResponse = tokio::time::timeout(
+    let response: FetchResponse = timeout(
         Duration::from_secs(5),
         fetch(broker, &request(fetch_offset)),
     )

@@ -9,7 +9,7 @@ use {
 };
 
 /// Expands `#[derive(PrimitiveCmp)]` on `item`.
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let inner = inner_type(&item, "PrimitiveCmp")?;
     let ident = item.ident;
     let (impl_generics, type_generics, where_clause) = item.generics.split();

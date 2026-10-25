@@ -31,20 +31,21 @@ use {
         streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
+    std::sync::Arc,
 };
 
 mod creation;
 pub(super) mod topic_authz;
 mod validation;
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: StreamsGroupHeartbeatRequest,
     version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<StreamsGroupHeartbeatResponse, BrokerError> {
     let image = broker.controller.current_image();
-    let ng = broker.group_coordinator.clone();
+    let ng = Arc::clone(&broker.group_coordinator);
 
     // KafkaApis answers UNSUPPORTED_VERSION before the group ACL when the
     // streams protocol is off: KIP-1071 gates it on a finalized
@@ -194,7 +195,7 @@ mod tests {
     ) -> StreamsGroupHeartbeatResponse {
         dispatch_wire(
             broker,
-            krabka_protocol::api_key::ApiKey::StreamsGroupHeartbeat as i16,
+            ApiKey::StreamsGroupHeartbeat as i16,
             version,
             &req,
             ctx,
@@ -288,7 +289,7 @@ mod tests {
                      rf-too-high-changelog (Unable to replicate the partition 3 time(s): The \
                      target replication factor of 3 cannot be reached because only 1 broker(s) \
                      are registered or some brokers have all their log directories cordoned.)."
-                        .to_string(),
+                        .to_owned(),
                 ],
             ),
             (
@@ -302,8 +303,8 @@ mod tests {
                 vec![format!(
                     "Internal topics are missing: bad-config-changelog; Creation failed: \
                      bad-config-changelog ({}).",
-                    crate::config_keys::validate_topic_config_map(&maplit::btreemap! {
-                        "cleanup.policy".to_string() => "bogus".to_string()
+                    config_keys::validate_topic_config_map(&maplit::btreemap! {
+                        "cleanup.policy".to_owned() => "bogus".to_owned()
                     })
                     .expect_err("an unknown cleanup policy is refused")
                 )],
@@ -346,9 +347,9 @@ mod tests {
                 Some((replication_factor, configs)) => {
                     let topic = topic.expect("the topic was created");
                     assert!(topic.replication_factor == replication_factor, "{group_id}");
-                    let expected: std::collections::BTreeMap<String, String> = configs
+                    let expected: BTreeMap<String, String> = configs
                         .into_iter()
-                        .map(|(name, value)| (name.to_string(), value.to_string()))
+                        .map(|(name, value)| (name.to_owned(), value.to_owned()))
                         .collect();
                     assert!(
                         image.topic_config(&changelog.name) == Some(&expected),
@@ -412,10 +413,7 @@ mod tests {
                 .expect("handle");
 
             assert!(
-                resp == crate::coordinator::unified::streams::actor::response::error_resp(
-                    codes::STREAMS_INVALID_TOPOLOGY,
-                    Some(message.into()),
-                ),
+                resp == error_resp(codes::STREAMS_INVALID_TOPOLOGY, Some(message.into()),),
                 "{group_id}"
             );
             assert!(
@@ -450,12 +448,7 @@ mod tests {
             .await
             .expect("handle");
 
-        assert!(
-            resp == crate::coordinator::unified::streams::actor::response::error_resp(
-                codes::TOPIC_AUTHORIZATION_FAILED,
-                None,
-            )
-        );
+        assert!(resp == error_resp(codes::TOPIC_AUTHORIZATION_FAILED, None,));
         assert!(
             broker
                 .group_coordinator
@@ -512,7 +505,7 @@ mod tests {
                 == vec![
                     "Internal topics are missing: no-create-grant-changelog; Unauthorized to \
                      CREATE on topics no-create-grant-changelog."
-                        .to_string()
+                        .to_owned()
                 ],
             "{status:?}"
         );
@@ -993,7 +986,9 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    use super::*;
+    use {
+        super::*, crate::config_keys, krabka_protocol::api_key::ApiKey, std::collections::BTreeMap,
+    };
 
     #[test]
     fn group_read_denied_yields_group_authorization_failed() {

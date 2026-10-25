@@ -14,6 +14,7 @@ use {
     crate::error::BrokerError,
     krabka_ids::Offset,
     krabka_kraft_core::NodeId,
+    krabka_verified::{consensus, wal},
 };
 
 /// Open on the longest prefix that a byte-identical majority of `replicas`
@@ -46,7 +47,7 @@ pub(super) fn recover_durable_prefix(
         .collect::<Vec<_>>();
     // The majority frontier of the replica ends, with the donor as the
     // counted leader; offsets are never negative, so 0 is only a floor.
-    let frontier = Offset(krabka_verified::consensus::majority_watermark(
+    let frontier = Offset(consensus::majority_watermark(
         donor_end.0,
         &follower_ends,
         majority,
@@ -142,7 +143,7 @@ fn quorum_donor(
 fn same_batches(left: &[BatchBytes], right: &[BatchBytes]) -> bool {
     left.len() == right.len()
         && left.iter().zip(right).all(|(left, right)| {
-            krabka_verified::wal::wal_batch_equal(
+            wal::wal_batch_equal(
                 (left.base_offset.0, left.last_offset.0, &left.verbatim.bytes),
                 (
                     right.base_offset.0,

@@ -3,13 +3,16 @@
 use {
     crate::{
         fixtures::{name, named_items, named_root},
-        meta::arguments,
+        meta::argument_array,
         sendfile_match::platform_cfg,
     },
-    moxy::{ast::ParseError, token::TokenStream},
+    moxy::{
+        ast::ParseError,
+        token::{Ident, Span, Spanner, TokenStream},
+    },
 };
 
-pub(crate) fn request_frame(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn request_frame(input: TokenStream) -> Result<TokenStream, ParseError> {
     named_items(input, |name| {
         moxy::template! {
             #[derive(Clone, Copy, ::derive_more::From, ::derive_more::Into)]
@@ -54,7 +57,7 @@ pub(crate) fn request_frame(input: TokenStream) -> Result<TokenStream, ParseErro
     })
 }
 
-pub(crate) fn patterned_bytes(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn patterned_bytes(input: TokenStream) -> Result<TokenStream, ParseError> {
     named_items(input, |name| {
         moxy::template! {
         #[derive(Clone, Copy)]
@@ -67,7 +70,7 @@ pub(crate) fn patterned_bytes(input: TokenStream) -> Result<TokenStream, ParseEr
     })
 }
 
-pub(crate) fn frame_prefix(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn frame_prefix(input: TokenStream) -> Result<TokenStream, ParseError> {
     named_items(input, |name| {
         moxy::template! {
         #[derive(Clone, Copy)]
@@ -109,7 +112,7 @@ pub(crate) fn frame_prefix(input: TokenStream) -> Result<TokenStream, ParseError
     })
 }
 
-pub(crate) fn file_region(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn file_region(input: TokenStream) -> Result<TokenStream, ParseError> {
     named_items(input, |name| {
         moxy::template! {
         fn {{ name }}(region: &::krabka_protocol::records::FileRegion) -> Vec<u8> {
@@ -129,7 +132,7 @@ pub(crate) fn file_region(input: TokenStream) -> Result<TokenStream, ParseError>
 }
 
 /// The keyed fixture's ordinary non-transactional headers and exact offset arithmetic.
-pub(crate) fn keyed_record_batch(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn keyed_record_batch(input: TokenStream) -> Result<TokenStream, ParseError> {
     named_items(input, |name| {
         moxy::template! {
         #[derive(Clone, Copy)]
@@ -163,7 +166,7 @@ pub(crate) fn keyed_record_batch(input: TokenStream) -> Result<TokenStream, Pars
 }
 
 /// Export the original paths and snapshot policy before constructing the caller's epoch bytes.
-pub(crate) fn export_segment_data(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn export_segment_data(input: TokenStream) -> Result<TokenStream, ParseError> {
     named_items(input, |name| {
         moxy::template! {
         #[derive(Clone, Copy)]
@@ -187,14 +190,14 @@ pub(crate) fn export_segment_data(input: TokenStream) -> Result<TokenStream, Par
 }
 
 /// Apply the shared file-region platform condition without rebuilding the caller's tokens.
-pub(crate) fn sendfile_platform(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn sendfile_platform(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let mut output: proc_macro::TokenStream = platform_cfg().into();
     output.extend(input);
     output
 }
 
 /// The test authorizer's common method header, followed by its original compiler body group.
-pub(crate) fn test_authorizer(
+pub fn test_authorizer(
     input: proc_macro::TokenStream,
 ) -> Result<proc_macro::TokenStream, ParseError> {
     use proc_macro::{Delimiter, Group, TokenTree};
@@ -209,7 +212,7 @@ pub(crate) fn test_authorizer(
     ] = tokens.as_slice()
     else {
         return Err(ParseError::new(
-            moxy::token::Span::call_site(),
+            Span::call_site(),
             "expected authorizer type, request; { authorization body }",
         ));
     };
@@ -219,8 +222,8 @@ pub(crate) fn test_authorizer(
             "expected authorizer bindings and a brace-delimited authorization body",
         ));
     }
-    let name: moxy::token::Ident = name.clone().into();
-    let request: moxy::token::Ident = request.clone().into();
+    let name: Ident = name.clone().into();
+    let request: Ident = request.clone().into();
     let mut method: proc_macro::TokenStream = moxy::template! {
         fn authorize(
             &self,
@@ -239,7 +242,7 @@ pub(crate) fn test_authorizer(
 }
 
 /// A checkpoint-only fault with the caller's original unit type, visibility and error kind.
-pub(crate) fn epoch_checkpoint_failure(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn epoch_checkpoint_failure(input: TokenStream) -> Result<TokenStream, ParseError> {
     use moxy::{ast::Visibility, token::TokenTree};
 
     let tokens = input.into_inner();
@@ -251,13 +254,13 @@ pub(crate) fn epoch_checkpoint_failure(input: TokenStream) -> Result<TokenStream
     ] = tokens.as_slice()
     else {
         return Err(ParseError::new(
-            moxy::token::Span::call_site(),
+            Span::call_site(),
             "expected unit type and error-kind variant",
         ));
     };
     if !comma.is_punct_comma() {
         return Err(ParseError::new(
-            moxy::token::Span::call_site(),
+            Span::call_site(),
             "expected type, error-kind variant",
         ));
     }
@@ -284,7 +287,7 @@ pub(crate) fn epoch_checkpoint_failure(input: TokenStream) -> Result<TokenStream
 }
 
 /// Supply the two partition-spawn wrappers' common parameters while retaining their native bodies.
-pub(crate) fn partition_spawn_parameters(
+pub fn partition_spawn_parameters(
     meta: TokenStream,
     item: proc_macro::TokenStream,
 ) -> Result<proc_macro::TokenStream, ParseError> {
@@ -292,12 +295,12 @@ pub(crate) fn partition_spawn_parameters(
 
     let target = match meta.into_inner().as_slice() {
         [] => TokenStream::new(),
-        [moxy::token::TokenTree::Ident(name)] if name == "target" => {
+        [token] if token.as_ident().is_some_and(|name| name == "target") => {
             moxy::template! { replication_target: crate::partition::ReplicationTarget, }
         }
         _ => {
             return Err(ParseError::new(
-                moxy::token::Span::call_site(),
+                Span::call_site(),
                 "expected no arguments or target",
             ));
         }
@@ -308,13 +311,13 @@ pub(crate) fn partition_spawn_parameters(
         .position(|token| matches!(token, TokenTree::Ident(name) if name.to_string() == "fn"))
     else {
         return Err(ParseError::new(
-            moxy::token::Span::call_site(),
+            Span::call_site(),
             "expected a partition-spawn function",
         ));
     };
     let Some(TokenTree::Group(arguments)) = tokens.get_mut(function + 2) else {
         return Err(ParseError::new(
-            moxy::token::Span::call_site(),
+            Span::call_site(),
             "expected function parameters",
         ));
     };
@@ -342,7 +345,7 @@ pub(crate) fn partition_spawn_parameters(
 }
 
 /// Stage checkpoint bytes under the JVM decoder's caller-chosen file name.
-pub(crate) fn jvm_checkpoint_dump(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn jvm_checkpoint_dump(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(input)?;
     Ok(moxy::template! {
         fn {{ name }}(dir: &::std::path::Path, filename: &str, bytes: &[u8], image: &str) -> ::std::process::Output {
@@ -360,9 +363,8 @@ pub(crate) fn jvm_checkpoint_dump(input: TokenStream) -> Result<TokenStream, Par
 }
 
 /// Compose a literal Java probe with the standard string-producer imports and properties.
-pub(crate) fn java_string_producer(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let [before, bootstrap, after]: [TokenStream; 3] =
-        arguments(input, 3)?.try_into().expect("three arguments");
+pub fn java_string_producer(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [before, bootstrap, after]: [TokenStream; 3] = argument_array(input)?;
     Ok(moxy::template! {
         concat!(
             "import java.util.Properties;\nimport org.apache.kafka.clients.producer.KafkaProducer;\nimport org.apache.kafka.clients.producer.ProducerConfig;\nimport org.apache.kafka.clients.producer.ProducerRecord;\n",
@@ -381,9 +383,8 @@ pub(crate) fn java_string_producer(input: TokenStream) -> Result<TokenStream, Pa
 }
 
 /// Define an epoch-millisecond reader with the caller's attributes and overflow fallback.
-pub(crate) fn epoch_millis(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let [signature, overflow]: [TokenStream; 2] =
-        arguments(input, 2)?.try_into().expect("two arguments");
+pub fn epoch_millis(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [signature, overflow]: [TokenStream; 2] = argument_array(input)?;
     Ok(moxy::template! {
         {{ signature }}() -> i64 {
             use ::std::time::{SystemTime, UNIX_EPOCH};
@@ -395,14 +396,14 @@ pub(crate) fn epoch_millis(input: TokenStream) -> Result<TokenStream, ParseError
 
 /// Literal bytes captured from Kafka 4.3.1's principal serializer.
 /// Keep this oracle independent of the broker's principal encoder.
-pub(crate) fn jvm_principal_golden(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn jvm_principal_golden(input: TokenStream) -> Result<TokenStream, ParseError> {
     let (user, token) = named_root(input)?;
     let name = match user.to_string().as_str() {
         "alice" => moxy::template! { 0x06, b'a', b'l', b'i', b'c', b'e' },
         "bob" => moxy::template! { 0x04, b'b', b'o', b'b' },
         _ => {
             return Err(ParseError::new(
-                moxy::token::Spanner::span(&user),
+                Spanner::span(&user),
                 "expected alice or bob JVM fixture",
             ));
         }
@@ -413,7 +414,7 @@ pub(crate) fn jvm_principal_golden(input: TokenStream) -> Result<TokenStream, Pa
 }
 
 /// The deliberately distinctive proposal UUID used by both signing golden fixtures.
-pub(crate) fn break_glass_golden_id(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn break_glass_golden_id(input: TokenStream) -> Result<TokenStream, ParseError> {
     named_items(input, |name| {
         moxy::template! {
             const {{ name }}: [u8; 16] = [

@@ -51,7 +51,10 @@ impl Assignor for UniformAssignor {
     fn assign(&self, group: &GroupSpec, topics: &TopicMetadata) -> Assignment {
         let mut spec = Spec::new(group, topics);
         let homogeneous_group = group.subscription_type == SubscriptionType::Homogeneous
-            && spec.subscriptions.windows(2).all(|pair| pair[0] == pair[1]);
+            && spec
+                .subscriptions
+                .windows(2)
+                .all(|pair| matches!(pair, [first, second] if first == second));
         if homogeneous_group {
             homogeneous(&mut spec);
         } else {
@@ -65,10 +68,27 @@ impl Assignor for UniformAssignor {
 /// then the least significant 64 bits as a signed long.
 fn kafka_uuid_order(a: &Uuid, b: &Uuid) -> Ordering {
     let halves = |uuid: &Uuid| {
-        let (most, least) = uuid.0.split_at(8);
+        let [
+            m0,
+            m1,
+            m2,
+            m3,
+            m4,
+            m5,
+            m6,
+            m7,
+            l0,
+            l1,
+            l2,
+            l3,
+            l4,
+            l5,
+            l6,
+            l7,
+        ] = uuid.0;
         (
-            i64::from_be_bytes(most.try_into().expect("8 bytes")),
-            i64::from_be_bytes(least.try_into().expect("8 bytes")),
+            i64::from_be_bytes([m0, m1, m2, m3, m4, m5, m6, m7]),
+            i64::from_be_bytes([l0, l1, l2, l3, l4, l5, l6, l7]),
         )
     };
     halves(a).cmp(&halves(b))
@@ -79,6 +99,8 @@ fn kafka_uuid_order(a: &Uuid, b: &Uuid) -> Ordering {
 struct TopicSize {
     topic_id: Uuid,
     partitions: usize,
+    /// `partitions` as the metadata states it.
+    partition_count: i32,
 }
 
 /// One partition, named by its topic's number in [`Spec::topics`] and its
@@ -115,6 +137,7 @@ impl<'a> Spec<'a> {
                 Some(TopicSize {
                     topic_id: *id,
                     partitions: usize::try_from(*count).ok()?,
+                    partition_count: *count,
                 })
             })
             .collect();
@@ -154,7 +177,7 @@ impl<'a> Spec<'a> {
                 for &partition in partitions {
                     let owner = usize::try_from(partition)
                         .ok()
-                        .and_then(|index| owners[topic].get_mut(index));
+                        .and_then(|index| owners.get_mut(topic)?.get_mut(index));
                     if let Some(owner @ None) = owner {
                         *owner = Some(member);
                     }
@@ -173,12 +196,25 @@ impl<'a> Spec<'a> {
         }
     }
 
+    /// The owners of `topic`'s partitions, empty for a topic number out of
+    /// range.
+    fn topic_owners(&self, topic: usize) -> &[Option<usize>] {
+        self.owners.get(topic).map_or(&[], Vec::as_slice)
+    }
+
+    /// The owner cell of `slot`, `None` for a slot out of range.
+    fn owner_mut(&mut self, slot: PartitionSlot) -> Option<&mut Option<usize>> {
+        self.owners.get_mut(slot.topic)?.get_mut(slot.partition)
+    }
+
     /// The partitions `member` owns, in topic order and then partition order.
     fn owned_by(&self, member: usize) -> Vec<PartitionSlot> {
-        self.subscriptions[member]
-            .iter()
+        self.subscriptions
+            .get(member)
+            .into_iter()
+            .flatten()
             .flat_map(|&topic| {
-                self.owners[topic]
+                self.topic_owners(topic)
                     .iter()
                     .enumerate()
                     .filter(move |(_, owner)| **owner == Some(member))
@@ -194,14 +230,15 @@ impl<'a> Spec<'a> {
             .map(|id| ((*id).to_owned(), HashMap::new()))
             .collect();
         for (topic, owners) in self.topics.iter().zip(&self.owners) {
-            for (partition, owner) in owners.iter().enumerate() {
-                if let Some(member) = owner {
-                    out.get_mut(self.member_ids[*member])
-                        .expect("every member has an entry")
-                        .entry(topic.topic_id)
-                        .or_default()
-                        .push(i32::try_from(partition).expect("partition counts are i32"));
-                }
+            for (partition, owner) in (0_i32..).zip(owners) {
+                let Some(member_id) = owner.and_then(|member| self.member_ids.get(member)) else {
+                    continue;
+                };
+                out.entry((*member_id).to_owned())
+                    .or_default()
+                    .entry(topic.topic_id)
+                    .or_default()
+                    .push(partition);
             }
         }
         out
@@ -222,20 +259,20 @@ fn homogeneous(spec: &mut Spec<'_>) {
     };
     let total: usize = subscribed
         .iter()
-        .map(|&topic| spec.topics[topic].partitions)
+        .filter_map(|&topic| spec.topics.get(topic))
+        .map(|topic| topic.partitions)
         .sum();
     let split = uniform_quota_split(total, spec.member_ids.len());
 
-    let mut unassigned: Vec<PartitionSlot> = subscribed
-        .iter()
-        .flat_map(|&topic| {
-            spec.owners[topic]
-                .iter()
-                .enumerate()
-                .filter(|(_, owner)| owner.is_none())
-                .map(move |(partition, _)| PartitionSlot { topic, partition })
-        })
-        .collect();
+    // The unassigned partitions are listed before any is given back below.
+    let mut unassigned: Vec<PartitionSlot> = Vec::new();
+    unassigned.extend(subscribed.iter().flat_map(|&topic| {
+        spec.topic_owners(topic)
+            .iter()
+            .enumerate()
+            .filter(|(_, owner)| owner.is_none())
+            .map(move |(partition, _)| PartitionSlot { topic, partition })
+    }));
     let owned: Vec<Vec<PartitionSlot>> = (0..spec.member_ids.len())
         .map(|member| spec.owned_by(member))
         .collect();
@@ -243,8 +280,10 @@ fn homogeneous(spec: &mut Spec<'_>) {
     let quotas = homogeneous_member_quotas(split.minimum_quota, split.extra_quotas, &counts);
 
     for (partitions, quota) in owned.iter().zip(&quotas) {
-        for &slot in &partitions[quota.retain..] {
-            spec.owners[slot.topic][slot.partition] = None;
+        for &slot in partitions.iter().skip(quota.retain) {
+            if let Some(owner) = spec.owner_mut(slot) {
+                *owner = None;
+            }
             unassigned.push(slot);
         }
     }
@@ -253,7 +292,9 @@ fn homogeneous(spec: &mut Spec<'_>) {
     let mut next = unassigned.into_iter();
     for (member, quota) in quotas.iter().enumerate() {
         for slot in next.by_ref().take(quota.fill) {
-            spec.owners[slot.topic][slot.partition] = Some(member);
+            if let Some(owner) = spec.owner_mut(slot) {
+                *owner = Some(member);
+            }
         }
     }
 }
@@ -288,12 +329,16 @@ impl<'s, 'a> Heterogeneous<'s, 'a> {
         let mut topic_subscribers = vec![Vec::new(); spec.topics.len()];
         for (member, subscription) in spec.subscriptions.iter().enumerate() {
             for &topic in subscription {
-                topic_subscribers[topic].push(member);
+                if let Some(subscribers) = topic_subscribers.get_mut(topic) {
+                    subscribers.push(member);
+                }
             }
         }
         let mut sizes = vec![0; spec.member_ids.len()];
         for owner in spec.owners.iter().flatten().flatten() {
-            sizes[*owner] += 1;
+            if let Some(size) = sizes.get_mut(*owner) {
+                *size += 1;
+            }
         }
         Heterogeneous {
             spec,
@@ -302,63 +347,89 @@ impl<'s, 'a> Heterogeneous<'s, 'a> {
         }
     }
 
+    /// The subscribers of `topic`, empty for a topic number out of range.
+    fn subscribers(&self, topic: usize) -> &[usize] {
+        self.topic_subscribers.get(topic).map_or(&[], Vec::as_slice)
+    }
+
+    /// `member`'s partition count across every topic.
+    fn size(&self, member: usize) -> usize { self.sizes.get(member).copied().unwrap_or(0) }
+
     /// `sortTopicIds`: partitions per subscriber descending, then subscriber
     /// count ascending, then topic ID ascending.
     fn sort_topics(&self, topics: &mut [usize]) {
+        let topic_id = |topic: usize| self.spec.topics.get(topic).map(|size| size.topic_id);
         let per_subscriber = |topic: usize| {
-            let partitions = u32::try_from(self.spec.topics[topic].partitions).expect("i32 count");
-            let subscribers =
-                u32::try_from(self.topic_subscribers[topic].len()).expect("member count fits u32");
-            f64::from(partitions) / f64::from(subscribers)
+            let partitions = self
+                .spec
+                .topics
+                .get(topic)
+                .map_or(0.0, |size| f64::from(size.partition_count));
+            let subscribers = self
+                .subscribers(topic)
+                .iter()
+                .fold(0.0, |count: f64, _| count + 1.0);
+            partitions / subscribers
         };
         topics.sort_by(|&a, &b| {
             per_subscriber(b)
                 .total_cmp(&per_subscriber(a))
-                .then_with(|| {
-                    self.topic_subscribers[a]
-                        .len()
-                        .cmp(&self.topic_subscribers[b].len())
-                })
-                .then_with(|| {
-                    kafka_uuid_order(&self.spec.topics[a].topic_id, &self.spec.topics[b].topic_id)
+                .then_with(|| self.subscribers(a).len().cmp(&self.subscribers(b).len()))
+                .then_with(|| match (topic_id(a), topic_id(b)) {
+                    (Some(a), Some(b)) => kafka_uuid_order(&a, &b),
+                    (a, b) => a.is_some().cmp(&b.is_some()),
                 })
         });
     }
 
-    fn assign_partition(&mut self, topic: usize, partition: usize, member: usize) {
-        if let Some(previous) = self.spec.owners[topic][partition] {
-            self.sizes[previous] -= 1;
+    fn assign_partition(&mut self, slot: PartitionSlot, member: usize) {
+        let Some(owner) = self.spec.owner_mut(slot) else {
+            return;
+        };
+        let previous = owner.replace(member);
+        if let Some(size) = previous.and_then(|previous| self.sizes.get_mut(previous)) {
+            *size -= 1;
         }
-        self.spec.owners[topic][partition] = Some(member);
-        self.sizes[member] += 1;
+        if let Some(size) = self.sizes.get_mut(member) {
+            *size += 1;
+        }
     }
 
     /// `assignRemainingPartitions`.
     fn assign_remaining_partitions(&mut self) {
         let mut topics: Vec<usize> = (0..self.spec.topics.len())
             .filter(|&topic| {
-                !self.topic_subscribers[topic].is_empty()
-                    && self.spec.owners[topic].iter().any(Option::is_none)
+                !self.subscribers(topic).is_empty()
+                    && self.spec.topic_owners(topic).iter().any(Option::is_none)
             })
             .collect();
         self.sort_topics(&mut topics);
         let mut loads = Vec::new();
         for topic in topics {
-            let subscribers = self.topic_subscribers[topic].clone();
-            let start: Vec<usize> = subscribers.iter().map(|&m| self.sizes[m]).collect();
-            for partition in 0..self.spec.owners[topic].len() {
-                if self.spec.owners[topic][partition].is_some() {
-                    continue;
-                }
+            let subscribers = self.subscribers(topic).to_vec();
+            let start: Vec<usize> = subscribers.iter().map(|&m| self.size(m)).collect();
+            let unowned: Vec<usize> = self
+                .spec
+                .topic_owners(topic)
+                .iter()
+                .enumerate()
+                .filter(|(_, owner)| owner.is_none())
+                .map(|(partition, _)| partition)
+                .collect();
+            for partition in unowned {
                 loads.clear();
                 loads.extend(subscribers.iter().zip(&start).map(|(&member, &at_start)| {
                     SubscriberLoad {
-                        assigned: self.sizes[member],
+                        assigned: self.size(member),
                         assigned_at_topic_start: at_start,
                     }
                 }));
-                let chosen = select_least_loaded(&loads).expect("the topic has subscribers");
-                self.assign_partition(topic, partition, subscribers[chosen]);
+                let Some(&chosen) =
+                    select_least_loaded(&loads).and_then(|chosen| subscribers.get(chosen))
+                else {
+                    break;
+                };
+                self.assign_partition(PartitionSlot { topic, partition }, chosen);
             }
         }
     }
@@ -367,7 +438,7 @@ impl<'s, 'a> Heterogeneous<'s, 'a> {
     /// subscribers until a full pass moves nothing, or the pass limit.
     fn balance(&mut self) {
         let mut topics: Vec<usize> = (0..self.spec.topics.len())
-            .filter(|&topic| self.topic_subscribers[topic].len() >= 2)
+            .filter(|&topic| self.subscribers(topic).len() >= 2)
             .collect();
         if topics.is_empty() {
             return;
@@ -389,19 +460,25 @@ impl<'s, 'a> Heterogeneous<'s, 'a> {
     /// `balanceTopic`: move the topic's partitions from its most-loaded
     /// subscribers to its least-loaded ones. Returns how many moved.
     fn balance_topic(&mut self, topic: usize) -> usize {
-        let mut balancer = Balancer::new(&self.topic_subscribers[topic], &self.sizes);
+        let Some(mut balancer) = Balancer::new(self.subscribers(topic), &self.sizes) else {
+            return 0;
+        };
         if balancer.imbalance(&self.sizes) <= 1 {
             return 0;
         }
 
         // The topic's partitions grouped by owner, and each owner's range.
-        let owners = &self.spec.owners[topic];
-        let mut partitions: Vec<usize> = (0..owners.len()).collect();
-        partitions.sort_by_key(|&partition| (owners[partition], partition));
+        let owners = self.spec.topic_owners(topic);
+        let mut partitions: Vec<(Option<usize>, usize)> = owners
+            .iter()
+            .enumerate()
+            .map(|(partition, &owner)| (owner, partition))
+            .collect();
+        partitions.sort_unstable();
         let mut start: HashMap<usize, usize> = HashMap::new();
         let mut end: HashMap<usize, usize> = HashMap::new();
-        for (index, &partition) in partitions.iter().enumerate() {
-            if let Some(owner) = owners[partition] {
+        for (index, &(owner, _)) in partitions.iter().enumerate() {
+            if let Some(owner) = owner {
                 start.entry(owner).or_insert(index);
                 end.insert(owner, index + 1);
             }
@@ -409,6 +486,8 @@ impl<'s, 'a> Heterogeneous<'s, 'a> {
 
         let mut moved = 0;
         while !balancer.is_balanced() {
+            // The most-loaded member that still holds a partition of the
+            // topic, and the end of its range.
             let most_loaded = loop {
                 let Some(member) = balancer.next_most_loaded(&self.sizes) else {
                     break None;
@@ -418,17 +497,20 @@ impl<'s, 'a> Heterogeneous<'s, 'a> {
                     _ => balancer.exclude_most_loaded(),
                 }
             };
-            let Some(most_loaded) = most_loaded else {
+            let Some(last) = most_loaded.and_then(|member| end.get_mut(&member)) else {
                 break;
             };
-            let last = end.get_mut(&most_loaded).expect("checked above");
             *last -= 1;
-            let partition = partitions[*last];
-            let least_loaded = balancer.next_least_loaded(&self.sizes);
+            let Some(&(_, partition)) = partitions.get(*last) else {
+                break;
+            };
+            let Some(least_loaded) = balancer.next_least_loaded(&self.sizes) else {
+                break;
+            };
             if balancer.is_balanced() {
                 break;
             }
-            self.assign_partition(topic, partition, least_loaded);
+            self.assign_partition(PartitionSlot { topic, partition }, least_loaded);
             moved += 1;
         }
         moved
@@ -456,47 +538,63 @@ struct Balancer {
     next_most_loaded_member: Option<usize>,
 }
 
-fn level(size: usize) -> i64 { i64::try_from(size).expect("partition counts fit i64") }
+/// A load as a signed level, so that a level can sit one below zero. It
+/// saturates, which no partition count reaches.
+fn level(size: usize) -> i64 { i64::try_from(size).unwrap_or(i64::MAX) }
+
+/// The load of `member` in `sizes`, as a level.
+fn load(sizes: &[usize], member: usize) -> i64 { level(sizes.get(member).copied().unwrap_or(0)) }
 
 impl Balancer {
-    /// `MemberAssignmentBalancer.initialize`.
-    fn new(members: &[usize], sizes: &[usize]) -> Self {
+    /// `MemberAssignmentBalancer.initialize`, or `None` for no members.
+    fn new(members: &[usize], sizes: &[usize]) -> Option<Self> {
         let mut sorted_members = members.to_vec();
-        sorted_members.sort_by_key(|&member| (sizes[member], member));
+        sorted_members.sort_by_key(|&member| (sizes.get(member).copied(), member));
+        let (&least, &most) = (sorted_members.first()?, sorted_members.last()?);
         let len = sorted_members.len();
-        Balancer {
+        Some(Self {
             least_loaded_range_end: 0,
-            least_loaded_range_partition_count: level(sizes[sorted_members[0]]) - 1,
+            least_loaded_range_partition_count: load(sizes, least) - 1,
             next_least_loaded_member: 0,
             most_loaded_range_start: len,
             most_loaded_range_end: len,
-            most_loaded_range_partition_count: level(sizes[sorted_members[len - 1]]) + 1,
-            next_most_loaded_member: Some(len - 1),
+            most_loaded_range_partition_count: load(sizes, most) + 1,
+            next_most_loaded_member: len.checked_sub(1),
             sorted_members,
-        }
+        })
+    }
+
+    /// The load of the member at `position` of the sorted members.
+    fn load_at(&self, sizes: &[usize], position: usize) -> Option<i64> {
+        self.sorted_members
+            .get(position)
+            .map(|&member| load(sizes, member))
     }
 
     /// The load gap between the most and the least loaded member, which
     /// `initialize` returns.
-    fn imbalance(&self, sizes: &[usize]) -> usize {
-        let first = self.sorted_members[0];
-        let last = self.sorted_members[self.sorted_members.len() - 1];
-        sizes[last] - sizes[first]
+    fn imbalance(&self, sizes: &[usize]) -> i64 {
+        match (self.sorted_members.first(), self.sorted_members.last()) {
+            (Some(&first), Some(&last)) => load(sizes, last) - load(sizes, first),
+            _ => 0,
+        }
     }
 
     /// `nextLeastLoadedMember`.
-    fn next_least_loaded(&mut self, sizes: &[usize]) -> usize {
+    fn next_least_loaded(&mut self, sizes: &[usize]) -> Option<usize> {
         if self.next_least_loaded_member >= self.least_loaded_range_end {
             self.least_loaded_range_partition_count += 1;
-            while self.least_loaded_range_end < self.sorted_members.len()
-                && level(sizes[self.sorted_members[self.least_loaded_range_end]])
-                    == self.least_loaded_range_partition_count
+            while self.load_at(sizes, self.least_loaded_range_end)
+                == Some(self.least_loaded_range_partition_count)
             {
                 self.least_loaded_range_end += 1;
             }
             self.next_least_loaded_member = 0;
         }
-        let member = self.sorted_members[self.next_least_loaded_member];
+        let member = self
+            .sorted_members
+            .get(self.next_least_loaded_member)
+            .copied();
         self.next_least_loaded_member += 1;
         member
     }
@@ -507,25 +605,26 @@ impl Balancer {
             .next_most_loaded_member
             .is_none_or(|next| next < self.most_loaded_range_start)
         {
-            if self.most_loaded_range_end <= self.most_loaded_range_start
-                && self.most_loaded_range_start > 0
-            {
-                self.most_loaded_range_partition_count =
-                    level(sizes[self.sorted_members[self.most_loaded_range_start - 1]]);
-            } else {
-                self.most_loaded_range_partition_count -= 1;
+            let below_start = self
+                .most_loaded_range_start
+                .checked_sub(1)
+                .and_then(|position| self.load_at(sizes, position));
+            match below_start {
+                Some(level) if self.most_loaded_range_end <= self.most_loaded_range_start => {
+                    self.most_loaded_range_partition_count = level;
+                }
+                _ => self.most_loaded_range_partition_count -= 1,
             }
-            while self.most_loaded_range_start > 0
-                && level(sizes[self.sorted_members[self.most_loaded_range_start - 1]])
-                    == self.most_loaded_range_partition_count
+            while let Some(position) = self.most_loaded_range_start.checked_sub(1)
+                && self.load_at(sizes, position) == Some(self.most_loaded_range_partition_count)
             {
-                self.most_loaded_range_start -= 1;
+                self.most_loaded_range_start = position;
             }
             self.next_most_loaded_member = self.most_loaded_range_end.checked_sub(1);
         }
         let next = self.next_most_loaded_member?;
         self.next_most_loaded_member = next.checked_sub(1);
-        Some(self.sorted_members[next])
+        self.sorted_members.get(next).copied()
     }
 
     /// `excludeMostLoadedMember`: swap the member last returned by

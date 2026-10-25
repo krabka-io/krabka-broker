@@ -9,18 +9,21 @@
 use {
     super::FileConfigError,
     crate::config_value::{PositiveCount, PositiveI32, PositiveI64},
+    krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax,
     krabka_units::{
         ByteSize, Ratio, Time,
         convert::{ByteSizeExt as _, RatioExt as _, TimeExt as _},
     },
+    refined_type::rule::GreaterU64,
+    std::fmt,
 };
 
-pub(super) fn invalid_runtime_value(name: &str, error: impl std::fmt::Display) -> FileConfigError {
+pub(super) fn invalid_runtime_value(name: &str, error: impl fmt::Display) -> FileConfigError {
     FileConfigError::InvalidConfig(format!("{name}: {error}"))
 }
 
 pub(super) fn positive_u64(name: &str, value: u64) -> Result<u64, FileConfigError> {
-    refined_type::rule::GreaterU64::<0>::new(value)
+    GreaterU64::<0>::new(value)
         .map(refined_type::Refined::into_value)
         .map_err(|error| invalid_runtime_value(name, error))
 }
@@ -53,7 +56,7 @@ pub(super) fn whole_bytes_u64(name: &str, value: ByteSize) -> Result<ByteSize, F
     let bytes = value.bytes_u64();
     if value.bytes_f64().is_finite()
         && value > ByteSize::from_bytes(0)
-        && value.bytes_f64() < 18_446_744_073_709_551_616.0
+        && value.bytes_f64() < 18_446_744_073_709_552_000.0 // 2^64, exactly
         && ByteSize::from_bytes(bytes) == value
     {
         Ok(value)
@@ -70,7 +73,7 @@ pub(super) fn metadata_snapshot_fetch_max(
     value: ByteSize,
 ) -> Result<ByteSize, FileConfigError> {
     let value = whole_bytes_u64(name, value)?;
-    krabka_kraft_core::snapshot_fetch::MetadataSnapshotFetchMax::new(value)
+    MetadataSnapshotFetchMax::new(value)
         .map(|_| value)
         .map_err(|error| invalid_runtime_value(name, error))
 }
@@ -94,9 +97,7 @@ fn whole_nonnegative_bytes(value: ByteSize) -> bool {
 /// through `whole_bytes_u64`: that helper rejects zero.
 pub(super) fn kafka_int_bytes(name: &str, value: ByteSize) -> Result<ByteSize, FileConfigError> {
     let bytes = value.bytes_u64();
-    if whole_nonnegative_bytes(value)
-        && bytes <= u64::try_from(i32::MAX).expect("i32::MAX fits u64")
-    {
+    if whole_nonnegative_bytes(value) && bytes <= u64::from(i32::MAX.unsigned_abs()) {
         Ok(value)
     } else {
         Err(invalid_runtime_value(
@@ -117,7 +118,7 @@ pub(super) fn metadata_log_segment_bytes(
 ) -> Result<ByteSize, FileConfigError> {
     let bytes = value.bytes_u64();
     let floor = krabka_raft::MIN_METADATA_LOG_SEGMENT_SIZE.bytes_u64();
-    let ceiling = u64::try_from(i32::MAX).expect("i32::MAX fits u64");
+    let ceiling = u64::from(i32::MAX.unsigned_abs());
     if whole_nonnegative_bytes(value) && (floor..=ceiling).contains(&bytes) {
         Ok(value)
     } else {
@@ -135,7 +136,8 @@ pub(super) fn metadata_log_segment_bytes(
 /// byte size has no negative form, so the operator omits the key instead,
 /// and the built-in limit stays.
 pub(super) fn kafka_long_bytes(name: &str, value: ByteSize) -> Result<ByteSize, FileConfigError> {
-    if whole_nonnegative_bytes(value) && value.bytes_f64() < 9_223_372_036_854_775_808.0 {
+    // 9_223_372_036_854_776_000.0 is 2^63, exactly.
+    if whole_nonnegative_bytes(value) && value.bytes_f64() < 9_223_372_036_854_776_000.0 {
         Ok(value)
     } else {
         Err(invalid_runtime_value(
@@ -147,7 +149,7 @@ pub(super) fn kafka_long_bytes(name: &str, value: ByteSize) -> Result<ByteSize, 
 
 pub(super) fn whole_bytes_i32(name: &str, value: ByteSize) -> Result<ByteSize, FileConfigError> {
     let value = whole_bytes_u64(name, value)?;
-    if value.bytes_u64() <= u64::try_from(i32::MAX).expect("i32::MAX fits u64") {
+    if value.bytes_u64() <= u64::from(i32::MAX.unsigned_abs()) {
         Ok(value)
     } else {
         Err(invalid_runtime_value(

@@ -18,6 +18,7 @@ use {
     krabka_units::{fmt::Human as _, prelude::*},
     std::{
         collections::BTreeMap,
+        fs,
         path::{Path, PathBuf},
     },
 };
@@ -47,11 +48,11 @@ impl Render {
     fn mean(self, values: &[f64]) -> String {
         let m = stat(values).mean;
         match self {
-            Render::Number => format!("{m:.3}"),
-            Render::Extent => Time::from_secs_f64(m).human().to_string(),
-            Render::Size => ByteSize::from_bytes_f64(m).human().to_string(),
-            Render::Throughput => ByteRate::from_bytes_per_sec_f64(m).human().to_string(),
-            Render::Rate => Frequency::from_per_sec(m).human().to_string(),
+            Self::Number => format!("{m:.3}"),
+            Self::Extent => Time::from_secs_f64(m).human().to_string(),
+            Self::Size => ByteSize::from_bytes_f64(m).human().to_string(),
+            Self::Throughput => ByteRate::from_bytes_per_sec_f64(m).human().to_string(),
+            Self::Rate => Frequency::from_per_sec(m).human().to_string(),
         }
     }
 
@@ -604,16 +605,15 @@ fn row_metric(
 /// the source path. The per-run `-runNN` tag lives in the filename.
 fn collect_runs(input_dir: &Path, strict: bool) -> Result<Vec<RunFile>> {
     let mut runs: Vec<RunFile> = Vec::new();
-    let entries = std::fs::read_dir(input_dir)
-        .with_context(|| format!("read_dir {}", input_dir.display()))?;
+    let entries =
+        fs::read_dir(input_dir).with_context(|| format!("read_dir {}", input_dir.display()))?;
     for e in entries {
         let e = e.context("dir entry")?;
         let path = e.path();
         if path.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
-        let body =
-            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let body = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         match serde_json::from_str::<RunOutput>(&body) {
             Ok(run) => runs.push(RunFile { path, run }),
             Err(e) => {
@@ -631,13 +631,13 @@ fn collect_runs(input_dir: &Path, strict: bool) -> Result<Vec<RunFile>> {
 /// `single` for an untagged one-off run.
 fn run_tag_from_path(path: &Path) -> String {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    if let Some(idx) = stem.rfind("-run") {
-        let tag = &stem[idx + 1..];
-        if tag.len() > 3 && tag["run".len()..].chars().all(|c| c.is_ascii_digit()) {
-            return tag.to_string();
-        }
+    if let Some((_, digits)) = stem.rsplit_once("-run")
+        && !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+    {
+        return format!("run{digits}");
     }
-    "single".to_string()
+    "single".to_owned()
 }
 
 /// Minimal CSV quoting. This wraps the field in double quotes, and doubles the
@@ -646,7 +646,7 @@ fn csv_field(s: &str) -> String {
     if s.contains(',') || s.contains('"') || s.contains('\n') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
-        s.to_string()
+        s.to_owned()
     }
 }
 
@@ -695,24 +695,26 @@ notes,errors_count\n",
     for RunFile { path, run: r } in &runs {
         let acks = format!("{:?}", r.scenario.acks).to_lowercase();
         let mode_tag = format!("{:?}", r.scenario.mode_tag).to_lowercase();
-        let (rec, drop, spike) = match &r.disturbance {
-            Some(d) => (
-                d.recovery_at_ms
-                    .since(d.kill_at_ms)
-                    .millis_i64()
-                    .to_string(),
-                d.dropped.to_string(),
-                format!("{:.3}", millis_f64(d.latency_spike_max)),
-            ),
-            None => (String::new(), String::new(), String::new()),
-        };
+        let (rec, drop, spike) = r.disturbance.as_ref().map_or_else(
+            || (String::new(), String::new(), String::new()),
+            |d| {
+                (
+                    d.recovery_at_ms
+                        .since(d.kill_at_ms)
+                        .millis_i64()
+                        .to_string(),
+                    d.dropped.to_string(),
+                    format!("{:.3}", millis_f64(d.latency_spike_max)),
+                )
+            },
+        );
         let opt_bytes = |o: Option<ByteSize>| o.map_or_default(|v| v.bytes_i64().to_string());
         let opt_millis = |o: Option<Time>| o.map_or_default(|v| v.millis_i64().to_string());
         let p = &r.producer_latency;
         let c = &r.consumer_e2e_latency;
         let cols = [
             csv_field(&r.scenario.name),
-            r.stack.as_str().to_string(),
+            r.stack.as_str().to_owned(),
             run_tag_from_path(path),
             r.topology.broker_count.to_string(),
             r.topology.partitions.to_string(),
@@ -761,6 +763,7 @@ notes,errors_count\n",
 }
 
 /// Long, tidy time-series CSV with one row per (run × time-offset × metric).
+///
 /// This is the graph-ready export for values plotted *over the test*. Filter by
 /// `metric` and group by `(scenario, stack, run_tag)` to draw lines.
 /// # Errors
@@ -815,6 +818,7 @@ pub fn render_timeseries_csv(input_dir: &Path, strict: bool) -> Result<String> {
 }
 
 /// Renders a self-contained Plotly HTML report from every run in `input_dir`.
+///
 /// The report holds bar charts and averaged time-series. This function delegates
 /// the aggregation to [`crate::aggregate`] and the figure building to
 /// [`crate::graph`].
@@ -828,9 +832,10 @@ pub fn render_html(input_dir: &Path, strict: bool, title: &str) -> Result<String
     Ok(render_graph_html(&outputs, title))
 }
 
-/// Renders the website HTML fragment from every run in `input_dir`. The
-/// fragment holds per-run and averaged throughput, CPU, and memory charts. This
-/// function pairs each run with the `runNN` tag it parses from the result
+/// Renders the website HTML fragment from every run in `input_dir`.
+///
+/// The fragment holds per-run and averaged throughput, CPU, and memory charts.
+/// This function pairs each run with the `runNN` tag it parses from the result
 /// filename, so every per-run trace carries a label.
 /// # Errors
 /// Returns an error when input data is invalid, required I/O fails, or the destination rejects the generated report or audit event.
@@ -1105,7 +1110,7 @@ mod tests {
     }
 
     fn write_run(path: impl AsRef<Path>, run: &RunOutput) {
-        std::fs::write(path, serde_json::to_string(run).unwrap()).unwrap();
+        fs::write(path, serde_json::to_string(run).unwrap()).unwrap();
     }
 
     fn write_failover_runs(dir: &Path, krabka: &RunOutput, kafka: &RunOutput) {

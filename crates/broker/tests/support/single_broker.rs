@@ -7,8 +7,12 @@
 
 use {
     crate::support::client::{BrokerWithClient, connect_owned, start_broker_client},
-    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle, api_catalog::LegacyRequestVersions},
     krabka_client_core::Client,
+    std::{
+        path::{Path, PathBuf},
+        sync::Arc,
+    },
     tempfile::TempDir,
 };
 
@@ -36,8 +40,7 @@ pub async fn standalone_broker() -> (TempDir, BrokerHandle) {
 /// refuses and krabka serves only on request.
 pub async fn start_legacy() -> InProcess {
     start_configured(|config| {
-        config.features.legacy_request_versions =
-            krabka_broker::api_catalog::LegacyRequestVersions::Enabled;
+        config.features.legacy_request_versions = LegacyRequestVersions::Enabled;
     })
     .await
 }
@@ -72,7 +75,7 @@ async fn boot_with_client(config: BrokerConfig, client_id: &str) -> BrokerWithCl
 /// Restart tests use this helper. Pass the same path across two boots to
 /// verify that the broker recovers persistent state (audit chain, spool)
 /// correctly. The helper detects an existing raft log and then uses `Rejoin`.
-pub async fn start_with_dir(dir: &std::path::Path) -> (BrokerHandle, krabka_client_core::Client) {
+pub async fn start_with_dir(dir: &Path) -> (BrokerHandle, krabka_client_core::Client) {
     let mut config = heartbeat_config(dir);
     // Mirror the production heuristic from `detect_bootstrap_mode` in
     // broker.rs: key Rejoin on `metadata_log_nonempty` (committed
@@ -91,14 +94,14 @@ pub async fn start_with_dir(dir: &std::path::Path) -> (BrokerHandle, krabka_clie
 ///
 /// Uses `every_secs = 3600` so only the count-based trigger fires in tests.
 pub fn start_with_audit_key(
-    key_path: &std::path::Path,
+    key_path: &Path,
     key_id: &str,
     every_n: u64,
-) -> impl std::future::Future<Output = InProcess> {
+) -> impl Future<Output = InProcess> {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut config = heartbeat_config(tempdir.path());
     config.audit_signing_key_path = Some(key_path.to_path_buf());
-    config.audit_signing_key_id = Some(key_id.to_string());
+    config.audit_signing_key_id = Some(key_id.to_owned());
     config.audit_checkpoint_every_n = every_n;
     config.audit_checkpoint_every = krabka_units::hours(1); // only count trigger fires
     Box::pin(async move {
@@ -125,7 +128,7 @@ pub async fn start_with_deny_all_authz() -> InProcess {
     // (empty ACL store, no super-users). The anonymous test client connects
     // with no credentials so it has no super-user bypass — every operation is
     // denied and the auditing decorator emits AuthorizationDenied events.
-    config.authorizer = std::sync::Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
+    config.authorizer = Arc::new(SimpleAclAuthorizer::new(HashSet::new()));
     // The broker's own heartbeat is denied too, so it stays fenced: it never
     // becomes alive in the liveness registry, and nothing here needs it to.
     let BrokerWithClient { broker, client } = start_broker_client()
@@ -147,11 +150,7 @@ krabka_macros::bound_start_fixture!(start, start_bound, ::krabka_broker, expect,
 pub async fn start_with_bound_listeners(
     customize: impl FnOnce(&mut BrokerConfig),
 ) -> (BrokerHandle, TempDir) {
-    let StartedBoundBroker {
-        broker,
-        controller_addr: _,
-        dir,
-    } = start_bound(customize).await;
+    let StartedBoundBroker { broker, dir, .. } = start_bound(customize).await;
     (broker, dir)
 }
 
@@ -214,7 +213,7 @@ pub async fn start_ready_group() -> InProcess {
 /// A non-failover fixture must not fence its only broker when a loaded test
 /// runner delays its heartbeats. Keep `for_tests`' two-second timeout for the
 /// failover fixtures, and apply this tolerance before caller overrides.
-pub fn heartbeat_config(dir: impl Into<std::path::PathBuf>) -> BrokerConfig {
+pub fn heartbeat_config(dir: impl Into<PathBuf>) -> BrokerConfig {
     let mut config = BrokerConfig::for_tests(dir.into());
     config.heartbeat_timeout = krabka_units::secs(30);
     config

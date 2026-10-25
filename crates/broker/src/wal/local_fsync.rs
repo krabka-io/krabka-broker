@@ -8,7 +8,7 @@ use {
     async_trait::async_trait,
     krabka_ids::Offset,
     krabka_log::Log,
-    std::sync::{Arc, Mutex},
+    std::sync::{Arc, Mutex, PoisonError},
 };
 
 /// A [`WalStore`] backed by the partition's local `Log` plus an explicit
@@ -25,25 +25,21 @@ impl LocalFsyncWal {
 #[async_trait]
 impl WalStore for LocalFsyncWal {
     async fn sync_durable(&self, leo: Offset) -> Result<Offset, BrokerError> {
-        let log = self.log.clone();
+        let log = Arc::clone(&self.log);
         // fsync off the async poller, through the seam
         // run_produce_append_batch uses.
-        let res = run_blocking(move || {
-            log.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .sync()
-        })
-        .await
-        .map_err(|e| storage_failure_error("wal fsync task panicked", &e))?;
+        let res = run_blocking(move || log.lock().unwrap_or_else(PoisonError::into_inner).sync())
+            .await
+            .map_err(|e| storage_failure_error("wal fsync task panicked", &e))?;
         res.map_err(BrokerError::from)?;
         Ok(leo)
     }
 
     async fn trim_to_offset(&self, new_start: Offset) -> Result<Offset, BrokerError> {
-        let log = self.log.clone();
+        let log = Arc::clone(&self.log);
         let result = run_blocking(move || {
             log.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .trim_to_offset(new_start)
         })
         .await
@@ -56,13 +52,16 @@ impl WalStore for LocalFsyncWal {
 mod tests {
     use {
         super::*,
-        crate::partition::ProduceData,
+        crate::{partition::ProduceData, test_support::RecordCount},
         assert2::assert,
         krabka_log::{Log, LogConfig},
-        std::sync::{Arc, Mutex},
+        std::{
+            path::Path,
+            sync::{Arc, Mutex},
+        },
     };
 
-    fn wal(dir: &std::path::Path) -> LocalFsyncWal {
+    fn wal(dir: &Path) -> LocalFsyncWal {
         let log = Arc::new(Mutex::new(Log::open(dir, LogConfig::default()).unwrap()));
         LocalFsyncWal::new(log)
     }
@@ -121,9 +120,7 @@ mod tests {
     }
 
     #[bon::builder]
-    fn sample_owned(
-        #[builder(into, default)] count: crate::test_support::RecordCount,
-    ) -> ProduceData {
+    fn sample_owned(#[builder(into, default)] count: RecordCount) -> ProduceData {
         ProduceData::Owned(sample_batch().count(count.0).call())
     }
 

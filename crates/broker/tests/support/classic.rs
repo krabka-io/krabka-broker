@@ -15,6 +15,7 @@ use {
     },
     krabka_units::{Time, convert::TimeExt, secs},
     std::time::Duration,
+    tokio::time,
 };
 
 const ERR_MEMBER_ID_REQUIRED: i16 = 79;
@@ -24,11 +25,11 @@ pub fn join_request(group_id: &str, member_id: &str) -> JoinGroupRequest {
     JoinGroupRequest {
         group_instance_id: None,
         ..classic_join_request()
-            .group_id(group_id.to_string())
-            .member_id(member_id.to_string())
-            .protocol_type("consumer".to_string())
+            .group_id(group_id.to_owned())
+            .member_id(member_id.to_owned())
+            .protocol_type("consumer".to_owned())
             .protocols(vec![join_protocol(
-                "range".to_string(),
+                "range".to_owned(),
                 Bytes::from_static(b""),
             )])
             .call()
@@ -47,7 +48,7 @@ pub fn required_member_id(error_code: i16, member_id: String) -> String {
 /// is also the leader and supplies a trivial self-assignment in `SyncGroup`.
 pub async fn classic_join_sync(client: &Client, group_id: &str) -> (String, i32) {
     // Round 1: empty member_id → broker mints one and returns MEMBER_ID_REQUIRED.
-    let r1 = tokio::time::timeout(
+    let r1 = time::timeout(
         Duration::from_secs(5),
         client.send(join_request(group_id, "")),
     )
@@ -63,7 +64,7 @@ pub async fn classic_join_sync(client: &Client, group_id: &str) -> (String, i32)
 
     // Round 2: rejoin with assigned member_id — broker blocks for the
     // initial-rebalance-delay then returns as sole leader.
-    let r2 = tokio::time::timeout(
+    let r2 = time::timeout(
         Duration::from_secs(10),
         client.send(join_request(group_id, &member_id)),
     )
@@ -79,7 +80,7 @@ pub async fn classic_join_sync(client: &Client, group_id: &str) -> (String, i32)
     // SyncGroup: sole leader supplies its own assignment.
     let r3 = client
         .send(SyncGroupRequest {
-            group_id: group_id.to_string(),
+            group_id: group_id.to_owned(),
             generation_id,
             member_id: member_id.clone(),
             protocol_type: Some("consumer".into()),

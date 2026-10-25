@@ -26,6 +26,7 @@
 //! `__consumer_offsets`, `__transaction_state` and `__share_group_state` and
 //! nothing else; `confluentinc/cp-kafka:7.5.0` predates KIP-932 and hides the
 //! first two. Krabka has a share coordinator, so it follows the 4.x answer.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -182,7 +183,7 @@ async fn metadata_marks_every_broker_owned_topic_internal() {
             without_partitions(row)
                 == MetadataResponseTopic {
                     error_code: 0,
-                    name: Some(name.to_string()),
+                    name: Some(name.to_owned()),
                     topic_id: row.topic_id,
                     is_internal,
                     partitions: Vec::new(),
@@ -240,7 +241,7 @@ async fn describe_topic_partitions_agrees_with_metadata() {
                 ..row.clone()
             } == DescribeTopicPartitionsResponseTopic {
                 error_code: 0,
-                name: Some(name.to_string()),
+                name: Some(name.to_owned()),
                 topic_id: metadata_row.topic_id,
                 is_internal,
                 partitions: Vec::new(),
@@ -264,7 +265,7 @@ async fn a_renamed_audit_topic_is_the_internal_one() {
 
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
-    config.audit_topic = RENAMED.to_string();
+    config.audit_topic = RENAMED.to_owned();
     let broker = Broker::start(config).await.expect("broker start");
     let client = connect_owned(
         broker.listen_addr().to_string(),
@@ -301,7 +302,7 @@ async fn a_renamed_audit_topic_is_the_internal_one() {
 async fn a_broker_refuses_an_audit_topic_outside_the_convention() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut config = BrokerConfig::for_tests(tempdir.path().to_path_buf());
-    config.audit_topic = "house_audit".to_string();
+    config.audit_topic = "house_audit".to_owned();
     let failure = Broker::start(config).await.err();
     assert!(let Some(error) = failure);
     check!(error.to_string().contains("audit_topic"), "{error}");

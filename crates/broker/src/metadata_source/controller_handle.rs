@@ -4,41 +4,36 @@
 
 use {
     super::{MetadataSource, prelude::*},
+    krabka_protocol::owned::envelope_request,
     krabka_raft::ControllerHandle,
 };
 
 #[async_trait::async_trait]
 impl MetadataSource for ControllerHandle {
-    fn current_image(&self) -> Arc<MetadataImage> { ControllerHandle::current_image(self) }
+    fn current_image(&self) -> Arc<MetadataImage> { Self::current_image(self) }
 
-    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> {
-        ControllerHandle::watch_image(self)
-    }
+    fn watch_image(&self) -> watch::Receiver<Arc<MetadataImage>> { Self::watch_image(self) }
 
-    fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> {
-        ControllerHandle::watch_leader(self)
-    }
+    fn watch_leader(&self) -> watch::Receiver<Option<NodeId>> { Self::watch_leader(self) }
 
-    fn watch_fatal(&self) -> watch::Receiver<Option<String>> { ControllerHandle::watch_fatal(self) }
+    fn watch_fatal(&self) -> watch::Receiver<Option<String>> { Self::watch_fatal(self) }
 
-    fn quorum_state(&self) -> QuorumState { ControllerHandle::quorum_state(self) }
+    fn quorum_state(&self) -> QuorumState { Self::quorum_state(self) }
 
-    fn quorum_committed_offset(&self) -> i64 { ControllerHandle::quorum_committed_offset(self) }
+    fn quorum_committed_offset(&self) -> i64 { Self::quorum_committed_offset(self) }
 
-    fn voted_directory_id(&self) -> Option<uuid::Uuid> {
-        ControllerHandle::voted_directory_id(self)
-    }
+    fn voted_directory_id(&self) -> Option<uuid::Uuid> { Self::voted_directory_id(self) }
 
     fn quorum_snapshot(&self) -> Option<krabka_raft::QuorumStateSnapshot> {
-        Some(ControllerHandle::quorum_snapshot(self))
+        Some(Self::quorum_snapshot(self))
     }
 
     fn last_applied_record_timestamp_ms(&self) -> i64 {
-        ControllerHandle::quorum_snapshot(self).last_applied_record_timestamp_ms
+        Self::quorum_snapshot(self).last_applied_record_timestamp_ms
     }
 
     fn pending_record_processing_time_us(&self) -> (u64, u64) {
-        let snapshot = ControllerHandle::quorum_snapshot(self);
+        let snapshot = Self::quorum_snapshot(self);
         (
             snapshot.pending_record_processing_time_us_avg,
             snapshot.pending_record_processing_time_us_max,
@@ -49,7 +44,7 @@ impl MetadataSource for ControllerHandle {
         &self,
         records: Vec<MetadataRecord>,
     ) -> Result<SubmitChangeResult, RaftError> {
-        ControllerHandle::submit_change(self, records).await
+        Self::submit_change(self, records).await
     }
 
     async fn submit_change_if_image(
@@ -57,28 +52,28 @@ impl MetadataSource for ControllerHandle {
         records: Vec<MetadataRecord>,
         expected_image: Arc<MetadataImage>,
     ) -> Result<SubmitChangeResult, RaftError> {
-        ControllerHandle::submit_change_if_image(self, records, expected_image).await
+        Self::submit_change_if_image(self, records, expected_image).await
     }
 
     async fn submit_delegation_token_mutations(
         &self,
         mutations: Vec<DelegationTokenMutation>,
     ) -> Result<SubmitChangeResult, RaftError> {
-        ControllerHandle::submit_delegation_token_mutations(self, mutations).await
+        Self::submit_delegation_token_mutations(self, mutations).await
     }
 
     async fn change_membership(&self, new_voters: BTreeSet<NodeId>) -> Result<(), RaftError> {
-        ControllerHandle::change_membership(self, new_voters).await
+        Self::change_membership(self, new_voters).await
     }
 
     async fn add_learner(&self, node_id: NodeId, node: Node) -> Result<(), RaftError> {
-        ControllerHandle::add_learner(self, node_id, node).await
+        Self::add_learner(self, node_id, node).await
     }
 
-    fn controller_bound_addr(&self) -> SocketAddr { ControllerHandle::controller_bound_addr(self) }
+    fn controller_bound_addr(&self) -> SocketAddr { Self::controller_bound_addr(self) }
 
     fn read_snapshot_range(&self, position: i64, max_bytes: i32) -> SnapshotRange {
-        ControllerHandle::read_snapshot_range(self, position, max_bytes)
+        Self::read_snapshot_range(self, position, max_bytes)
     }
 
     async fn fetch_snapshot(
@@ -86,35 +81,33 @@ impl MetadataSource for ControllerHandle {
         version: i16,
         body: bytes::Bytes,
     ) -> Option<Result<bytes::Bytes, RaftError>> {
-        Some(ControllerHandle::fetch_snapshot(self, version, body).await)
+        Some(Self::fetch_snapshot(self, version, body).await)
     }
 
-    async fn trigger_snapshot(&self) -> Result<(), RaftError> {
-        ControllerHandle::trigger_snapshot(self).await
-    }
+    async fn trigger_snapshot(&self) -> Result<(), RaftError> { Self::trigger_snapshot(self).await }
 
     async fn add_voter(&self, req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
-        ControllerHandle::add_voter(self, req).await
+        Self::add_voter(self, req).await
     }
 
     async fn check_add_voter(&self, req: AddVoter) -> Result<ReconfigOutcome, RaftError> {
-        ControllerHandle::check_add_voter(self, req).await
+        Self::check_add_voter(self, req).await
     }
 
     async fn remove_voter(&self, req: RemoveVoter) -> Result<ReconfigOutcome, RaftError> {
-        ControllerHandle::remove_voter(self, req).await
+        Self::remove_voter(self, req).await
     }
 
     async fn update_voter(&self, req: UpdateVoter) -> Result<ReconfigOutcome, RaftError> {
-        ControllerHandle::update_voter(self, req).await
+        Self::update_voter(self, req).await
     }
 
     async fn finalize_kraft_version(&self, version: u16) -> Result<ReconfigOutcome, RaftError> {
-        ControllerHandle::finalize_kraft_version(self, version).await
+        Self::finalize_kraft_version(self, version).await
     }
 
     async fn validate_kraft_version(&self, version: u16) -> Result<ReconfigOutcome, RaftError> {
-        ControllerHandle::validate_kraft_version(self, version).await
+        Self::validate_kraft_version(self, version).await
     }
 
     async fn forward_raw(
@@ -139,17 +132,15 @@ impl MetadataSource for ControllerHandle {
         // Nothing else in this codebase forwards an `Envelope` through this
         // method, so gating on its api key is exactly as exclusive as gating
         // on `DescribeQuorum`'s own was.
-        if api_key != krabka_protocol::owned::envelope_request::API_KEY
-            || ControllerHandle::quorum_snapshot(self).is_leader
-        {
+        if api_key != envelope_request::API_KEY || Self::quorum_snapshot(self).is_leader {
             return None;
         }
-        Some(ControllerHandle::forward_raw(self, api_key, version, body).await)
+        Some(Self::forward_raw(self, api_key, version, body).await)
     }
 
-    async fn cancel(&self) { ControllerHandle::cancel(self).await; }
+    async fn cancel(&self) { Self::cancel(self).await; }
 
-    async fn halt(&self) { ControllerHandle::halt(self).await; }
+    async fn halt(&self) { Self::halt(self).await; }
 }
 
 #[cfg(test)]
@@ -158,9 +149,10 @@ mod tests {
     use {
         super::*,
         crate::metadata_source::test_support::{StartedController, start_controller, topic_record},
+        std::time::Duration,
     };
 
-    krabka_macros::bind_retry_fixture!(bind_eventually, ::std::time::Duration::from_secs(2));
+    krabka_macros::bind_retry_fixture!(bind_eventually, Duration::from_secs(2));
 
     #[tokio::test]
     async fn controller_handle_metadata_source_forwards_snapshot_reconfig_and_cancel() {

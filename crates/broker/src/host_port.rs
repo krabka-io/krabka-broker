@@ -1,18 +1,20 @@
-pub(crate) const DEFAULT_KAFKA_HOST: &str = "localhost";
-pub(crate) const DEFAULT_KAFKA_PORT: u16 = 9092;
+use std::net::IpAddr;
+
+pub const DEFAULT_KAFKA_HOST: &str = "localhost";
+pub const DEFAULT_KAFKA_PORT: u16 = 9092;
 
 /// A `host:port` address split into its host and port.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HostPort {
+pub struct HostPort {
     pub(crate) host: String,
     pub(crate) port: u16,
 }
 
-pub(crate) fn parse_host_port(addr: &str) -> Option<HostPort> {
+pub fn parse_host_port(addr: &str) -> Option<HostPort> {
     let (host, port) = addr.rsplit_once(':')?;
     let port = port.parse::<u16>().ok()?;
     Some(HostPort {
-        host: host.to_string(),
+        host: host.to_owned(),
         port,
     })
 }
@@ -21,7 +23,7 @@ pub(crate) fn parse_host_port(addr: &str) -> Option<HostPort> {
 /// a `FindCoordinator` row. Splits on the last `:`, so a bracketed IPv6
 /// literal keeps its inner colons. A value that is not `host:port` logs a
 /// warning naming it and falls back to `localhost:9092`.
-pub(crate) fn parse_advertised_host_port(addr: &str) -> (String, u16) {
+pub fn parse_advertised_host_port(addr: &str) -> (String, u16) {
     if let Some(HostPort { host, port }) = parse_host_port(addr) {
         return (host, port);
     }
@@ -42,10 +44,7 @@ pub(crate) fn parse_advertised_host_port(addr: &str) -> (String, u16) {
 /// `InetAddress.getLocalHost().getCanonicalHostName()` for a wildcard listener.
 /// A node that cannot read its host name advertises `127.0.0.1`, which only
 /// that node can reach.
-pub(crate) fn advertised_host(
-    ip: std::net::IpAddr,
-    local_host_name: impl FnOnce() -> Option<String>,
-) -> String {
+pub fn advertised_host(ip: IpAddr, local_host_name: impl FnOnce() -> Option<String>) -> String {
     if ip.is_unspecified() {
         local_host_name().unwrap_or_else(|| "127.0.0.1".to_owned())
     } else {
@@ -56,7 +55,7 @@ pub(crate) fn advertised_host(
 /// This machine's host name, as the operating system reports it, or `None`
 /// when it reports none.
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn local_host_name() -> Option<String> {
+pub fn local_host_name() -> Option<String> {
     hostname::get()
         .ok()?
         .into_string()

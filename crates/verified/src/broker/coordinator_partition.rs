@@ -78,10 +78,14 @@ pub fn unclean_recovery_commit_admission(
         0 <= k && k < i@ && current_replicas@[k] == winner)))]
     #[cfg_attr(creusot, variant(selected_replicas@.len() - i@))]
     while i < selected_replicas.len() {
-        if selected_replicas[i] != current_replicas[i] {
+        let (Some(&selected), Some(&current)) = (selected_replicas.get(i), current_replicas.get(i))
+        else {
+            return false;
+        };
+        if selected != current {
             return false;
         }
-        if current_replicas[i] == winner {
+        if current == winner {
             winner_assigned = true;
         }
         i += 1;
@@ -163,15 +167,16 @@ pub fn java_string_hash_partition(units: &[u16], partition_count: i32) -> Option
     #[cfg_attr(creusot, invariant(hash == java_string_hash_prefix_model(units@, index@)))]
     #[variant(units@.len() - index@)]
     while index < units.len() {
-        hash = hash.wrapping_mul(31).wrapping_add(i32::from(units[index]));
+        let Some(&unit) = units.get(index) else {
+            break;
+        };
+        hash = hash.wrapping_mul(31).wrapping_add(i32::from(unit));
         index += 1;
     }
-    let positive = if hash == i32::MIN {
-        0
-    } else if hash < 0 {
-        -hash
-    } else {
-        hash
+    let positive = match hash {
+        i32::MIN => 0,
+        negative if negative < 0 => -negative,
+        nonnegative => nonnegative,
     };
     Some(positive % partition_count)
 }

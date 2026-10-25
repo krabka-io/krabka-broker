@@ -18,6 +18,7 @@ use {
         TopicIdPartition, end_position_for, parse_offset_index, position_for_relative_offset,
     },
     krabka_verified::remote_read_relative_offset,
+    std::ops::Range,
     zerocopy::FromBytes as _,
 };
 
@@ -225,7 +226,7 @@ struct SegmentRead {
 #[derive(Debug, PartialEq, Eq)]
 enum RawScan {
     /// The read holds them in this byte range, the first one whole.
-    Batches(std::ops::Range<usize>),
+    Batches(Range<usize>),
     /// The first one starts at byte `at`, but the read holds only part of it.
     /// `len` is its whole length when the read reached its length field.
     Truncated { at: usize, len: Option<usize> },
@@ -272,8 +273,7 @@ fn whole_batches_from(data: &[u8], offset: LogOffset, max_bytes: usize) -> RawSc
     let mut at = 0_usize;
     let mut first: Option<usize> = None;
     let found = |first: Option<usize>, at: usize| first.map(|first| RawScan::Batches(first..at));
-    while at < data.len() {
-        let rest = &data[at..];
+    while let Some(rest) = data.get(at..).filter(|rest| !rest.is_empty()) {
         if rest.len() < LOG_OVERHEAD {
             return found(first, at).unwrap_or(RawScan::Truncated { at, len: None });
         }
@@ -366,6 +366,7 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_remote_storage::RemoteLogSegmentMetadata,
+        std::{collections::BTreeMap, sync::atomic::Ordering},
         uuid::Uuid,
     };
 
@@ -540,7 +541,7 @@ mod tests {
         }
 
         assert!(
-            index_fetches.load(std::sync::atomic::Ordering::Relaxed) == 1,
+            index_fetches.load(Ordering::Relaxed) == 1,
             "the second fetch must read the cached index, not download it again"
         );
         let stats = reader.index_cache.stats();
@@ -578,7 +579,7 @@ mod tests {
             .expect("ok")
             .expect("a batch");
 
-        assert!(index_fetches.load(std::sync::atomic::Ordering::Relaxed) == 2);
+        assert!(index_fetches.load(Ordering::Relaxed) == 2);
         assert!(reader.index_cache.stats().hits == 0);
     }
 
@@ -756,7 +757,7 @@ mod tests {
         start: i64,
         end: i64,
         state: RemoteLogSegmentState,
-        epochs: std::collections::BTreeMap<LeaderEpoch, i64>,
+        epochs: BTreeMap<LeaderEpoch, i64>,
     ) -> RemoteLogSegmentMetadata {
         RemoteLogSegmentMetadata::new(
             krabka_remote_storage::RemoteLogSegmentId::new(tp(), Uuid::new_v4()),

@@ -2,7 +2,10 @@
 //! coordinator's marker fan-out, so a test can stop or fail a transaction
 //! after its `Prepare*` record is durable.
 
-use crate::{broker::BrokerHandle, txn::coordinator::fanout_gate::MarkerFanoutMode};
+use {
+    crate::{broker::BrokerHandle, txn::coordinator::fanout_gate::MarkerFanoutMode},
+    tokio::time,
+};
 
 impl BrokerHandle {
     /// Test-only: set what every transaction-marker fan-out does at its start.
@@ -22,7 +25,7 @@ impl BrokerHandle {
     pub async fn wait_for_transaction_marker_fanouts_for_test(&self, count: usize) {
         use crate::broker::TEST_AWAITER_TIMEOUT;
 
-        let arrived = tokio::time::timeout(
+        let arrived = time::timeout(
             TEST_AWAITER_TIMEOUT,
             self.broker
                 .txn_coordinator

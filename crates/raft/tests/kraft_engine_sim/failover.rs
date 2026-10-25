@@ -3,12 +3,20 @@
 //! own data dir five times running never leaves the quorum leaderless, and that
 //! a leader the network isolates gives its epoch up instead of holding it.
 
-use crate::{
-    harness::{
-        self as fixture, await_single_leader, await_until, reopen_controller, start_cluster,
-        start_engines, three_voter_network, topic_record,
+use {
+    crate::{
+        harness::{
+            self as fixture, await_single_leader, await_until, reopen_controller, start_cluster,
+            start_engines, three_voter_network, topic_record,
+        },
+        sim_net::SimNet,
     },
-    sim_net::SimNet,
+    krabka_raft::kraft::QuorumStateSnapshot,
+    krabka_units::prelude,
+    tokio::{
+        task,
+        time::{self, Instant},
+    },
 };
 
 /// An elected cluster: the data directories that must outlive it, the leader
@@ -96,9 +104,9 @@ async fn await_quorum_state<F>(
     timeout: fixture::Duration,
     mut f: F,
 ) where
-    F: FnMut(&krabka_raft::kraft::QuorumStateSnapshot) -> bool,
+    F: FnMut(&QuorumStateSnapshot) -> bool,
 {
-    let deadline = tokio::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         if let Ok(qs) = ctrl.quorum_state().await
             && f(&qs)
@@ -106,10 +114,10 @@ async fn await_quorum_state<F>(
             return;
         }
         assert2::assert!(
-            tokio::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "quorum state never satisfied the condition"
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 }
 
@@ -139,7 +147,7 @@ async fn leader_failure_reelects() {
     } = await_surviving_leader(&net, &ids, leader, epoch1).await;
 
     // A submit to the new leader commits across the two survivors.
-    tokio::time::timeout(
+    time::timeout(
         fixture::Duration::from_secs(10),
         net.get(new_leader)
             .unwrap()
@@ -186,7 +194,7 @@ async fn repeated_leader_restart_reelects() {
         let (leader, _) = await_single_leader(&net, &ids, fixture::Duration::from_secs(10)).await;
         net.get(leader).unwrap().shutdown().await;
         net.remove(leader);
-        tokio::time::sleep(fixture::Duration::from_millis(50)).await;
+        time::sleep(fixture::Duration::from_millis(50)).await;
         let reopened =
             reopen_controller(&net, dirs[&leader].path().to_path_buf(), leader, cid, &ids);
         net.register(leader, reopened);
@@ -239,7 +247,7 @@ async fn isolated_leader_resigns_and_rejoins_after_heal() {
         leader: new_leader,
         epoch: epoch2,
     } = await_surviving_leader(&net, &ids, leader, epoch1).await;
-    tokio::time::timeout(
+    time::timeout(
         fixture::Duration::from_secs(10),
         net.get(new_leader)
             .expect("new leader is registered")
@@ -290,8 +298,8 @@ async fn isolated_leader_resigns_and_rejoins_after_heal() {
 async fn lockstep_survivors_elect_within_a_fetch_timeout_and_a_few_election_timeouts(
     cluster: u128,
 ) {
-    let fetch_timeout = krabka_units::prelude::millis(1_500);
-    let election_timeout = krabka_units::prelude::millis(150);
+    let fetch_timeout = prelude::millis(1_500);
+    let election_timeout = prelude::millis(150);
     let (net, ids) = three_voter_network();
     let ElectedCluster {
         dirs: _dirs,
@@ -306,9 +314,9 @@ async fn lockstep_survivors_elect_within_a_fetch_timeout_and_a_few_election_time
         .call()
         .await;
     // Let both followers settle into the same long-poll Fetch rounds.
-    tokio::time::sleep(fixture::Duration::from_secs(1)).await;
+    time::sleep(fixture::Duration::from_secs(1)).await;
 
-    let killed_at = tokio::time::Instant::now();
+    let killed_at = Instant::now();
     net.get(leader).unwrap().shutdown().await;
     net.remove(leader);
     let SurvivingLeader { survivors, .. } = await_surviving_leader(&net, &ids, leader, epoch).await;

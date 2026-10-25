@@ -21,6 +21,7 @@ use {
         records::{apply_seed, snapshot_seed},
     },
     crate::{
+        codes,
         coordinator::unified::streams::{
             config::{StreamsAssignorKind, StreamsGroupConfig},
             persistence::{StoredSubtopology, StreamsGroupTopologyValue},
@@ -33,7 +34,7 @@ use {
     },
     stateright::{Checker, Model, Property},
     std::{
-        collections::{BTreeMap, HashSet},
+        collections::{BTreeMap, HashMap, HashSet},
         time::{Duration, Instant},
     },
 };
@@ -181,7 +182,7 @@ fn topology(epoch: i32) -> StreamsGroupTopologyValue {
     StreamsGroupTopologyValue {
         epoch,
         subtopologies: vec![StoredSubtopology {
-            subtopology_id: SUBTOPOLOGY.to_string(),
+            subtopology_id: SUBTOPOLOGY.to_owned(),
             ..Default::default()
         }],
     }
@@ -197,7 +198,7 @@ fn config() -> StreamsGroupConfig {
 }
 
 fn task_counts(partitions: i32) -> BTreeMap<String, i32> {
-    [(SUBTOPOLOGY.to_string(), partitions)].into()
+    [(SUBTOPOLOGY.to_owned(), partitions)].into()
 }
 
 fn reconcile(state: &mut State) -> bool {
@@ -234,9 +235,7 @@ fn task_map_projection(map: &BTreeMap<String, Vec<i32>>) -> TaskMapProjection {
         .collect()
 }
 
-fn target_projection(
-    target: &std::collections::HashMap<String, BTreeMap<String, Vec<i32>>>,
-) -> TargetProjection {
+fn target_projection(target: &HashMap<String, BTreeMap<String, Vec<i32>>>) -> TargetProjection {
     let mut projection: TargetProjection = target
         .iter()
         .map(|(member, tasks)| MemberTargetProjection {
@@ -430,7 +429,7 @@ impl Model for StreamsModel {
                     return None;
                 }
                 let mut member = StreamsMemberState::joining(member_id, "client", "host");
-                member.process_id = member_id.to_string();
+                member.process_id = member_id.to_owned();
                 member.topology_epoch = state.actor.state.topology_epoch;
                 member.last_seen = at(&state);
                 state.actor.state.add_or_update_member(member);
@@ -485,7 +484,7 @@ impl Model for StreamsModel {
                     .state
                     .validate_heartbeat_epoch(member_id, requested, OwnedTasks::default())
                     .expect_err("stale member epoch is rejected");
-                assert2::assert!(error == crate::codes::FENCED_MEMBER_EPOCH);
+                assert2::assert!(error == codes::FENCED_MEMBER_EPOCH);
                 state.witnesses |= WITNESS_STALE_FENCED;
             }
             Action::ForwardHeartbeat(member_id) => {
@@ -496,7 +495,7 @@ impl Model for StreamsModel {
                     .state
                     .validate_heartbeat_epoch(member_id, requested, OwnedTasks::default())
                     .expect_err("forward member epoch is rejected");
-                assert2::assert!(error == crate::codes::FENCED_MEMBER_EPOCH);
+                assert2::assert!(error == codes::FENCED_MEMBER_EPOCH);
                 state.witnesses |= WITNESS_FORWARD_FENCED;
             }
             Action::Leave(member_id) => {
@@ -539,13 +538,13 @@ impl Model for StreamsModel {
                     .state
                     .validate_heartbeat_epoch("unknown", 1, OwnedTasks::default())
                     .expect_err("unknown member is rejected");
-                assert2::assert!(error == crate::codes::UNKNOWN_MEMBER_ID);
+                assert2::assert!(error == codes::UNKNOWN_MEMBER_ID);
                 state.witnesses |= WITNESS_UNKNOWN_FENCED;
             }
             Action::Replay => {
                 let before = durable_projection(&state.actor);
                 let seed = snapshot_seed(&state.actor);
-                let mut restored = ActorState::new("g".to_string());
+                let mut restored = ActorState::new("g".to_owned());
                 apply_seed(&mut restored, seed);
                 for member in restored.state.members.values_mut() {
                     member.last_seen = at(&state);
@@ -595,7 +594,7 @@ impl Model for StreamsModel {
     }
 
     fn init_states(&self) -> Vec<Self::State> {
-        let mut actor = ActorState::new("g".to_string());
+        let mut actor = ActorState::new("g".to_owned());
         let topology = topology(1);
         actor.state.topology_epoch = topology.epoch;
         actor.state.topology = Some(super::super::state::StoredTopologyHandle {

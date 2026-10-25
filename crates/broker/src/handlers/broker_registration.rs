@@ -14,7 +14,9 @@ use {
         leader_election::{compute_failover_changes, compute_unclean_restart_changes},
         unclean_recovery::RecoveryJob,
     },
-    krabka_metadata::{BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId},
+    krabka_metadata::{
+        BrokerEndpoint, BrokerRegistrationRecord, MetadataRecord, NodeId, metadata_version,
+    },
     krabka_protocol::owned::{
         broker_registration_request::{BrokerRegistrationRequest, Listener},
         broker_registration_response::BrokerRegistrationResponse,
@@ -23,7 +25,7 @@ use {
     std::collections::HashSet,
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: BrokerRegistrationRequest,
     version: ApiVersion,
@@ -65,9 +67,9 @@ pub(crate) async fn handle(
     if req.is_migrating_zk_broker {
         return Ok(response(codes::BROKER_ID_NOT_REGISTERED, -1));
     }
-    let directory_assignment = image.finalized_metadata_version().is_some_and(|level| {
-        level >= krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL
-    });
+    let directory_assignment = image
+        .finalized_metadata_version()
+        .is_some_and(|level| level >= metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL);
     if directory_assignment && let Err(code) = validate_log_dirs(&req, &image, node_id) {
         return Ok(response(code, -1));
     }
@@ -79,7 +81,10 @@ pub(crate) async fn handle(
         return Ok(response(code, -1));
     }
 
-    let first = &endpoints[0];
+    // `decode_listeners` refuses an empty listener list with this code.
+    let Some(first) = endpoints.first() else {
+        return Ok(response(codes::INVALID_REGISTRATION, -1));
+    };
     let features = req
         .features
         .iter()
@@ -324,7 +329,7 @@ fn validate_features(
     let names_metadata_version = req
         .features
         .iter()
-        .any(|feature| feature.name == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE);
+        .any(|feature| feature.name == metadata_version::METADATA_VERSION_FEATURE);
     if !names_metadata_version {
         return Err(codes::INVALID_REGISTRATION);
     }
@@ -356,8 +361,10 @@ fn response(error_code: i16, broker_epoch: i64) -> BrokerRegistrationResponse {
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::test_support::broker_registration,
-        krabka_protocol::owned::broker_registration_request::Feature,
+        super::*,
+        crate::test_support::broker_registration,
+        krabka_protocol::{owned::broker_registration_request::Feature, primitives::uuid::Uuid},
+        std::slice,
     };
 
     #[test]
@@ -369,7 +376,7 @@ mod tests {
             security_protocol: 0,
             ..Default::default()
         };
-        assert2::assert!(decode_listeners(std::slice::from_ref(&valid)).is_ok());
+        assert2::assert!(decode_listeners(slice::from_ref(&valid)).is_ok());
         assert2::assert!(decode_listeners(&[valid.clone(), valid.clone()]).is_err());
         assert2::assert!(
             decode_listeners(&[Listener {
@@ -571,11 +578,7 @@ mod tests {
                 broker_id: 2,
                 log_dirs: directories
                     .iter()
-                    .map(|&id| {
-                        krabka_protocol::primitives::uuid::Uuid(
-                            *uuid::Uuid::from_u128(id).as_bytes(),
-                        )
-                    })
+                    .map(|&id| Uuid(*uuid::Uuid::from_u128(id).as_bytes()))
                     .collect(),
                 ..Default::default()
             };
@@ -606,10 +609,11 @@ mod wire_tests {
                 TopicElr,
                 state::{PartitionElr, test_records},
             },
+            features::ELR_VERSION,
             handlers::forward_to_controller::is_active_controller,
             test_support::{
-                dispatch_wire, end_heartbeat_session, finalized_broker_features,
-                start_broker_with_authorizer,
+                broker_registration, dispatch_wire, end_heartbeat_session,
+                finalized_broker_features, plaintext_broker_endpoint, start_broker_with_authorizer,
             },
         },
         assert2::assert,
@@ -617,7 +621,12 @@ mod wire_tests {
             BrokerRegistrationRecord, LeaderEpoch, NodeId, PartitionRecord, TopicConfigRecord,
             TopicRecord,
         },
-        std::sync::Arc,
+        krabka_protocol::{api_key::ApiKey, primitives::uuid::Uuid},
+        std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        },
+        tokio::time,
     };
 
     const TOPIC: &str = "orders";
@@ -653,7 +662,7 @@ mod wire_tests {
             // default is 0, so the seed finalizes it the way an operator's
             // `kafka-features upgrade` would.
             MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
-                name: crate::features::ELR_VERSION.into(),
+                name: ELR_VERSION.into(),
                 level: 1,
             }),
             MetadataRecord::V1BrokerRegistration(BrokerRegistrationRecord {
@@ -662,12 +671,10 @@ mod wire_tests {
                 broker_epoch: -1,
                 incarnation_id: uuid::Uuid::from_u128(0xdead),
                 host: "broker-2".into(),
-                endpoints: vec![crate::test_support::plaintext_broker_endpoint(
-                    "broker-2", 9092,
-                )],
+                endpoints: vec![plaintext_broker_endpoint("broker-2", 9092)],
                 log_dirs: vec![uuid::Uuid::from_u128(1011)],
                 features: krabka_metadata::supported_feature_ranges(),
-                ..crate::test_support::broker_registration(REGISTERED)
+                ..broker_registration(REGISTERED)
             }),
             MetadataRecord::V1Topic(TopicRecord {
                 name: TOPIC.into(),
@@ -689,9 +696,7 @@ mod wire_tests {
             }),
             MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: TOPIC.into(),
-                overrides: [(MIN_INSYNC_REPLICAS.to_string(), min_isr.to_string())]
-                    .into_iter()
-                    .collect(),
+                overrides: [(MIN_INSYNC_REPLICAS.to_owned(), min_isr.to_owned())].into(),
             }),
         ];
         if let Some(elr) = elr {
@@ -725,13 +730,13 @@ mod wire_tests {
             bind(broker_handle, _dir, broker);
             boot [start_broker_with_authorizer(Arc::new(fixture_authorizers::AllowAllAuthorizer))];
         };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !is_active_controller(&broker) {
             assert!(
-                std::time::Instant::now() <= deadline,
+                Instant::now() <= deadline,
                 "broker did not become controller leader"
             );
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            time::sleep(Duration::from_millis(25)).await;
         }
         broker.controller.submit_change(seed).await.expect("seed");
         // This fixture represents a stopped old broker, whose heartbeat
@@ -749,9 +754,7 @@ mod wire_tests {
         let request = BrokerRegistrationRequest {
             broker_id: 2,
             cluster_id: image.cluster_id().to_string(),
-            incarnation_id: krabka_protocol::primitives::uuid::Uuid(
-                uuid::Uuid::from_u128(0xbeef).into_bytes(),
-            ),
+            incarnation_id: Uuid(uuid::Uuid::from_u128(0xbeef).into_bytes()),
             listeners: vec![Listener {
                 name: "PLAINTEXT".into(),
                 host: "broker-2".into(),
@@ -760,9 +763,7 @@ mod wire_tests {
                 ..Default::default()
             }],
             features: finalized_broker_features(&image),
-            log_dirs: vec![krabka_protocol::primitives::uuid::Uuid(
-                uuid::Uuid::from_u128(1011).into_bytes(),
-            )],
+            log_dirs: vec![Uuid(uuid::Uuid::from_u128(1011).into_bytes())],
             previous_broker_epoch,
             ..Default::default()
         };
@@ -775,7 +776,7 @@ mod wire_tests {
         // the wire from version 3.
         let response: BrokerRegistrationResponse = dispatch_wire(
             &broker,
-            krabka_protocol::api_key::ApiKey::BrokerRegistration as i16,
+            ApiKey::BrokerRegistration as i16,
             version,
             &request,
             &ctx,

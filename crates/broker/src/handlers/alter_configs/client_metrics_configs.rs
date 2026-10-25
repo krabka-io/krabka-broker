@@ -12,6 +12,7 @@ use {
     crate::client_metrics,
     krabka_metadata::{ClientMetricsConfigRecord, MetadataRecord},
     krabka_protocol::owned::alter_configs_request::AlterConfigsResource,
+    std::collections::BTreeMap,
 };
 
 /// Build the authoritative `V1ClientMetricsConfig` record for a
@@ -23,13 +24,13 @@ pub(super) fn client_metrics_config_record(
     // Kafka's `legacyAlterConfigResource` turns a null value into a
     // deletion, so it is left out of the map `ClientMetricsConfigs.validate`
     // checks.
-    let overrides: std::collections::BTreeMap<String, String> = resource
+    let overrides: BTreeMap<String, String> = resource
         .configs
         .iter()
         .filter_map(|cfg| Some((cfg.name.clone(), cfg.value.clone()?)))
         .collect();
     client_metrics::config::validate(&resource.resource_name, &overrides)
-        .map_err(|error| (error.code(), error.message().to_string()))?;
+        .map_err(|error| (error.code(), error.message().to_owned()))?;
     Ok(MetadataRecord::V1ClientMetricsConfig(
         ClientMetricsConfigRecord {
             name: resource.resource_name.clone(),
@@ -57,8 +58,8 @@ mod tests {
         let expected = MetadataRecord::V1ClientMetricsConfig(ClientMetricsConfigRecord {
             name: "sub-a".into(),
             configs: maplit::btreemap! {
-                "interval.ms".to_string() => "60000".to_string(),
-                "metrics".to_string() => "org.apache.kafka.consumer.".to_string(),
+                "interval.ms".to_owned() => "60000".to_owned(),
+                "metrics".to_owned() => "org.apache.kafka.consumer.".to_owned(),
             },
         });
         assert!(record == expected);
@@ -108,7 +109,7 @@ mod tests {
             let error =
                 client_metrics_config_record(&client_metrics_resource(subscription, configs))
                     .expect_err(name);
-            assert2::check!(error == (expected.0, expected.1.to_string()), "case {name}");
+            assert2::check!(error == (expected.0, expected.1.to_owned()), "case {name}");
         }
     }
 }

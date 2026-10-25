@@ -58,7 +58,7 @@ const GROUP_ID_NOT_FOUND_MIN_VERSION: i16 = 6;
 /// The first `DescribeGroups` version with `authorized_operations`.
 const AUTHORIZED_OPERATIONS_MIN_VERSION: i16 = 3;
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DescribeGroupsRequest,
     version: ApiVersion,
@@ -216,11 +216,12 @@ mod tests {
         },
         assert2::assert,
         krabka_metadata::{AclOperation, ResourceType},
-        std::sync::Arc,
+        krabka_protocol::owned::describe_groups_response,
+        std::{collections::HashSet, sync::Arc},
     };
 
     const VERSION: krabka_ids::ApiVersion =
-        krabka_ids::ApiVersion(krabka_protocol::owned::describe_groups_response::MAX_VERSION);
+        krabka_ids::ApiVersion(describe_groups_response::MAX_VERSION);
 
     krabka_macros::wire_codec_helpers! {
         test_context ["admin-client"];
@@ -247,7 +248,7 @@ mod tests {
     ) -> DescribeGroupsRequest {
         let setup = GroupDescribeSetup { groups, operations };
         DescribeGroupsRequest {
-            groups: setup.groups.iter().map(|g| (*g).to_string()).collect(),
+            groups: setup.groups.iter().map(|g| (*g).to_owned()).collect(),
             include_authorized_operations: matches!(
                 setup.operations,
                 OperationsDisclosure::Include
@@ -262,7 +263,7 @@ mod tests {
         krabka_macros::tagged_wire!(DescribedGroup {
             error_code: error_code.0,
             error_message: None,
-            group_id: group_id.to_string(),
+            group_id: group_id.to_owned(),
             group_state: String::new(),
             protocol_type: String::new(),
             protocol_data: String::new(),
@@ -306,14 +307,8 @@ mod tests {
         assert!(
             resp == krabka_macros::unthrottled_wire!(DescribeGroupsResponse {
                 groups: vec![
-                    error_row(
-                        "group-a",
-                        crate::test_support::KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED)
-                    ),
-                    error_row(
-                        "group-b",
-                        crate::test_support::KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED)
-                    ),
+                    error_row("group-a", KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED)),
+                    error_row("group-b", KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED)),
                 ],
             })
         );
@@ -352,7 +347,7 @@ mod tests {
         };
         DescribedGroup {
             group_state: "Dead".into(),
-            error_message: setup.message.map(str::to_string),
+            error_message: setup.message.map(str::to_owned),
             authorized_operations: setup.operations.0,
             ..error_row(setup.group, setup.error)
         }
@@ -544,7 +539,7 @@ mod tests {
         let HandlerStartedBroker {
             broker: broker_handle,
             dir: _dir,
-        } = start_group_broker_no_audit(Arc::clone(&authorizer) as _).await;
+        } = start_group_broker_no_audit(Arc::<AllowAllAuthorizer>::clone(&authorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker.group_coordinator.get_or_create_classic("classic-a");
 
@@ -612,10 +607,7 @@ mod tests {
                 vec![AclOperation::Describe],
                 OperationsDisclosure::Omit,
                 vec![
-                    error_row(
-                        "denied",
-                        crate::test_support::KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED),
-                    ),
+                    error_row("denied", KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED)),
                     empty_row("allowed", i32::MIN),
                 ],
             ),
@@ -623,10 +615,7 @@ mod tests {
                 vec![AclOperation::Describe, AclOperation::AlterConfigs],
                 OperationsDisclosure::Include,
                 vec![
-                    error_row(
-                        "denied",
-                        crate::test_support::KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED),
-                    ),
+                    error_row("denied", KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED)),
                     empty_row(
                         "allowed",
                         bit(AclOperation::Describe)
@@ -639,10 +628,7 @@ mod tests {
                 vec![AclOperation::All],
                 OperationsDisclosure::Include,
                 vec![
-                    error_row(
-                        "denied",
-                        crate::test_support::KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED),
-                    ),
+                    error_row("denied", KafkaErrorCode(codes::GROUP_AUTHORIZATION_FAILED)),
                     empty_row(
                         "allowed",
                         bit(AclOperation::Read)
@@ -655,7 +641,7 @@ mod tests {
             ),
         ];
         for (acls, include_ops, expected) in rows {
-            let authorizer = SimpleAclAuthorizer::new(std::collections::HashSet::new());
+            let authorizer = SimpleAclAuthorizer::new(HashSet::new());
             let HandlerStartedBroker {
                 broker: broker_handle,
                 dir: _dir,

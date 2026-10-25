@@ -20,7 +20,8 @@ use {
     assert2::assert,
     krabka_ids::PartitionIndex,
     krabka_metadata::{MetadataRecord, NodeId, TopicRecord},
-    std::time::Duration,
+    std::{sync::atomic, time::Duration},
+    tokio::{sync::Notify, task, time},
 };
 
 fn ready_image() -> Arc<MetadataImage> {
@@ -76,11 +77,9 @@ async fn recovery_without_metadata_changes_releases_completed_replay_tasks() {
 async fn waits_for_readiness_and_cancels_a_blocked_replay() {
     let dir = tempfile::tempdir().unwrap();
     let partitions = Arc::new(PartitionRegistry::new());
-    let release_writer = Arc::new(tokio::sync::Notify::new());
+    let release_writer = Arc::new(Notify::new());
     let partition = gated_state_partition(dir.path(), &release_writer);
-    partition
-        .current_leader
-        .store(1, std::sync::atomic::Ordering::Release);
+    partition.current_leader.store(1, atomic::Ordering::Release);
     partitions.insert(
         bootstrap::TOPIC.into(),
         PartitionIndex(0),
@@ -107,7 +106,7 @@ async fn waits_for_readiness_and_cancels_a_blocked_replay() {
     );
     // The local log already exists and leads, but no completed replica pass
     // has published an image yet.
-    tokio::task::yield_now().await;
+    task::yield_now().await;
     assert!(coordinator.load_status(PartitionIndex(0)).await.is_none());
 
     ready.send_replace(Some(ready_image()));
@@ -115,7 +114,7 @@ async fn waits_for_readiness_and_cancels_a_blocked_replay() {
     // blocked and prove shutdown does not wait for its release.
     await_load_status(&coordinator, PartitionIndex(0), LoadStatus::Loading).await;
     shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(2), driver)
+    time::timeout(Duration::from_secs(2), driver)
         .await
         .expect("driver shutdown cancels replay")
         .unwrap();

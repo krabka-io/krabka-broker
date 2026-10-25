@@ -13,7 +13,7 @@
 /// at once.
 #[must_use]
 pub fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
+    net::TcpListener::bind("127.0.0.1:0")
         .expect("bind an ephemeral port")
         .local_addr()
         .expect("local addr")
@@ -22,7 +22,7 @@ pub fn free_port() -> u16 {
 
 /// Runs a Docker fixture command and returns its trimmed stdout.
 pub fn docker(args: &[&str]) -> String {
-    let out = std::process::Command::new("docker")
+    let out = process::Command::new("docker")
         .args(args)
         .output()
         .unwrap_or_else(|e| panic!("spawn docker {args:?}: {e}"));
@@ -40,21 +40,21 @@ pub fn docker(args: &[&str]) -> String {
 /// Docker assigns the bridge the subnet's first address in that case.
 pub fn bridge_gateway(rendered: &str) -> Option<String> {
     let (gateway, subnet) = rendered.trim().split_once('|')?;
-    if gateway.parse::<std::net::IpAddr>().is_ok() {
+    if gateway.parse::<IpAddr>().is_ok() {
         return Some(gateway.to_owned());
     }
     let (base, _prefix) = subnet.split_once('/')?;
-    let base: std::net::Ipv4Addr = base.parse().ok()?;
+    let base: Ipv4Addr = base.parse().ok()?;
     let first = u32::from(base).checked_add(1)?;
-    Some(std::net::Ipv4Addr::from(first).to_string())
+    Some(Ipv4Addr::from(first).to_string())
 }
 
 /// Capture a Docker tool's output after delivering its optional complete stdin.
 pub fn docker_output(
-    command: &mut std::process::Command,
+    command: &mut process::Command,
     stdin: Option<&str>,
     write_context: &str,
-) -> std::process::Output {
+) -> Output {
     use std::{io::Write as _, process::Stdio};
 
     match stdin {
@@ -126,13 +126,13 @@ impl JvmListeners {
 
 /// Listeners shared by the tests in a single JVM test binary.
 pub fn jvm_listeners() -> &'static JvmListeners {
-    static LISTENERS: std::sync::OnceLock<JvmListeners> = std::sync::OnceLock::new();
+    static LISTENERS: OnceLock<JvmListeners> = OnceLock::new();
     LISTENERS.get_or_init(JvmListeners::allocate)
 }
 
 /// Host-loopback address for native clients in a JVM test binary.
 pub fn jvm_client_addr() -> &'static str {
-    static ADDRESS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    static ADDRESS: OnceLock<String> = OnceLock::new();
     ADDRESS.get_or_init(|| jvm_listeners().listen.replace("0.0.0.0", "127.0.0.1"))
 }
 
@@ -188,16 +188,30 @@ pub async fn start_host_broker() -> StartedBroker {
 /// Initialize tracing with the suite's default filter.
 pub fn init_jvm_tracing(default_filter: &str) { super::init_tracing_with(default_filter); }
 
-use {crate::support::controller_voters, krabka_broker::NodeId};
+use {
+    crate::support::controller_voters,
+    krabka_broker::NodeId,
+    std::{
+        array,
+        collections::hash_map::DefaultHasher,
+        env,
+        fs::{self, Permissions},
+        net::{self, IpAddr, Ipv4Addr, SocketAddr},
+        path::{Path, PathBuf},
+        process::{self, Child, Output},
+        sync::OnceLock,
+    },
+    tokio::{net::TcpListener, task},
+};
 
 #[derive(krabka_macros::FieldDefaults)]
 pub struct JvmBrokerSetup {
     #[default(NodeId(1))]
     pub node: NodeId,
     #[default("127.0.0.1:0".parse().expect("loopback listener"))]
-    pub listen: std::net::SocketAddr,
+    pub listen: SocketAddr,
     #[default("127.0.0.1:0".parse().expect("loopback controller"))]
-    pub controller: std::net::SocketAddr,
+    pub controller: SocketAddr,
     #[default("127.0.0.1:0".into())]
     pub advertised: String,
     #[default(vec![(NodeId(1), "127.0.0.1:0".into())])]
@@ -207,12 +221,12 @@ pub struct JvmBrokerSetup {
 /// Common configuration for host brokers addressed by Kafka containers.
 #[bon::builder]
 pub fn jvm_broker_config(
-    log_dir: std::path::PathBuf,
+    log_dir: PathBuf,
     #[builder(into, default = NodeId (1))] node: NodeId,
     #[builder(default = "127.0.0.1:0" . parse () . expect ("loopback listener"))]
-    listen: std::net::SocketAddr,
+    listen: SocketAddr,
     #[builder(default = "127.0.0.1:0" . parse () . expect ("loopback controller"))]
-    controller: std::net::SocketAddr,
+    controller: SocketAddr,
     #[builder(default = "127.0.0.1:0" . into ())] advertised: String,
     #[builder(default = vec ! [(NodeId (1) , "127.0.0.1:0" . into ())])] voters: Vec<(
         NodeId,
@@ -260,7 +274,7 @@ pub struct JvmSingleBrokerSetup<'a> {
 /// Common single-voter configuration, with listener strings supplied by a suite.
 #[bon::builder]
 pub fn jvm_single_broker_config(
-    log_dir: std::path::PathBuf,
+    log_dir: PathBuf,
     #[builder(default = "127.0.0.1:0")] listen: &'_ str,
     #[builder(default = "127.0.0.1:0")] advertised: &'_ str,
     #[builder(default = "127.0.0.1:0")] controller: &'_ str,
@@ -270,7 +284,7 @@ pub fn jvm_single_broker_config(
         advertised,
         controller,
     };
-    let controller: std::net::SocketAddr = setup.controller.parse().expect("controller address");
+    let controller: SocketAddr = setup.controller.parse().expect("controller address");
     jvm_broker_config()
         .log_dir(log_dir)
         .listen(setup.listen.parse().expect("client address"))
@@ -281,7 +295,7 @@ pub fn jvm_single_broker_config(
 }
 
 /// Prepare a tool container with Docker options kept in the caller's order.
-pub fn docker_tool_command(image: &str, options: &[&str]) -> std::process::Command {
+pub fn docker_tool_command(image: &str, options: &[&str]) -> process::Command {
     use std::process::{Command, Stdio};
 
     let mut command = Command::new("docker");
@@ -317,7 +331,7 @@ pub fn jvm_docker_command(
     #[builder(default)] mounts: &'_ [&'_ str],
     #[builder(default)] args: &'_ [&'_ str],
     #[builder(default)] input: ContainerInput,
-) -> std::process::Command {
+) -> process::Command {
     let setup = JvmDockerSetup {
         image,
         mounts,
@@ -338,7 +352,7 @@ pub fn jvm_docker_command(
 
 /// Capture both log streams for a container-readiness diagnostic.
 pub fn docker_logs(name: &str) -> String {
-    let out = std::process::Command::new("docker")
+    let out = process::Command::new("docker")
         .args(["logs", name])
         .output()
         .expect("spawn docker logs");
@@ -351,20 +365,20 @@ pub fn docker_logs(name: &str) -> String {
 
 /// Best-effort cleanup, including containers left by a failed test.
 pub fn remove_container(name: &str) {
-    let _ = std::process::Command::new("docker")
+    let _ = process::Command::new("docker")
         .args(["rm", "-f", name])
         .output();
 }
 
 /// Best-effort cleanup of a container and its anonymous volumes.
 pub fn remove_container_with_volumes(name: &str) {
-    let _ = std::process::Command::new("docker")
+    let _ = process::Command::new("docker")
         .args(["rm", "--force", "--volumes", name])
         .output();
 }
 
 /// Nonempty, trimmed CLI rows in their original order.
-pub fn jvm_output_lines(output: &std::process::Output) -> Vec<String> {
+pub fn jvm_output_lines(output: &Output) -> Vec<String> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(str::trim)
@@ -382,7 +396,7 @@ pub struct JvmStaticVoterSetup {
 /// A test-default voter in a named static quorum shared with a JVM node.
 #[bon::builder]
 pub fn jvm_static_voter_config(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     #[builder(default)] broker: JvmBrokerSetup,
     #[builder(default)] cluster_id: uuid::Uuid,
 ) -> krabka_broker::BrokerConfig {
@@ -405,29 +419,29 @@ pub fn jvm_static_voter_config(
 
 /// Format a voter at the Kafka release supported by the oldest quorum member.
 pub async fn format_jvm_voter(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     cluster_id: &str,
     node: &krabka_broker::BrokerConfig,
 ) {
     let argv = vec![
-        "krabka-format".to_string(),
-        "--log-dir".to_string(),
-        log_dir.to_str().unwrap().to_string(),
-        "--cluster-id".to_string(),
-        cluster_id.to_string(),
-        "--node-id".to_string(),
+        "krabka-format".to_owned(),
+        "--log-dir".to_owned(),
+        log_dir.to_str().unwrap().to_owned(),
+        "--cluster-id".to_owned(),
+        cluster_id.to_owned(),
+        "--node-id".to_owned(),
         node.node_id.0.to_string(),
-        "--directory-id".to_string(),
+        "--directory-id".to_owned(),
         node.directory_id.to_string(),
-        "--release-version".to_string(),
-        "4.0".to_string(),
+        "--release-version".to_owned(),
+        "4.0".to_owned(),
     ];
     let code = krabka_format::run_from_args(argv).await;
     assert2::assert!(code == 0, "krabka-format exited {code}");
 }
 
 /// Run a JVM tool while leaving success and output assertions to its caller.
-pub fn jvm_docker_run(image: &str, args: &[&str]) -> std::process::Output {
+pub fn jvm_docker_run(image: &str, args: &[&str]) -> Output {
     let out = jvm_docker_command()
         .image(image)
         .args(args)
@@ -443,10 +457,7 @@ pub fn jvm_docker_run(image: &str, args: &[&str]) -> std::process::Output {
 }
 
 /// Write a console tool's complete input and capture its output.
-pub fn jvm_stdin_output(
-    command: &mut std::process::Command,
-    payload: &[u8],
-) -> std::process::Output {
+pub fn jvm_stdin_output(command: &mut process::Command, payload: &[u8]) -> Output {
     use std::{io::Write, process::Stdio};
 
     let mut child = command
@@ -527,7 +538,7 @@ pub fn unique_container_name(prefix: &str) -> String {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     format!(
         "{prefix}-{}-{}",
-        std::process::id(),
+        process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
     )
 }
@@ -549,17 +560,14 @@ pub fn unique_container_name(prefix: &str) -> String {
 /// Panics when neither Cargo's variable nor Bazel's pair is set, which means the
 /// test was launched by something that stages fixtures differently again.
 #[must_use]
-pub fn manifest_dir() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        return std::path::PathBuf::from(dir);
+pub fn manifest_dir() -> PathBuf {
+    if let Ok(dir) = env::var("CARGO_MANIFEST_DIR") {
+        return PathBuf::from(dir);
     }
-    let srcdir = std::env::var("TEST_SRCDIR")
+    let srcdir = env::var("TEST_SRCDIR")
         .expect("CARGO_MANIFEST_DIR (cargo) or TEST_SRCDIR (bazel) must be set");
-    let workspace =
-        std::env::var("TEST_WORKSPACE").expect("TEST_WORKSPACE accompanies TEST_SRCDIR");
-    std::path::PathBuf::from(srcdir)
-        .join(workspace)
-        .join("crates/broker")
+    let workspace = env::var("TEST_WORKSPACE").expect("TEST_WORKSPACE accompanies TEST_SRCDIR");
+    PathBuf::from(srcdir).join(workspace).join("crates/broker")
 }
 
 /// A cache directory under the system temp dir whose name carries a digest of
@@ -573,23 +581,23 @@ pub fn manifest_dir() -> std::path::PathBuf {
 ///
 /// Panics when a fixture cannot be read.
 #[must_use]
-pub fn fixture_cache_dir(prefix: &str, fixtures: &[&str]) -> std::path::PathBuf {
+pub fn fixture_cache_dir(prefix: &str, fixtures: &[&str]) -> PathBuf {
     use std::hash::{Hash, Hasher};
 
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = DefaultHasher::new();
     for name in fixtures {
         let path = manifest_dir().join("tests/fixtures/security").join(name);
-        std::fs::read(&path)
+        fs::read(&path)
             .unwrap_or_else(|error| panic!("read fixture {}: {error}", path.display()))
             .hash(&mut hasher);
     }
-    std::env::temp_dir().join(format!("{prefix}-{:016x}", hasher.finish()))
+    env::temp_dir().join(format!("{prefix}-{:016x}", hasher.finish()))
 }
 
 /// Run a blocking container command without occupying a broker runtime worker.
-pub async fn docker_run_blocking(args: Vec<String>, context: &'static str) -> std::process::Output {
-    tokio::task::spawn_blocking(move || {
-        std::process::Command::new("docker")
+pub async fn docker_run_blocking(args: Vec<String>, context: &'static str) -> Output {
+    task::spawn_blocking(move || {
+        process::Command::new("docker")
             .args(&args)
             .output()
             .unwrap_or_else(|error| panic!("{context}: {error}"))
@@ -663,7 +671,7 @@ pub fn print_log_tail(text: &str, count: usize) {
 }
 
 /// A finished process's stdout followed by stderr, including invalid UTF-8 replacement.
-pub fn combined_output(output: &std::process::Output) -> String {
+pub fn combined_output(output: &Output) -> String {
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
     text
@@ -671,13 +679,13 @@ pub fn combined_output(output: &std::process::Output) -> String {
 
 /// Host-bound listeners transferred directly into the broker to avoid port races.
 pub async fn start_jvm_bound(
-    log_dir: std::path::PathBuf,
+    log_dir: PathBuf,
     customize: impl FnOnce(&mut krabka_broker::BrokerConfig),
 ) -> (krabka_broker::BrokerHandle, String) {
-    let data_plane = tokio::net::TcpListener::bind("0.0.0.0:0")
+    let data_plane = TcpListener::bind("0.0.0.0:0")
         .await
         .expect("bind data plane");
-    let controller = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let controller = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind controller");
     let port = data_plane.local_addr().expect("data plane addr").port();
@@ -698,12 +706,12 @@ pub async fn start_jvm_bound(
 }
 
 /// The long admin timeouts shared by tools whose broker heartbeat must keep running.
-pub fn jvm_admin_config() -> &'static std::path::Path {
-    static CONFIG: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+pub fn jvm_admin_config() -> &'static Path {
+    static CONFIG: OnceLock<tempfile::TempDir> = OnceLock::new();
     CONFIG
         .get_or_init(|| {
             let dir = tempfile::tempdir().expect("tempdir for command config");
-            std::fs::write(
+            fs::write(
                 dir.path().join("admin.properties"),
                 "request.timeout.ms=120000\ndefault.api.timeout.ms=240000\n",
             )
@@ -715,7 +723,7 @@ pub fn jvm_admin_config() -> &'static std::path::Path {
 
 /// Allocate a broker set's client ports before allocating any controller ports.
 pub fn jvm_client_ports<const N: usize>() -> ([u16; N], [String; N], [String; N]) {
-    let ports: [u16; N] = std::array::from_fn(|_| free_port());
+    let ports: [u16; N] = array::from_fn(|_| free_port());
     (
         ports,
         ports.map(|port| format!("0.0.0.0:{port}")),
@@ -741,7 +749,7 @@ pub fn jvm_parse_offset(line: &str) -> i64 {
 }
 
 /// Spawn an interactive JVM command with all three streams captured.
-pub fn jvm_spawn_piped(command: &mut std::process::Command, context: &str) -> std::process::Child {
+pub fn jvm_spawn_piped(command: &mut process::Command, context: &str) -> Child {
     use std::process::Stdio;
     command
         .stdin(Stdio::piped())
@@ -752,7 +760,7 @@ pub fn jvm_spawn_piped(command: &mut std::process::Command, context: &str) -> st
 }
 
 /// The shared acks-all console-producer command; callers retain their write/exit assertions.
-pub fn jvm_acks_all_producer(image: &str, bootstrap: &str, topic: &str) -> std::process::Child {
+pub fn jvm_acks_all_producer(image: &str, bootstrap: &str, topic: &str) -> Child {
     jvm_spawn_piped(
         &mut jvm_docker_command()
             .image(image)
@@ -772,7 +780,7 @@ pub fn jvm_acks_all_producer(image: &str, bootstrap: &str, topic: &str) -> std::
 }
 
 /// Capture a plain JVM tool while retaining the suite-specific log prefix.
-pub fn jvm_tool_output(image: &str, args: &[&str], log_scope: &str) -> std::process::Output {
+pub fn jvm_tool_output(image: &str, args: &[&str], log_scope: &str) -> Output {
     let out = jvm_docker_command()
         .image(image)
         .args(args)
@@ -789,20 +797,20 @@ pub fn jvm_tool_output(image: &str, args: &[&str], log_scope: &str) -> std::proc
 
 /// Controller logs concatenated in stdout/stderr order and saved for diagnosis.
 pub fn save_jvm_logs(container: &str, path: &str) -> String {
-    let logs = std::process::Command::new("docker")
+    let logs = process::Command::new("docker")
         .args(["logs", container])
         .output()
         .expect("docker logs");
     let text = combined_output(&logs);
-    let _ = std::fs::write(path, &text);
+    let _ = fs::write(path, &text);
     text
 }
 
 /// Execute a tool inside an existing container, retaining its output for the caller's assertions.
-pub fn docker_exec(name: &str, args: &[&str]) -> std::process::Output {
+pub fn docker_exec(name: &str, args: &[&str]) -> Output {
     let mut full = vec!["exec", name];
     full.extend_from_slice(args);
-    std::process::Command::new("docker")
+    process::Command::new("docker")
         .args(&full)
         .output()
         .expect("spawn docker exec")
@@ -838,8 +846,8 @@ pub fn kafka_single_node_env_args() -> &'static [&'static str] {
 
 /// Set the caller's exact Unix mode so a container user can access a mounted fixture.
 #[cfg(unix)]
-pub fn chmod_for_container(path: &std::path::Path, mode: u32, context: &str) {
+pub fn chmod_for_container(path: &Path, mode: u32, context: &str) {
     use std::os::unix::fs::PermissionsExt as _;
 
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect(context);
+    fs::set_permissions(path, Permissions::from_mode(mode)).expect(context);
 }

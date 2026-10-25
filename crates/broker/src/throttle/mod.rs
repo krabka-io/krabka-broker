@@ -171,7 +171,7 @@ pub const ALTER_LOG_DIRS_THROTTLED_RATE_KEY: &str =
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, assert2::assert, std::iter};
 
     fn replica(partition: i32, broker: u64) -> ThrottledReplica {
         ThrottledReplica {
@@ -211,17 +211,17 @@ mod tests {
         first_replica = {
             "0:1,0:2,1:3",
             1,
-            ThrottledPartitions::Listed([0].into_iter().collect()),
+            ThrottledPartitions::Listed(iter::once(0).collect()),
         },
         second_replica = {
             "0:1,0:2,1:3",
             2,
-            ThrottledPartitions::Listed([0].into_iter().collect()),
+            ThrottledPartitions::Listed(iter::once(0).collect()),
         },
         third_replica = {
             "0:1,0:2,1:3",
             3,
-            ThrottledPartitions::Listed([1].into_iter().collect()),
+            ThrottledPartitions::Listed(iter::once(1).collect()),
         },
         no_matching_replicas = {
             "0:1,0:2,1:3",

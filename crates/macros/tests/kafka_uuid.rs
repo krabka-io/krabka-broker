@@ -1,4 +1,5 @@
 //! The derive delegates its string representation, parser and errors to the local codec.
+#![cfg(test)]
 
 use assert2::assert;
 

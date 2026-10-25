@@ -15,6 +15,7 @@ use {
     },
     krabka_ids::Offset,
     krabka_units::prelude::TimeExt as _,
+    std::sync::PoisonError,
 };
 
 /// Whether a topic schedules delivery, and its clock bound in milliseconds.
@@ -57,10 +58,6 @@ impl Log {
     /// log start using the current clock and bound. If uncertainty increased
     /// or the clock moved backward, a rebuilt watermark can be below the
     /// prefix this instance had already released.
-    ///
-    /// # Panics
-    ///
-    /// Panics when another thread poisoned the log configuration lock.
     pub fn advance_delivery_watermark(&mut self, now_ms: i64) -> DeliveryAdvance {
         let DeliverySettings {
             scheduled,
@@ -140,13 +137,15 @@ impl Log {
     /// This method reads the cached value and walks nothing, so a reader that
     /// must not do I/O can use it. It answers `log_end_offset()` on a topic
     /// that does not schedule delivery, where every durable record is visible.
-    ///
-    /// # Panics
-    ///
-    /// Panics when another thread poisoned the log configuration lock.
     #[must_use]
     pub fn delivery_watermark(&self) -> Offset {
-        if self.config.read().unwrap().delivery_policy != DeliveryPolicy::Scheduled {
+        if self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .delivery_policy
+            != DeliveryPolicy::Scheduled
+        {
             return self.log_end_offset();
         }
         self.bounded_watermark()
@@ -166,10 +165,6 @@ impl Log {
     /// empty when the window holds no records.
     /// Records below the published delivery watermark stay visible even if
     /// clock uncertainty subsequently increases or the clock moves backward.
-    ///
-    /// # Panics
-    ///
-    /// Panics when another thread poisoned the log configuration lock.
     #[must_use]
     pub fn pending_activation_ranges(
         &self,
@@ -222,7 +217,7 @@ impl Log {
     /// Whether this topic schedules delivery, and its clock bound in
     /// milliseconds.
     fn delivery_settings(&self) -> DeliverySettings {
-        let config = self.config.read().unwrap();
+        let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
         DeliverySettings {
             scheduled: config.delivery_policy == DeliveryPolicy::Scheduled,
             uncertainty_ms: config.delivery_clock_uncertainty.millis_i64_trunc(),

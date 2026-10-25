@@ -45,6 +45,7 @@
 //! `InMemory`-backed suites under `crates/remote-storage/src/s3`,
 //! `crates/object-store`'s `put_from_path` tests, and the MinIO-backed
 //! S3 suites. No GCS emulator can execute it.
+#![cfg(test)]
 
 use {
     assert2::{assert, check},
@@ -59,6 +60,7 @@ use {
         process::{Command, Stdio},
         time::Duration,
     },
+    tokio::{task, time},
     uuid::Uuid,
 };
 
@@ -145,16 +147,17 @@ impl FakeGcs {
         let client = reqwest::Client::new();
         let url = self.buckets_url();
         for _ in 0..60 {
-            let served = match client.get(&url).send().await {
-                Ok(response) => response.status().is_success(),
-                Err(_) => false,
-            };
+            let served = client
+                .get(&url)
+                .send()
+                .await
+                .is_ok_and(|response| response.status().is_success());
             if served {
                 return;
             }
             // Intentional: a bounded readiness poll of an external process. No
             // krabka metric reflects its listener coming up.
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            time::sleep(Duration::from_millis(500)).await;
         }
         panic!(
             "fake-gcs-server never served a bucket listing on 127.0.0.1:{}",
@@ -375,7 +378,7 @@ async fn a_segment_seeded_in_the_emulator_fetches_back_byte_for_byte(
         metadata,
     } = seeded_segment(0).await;
 
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         check!(
             storage
                 .fetch_log_segment(&metadata, 0, None)
@@ -416,7 +419,7 @@ async fn a_deleted_segment_is_gone_from_the_bucket() {
     check!(seeded.len() == segment_artifacts().len());
 
     let deleted = metadata.clone();
-    tokio::task::spawn_blocking(move || {
+    task::spawn_blocking(move || {
         storage
             .delete_log_segment_data(&deleted)
             .expect("delete the segment from the emulator");

@@ -2,14 +2,14 @@ use {
     super::*,
     crate::{kraft::transport::api_key::END_QUORUM_EPOCH, network::negotiation::convert_request},
     assert2::{assert, check},
-    base64::Engine as _,
+    base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
 };
 
 fn raw_vote_request() -> VoteRequest {
     VoteRequest {
         voter_id: 1,
         topics: vec![vote_req::TopicData {
-            topic_name: METADATA_TOPIC.to_string(),
+            topic_name: METADATA_TOPIC.to_owned(),
             partitions: vec![vote_req::PartitionData {
                 partition_index: METADATA_PARTITION,
                 replica_epoch: 3,
@@ -90,10 +90,7 @@ fn vote_request_round_trips() {
 
     let mut cur = &encoded[..];
     let raw = VoteRequest::decode(&mut cur, VOTE_VERSION).expect("decode vote request");
-    assert2::assert!(
-        raw.cluster_id
-            == Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(cluster_id.as_bytes()))
-    );
+    assert2::assert!(raw.cluster_id == Some(URL_SAFE_NO_PAD.encode(cluster_id.as_bytes())));
 }
 
 #[test]
@@ -116,8 +113,7 @@ fn vote_request_preserves_legitimate_node_zero() {
 fn vote_decode_accepts_kafka_base64_cluster_id() {
     let cluster_id = uuid::Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
     let mut request = raw_vote_request();
-    request.cluster_id =
-        Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(cluster_id.as_bytes()));
+    request.cluster_id = Some(URL_SAFE_NO_PAD.encode(cluster_id.as_bytes()));
 
     let Some(PeerRequest::Vote {
         cluster_id: decoded,
@@ -181,7 +177,7 @@ fn vote_decode_rejects_negative_epochs() {
 #[test]
 fn vote_decode_rejects_wrong_topic_or_partition() {
     let mut request = raw_vote_request();
-    request.topics[0].topic_name = "other".to_string();
+    request.topics[0].topic_name = "other".to_owned();
     assert2::assert!(decode_vote(&raw_vote_body(&request)).is_none());
 
     let mut request = raw_vote_request();

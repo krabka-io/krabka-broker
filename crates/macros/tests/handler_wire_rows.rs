@@ -1,4 +1,5 @@
 //! Real wire rows exercise fixed projections and native acknowledgement expressions.
+#![cfg(test)]
 
 use {
     assert2::assert,
@@ -12,8 +13,8 @@ use {
 };
 
 mod codes {
-    pub(crate) const NONE: i16 = 0;
-    pub(crate) const GROUP_AUTHORIZATION_FAILED: i16 = 30;
+    pub const NONE: i16 = 0;
+    pub const GROUP_AUTHORIZATION_FAILED: i16 = 30;
 }
 
 struct Offset(i64);
@@ -162,10 +163,13 @@ enum RoutingDecision {
 }
 
 mod handlers {
-    pub(crate) mod forward_to_controller {
-        use super::super::{Cell, ControlFlow, RoutingDecision, assert};
+    pub mod forward_to_controller {
+        use {
+            super::super::{Cell, ControlFlow, RoutingDecision, assert},
+            std::future,
+        };
 
-        pub(crate) async fn controller_listener_dispatch(
+        pub async fn controller_listener_dispatch(
             broker: &RoutingDecision,
             context: &Cell<u32>,
             request: u8,
@@ -173,7 +177,7 @@ mod handlers {
             operation: impl FnOnce(u8) -> u8,
             refusal: impl FnOnce() -> &'static str,
         ) -> ControlFlow<Result<u8, &'static str>, u8> {
-            std::future::ready(()).await;
+            future::ready(()).await;
             context.set(context.get() + 1);
             assert!(version == 3);
             match broker {

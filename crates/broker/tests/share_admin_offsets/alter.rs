@@ -19,6 +19,7 @@ use {
         AlterShareGroupOffsetsRequestTopic,
     },
     std::time::Duration,
+    tokio::time,
 };
 
 fn alter_request(start_offset: i64) -> AlterShareGroupOffsetsRequest {
@@ -73,7 +74,7 @@ async fn alter_resets_empty_group() {
         // intentional: bounded retry of the Alter mutation RPC while the share
         // persister leadership settles; coordinator-local state with no
         // metadata-image signal or awaiter.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
     assert!(altered, "AlterShareGroupOffsets never succeeded");
 

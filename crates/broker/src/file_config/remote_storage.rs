@@ -21,6 +21,7 @@ use {
     },
     schemars::JsonSchema,
     serde::Deserialize,
+    std::path::PathBuf,
 };
 
 /// TOML shape of `[remote_storage]`. Maps to
@@ -272,7 +273,7 @@ pub(super) fn apply_remote_storage(
     }
     if let Some(dir) = &rs.storage_dir {
         cfg.remote_storage_backend = Some(RemoteStorageBackend::Local {
-            dir: std::path::PathBuf::from(dir),
+            dir: PathBuf::from(dir),
         });
     } else if let Some(s3) = &rs.s3 {
         cfg.remote_storage_backend = Some(RemoteStorageBackend::S3(s3_config(s3)));
@@ -326,10 +327,7 @@ pub(super) fn apply_remote_storage(
             (Some(_), Some(_)) | (None, None) => {}
         }
         cfg.remote_storage_worm = Some(krabka_remote_storage::WormConfig {
-            signing_key_path: worm
-                .signing_key_path
-                .as_deref()
-                .map(std::path::PathBuf::from),
+            signing_key_path: worm.signing_key_path.as_deref().map(PathBuf::from),
             signing_key_id: worm.signing_key_id.clone(),
             write_only: worm.write_only,
         });
@@ -395,6 +393,7 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_units::{gibibytes, mebibytes, millis, secs},
+        std::path::PathBuf,
     };
 
     #[test]
@@ -406,7 +405,7 @@ storage_dir = "/var/lib/krabka/tier"
         let cfg = configured_unwrap_parse(toml).unwrap();
         match cfg.remote_storage_backend {
             Some(RemoteStorageBackend::Local { dir }) => {
-                assert!(dir == std::path::PathBuf::from("/var/lib/krabka/tier"));
+                assert!(dir == PathBuf::from("/var/lib/krabka/tier"));
             }
             other => panic!("expected Local backend, got {other:?}"),
         }
@@ -416,10 +415,7 @@ storage_dir = "/var/lib/krabka/tier"
         let cfg = configured_unwrap_parse("broker_id = 1").unwrap();
         assert!(cfg.remote_storage_backend.is_none());
         // No remote_storage section: RLMM stays at the production default (TopicBacked).
-        assert!(matches!(
-            cfg.remote_log_metadata,
-            crate::config::RlmmKind::TopicBacked(_)
-        ));
+        assert!(matches!(cfg.remote_log_metadata, RlmmKind::TopicBacked(_)));
     }
     fn parsed_kafka_metadata(toml: &str) -> KafkaRlmmConfig {
         let cfg = configured_unwrap_parse(toml).unwrap();
@@ -627,7 +623,7 @@ in_memory = true
 "#;
         let cfg = configured_unwrap_parse(toml).unwrap();
         assert!(
-            matches!(cfg.remote_log_metadata, crate::config::RlmmKind::InMemory),
+            matches!(cfg.remote_log_metadata, RlmmKind::InMemory),
             "in_memory = true must opt out to RlmmKind::InMemory, got {:?}",
             cfg.remote_log_metadata
         );

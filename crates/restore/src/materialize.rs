@@ -29,12 +29,13 @@
 use {
     crate::{RestoreArgs, RestoreError},
     krabka_log::{Log, LogConfig, name},
+    std::fs,
 };
 
 mod format;
-pub(crate) mod prepare;
+pub mod prepare;
 mod segment;
-pub(crate) use {
+pub use {
     format::{format_target_with_snapshot, seed_rlmm_snapshot_from},
     segment::write_segment_after_skip,
 };
@@ -46,7 +47,7 @@ pub use self::{
     segment::{SegmentOutcome, write_segment},
 };
 
-pub(crate) fn open_partition_log(
+pub fn open_partition_log(
     args: &RestoreArgs,
     topic: &str,
     partition: i32,
@@ -55,6 +56,6 @@ pub(crate) fn open_partition_log(
         return Ok(None);
     }
     let dir = name::partition_dir(&args.target.log_dir, topic, partition);
-    std::fs::create_dir_all(&dir)?;
+    fs::create_dir_all(&dir)?;
     Ok(Some(Log::open(&dir, LogConfig::default())?))
 }

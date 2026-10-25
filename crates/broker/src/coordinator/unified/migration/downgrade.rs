@@ -17,6 +17,7 @@ use {
         GroupMigrationDirection, GroupMigrationRecordAction, consumer_downgrade_epoch,
         group_migration_record_plan,
     },
+    std::collections::HashMap,
 };
 
 /// Converts a consumer group back into a classic group during a KIP-848
@@ -32,13 +33,13 @@ use {
 /// The `leaving` members, which a fence removes, are left out, as Kafka's
 /// `ClassicGroup.fromConsumerGroup` leaves out its `leavingMembers`.
 ///
-/// Precondition: every other member is a hosted classic member, that is
-/// `classic.is_some()`.
-pub(crate) fn convert_consumer_to_classic(
+/// It returns `None` when a remaining member is not a hosted classic member,
+/// that is when its `classic` is `None`, so the group cannot downgrade.
+pub fn convert_consumer_to_classic(
     state: &ConsumerState,
     leaving: &[String],
     image: &ReconcileInput,
-) -> ClassicState {
+) -> Option<ClassicState> {
     let mut classic = ClassicState::new(state.group_id.clone());
     classic.protocol_type = Some("consumer".into());
     let mut members: Vec<_> = state
@@ -48,10 +49,7 @@ pub(crate) fn convert_consumer_to_classic(
         .collect();
     members.sort_unstable_by_key(|(member_id, _)| member_id.as_str());
     for (mid, m) in members {
-        let facade = m
-            .classic
-            .as_ref()
-            .expect("downgrade precondition: all members are hosted classic members");
+        let facade = m.classic.as_ref()?;
         let cm = ClassicMember::new(
             mid.clone(),
             m.client_id.clone(),
@@ -82,13 +80,13 @@ pub(crate) fn convert_consumer_to_classic(
             .get(mid)
             .cloned()
             .unwrap_or_default();
-        member.assignment = Some(consumer_assignment_blob(&target, image, version));
+        member.assignment = consumer_assignment_blob(&target, image, version);
     }
     if let Some(name) = selected {
         classic.complete_rebalance(&name);
         // Drive to Stable so a downgraded member's first Heartbeat/SyncGroup
         // reads its seed assignment instead of REBALANCE_IN_PROGRESS.
-        let assignments: std::collections::HashMap<String, bytes::Bytes> = classic
+        let assignments: HashMap<String, bytes::Bytes> = classic
             .members
             .iter()
             .filter_map(|(id, m)| m.assignment.clone().map(|a| (id.clone(), a)))
@@ -104,9 +102,8 @@ pub(crate) fn convert_consumer_to_classic(
             .filter(|member| !leaving.contains(&member.member_id))
             .all(|member| member.classic.is_some()),
         state.group_epoch,
-    )
-    .expect("downgrade precondition: every member has a classic facade");
-    classic
+    )?;
+    Some(classic)
 }
 
 /// The atomic record batch for a downgrade.
@@ -123,7 +120,7 @@ pub(crate) fn convert_consumer_to_classic(
 /// is group-level and never tombstoned per member, would outlive the collected
 /// k3. It would then re-create a next-gen seed on replay and bring the
 /// downgraded group back as next-gen.
-pub(crate) fn downgrade_pending_records(
+pub fn downgrade_pending_records(
     consumer: &ConsumerState,
     classic: &ClassicState,
     now_ms: i64,
@@ -159,13 +156,17 @@ pub(crate) fn downgrade_pending_records(
 mod tests {
     use {
         super::*,
-        crate::coordinator::unified::persistence_next_gen::{NextGenKey, encode_key},
+        crate::coordinator::unified::{
+            persistence::GroupMetadataValue,
+            persistence_next_gen::{NextGenKey, encode_key},
+        },
         assert2::{assert, check},
         bytes::Buf,
         krabka_protocol::{
             Decode, owned::consumer_protocol_assignment::ConsumerProtocolAssignment,
             primitives::uuid::Uuid,
         },
+        std::collections::HashMap,
     };
 
     #[test]
@@ -181,7 +182,7 @@ mod tests {
 
         let t1 = Uuid([1; 16]);
         let image = ReconcileInput {
-            topic_id_by_name: [("orders".to_string(), t1)].into(),
+            topic_id_by_name: [("orders".to_owned(), t1)].into(),
             ..Default::default()
         };
         let mut state = GroupState::new("g");
@@ -192,7 +193,7 @@ mod tests {
             rack_id: None,
             client_id: "c".into(),
             client_host: "/127.0.0.1".into(),
-            subscribed_topic_names: ["orders".to_string()].into(),
+            subscribed_topic_names: ["orders".to_owned()].into(),
             subscribed_topic_regex: None,
             server_assignor: None,
             rebalance_timeout: Duration::from_mins(1),
@@ -203,9 +204,9 @@ mod tests {
             // `assigned_partitions` stays EMPTY — its real partitions live in
             // the group's target (set below). The downgrade must seed from the
             // target, not from this empty map.
-            assigned_partitions: std::collections::HashMap::new(),
-            partitions_pending_revocation: std::collections::HashMap::new(),
-            assignment_epochs: std::collections::HashMap::new(),
+            assigned_partitions: HashMap::new(),
+            partitions_pending_revocation: HashMap::new(),
+            assignment_epochs: HashMap::new(),
             last_seen: Instant::now(),
             // Subscription metadata whose embedded-protocol version is 1, the
             // version the member's seed assignment is serialized at.
@@ -226,7 +227,7 @@ mod tests {
             .per_member
             .insert("m1".into(), [(t1, vec![0, 1])].into());
 
-        let classic = convert_consumer_to_classic(&state, &[], &image);
+        let classic = convert_consumer_to_classic(&state, &[], &image).unwrap();
         assert!(classic.group_id == "g");
         assert!(classic.generation_id == 7);
         let member = classic.members.get("m1").expect("member preserved");
@@ -267,7 +268,7 @@ mod tests {
             .iter()
             .map(|record| (record.key.clone().unwrap(), record.value.is_none()))
             .collect();
-        let member = || ("g".to_string(), "m1".to_string());
+        let member = || ("g".to_owned(), "m1".to_owned());
         check!(
             keys == vec![
                 (
@@ -309,11 +310,7 @@ mod tests {
                     }),
                     true
                 ),
-                (
-                    crate::coordinator::unified::persistence::GroupMetadataValue::encode_key("g")
-                        .unwrap(),
-                    false
-                ),
+                (GroupMetadataValue::encode_key("g").unwrap(), false),
             ]
         );
         assert!(first.records == second.records);

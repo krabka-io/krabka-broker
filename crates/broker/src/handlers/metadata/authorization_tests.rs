@@ -19,6 +19,7 @@ use {
     assert2::assert,
     krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::{
+        api_key::ApiKey,
         owned::{
             metadata_request::{MetadataRequest, MetadataRequestTopic},
             metadata_response::{MetadataResponse, MetadataResponseTopic},
@@ -140,14 +141,7 @@ impl Fixture {
             user [TESTER];
             client ["metadata-client"];
         };
-        dispatch_wire(
-            &shared,
-            krabka_protocol::api_key::ApiKey::Metadata as i16,
-            version,
-            request,
-            &ctx,
-        )
-        .await
+        dispatch_wire(&shared, ApiKey::Metadata as i16, version, request, &ctx).await
     }
 
     /// The row an allow-all principal gets for [`EXISTING`] at `version`.

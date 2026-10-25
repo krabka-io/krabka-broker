@@ -17,7 +17,9 @@ use {
     krabka_ids::Offset,
     krabka_units::prelude::mebibytes,
     std::{
+        fs::OpenOptions,
         io::Write as _,
+        thread,
         time::{Duration, SystemTime},
     },
 };
@@ -145,7 +147,7 @@ fn a_failed_build_is_an_error_only_while_its_input_stands() {
         let mut fixture = compact_test_log();
         alternating_keys(&mut fixture.log, 6);
         // A torn batch after the first segment's records fails the build.
-        std::fs::OpenOptions::new()
+        OpenOptions::new()
             .append(true)
             .open(name::log_path(fixture.dir.path(), 0))
             .unwrap()
@@ -210,12 +212,12 @@ fn a_fence_during_the_build_waits_for_it_to_stop_writing() {
         .unwrap();
     let TempLog { dir, mut log } = fixture;
 
-    let built = std::thread::scope(|scope| {
+    let built = thread::scope(|scope| {
         let builder = scope.spawn(|| job.build());
         control.wait_until_paused();
         let fencer = scope.spawn(|| log.fence());
         // The build is held inside a write, so the fence has to wait for it.
-        std::thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(100));
         check!(!fencer.is_finished());
 
         control.resume();

@@ -12,7 +12,11 @@ use {
         ControllerAdminRouter, ControllerApiVersion, server::api_versions,
     },
     krabka_protocol::owned::broker_heartbeat_request,
-    tokio::{io::DuplexStream, time::Instant},
+    tokio::{
+        io::{self, DuplexStream},
+        task::JoinHandle,
+        time::{self, Instant},
+    },
 };
 
 /// The window every test here runs with.
@@ -37,7 +41,7 @@ impl ControllerAdminRouter for SlowRouter {
     fn route(&self, _request: ControllerAdminRequest) -> ControllerAdminRouteFuture<'_> {
         let delay = self.delay;
         Box::pin(async move {
-            tokio::time::sleep(delay).await;
+            time::sleep(delay).await;
             Ok(Some(ControllerAdminResponse {
                 body: bytes::Bytes::from_static(&[0xab; ANSWER_BODY]),
                 flexible: true,
@@ -64,7 +68,7 @@ fn heartbeat_request(correlation_id: i32) -> Vec<u8> {
 /// router whose answers take `delay`, under [`WINDOW`].
 fn slow_connection(delay: Duration, capacity: usize) -> DuplexConnection {
     let (engine, dir) = single_voter_engine();
-    let (client, server): (DuplexStream, DuplexStream) = tokio::io::duplex(capacity);
+    let (client, server): (DuplexStream, DuplexStream) = io::duplex(capacity);
     let limits = ListenerLimits {
         max_idle: Some(WINDOW),
         ..ListenerLimits::default()
@@ -86,8 +90,8 @@ fn slow_connection(delay: Duration, capacity: usize) -> DuplexConnection {
 }
 
 /// Waits for the listener to close `connection` and returns when it did.
-async fn closed_at(connection: &mut tokio::task::JoinHandle<Result<(), RaftError>>) -> Instant {
-    let outcome = tokio::time::timeout(Duration::from_secs(5), connection)
+async fn closed_at(connection: &mut JoinHandle<Result<(), RaftError>>) -> Instant {
+    let outcome = time::timeout(Duration::from_secs(5), connection)
         .await
         .expect("the listener closes the connection")
         .expect("the connection task does not panic");
@@ -139,7 +143,7 @@ async fn the_idle_window_restarts_on_every_byte_of_a_response() {
     client.write_all(&heartbeat_request(1)).await.unwrap();
     let mut answer = Vec::new();
     for _ in 0..ANSWER_FRAME {
-        tokio::time::sleep(gap).await;
+        time::sleep(gap).await;
         let mut byte = [0u8];
         client.read_exact(&mut byte).await.unwrap();
         answer.push(byte[0]);
@@ -151,7 +155,7 @@ async fn the_idle_window_restarts_on_every_byte_of_a_response() {
     client.write_all(&heartbeat_request(2)).await.unwrap();
     let mut last_byte = Instant::now();
     for _ in 0..5 {
-        tokio::time::sleep(gap).await;
+        time::sleep(gap).await;
         let mut byte = [0u8];
         client.read_exact(&mut byte).await.unwrap();
         last_byte = Instant::now();
@@ -172,7 +176,7 @@ async fn a_queued_response_restarts_the_idle_window() {
     } = slow_connection(delay, ANSWER_FRAME);
 
     client.write_all(&heartbeat_request(1)).await.unwrap();
-    tokio::time::sleep(delay).await;
+    time::sleep(delay).await;
     client.write_all(&heartbeat_request(2)).await.unwrap();
     let request_arrived = Instant::now();
     check!(closed_at(&mut connection).await - request_arrived == delay + WINDOW);

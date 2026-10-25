@@ -1,10 +1,13 @@
 //! Error type shared by both tiered-storage SPIs.
 
-use crate::{
-    metadata::{
-        RemoteLogSegmentId, RemoteLogSegmentState, RemotePartitionDeleteState, TopicIdPartition,
+use {
+    crate::{
+        metadata::{
+            RemoteLogSegmentId, RemoteLogSegmentState, RemotePartitionDeleteState, TopicIdPartition,
+        },
+        worm::WormError,
     },
-    worm::WormError,
+    std::io,
 };
 
 /// Errors raised by [`RemoteStorageManager`](crate::RemoteStorageManager)
@@ -14,7 +17,7 @@ use crate::{
 pub enum RemoteStorageError {
     /// An I/O failure in the underlying store (filesystem, object store, …).
     #[error("remote storage I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// A segment was referenced that the metadata store has never seen.
     #[error("no remote log segment metadata for {0:?}")]

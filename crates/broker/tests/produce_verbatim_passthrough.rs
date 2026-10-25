@@ -11,6 +11,7 @@
 //! tests drive the whole broker over the wire. Produce and
 //! Fetch auto-negotiate to v13 (KIP-516 topic-id), so every batch travels the
 //! v≥3 native-v2 path that the verbatim dispatch covers.
+#![cfg(test)]
 
 mod support;
 

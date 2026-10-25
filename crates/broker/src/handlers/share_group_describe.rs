@@ -38,7 +38,7 @@ impl DescribedTopics for DescribedGroup {
     }
 }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ShareGroupDescribeRequest,
     _version: ApiVersion,
@@ -156,13 +156,13 @@ mod tests {
         },
         assert2::assert,
         krabka_metadata::{AclOperation, ResourceType},
-        krabka_protocol::owned::share_group_describe_response,
-        std::sync::Arc,
+        krabka_protocol::{owned::share_group_describe_response, primitives::uuid::Uuid},
+        std::{collections::HashSet, sync::Arc},
     };
 
     fn request(group_ids: &[&str]) -> ShareGroupDescribeRequest {
         ShareGroupDescribeRequest {
-            group_ids: group_ids.iter().map(|g| (*g).to_string()).collect(),
+            group_ids: group_ids.iter().map(|g| (*g).to_owned()).collect(),
             include_authorized_operations: false,
             ..Default::default()
         }
@@ -269,14 +269,9 @@ mod tests {
         };
         let mut assigned: Vec<_> = topics
             .iter()
-            .map(|t| {
-                (
-                    krabka_protocol::primitives::uuid::Uuid(*t.as_bytes()),
-                    vec![0],
-                )
-            })
+            .map(|t| (Uuid(*t.as_bytes()), vec![0]))
             .collect();
-        assigned.push((krabka_protocol::primitives::uuid::Uuid([0xEE; 16]), vec![0]));
+        assigned.push((Uuid([0xEE; 16]), vec![0]));
         let coordinator = &broker.group_coordinator;
         coordinator.mark_share(group_id);
         let handle = coordinator.get_or_create_share(group_id);
@@ -325,9 +320,7 @@ mod tests {
             broker: broker_handle,
             dir: _dir,
         } = start_share_broker()
-            .authorizer(Arc::new(SimpleAclAuthorizer::new(
-                std::collections::HashSet::new(),
-            )))
+            .authorizer(Arc::new(SimpleAclAuthorizer::new(HashSet::new())))
             .call()
             .await;
         let broker = broker_handle.broker_arc_for_test();

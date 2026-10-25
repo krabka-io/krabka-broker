@@ -4,7 +4,7 @@ use {
     crate::{
         codes::{
             DELEGATION_TOKEN_AUTH_DISABLED, DELEGATION_TOKEN_NOT_FOUND,
-            DELEGATION_TOKEN_OWNER_MISMATCH, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED,
+            DELEGATION_TOKEN_OWNER_MISMATCH, DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, NONE,
         },
         network::auth::ConnectionAuth,
         test_support::{KafkaErrorCode, UnixMillis, principal},
@@ -14,7 +14,14 @@ use {
     krabka_metadata::{DelegationTokenRecord, MetadataRecord},
     krabka_raft::{Controller, ControllerConfig, ControllerHandle, NodeId},
     krabka_security::{AuthMethod, KafkaPrincipal, Principal, SaslMechanism},
-    std::{path::PathBuf, sync::Arc, time::Duration},
+    std::{
+        fmt,
+        future::Future,
+        path::PathBuf,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::time::timeout,
 };
 
 /// The controller, directory and HMAC secret used by token wire fixtures.
@@ -161,7 +168,7 @@ pub(super) async fn check_refusals<Cases, Response>(
     verify: impl FnOnce(&ControllerHandle, &RefusalToken, &RefusalToken),
 ) where
     Cases: IntoIterator<Item = TokenMutationRefusalSetup>,
-    Response: PartialEq + std::fmt::Debug,
+    Response: PartialEq + fmt::Debug,
 {
     let RefusalFixture {
         resources:
@@ -338,10 +345,10 @@ pub(super) async fn test_controller(log_dir: PathBuf) -> Arc<ControllerHandle> {
     };
     let controller = Arc::new(Controller::start(config).await.unwrap());
     let mut leader = controller.watch_leader();
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while leader.borrow().is_none() {
-        assert!(std::time::Instant::now() < deadline, "no leader in 5s");
-        let _ = tokio::time::timeout(Duration::from_millis(100), leader.changed()).await;
+        assert!(Instant::now() < deadline, "no leader in 5s");
+        let _ = timeout(Duration::from_millis(100), leader.changed()).await;
     }
     controller
 }
@@ -532,9 +539,7 @@ pub(super) struct MutationExecution<Response> {
     pub(super) response: Response,
 }
 /// Pin independent wall-clock bounds around execution of a token mutation.
-pub(super) async fn in_mutation_window<F: std::future::Future>(
-    mutation: F,
-) -> MutationExecution<F::Output> {
+pub(super) async fn in_mutation_window<F: Future>(mutation: F) -> MutationExecution<F::Output> {
     let before = UnixMillis(now_ms());
     let response = mutation.await;
     let after = UnixMillis(now_ms());
@@ -574,17 +579,14 @@ pub(super) enum ExpiryExpectation {
 
 impl ExpiryExpectation {
     pub fn for_period(period: Option<TokenPeriodMillis>, maximum: UnixMillis) -> Self {
-        match period {
-            Some(period) => Self::RelativeToMutation(period),
-            None => Self::LifetimeCap(maximum),
-        }
+        period.map_or(Self::LifetimeCap(maximum), Self::RelativeToMutation)
     }
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(super) struct TokenExpirySetup {
     pub window: TokenMutationWindow,
-    #[default(ExpiryExpectation::LifetimeCap(crate::test_support::UnixMillis(0)))]
+    #[default(ExpiryExpectation::LifetimeCap(UnixMillis(0)))]
     pub expectation: ExpiryExpectation,
 }
 
@@ -619,14 +621,14 @@ pub(super) fn check_expiry_window(
     case: &str,
     outcome: TokenMutationOutcome,
     #[builder(default)] window: TokenMutationWindow,
-    #[builder(default = ExpiryExpectation :: LifetimeCap (crate :: test_support :: UnixMillis (0)))]
+    #[builder(default = ExpiryExpectation :: LifetimeCap (UnixMillis (0)))]
     expectation: ExpiryExpectation,
 ) {
     let setup = TokenExpirySetup {
         window,
         expectation,
     };
-    assert!(outcome.error.0 == crate::codes::NONE, "{case}");
+    assert!(outcome.error.0 == NONE, "{case}");
     match setup.expectation {
         ExpiryExpectation::RelativeToMutation(delta) => {
             let before = setup.window.before.0;

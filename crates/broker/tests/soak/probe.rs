@@ -23,7 +23,11 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
+    iter::Sum,
+    ops::Add,
     path::Path,
+    time,
 };
 
 /// A sampled count as a float, for the trend analysis.
@@ -33,12 +37,10 @@ use std::{
 /// reading that does not fit saturates, and `u32::MAX` is above every ceiling
 /// here, so an implausible sample fails its series rather than wrapping into a
 /// passing one.
-pub(crate) fn sampled(value: u64) -> f64 { f64::from(u32::try_from(value).unwrap_or(u32::MAX)) }
+pub fn sampled(value: u64) -> f64 { f64::from(u32::try_from(value).unwrap_or(u32::MAX)) }
 
 /// The same, for the `usize` a count comes back as.
-pub(crate) fn sampled_count(value: usize) -> f64 {
-    sampled(u64::try_from(value).unwrap_or(u64::MAX))
-}
+pub fn sampled_count(value: usize) -> f64 { sampled(u64::try_from(value).unwrap_or(u64::MAX)) }
 
 /// Resident set size in bytes, from a `/proc/<pid>/status` body.
 ///
@@ -46,7 +48,7 @@ pub(crate) fn sampled_count(value: usize) -> f64 {
 /// line and it has been `kB` for the whole life of the file. Returns `None`
 /// when the process has exited between `docker inspect` and this read, which
 /// leaves an unreadable or truncated file rather than an error.
-pub(crate) fn parse_vm_rss_bytes(status: &str) -> Option<u64> {
+pub fn parse_vm_rss_bytes(status: &str) -> Option<u64> {
     let line = status.lines().find(|line| line.starts_with("VmRSS:"))?;
     let mut fields = line.split_whitespace().skip(1);
     let value: u64 = fields.next()?.parse().ok()?;
@@ -64,7 +66,7 @@ pub(crate) fn parse_vm_rss_bytes(status: &str) -> Option<u64> {
 /// One line per series-and-labels, so this is the cardinality a scrape carries.
 /// `# HELP` and `# TYPE` are metadata about a family rather than members of it,
 /// and blank lines are neither.
-pub(crate) fn count_series(body: &str) -> usize {
+pub fn count_series(body: &str) -> usize {
     body.lines()
         .filter(|line| {
             let line = line.trim();
@@ -80,7 +82,7 @@ pub(crate) fn count_series(body: &str) -> usize {
 /// and the question asked of them is how many cycles the broker ran in total,
 /// not how many one partition saw. A name that appears nowhere sums to zero,
 /// which is the right answer for a counter that has not been touched.
-pub(crate) fn sum_metric(body: &str, metric: &str) -> f64 {
+pub fn sum_metric(body: &str, metric: &str) -> f64 {
     let mut total = 0.0;
     for line in body.lines() {
         let line = line.trim();
@@ -110,7 +112,7 @@ pub(crate) fn sum_metric(body: &str, metric: &str) -> f64 {
 /// Kafka's convention, which krabka keeps: twenty zero-padded digits and a
 /// `.log` suffix. Index and time-index files share the stem and are not
 /// segments.
-pub(crate) fn segment_base_offset(file_name: &str) -> Option<u64> {
+pub fn segment_base_offset(file_name: &str) -> Option<u64> {
     file_name.strip_suffix(".log")?.parse().ok()
 }
 
@@ -118,9 +120,9 @@ pub(crate) fn segment_base_offset(file_name: &str) -> Option<u64> {
 ///
 /// Read off the host side of the bind mount, so it sees the same bytes the
 /// container is writing.
-pub(crate) fn segments(log_dir: &Path) -> BTreeMap<String, BTreeSet<u64>> {
+pub fn segments(log_dir: &Path) -> BTreeMap<String, BTreeSet<u64>> {
     let mut found = BTreeMap::new();
-    let Ok(entries) = std::fs::read_dir(log_dir) else {
+    let Ok(entries) = fs::read_dir(log_dir) else {
         return found;
     };
     for entry in entries.filter_map(Result::ok) {
@@ -131,7 +133,7 @@ pub(crate) fn segments(log_dir: &Path) -> BTreeMap<String, BTreeSet<u64>> {
         let Some(partition) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let Ok(files) = std::fs::read_dir(&path) else {
+        let Ok(files) = fs::read_dir(&path) else {
             continue;
         };
         let offsets: BTreeSet<u64> = files
@@ -147,12 +149,12 @@ pub(crate) fn segments(log_dir: &Path) -> BTreeMap<String, BTreeSet<u64>> {
 
 /// What the regular files under one directory hold.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct DirectoryUsage {
+pub struct DirectoryUsage {
     pub(crate) bytes: u64,
     pub(crate) files: u64,
 }
 
-impl std::ops::Add for DirectoryUsage {
+impl Add for DirectoryUsage {
     type Output = Self;
 
     fn add(self, other: Self) -> Self {
@@ -163,29 +165,27 @@ impl std::ops::Add for DirectoryUsage {
     }
 }
 
-impl std::iter::Sum for DirectoryUsage {
-    fn sum<I: Iterator<Item = Self>>(usages: I) -> Self {
-        usages.fold(Self::default(), std::ops::Add::add)
-    }
+impl Sum for DirectoryUsage {
+    fn sum<I: Iterator<Item = Self>>(usages: I) -> Self { usages.fold(Self::default(), Add::add) }
 }
 
 /// Bytes and files held by every regular file under `root`.
 ///
 /// Walked rather than `du`-ed: the image carries no shell and the host may not
 /// have one either under a Bazel test sandbox.
-pub(crate) fn directory_usage(root: &Path) -> DirectoryUsage {
-    let Ok(entries) = std::fs::read_dir(root) else {
+pub fn directory_usage(root: &Path) -> DirectoryUsage {
+    let Ok(entries) = fs::read_dir(root) else {
         return DirectoryUsage::default();
     };
     entries
         .filter_map(Result::ok)
         .map(|entry| match entry.file_type() {
             Ok(kind) if kind.is_dir() => directory_usage(&entry.path()),
-            Ok(kind) if kind.is_file() => DirectoryUsage {
+            Ok(_) => DirectoryUsage {
                 bytes: entry.metadata().map_or(0, |m| m.len()),
                 files: 1,
             },
-            _ => DirectoryUsage::default(),
+            Err(_) => DirectoryUsage::default(),
         })
         .sum()
 }
@@ -197,8 +197,8 @@ pub(crate) fn directory_usage(root: &Path) -> DirectoryUsage {
 /// This is what names the directory that grew when the log-directory series
 /// fails. A total alone cannot say whether retention, the cleaner, the metadata
 /// log or the offsets topic is the one not keeping up.
-pub(crate) fn top_level_usage(log_dir: &Path) -> BTreeMap<String, DirectoryUsage> {
-    let Ok(entries) = std::fs::read_dir(log_dir) else {
+pub fn top_level_usage(log_dir: &Path) -> BTreeMap<String, DirectoryUsage> {
+    let Ok(entries) = fs::read_dir(log_dir) else {
         return BTreeMap::new();
     };
     entries
@@ -208,13 +208,11 @@ pub(crate) fn top_level_usage(log_dir: &Path) -> BTreeMap<String, DirectoryUsage
             let kind = entry.file_type().ok()?;
             let usage = if kind.is_dir() {
                 directory_usage(&entry.path())
-            } else if kind.is_file() {
+            } else {
                 DirectoryUsage {
                     bytes: entry.metadata().map_or(0, |m| m.len()),
                     files: 1,
                 }
-            } else {
-                return None;
             };
             Some((name, usage))
         })
@@ -222,7 +220,7 @@ pub(crate) fn top_level_usage(log_dir: &Path) -> BTreeMap<String, DirectoryUsage
 }
 
 /// Whether `entry` is the directory of a partition of `topic`: `<topic>-<n>`.
-pub(crate) fn is_partition_of(entry: &str, topic: &str) -> bool {
+pub fn is_partition_of(entry: &str, topic: &str) -> bool {
     entry
         .strip_prefix(topic)
         .and_then(|rest| rest.strip_prefix('-'))
@@ -230,10 +228,7 @@ pub(crate) fn is_partition_of(entry: &str, topic: &str) -> bool {
 }
 
 /// The usage of every entry in `usage` except the partitions of `excluded`.
-pub(crate) fn usage_without(
-    usage: &BTreeMap<String, DirectoryUsage>,
-    excluded: &str,
-) -> DirectoryUsage {
+pub fn usage_without(usage: &BTreeMap<String, DirectoryUsage>, excluded: &str) -> DirectoryUsage {
     usage
         .iter()
         .filter(|(entry, _)| !is_partition_of(entry, excluded))
@@ -243,7 +238,7 @@ pub(crate) fn usage_without(
 
 /// One top-level entry's change in bytes between two samples.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Growth {
+pub struct Growth {
     pub(crate) entry: String,
     pub(crate) bytes: i128,
     pub(crate) files: i128,
@@ -256,8 +251,8 @@ pub(crate) struct Growth {
 ///
 /// The midpoint is the one the drift judgement fits its trend from, so this names
 /// the entries behind a log-directory verdict.
-pub(crate) fn second_half_growth(
-    samples: &[(std::time::Duration, BTreeMap<String, DirectoryUsage>)],
+pub fn second_half_growth(
+    samples: &[(time::Duration, BTreeMap<String, DirectoryUsage>)],
     top: usize,
 ) -> Vec<Growth> {
     let (Some((first, _)), Some((last, to))) = (samples.first(), samples.last()) else {
@@ -293,19 +288,23 @@ pub(crate) fn second_half_growth(
 /// `/proc/<pid>/fd` is mode 500 and owned by the process's user, which is why
 /// the fixture runs each container as the host user that owns its data
 /// directory. `None` when the process has gone.
-pub(crate) fn open_descriptors(pid: u32) -> Option<usize> {
-    let entries = std::fs::read_dir(format!("/proc/{pid}/fd")).ok()?;
+pub fn open_descriptors(pid: u32) -> Option<usize> {
+    let entries = fs::read_dir(format!("/proc/{pid}/fd")).ok()?;
     Some(entries.filter_map(Result::ok).count())
 }
 
 /// Resident set of `pid`, in bytes. `None` when the process has gone.
-pub(crate) fn resident_bytes(pid: u32) -> Option<u64> {
-    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+pub fn resident_bytes(pid: u32) -> Option<u64> {
+    let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     parse_vm_rss_bytes(&status)
 }
 
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        std::{fs, process},
+    };
 
     /// Equal to within a hair.
     ///
@@ -402,10 +401,10 @@ krabka_broker_log_compactions_total_seconds 999
     #[test]
     fn directory_usage_sums_the_tree_per_top_level_entry() {
         let dir = tempfile::TempDir::new().expect("tempdir");
-        std::fs::write(dir.path().join("a"), vec![0u8; 100]).expect("write a");
-        std::fs::create_dir_all(dir.path().join("nested/deeper")).expect("mkdir");
-        std::fs::write(dir.path().join("nested/b"), vec![0u8; 250]).expect("write b");
-        std::fs::write(dir.path().join("nested/deeper/c"), vec![0u8; 50]).expect("write c");
+        fs::write(dir.path().join("a"), vec![0u8; 100]).expect("write a");
+        fs::create_dir_all(dir.path().join("nested/deeper")).expect("mkdir");
+        fs::write(dir.path().join("nested/b"), vec![0u8; 250]).expect("write b");
+        fs::write(dir.path().join("nested/deeper/c"), vec![0u8; 50]).expect("write c");
         let usage = |bytes, files| DirectoryUsage { bytes, files };
         check!(directory_usage(dir.path()) == usage(400, 3));
         check!(directory_usage(&dir.path().join("missing")) == DirectoryUsage::default());
@@ -515,9 +514,9 @@ krabka_broker_log_compactions_total_seconds 999
             ("__meta", vec!["leader-epoch-checkpoint"]),
         ] {
             let path = dir.path().join(partition);
-            std::fs::create_dir(&path).expect("mkdir");
+            fs::create_dir(&path).expect("mkdir");
             for name in names {
-                std::fs::write(path.join(name), b"x").expect("write");
+                fs::write(path.join(name), b"x").expect("write");
             }
         }
         let found = segments(dir.path());
@@ -539,7 +538,7 @@ krabka_broker_log_compactions_total_seconds 999
     /// the mechanism the container samples use.
     #[test]
     fn a_live_process_reports_both_readings() {
-        let me = std::process::id();
+        let me = process::id();
         check!(open_descriptors(me).is_some_and(|n| n > 0));
         check!(resident_bytes(me).is_some_and(|n| n > 0));
     }

@@ -17,7 +17,7 @@ use {
 /// Reads a canonical `.checkpoint` byte stream back into the sequence of
 /// `MetadataRecord`s it contains (skipping the header/footer control
 /// batches), plus a raw byte-range accessor for `FetchSnapshot` serving.
-pub(crate) struct SnapshotReader;
+pub struct SnapshotReader;
 
 impl SnapshotReader {
     /// The `last_contained_log_timestamp` of the `SnapshotHeaderRecord` that

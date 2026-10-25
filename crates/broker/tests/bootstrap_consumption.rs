@@ -19,6 +19,7 @@
 //! file is self-contained and uses only those two helpers, so a verbatim copy
 //! keeps the blast radius small and leaves the auth test file, over 1500
 //! lines, untouched.
+#![cfg(test)]
 
 mod kafka_wire;
 
@@ -27,7 +28,7 @@ mod support;
 use {
     crate::{
         kafka_wire::ScramAuthenticationSetup,
-        support::wire::HeaderEncoding as RequestHeaderEncoding,
+        support::{listeners, wire::HeaderEncoding as RequestHeaderEncoding},
     },
     assert2::assert,
     krabka_broker::{Broker, BrokerConfig},
@@ -35,7 +36,8 @@ use {
         metadata_request::MetadataRequest, metadata_response::MetadataResponse,
     },
     krabka_security::{ListenerProtocol, SaslMechanism},
-    std::{io, net::SocketAddr},
+    rustls::crypto::aws_lc_rs,
+    std::{fs, io, net::SocketAddr, path::Path},
     tokio::net::TcpStream,
 };
 
@@ -48,7 +50,7 @@ const CLIENT_ID: &str = "krabka-bootstrap-test";
 /// setup for the test below, not the thing under test -- `krabka-format`'s own
 /// `format_smoke` suite runs the real binary -- and a subprocess would need a
 /// Cargo working tree to build from, which a Bazel test sandbox does not have.
-async fn run_krabka_format(log_dir: &std::path::Path, add_scram: &str) {
+async fn run_krabka_format(log_dir: &Path, add_scram: &str) {
     let code = krabka_format::run_from_args([
         "krabka-format",
         "--log-dir",
@@ -68,7 +70,7 @@ async fn bootstrap_records_provisions_scram_user() {
     // but the SCRAM client side of this test also performs PBKDF2 / SHA
     // through the same provider. Install it defensively so the test is
     // order-independent. `.ok()` swallows `AlreadySet`.
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
 
     let dir = tempfile::tempdir().unwrap();
     // Format the log_dir into the *child* `boot` subdir — the CLI refuses
@@ -82,7 +84,7 @@ async fn bootstrap_records_provisions_scram_user() {
     .await;
 
     let mut cfg = BrokerConfig::for_tests(boot_dir.clone());
-    cfg.listeners = vec![crate::support::listeners::loopback_listener(
+    cfg.listeners = vec![listeners::loopback_listener(
         "SASL_PLAINTEXT",
         ListenerProtocol::SaslPlaintext,
     )];
@@ -104,7 +106,7 @@ async fn bootstrap_records_provisions_scram_user() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn corrupt_bootstrap_refuses_start() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
+    fs::write(
         dir.path().join("bootstrap.records.bin"),
         b"this is not a length-prefixed metadata record",
     )

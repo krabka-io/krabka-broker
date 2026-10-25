@@ -5,6 +5,7 @@
 //! started with `unstable.feature.versions.enable` off never serves a log that
 //! was finalized at an unstable `metadata.version`. The tests finalize
 //! `4.4-IV2` (level 33), which is unstable in Kafka 4.3.
+#![cfg(test)]
 
 use {
     assert2::{assert, check},
@@ -16,10 +17,12 @@ use {
     krabka_units::prelude::{Time, millis},
     std::{
         collections::BTreeMap,
+        fs,
         path::{Path, PathBuf},
         time::{Duration, Instant},
     },
     tempfile::TempDir,
+    tokio::time,
     uuid::Uuid,
 };
 
@@ -71,7 +74,7 @@ fn config(
 
 async fn wait_for_leader(controller: &ControllerHandle) {
     let mut rx = controller.watch_leader();
-    tokio::time::timeout(Duration::from_secs(30), rx.wait_for(Option::is_some))
+    time::timeout(Duration::from_secs(30), rx.wait_for(Option::is_some))
         .await
         .expect("no leader elected within 30s")
         .expect("leader watch channel closed");
@@ -85,7 +88,7 @@ fn finalize_unstable_metadata_version() -> Vec<MetadataRecord> {
 }
 
 fn protected_metadata_files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
-    std::fs::read_dir(dir)
+    fs::read_dir(dir)
         .expect("read metadata directory")
         .map(|entry| entry.unwrap().path())
         .filter(|path| {
@@ -96,7 +99,7 @@ fn protected_metadata_files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
                 )
         })
         .map(|path| {
-            let bytes = std::fs::read(&path).expect("read protected metadata file");
+            let bytes = fs::read(&path).expect("read protected metadata file");
             (path, bytes)
         })
         .collect()
@@ -195,7 +198,7 @@ async fn a_controller_stops_when_it_replays_a_level_it_does_not_support() {
         );
         // intentional: the stop follows the image publication on another task,
         // and nothing but a refused submit says that it has happened.
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
     }
     // The refusal is on the fatal channel by the time a submit fails: the host
     // that halts over it never sees the shutdown without the reason.

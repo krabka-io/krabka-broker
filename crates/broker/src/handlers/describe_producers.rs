@@ -57,7 +57,7 @@ use {
     },
 };
 
-pub(crate) fn handle(
+pub fn handle(
     broker: &Broker,
     req: &DescribeProducersRequest,
     _version: i16,
@@ -263,7 +263,12 @@ mod tests {
         test_context ["admin-client"];
     }
 
-    use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+    use {
+        crate::test_support::start_broker_with_authorizer_no_audit as start_broker,
+        krabka_log::{topic_name, topic_name::InvalidTopicName},
+        std::time::Duration,
+        tokio::time,
+    };
 
     fn request(topic: &str, partition_indexes: &[i32]) -> DescribeProducersRequest {
         DescribeProducersRequest {
@@ -302,7 +307,7 @@ mod tests {
             expected_message: Option<String>,
         }
 
-        let too_long = "a".repeat(krabka_log::topic_name::MAX_TOPIC_NAME_LENGTH + 1);
+        let too_long = "a".repeat(topic_name::MAX_TOPIC_NAME_LENGTH + 1);
         let invalid_name_cases = |name, message: String| {
             [
                 NameCase {
@@ -320,22 +325,17 @@ mod tests {
             ]
         };
         let mut cases: Vec<NameCase<'_>> = Vec::new();
-        cases.extend(invalid_name_cases(
-            "",
-            krabka_log::topic_name::InvalidTopicName::Empty.to_string(),
-        ));
+        cases.extend(invalid_name_cases("", InvalidTopicName::Empty.to_string()));
         cases.extend(invalid_name_cases(
             "a/b",
-            krabka_log::topic_name::InvalidTopicName::IllegalCharacter("a/b".into()).to_string(),
+            InvalidTopicName::IllegalCharacter("a/b".into()).to_string(),
         ));
         cases.extend([
             NameCase {
                 name: too_long.as_str(),
                 authorizer: Arc::new(AllowAllAuthorizer),
                 expected_code: codes::INVALID_TOPIC_EXCEPTION,
-                expected_message: Some(
-                    krabka_log::topic_name::InvalidTopicName::TooLong(too_long.clone()).to_string(),
-                ),
+                expected_message: Some(InvalidTopicName::TooLong(too_long.clone()).to_string()),
             },
             NameCase {
                 name: "missing-but-valid",
@@ -486,8 +486,7 @@ mod tests {
 
         let resp = drive(&broker, &req, &test_context(&p, &peer));
 
-        let message =
-            krabka_log::topic_name::InvalidTopicName::IllegalCharacter("a/b".into()).to_string();
+        let message = InvalidTopicName::IllegalCharacter("a/b".into()).to_string();
         let expected = DescribeProducersResponse {
             throttle_time_ms: 0,
             topics: vec![TopicResponse {
@@ -561,7 +560,7 @@ mod tests {
             ])
             .await
             .expect("seed the topic");
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        time::timeout(Duration::from_secs(10), async {
             loop {
                 let in_role = broker
                     .partitions
@@ -580,7 +579,7 @@ mod tests {
                 match (hosted, in_role) {
                     (true, Some(partition)) => return Some(partition),
                     (false, _) if image_holds => return None,
-                    _ => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+                    _ => time::sleep(Duration::from_millis(10)).await,
                 }
             }
         })

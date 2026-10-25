@@ -9,7 +9,8 @@ use {
         partition::Partition,
     },
     krabka_log::Offset,
-    std::sync::Arc,
+    std::{sync::Arc, time::Instant},
+    tokio::time,
 };
 
 /// Returned by `await_hw_at_least` when the deadline elapses before
@@ -99,7 +100,7 @@ impl Partition {
         let leader_leo = self.log_end_offset();
         let mut st = self.replica_state.lock().await;
         let prev_hw = st.hw;
-        st.install_isr(isr, replicas, leader, std::time::Instant::now());
+        st.install_isr(isr, replicas, leader, Instant::now());
         let new_hw = if self.diskless {
             st.hw
         } else {
@@ -123,7 +124,7 @@ impl Partition {
     pub async fn await_hw_at_least(
         &self,
         target_offset: Offset,
-        deadline: std::time::Instant,
+        deadline: Instant,
     ) -> Result<(), HwTimeout> {
         loop {
             if self.high_watermark().await >= target_offset {
@@ -138,7 +139,7 @@ impl Partition {
             }
             tokio::select! {
                 () = &mut waiter => {},
-                () = tokio::time::sleep_until(deadline.into()) => {
+                () = time::sleep_until(deadline.into()) => {
                     // Diagnostic: an acks=all produce gave up waiting for the HW
                     // to reach its appended offset. Dump the leader-side replica
                     // state so a failover stall (HW stuck because the ISR can't

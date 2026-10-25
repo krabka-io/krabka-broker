@@ -31,20 +31,19 @@
 //! `delete_records` — and all five emit their event through [`audit`], so the
 //! shape of a transition event is written once.
 
-pub(crate) mod approve;
-pub(crate) mod audit;
-pub(crate) mod batch;
-pub(crate) mod describe;
-pub(crate) mod propose;
+pub mod approve;
+pub mod audit;
+pub mod batch;
+pub mod describe;
+pub mod propose;
 
 // The `Describe` gate that `describe` applies. It lives in `crate::handlers`
 // beside its `Alter` twin, so the break-glass control plane does not reach into
 // another subsystem for an ACL gate.
-pub(crate) use crate::handlers::cluster_describe_denied;
 use {
     crate::{
         codes::{self, POLICY_VIOLATION},
-        handlers::RequestContext,
+        handlers::{RequestContext, cluster_describe_denied},
         time_util::now_ms,
     },
     krabka_audit::{
@@ -57,11 +56,11 @@ use {
 };
 
 /// The audited action name of a request whose wire action names no transition.
-pub(crate) const UNKNOWN_ACTION: &str = "unknown";
+pub const UNKNOWN_ACTION: &str = "unknown";
 
 /// A refused request, and the wire code the response carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Refusal {
+pub struct Refusal {
     /// The Kafka error code of the response.
     pub code: i16,
     /// The text the response carries as its `error_message`, and the text the
@@ -83,22 +82,20 @@ impl Refusal {
 ///
 /// `break_glass.approvers`, `[[operator_keys]]`, and the stored approvals all
 /// name a principal in this form, so one spelling compares against another.
-pub(crate) fn principal_name(ctx: &RequestContext<'_>) -> String {
-    ctx.principal.to_kafka().to_string()
-}
+pub fn principal_name(ctx: &RequestContext<'_>) -> String { ctx.principal.to_kafka().to_string() }
 
 /// The `uuid` form of a wire id.
-pub(crate) fn from_wire_uuid(id: WireUuid) -> Uuid { Uuid::from_bytes(id.0) }
+pub fn from_wire_uuid(id: WireUuid) -> Uuid { Uuid::from_bytes(id.0) }
 
 /// The wire form of a `uuid` id.
-pub(crate) fn to_wire_uuid(id: Uuid) -> WireUuid { WireUuid(*id.as_bytes()) }
+pub fn to_wire_uuid(id: Uuid) -> WireUuid { WireUuid(*id.as_bytes()) }
 
 /// The [`Refusal`] that a failed `submit_change` answers with.
 ///
 /// A raft submit fails for two reasons that a caller acts on differently. This
 /// broker is not the controller leader, which the caller retries somewhere
 /// else, or the quorum did not take the record, which the caller retries later.
-pub(crate) fn submit_error(error: &RaftError) -> Refusal {
+pub fn submit_error(error: &RaftError) -> Refusal {
     let (code, message) = match error {
         RaftError::NotLeader { .. } | RaftError::LeaderUnknown => (
             codes::NOT_CONTROLLER,
@@ -122,7 +119,7 @@ pub(crate) fn submit_error(error: &RaftError) -> Refusal {
 /// thirteen of them, and a positional call would be unreadable and easy to
 /// transpose.
 #[derive(Clone, Copy)]
-pub(crate) struct PrivilegedAudit<'a> {
+pub struct PrivilegedAudit<'a> {
     /// Whether the phase succeeded.
     pub outcome: AuditOutcome,
     /// Which step of the workflow this event records.
@@ -152,7 +149,7 @@ pub(crate) struct PrivilegedAudit<'a> {
 ///
 /// Every phase calls this, refusals included. A refusal that reaches no audit
 /// log is a refusal an auditor cannot count.
-pub(crate) fn audit_privileged(
+pub fn audit_privileged(
     audit_log: &AuditLog,
     ctx: &RequestContext<'_>,
     approver_set_fingerprint: String,
@@ -170,7 +167,7 @@ pub(crate) fn audit_privileged(
 ///
 /// Fail-open keeps the existing single outcome record. Fail-closed records an
 /// `Attempted` event durably; only then may the caller commit the action.
-pub(crate) async fn require_privileged(
+pub async fn require_privileged(
     audit_log: &AuditLog,
     ctx: &RequestContext<'_>,
     approver_set_fingerprint: String,
@@ -195,7 +192,7 @@ pub(crate) async fn require_privileged(
 }
 
 /// Refuse a workflow request with the same policy error when its durable audit intent fails.
-pub(crate) async fn admit_privileged_request(
+pub async fn admit_privileged_request(
     audit_log: &AuditLog,
     ctx: &RequestContext<'_>,
     approver_set_fingerprint: String,
@@ -221,7 +218,7 @@ const NO_SIGNED_STAMP: i64 = 0;
 ///
 /// `signed_at_ms` is the stamp inside the signed preimage, which a write-freeze
 /// carries and a break-glass event does not.
-pub(crate) fn privileged_event(
+pub fn privileged_event(
     ctx: &RequestContext<'_>,
     approver_set_fingerprint: String,
     event: &PrivilegedAudit<'_>,
@@ -260,24 +257,20 @@ pub(crate) fn privileged_event(
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use {
         super::*,
         crate::test_support::sasl_principal,
         assert2::{assert, check},
         krabka_security::Principal,
+        std::{net::SocketAddr, sync::Arc},
     };
 
-    pub(crate) fn principal(name: &str) -> Principal { sasl_principal(name) }
+    pub fn principal(name: &str) -> Principal { sasl_principal(name) }
 
-    pub(crate) fn peer() -> std::net::SocketAddr {
-        "10.0.0.7:51120".parse().expect("a loopback peer address")
-    }
+    pub fn peer() -> SocketAddr { "10.0.0.7:51120".parse().expect("a loopback peer address") }
 
-    pub(crate) fn context<'a>(
-        principal: &'a Principal,
-        peer: &'a std::net::SocketAddr,
-    ) -> RequestContext<'a> {
+    pub fn context<'a>(principal: &'a Principal, peer: &'a SocketAddr) -> RequestContext<'a> {
         RequestContext::new(
             principal,
             peer,
@@ -288,9 +281,7 @@ pub(crate) mod tests {
         )
     }
 
-    pub(crate) fn audit_channel() -> (std::sync::Arc<AuditLog>, krabka_audit::AuditReceiver) {
-        AuditLog::new(8)
-    }
+    pub fn audit_channel() -> (Arc<AuditLog>, krabka_audit::AuditReceiver) { AuditLog::new(8) }
 
     #[test]
     fn a_connection_principal_takes_its_kafka_string_form() {

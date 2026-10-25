@@ -26,7 +26,7 @@ pub fn first_unstable_offset(starts: &[i64], log_end: i64) -> Option<i64> {
     #[invariant(forall<i: Int> 0 <= i && i < index@ ==> lso@ <= starts@[i]@)]
     #[variant(starts@.len() - index@)]
     while index < starts.len() {
-        let start = starts[index];
+        let &start = starts.get(index)?;
         if start > log_end {
             return None;
         }

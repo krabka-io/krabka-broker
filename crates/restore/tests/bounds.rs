@@ -10,6 +10,7 @@
 //! `crates/remote-storage/tests/jvm_tiered_storage.rs` uses to build a
 //! KIP-405 archive, then drives `restore()` and reads the restored
 //! partition back with a fresh `krabka_log::Log`.
+#![cfg(test)]
 
 #[path = "support/archive_fixture.rs"]
 mod archive_fixture;

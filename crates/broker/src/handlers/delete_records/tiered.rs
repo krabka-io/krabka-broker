@@ -18,6 +18,7 @@ use {
     },
     krabka_log::Offset,
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition},
+    std::sync::PoisonError,
 };
 
 /// The remote archive behind one tiered partition, which a trim has to make
@@ -54,7 +55,7 @@ pub(super) fn archive_floor<'a>(
     let tiered = part
         .log
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .config_snapshot()
         .remote_storage_enable;
     if !tiered {

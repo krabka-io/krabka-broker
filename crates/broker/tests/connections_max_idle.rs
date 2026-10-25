@@ -34,6 +34,7 @@
 //! reaches the serve loop that increments it. It runs on a real, short window
 //! instead, and the bounded read it blocks on gives that window twenty times
 //! its length to fire.
+#![cfg(test)]
 
 mod support;
 
@@ -52,12 +53,19 @@ use {
     },
     krabka_security::{ClientAuthMode, ListenerProtocol, TlsConfig},
     krabka_units::Time,
-    std::{io, net::SocketAddr, path::Path, time::Duration},
+    rustls::crypto::aws_lc_rs,
+    std::{
+        fs, io, iter,
+        net::SocketAddr,
+        path::{Path, PathBuf},
+        time::Duration,
+    },
     support::listeners::loopback_listener,
     tempfile::TempDir,
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpStream,
+        time,
     },
 };
 
@@ -68,9 +76,9 @@ const DEV_CERT: &str = include_str!("fixtures/security/dev_cert.pem");
 const DEV_KEY: &str = include_str!("fixtures/security/dev_key.pem");
 
 /// Writes one PEM fixture into `dir` and returns its path.
-fn write_pem(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+fn write_pem(dir: &Path, name: &str, body: &str) -> PathBuf {
     let path = dir.join(name);
-    std::fs::write(&path, body).expect("write PEM fixture");
+    fs::write(&path, body).expect("write PEM fixture");
     path
 }
 
@@ -86,7 +94,7 @@ impl Fixture {
     /// Boots a broker over `cfg`, whose listener list this function fills in.
     async fn start(mut cfg: BrokerConfig, log_dir: TempDir, listener: &str) -> Self {
         cfg.listeners = vec![loopback_listener(listener, ListenerProtocol::Plaintext)];
-        cfg.inter_broker_listener_name = listener.to_string();
+        cfg.inter_broker_listener_name = listener.to_owned();
         let handle = Broker::start(cfg).await.expect("broker must start");
         let addr = handle.listen_addr();
         Self {
@@ -166,15 +174,15 @@ async fn api_versions(stream: &mut TcpStream, corr_id: i32) -> io::Result<ApiVer
 
 /// Jumps the tokio clock forward without letting the wall clock move.
 async fn advance(by: Duration) {
-    tokio::time::pause();
-    tokio::time::advance(by).await;
-    tokio::time::resume();
+    time::pause();
+    time::advance(by).await;
+    time::resume();
 }
 
 /// Reads one byte with a bounded wait and reports whether the peer closed.
 async fn is_closed(stream: &mut TcpStream) -> bool {
     let mut buf = [0_u8; 1];
-    let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf))
+    let read = time::timeout(Duration::from_secs(5), stream.read(&mut buf))
         .await
         .expect("read must not hang")
         .expect("read must not error");
@@ -207,7 +215,7 @@ async fn silent_plaintext_connection_closes_past_its_idle_window(
     };
     if per_listener {
         cfg.connections_max_idle_overrides =
-            std::iter::once(("EXTERNAL".to_string(), krabka_units::secs(window_secs))).collect();
+            iter::once(("EXTERNAL".to_owned(), krabka_units::secs(window_secs))).collect();
     }
     let listener = if per_listener {
         "EXTERNAL"
@@ -281,7 +289,7 @@ async fn a_request_trickled_across_two_windows_is_served() {
         stream.write_all(chunk).await.expect("write a chunk");
         stream.flush().await.expect("flush a chunk");
         // Lets the serve loop take the chunk before the clock moves on.
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
         advance(Duration::from_secs(30)).await;
     }
 
@@ -312,7 +320,7 @@ async fn a_request_trickled_across_two_windows_is_served() {
 /// in `TlsAcceptor::accept` for as long as the peer cared to hold them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_tls_listener_closes_a_socket_that_never_starts_its_handshake() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
 
     let log_dir = tempfile::tempdir().expect("tempdir");
     let pem_dir = tempfile::tempdir().expect("tempdir");
@@ -322,7 +330,7 @@ async fn a_tls_listener_closes_a_socket_that_never_starts_its_handshake() {
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.connections_max_idle = Some(krabka_units::millis(250));
     cfg.listeners = vec![loopback_listener("SSL", ListenerProtocol::Ssl)];
-    cfg.inter_broker_listener_name = "SSL".to_string();
+    cfg.inter_broker_listener_name = "SSL".to_owned();
     cfg.tls_config = Some(TlsConfig {
         cert_chain_path: cert_path,
         private_key_path: key_path,

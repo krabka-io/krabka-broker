@@ -18,7 +18,7 @@ struct ArrayCodec {
     decode: Tokens,
 }
 
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let codec = item.parse_meta::<ArrayCodec>("array_value")?.ok_or_else(|| {
         ParseError::new(item.ident.span(), "`FlexibleArrayValue` needs `#[array_value(record = \"KafkaRecord\", encode = writer, decode = reader)]`")
     })?;
@@ -29,7 +29,12 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
             "`FlexibleArrayValue` needs exactly one named array field",
         ));
     }
-    let array = fields.first().expect("one field");
+    let Some(array) = fields.first() else {
+        return Err(ParseError::new(
+            item.ident.span(),
+            "`FlexibleArrayValue` needs exactly one named array field",
+        ));
+    };
     if !array
         .ty
         .as_path()

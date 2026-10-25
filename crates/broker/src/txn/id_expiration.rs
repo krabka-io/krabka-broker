@@ -41,7 +41,7 @@ use {
 /// [`crate::config::BrokerConfig::txn_id_expiration`], Kafka's
 /// `transactional.id.expiration.ms`.
 #[krabka_macros::reaper_task(shutdown_message = "transactional-id expiry sweep shutting down")]
-pub(crate) async fn run(
+pub async fn run(
     coord: Arc<TxnCoordinator>,
     controller: Arc<dyn MetadataSource>,
     interval: Time,

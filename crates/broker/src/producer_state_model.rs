@@ -109,11 +109,8 @@ impl HostEntry {
     /// The entry after the host accepts `batch` at `epoch`: exactly what
     /// `ProducerState::commit` stores.
     fn after_append(existing: Option<&Self>, epoch: i16, batch: Range) -> Self {
-        let Completion { earlier, .. } = super::entry::earlier_after_completion(
-            existing.map(HostEntry::entry),
-            epoch,
-            batch.batch(),
-        );
+        let Completion { earlier, .. } =
+            super::entry::earlier_after_completion(existing.map(Self::entry), epoch, batch.batch());
         Self {
             epoch,
             last: Range {

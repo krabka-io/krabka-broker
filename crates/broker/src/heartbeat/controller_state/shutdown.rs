@@ -10,7 +10,7 @@ use super::{BrokerLivenessState, ControllerLivenessState};
 
 /// Kafka's `BrokerControlState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BrokerControlState {
+pub enum BrokerControlState {
     Fenced,
     Unfenced,
     ControlledShutdown,
@@ -27,14 +27,14 @@ impl BrokerControlState {
 
 /// What one heartbeat asks for: `wantFence` and `wantShutDown`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct HeartbeatWants {
+pub struct HeartbeatWants {
     pub(crate) fence: bool,
     pub(crate) shut_down: bool,
 }
 
 /// What one heartbeat asks for and what the controller knows about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct HeartbeatFacts {
+pub struct HeartbeatFacts {
     pub(crate) wants: HeartbeatWants,
     /// The broker reached the offset of its own registration record.
     pub(crate) caught_up: bool,
@@ -55,7 +55,7 @@ pub(crate) struct HeartbeatFacts {
 /// may shut down at once. A broker in controlled shutdown may shut down once it
 /// leads nothing and every active broker has replicated the records that its
 /// controlled shutdown wrote.
-pub(crate) const fn next_broker_state(
+pub const fn next_broker_state(
     current: BrokerControlState,
     facts: HeartbeatFacts,
 ) -> BrokerControlState {
@@ -153,14 +153,12 @@ impl ControllerLivenessState {
         next: BrokerControlState,
         metadata_offset: i64,
     ) {
-        let mut map = self.brokers.lock().await;
-        let Some(entry) = map.get_mut(&broker_id) else {
-            return;
-        };
-        entry.fenced = next.fenced();
-        entry.metadata_offset = metadata_offset;
-        if entry.fenced || next != BrokerControlState::ControlledShutdown {
-            entry.controlled_shutdown_offset = None;
+        if let Some(entry) = self.brokers.lock().await.get_mut(&broker_id) {
+            entry.fenced = next.fenced();
+            entry.metadata_offset = metadata_offset;
+            if entry.fenced || next != BrokerControlState::ControlledShutdown {
+                entry.controlled_shutdown_offset = None;
+            }
         }
     }
 

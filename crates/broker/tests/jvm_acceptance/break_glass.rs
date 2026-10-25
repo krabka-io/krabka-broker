@@ -1,14 +1,14 @@
 //! Break-glass setup through the host-side private APIs.
 
-use crate::support::sasl_client;
+use {crate::support::sasl_client, krabka_protocol::primitives::uuid::Uuid};
 
-pub(crate) async fn propose(
+pub async fn propose(
     bootstrap: &str,
     operator: (&str, &str),
     action: i8,
     target: &str,
     reason: &str,
-) -> krabka_protocol::primitives::uuid::Uuid {
+) -> Uuid {
     use krabka_protocol::krabka::break_glass::ProposeBreakGlassRequest;
     let client = sasl_client(bootstrap, operator.0, operator.1).await;
     let response = client
@@ -29,7 +29,7 @@ pub(crate) async fn propose(
 
 /// How far along a proposal is after one approval.
 #[derive(Debug)]
-pub(crate) struct Approvals {
+pub struct Approvals {
     /// Distinct principals that have approved it.
     pub(crate) held: i32,
     /// Distinct principals it needs. The broker refuses a configured value
@@ -39,11 +39,7 @@ pub(crate) struct Approvals {
 
 /// Add one approval to a proposal as `operator`, and answer with the
 /// approvals now held.
-pub(crate) async fn approve(
-    bootstrap: &str,
-    operator: (&str, &str),
-    proposal_id: krabka_protocol::primitives::uuid::Uuid,
-) -> Approvals {
+pub async fn approve(bootstrap: &str, operator: (&str, &str), proposal_id: Uuid) -> Approvals {
     use krabka_protocol::krabka::break_glass::ApproveBreakGlassRequest;
     let client = sasl_client(bootstrap, operator.0, operator.1).await;
     let response = client

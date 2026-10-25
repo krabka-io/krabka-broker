@@ -60,7 +60,7 @@ use {
     },
 };
 
-pub(crate) fn clear_elr_records(
+pub fn clear_elr_records(
     image: &krabka_metadata::MetadataImage,
     topic: Option<&str>,
 ) -> Vec<krabka_metadata::MetadataRecord> {
@@ -88,7 +88,7 @@ const KAFKA_DEFAULT_MIN_INSYNC_REPLICAS: usize = 1;
 /// An unparseable value reads as `None`. The alter paths reject those, so a
 /// string here that does not parse means a corrupt metadata image, and every
 /// caller would rather fall back than fail the request.
-pub(crate) fn node_min_insync_replicas(
+pub fn node_min_insync_replicas(
     image: &krabka_metadata::MetadataImage,
     node: krabka_metadata::NodeId,
     topic: &str,
@@ -114,7 +114,7 @@ pub(crate) fn node_min_insync_replicas(
 /// topic; krabka passes the replica count of the partition it is deciding,
 /// which is the same number on a topic whose partitions share a replication
 /// factor.
-pub(crate) fn effective_min_insync_replicas(
+pub fn effective_min_insync_replicas(
     image: &krabka_metadata::MetadataImage,
     topic: &str,
     replication_factor: usize,
@@ -143,7 +143,7 @@ mod tests {
         if let Some(value) = topic_override {
             image.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
                 topic: "t".into(),
-                overrides: [(MIN_INSYNC_REPLICAS.to_string(), value.to_string())]
+                overrides: [(MIN_INSYNC_REPLICAS.to_owned(), value.to_owned())]
                     .into_iter()
                     .collect(),
             }));
@@ -151,8 +151,8 @@ mod tests {
         if let Some(value) = cluster_default {
             image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
                 node_id: DEFAULT_BROKER_CONFIG_NODE_ID,
-                config_name: MIN_INSYNC_REPLICAS.to_string(),
-                config_value: Some(value.to_string()),
+                config_name: MIN_INSYNC_REPLICAS.to_owned(),
+                config_value: Some(value.to_owned()),
             }));
         }
         image
@@ -200,8 +200,8 @@ mod tests {
         if let Some(value) = node_two {
             image.apply(&MetadataRecord::V1BrokerConfig(BrokerConfigRecord {
                 node_id: NodeId(2),
-                config_name: MIN_INSYNC_REPLICAS.to_string(),
-                config_value: Some(value.to_string()),
+                config_name: MIN_INSYNC_REPLICAS.to_owned(),
+                config_value: Some(value.to_owned()),
             }));
         }
         check!(

@@ -1,4 +1,5 @@
 //! Runtime tables preserve assignment order, absent fields and validation errors.
+#![cfg(test)]
 
 use {
     assert2::assert,

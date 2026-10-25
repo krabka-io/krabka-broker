@@ -138,15 +138,22 @@ pub fn homogeneous_member_quotas(
         }))]
     #[variant(owned@.len() - i@)]
     while i < owned.len() {
+        let Some(&owned_now) = owned.get(i) else {
+            break;
+        };
         let members_left = owned.len() - i;
         let takes_extra =
-            extras_left > 0 && (owned[i] > minimum_quota || members_left <= extras_left);
+            extras_left > 0 && (owned_now > minimum_quota || members_left <= extras_left);
         let target = if takes_extra {
             minimum_quota + 1
         } else {
             minimum_quota
         };
-        let retain = if owned[i] < target { owned[i] } else { target };
+        let retain = if owned_now < target {
+            owned_now
+        } else {
+            target
+        };
         quotas.push(HomogeneousMemberQuota {
             takes_extra,
             retain,
@@ -208,11 +215,10 @@ pub fn select_least_loaded(candidates: &[SubscriberLoad]) -> Option<usize> {
         ==> load_precedes(candidates@[best@], candidates@[j]))]
     #[variant(candidates@.len() - i@)]
     while i < count {
-        let candidate = candidates[i];
-        let current = candidates[best];
-        if candidate.assigned < current.assigned
-            || (candidate.assigned == current.assigned
-                && candidate.assigned_at_topic_start < current.assigned_at_topic_start)
+        if let (Some(candidate), Some(current)) = (candidates.get(i), candidates.get(best))
+            && (candidate.assigned < current.assigned
+                || (candidate.assigned == current.assigned
+                    && candidate.assigned_at_topic_start < current.assigned_at_topic_start))
         {
             best = i;
         }

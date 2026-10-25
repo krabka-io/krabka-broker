@@ -8,7 +8,10 @@
 //! separate from the request handling because it is a pure function over a
 //! decoded payload.
 
-use crate::client_metrics::prometheus_sink::{DataPoint, PointValue};
+use {
+    crate::client_metrics::prometheus_sink::{DataPoint, PointValue},
+    opentelemetry_proto::tonic::metrics::v1::{MetricsData, NumberDataPoint},
+};
 
 const MAX_POINTS_PER_PUSH: usize = 1_000;
 const MAX_ATTRIBUTES_PER_POINT: usize = 32;
@@ -21,7 +24,7 @@ const MAX_HISTOGRAM_BUCKETS: usize = 128;
 /// become numbers, and a Histogram becomes count and sum gauges. The function
 /// is best-effort and skips unknown shapes.
 pub(super) fn flatten_for_prometheus(
-    md: &opentelemetry_proto::tonic::metrics::v1::MetricsData,
+    md: &MetricsData,
     instance: &str,
     client_id: &str,
 ) -> Result<Vec<DataPoint>, ()> {
@@ -47,13 +50,11 @@ pub(super) fn flatten_for_prometheus(
         return Err(());
     }
     let mut out = Vec::with_capacity(point_count);
-    let num = |v: &Value| -> f64 {
+    // Every i64 has a finite f64 representation, so the parse never fails.
+    let num = |v: &Value| -> Result<f64, ()> {
         match v {
-            Value::AsDouble(d) => *d,
-            Value::AsInt(i) => i
-                .to_string()
-                .parse()
-                .expect("every i64 has a finite f64 representation"),
+            Value::AsDouble(d) => Ok(*d),
+            Value::AsInt(i) => i.to_string().parse().map_err(|_| ()),
         }
     };
     let attribute_value = |value: &AnyValue| -> Option<String> {
@@ -105,8 +106,8 @@ pub(super) fn flatten_for_prometheus(
                     |point_attributes: &[KeyValue], value, delta_start| -> Result<DataPoint, ()> {
                         Ok(DataPoint {
                             metric: m.name.clone(),
-                            client_instance_id: instance.to_string(),
-                            client_id: client_id.to_string(),
+                            client_instance_id: instance.to_owned(),
+                            client_id: client_id.to_owned(),
                             attributes: attributes(&[
                                 rm.resource
                                     .as_ref()
@@ -119,12 +120,9 @@ pub(super) fn flatten_for_prometheus(
                         })
                     };
                 let mut numbers =
-                    |points: &[opentelemetry_proto::tonic::metrics::v1::NumberDataPoint],
-                     monotonic: bool,
-                     delta: bool|
-                     -> Result<(), ()> {
+                    |points: &[NumberDataPoint], monotonic: bool, delta: bool| -> Result<(), ()> {
                         for dp in points {
-                            let Some(value) = dp.value.as_ref().map(num) else {
+                            let Some(value) = dp.value.as_ref().map(num).transpose()? else {
                                 continue;
                             };
                             out.push(point(

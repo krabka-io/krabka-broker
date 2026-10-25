@@ -17,11 +17,13 @@ use {
             transport::Inbound,
         },
     },
+    std::path::Path,
+    tokio::sync::oneshot,
 };
 
 /// A contiguous byte window of the latest metadata `.checkpoint`, returned by
 /// [`ControllerHandle::read_snapshot_range`].
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SnapshotSlice {
     pub end_offset: i64,
     pub epoch: i32,
@@ -91,7 +93,7 @@ impl ControllerHandle {
         version: i16,
         body: bytes::Bytes,
     ) -> Result<bytes::Bytes, RaftError> {
-        let (reply, answer) = tokio::sync::oneshot::channel();
+        let (reply, answer) = oneshot::channel();
         self.engine
             .deliver(Inbound::FetchSnapshot {
                 req: body,
@@ -114,7 +116,7 @@ impl ControllerHandle {
 /// The highest `(end_offset, epoch)` `.checkpoint` in `dir` plus its raw
 /// bytes. Matches the bare-checkpoint format the engine writes (no `.meta`
 /// sidecar).
-pub(super) fn load_latest_checkpoint(dir: &std::path::Path) -> Option<(SnapshotId, Vec<u8>)> {
+pub(super) fn load_latest_checkpoint(dir: &Path) -> Option<(SnapshotId, Vec<u8>)> {
     let id = latest_checkpoint_id(dir)?;
     let bytes = load_checkpoint_by_id(dir, id.0, id.1)?;
     Some((id, bytes))
@@ -125,32 +127,33 @@ mod tests {
     use {
         super::*,
         crate::{controller::test_support::joining_controller, metadata_partition_dir},
+        std::fs,
         tempfile::TempDir,
     };
 
     #[test]
     fn load_latest_checkpoint_picks_highest_offset_then_epoch() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(
+        fs::write(
             dir.path()
                 .join("00000000000000000001-0000000009.checkpoint"),
             b"old-offset",
         )
         .unwrap();
-        std::fs::write(
+        fs::write(
             dir.path()
                 .join("00000000000000000002-0000000001.checkpoint"),
             b"old-epoch",
         )
         .unwrap();
-        std::fs::write(
+        fs::write(
             dir.path()
                 .join("00000000000000000002-0000000003.checkpoint"),
             b"best",
         )
         .unwrap();
-        std::fs::write(dir.path().join("9-9.txt"), b"ignored suffix").unwrap();
-        std::fs::write(
+        fs::write(dir.path().join("9-9.txt"), b"ignored suffix").unwrap();
+        fs::write(
             dir.path().join("not-a-checkpoint.checkpoint"),
             b"ignored name",
         )
@@ -174,8 +177,8 @@ mod tests {
     ) {
         let (dir, ctrl) = joining_controller("join start").await;
         let checkpoint_dir = metadata_partition_dir(dir.path());
-        std::fs::create_dir_all(&checkpoint_dir).unwrap();
-        std::fs::write(
+        fs::create_dir_all(&checkpoint_dir).unwrap();
+        fs::write(
             checkpoint_dir.join("00000000000000000010-0000000004.checkpoint"),
             b"abc",
         )

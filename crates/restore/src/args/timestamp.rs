@@ -72,12 +72,19 @@ struct CalendarDate {
 
 fn parse_date(date: &str) -> Result<CalendarDate, String> {
     let bytes = date.as_bytes();
-    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+    let (10, Some(b'-'), Some(b'-'), Some(year), Some(month), Some(day)) = (
+        bytes.len(),
+        bytes.get(4),
+        bytes.get(7),
+        date.get(0..4),
+        date.get(5..7),
+        date.get(8..10),
+    ) else {
         return Err(format!("expected a YYYY-MM-DD date, got {date:?}"));
-    }
-    let year = parse_digits(&date[0..4], "year")?;
-    let month = parse_digits(&date[5..7], "month")?;
-    let day = parse_digits(&date[8..10], "day")?;
+    };
+    let year = parse_digits(year, "year")?;
+    let month = parse_digits(month, "month")?;
+    let day = parse_digits(day, "day")?;
     if year == 0 {
         return Err("year must be 0001 or later".into());
     }
@@ -117,20 +124,21 @@ fn split_zone(rest: &str) -> Result<ZonedTime<'_>, String> {
         format!("expected a zone designator, Z or +HH:MM or -HH:MM, at the end of {rest:?}")
     })?;
     let bytes = zone.as_bytes();
-    let sign = match bytes[0] {
-        b'+' => 1,
-        b'-' => -1,
+    let sign = match bytes.first() {
+        Some(b'+') => 1,
+        Some(b'-') => -1,
         _ => {
             return Err(format!(
                 "expected a zone designator, Z or +HH:MM or -HH:MM, got {zone:?}"
             ));
         }
     };
-    if bytes[3] != b':' {
+    let (Some(b':'), Some(hours), Some(minutes)) = (bytes.get(3), zone.get(1..3), zone.get(4..6))
+    else {
         return Err(format!("expected a zone offset of +HH:MM, got {zone:?}"));
-    }
-    let hours = parse_digits(&zone[1..3], "zone hours")?;
-    let minutes = parse_digits(&zone[4..6], "zone minutes")?;
+    };
+    let hours = parse_digits(hours, "zone hours")?;
+    let minutes = parse_digits(minutes, "zone minutes")?;
     if hours > 23 || minutes > 59 {
         return Err(format!("zone offset out of range: {zone:?}"));
     }
@@ -154,12 +162,19 @@ fn parse_time(time: &str) -> Result<ClockTime, String> {
         None => (time, None),
     };
     let bytes = hms.as_bytes();
-    if bytes.len() != 8 || bytes[2] != b':' || bytes[5] != b':' {
+    let (8, Some(b':'), Some(b':'), Some(hour), Some(minute), Some(second)) = (
+        bytes.len(),
+        bytes.get(2),
+        bytes.get(5),
+        hms.get(0..2),
+        hms.get(3..5),
+        hms.get(6..8),
+    ) else {
         return Err(format!("expected a HH:MM:SS time, got {hms:?}"));
-    }
-    let hour = parse_digits(&hms[0..2], "hour")?;
-    let minute = parse_digits(&hms[3..5], "minute")?;
-    let second = parse_digits(&hms[6..8], "second")?;
+    };
+    let hour = parse_digits(hour, "hour")?;
+    let minute = parse_digits(minute, "minute")?;
+    let second = parse_digits(second, "second")?;
     if hour > 23 {
         return Err(format!("hour must be 00..23, got {hour:02}"));
     }
@@ -179,7 +194,10 @@ fn parse_time(time: &str) -> Result<ClockTime, String> {
             }
             let mut padded = String::from(fraction);
             padded.push_str("000");
-            parse_digits(&padded[0..3], "fractional second")?
+            let millis = padded.get(0..3).ok_or_else(|| {
+                format!("fractional second must be 1 to 9 digits, got {fraction:?}")
+            })?;
+            parse_digits(millis, "fractional second")?
         }
     };
     Ok(ClockTime {

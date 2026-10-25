@@ -14,6 +14,7 @@
 //! qualification gate runs the same commands against two secured clusters,
 //! through a real capture and restore. This suite keeps the commands honest
 //! without Docker.
+#![cfg(test)]
 
 mod support;
 
@@ -39,11 +40,14 @@ use {
         verdict::judge,
     },
     krabka_security::{ClientAuthMode, ListenerProtocol, SaslMechanism, TlsConfig},
+    rustls::crypto::aws_lc_rs,
     std::{
+        fs, iter,
         net::SocketAddr,
         path::{Path, PathBuf},
         time::Duration,
     },
+    tokio::time,
 };
 
 /// How long the load runs before the loss.
@@ -58,27 +62,27 @@ const PASSWORD: &str = "qualification-soak";
 /// fast the load ran.
 fn shortened_contract(dir: &Path) -> PathBuf {
     let declared =
-        std::fs::read_to_string(manifest_dir().join("../../bench/soak/dr-secured.yaml")).unwrap();
+        fs::read_to_string(manifest_dir().join("../../bench/soak/dr-secured.yaml")).unwrap();
     let shortened = declared
         .replace("post_capture_load: 20s", "post_capture_load: 2s")
         .replace("throughput_floor: 15/s", "throughput_floor: 1/s");
     assert!(shortened != declared);
     let path = dir.join("dr-secured.yaml");
-    std::fs::write(&path, shortened).unwrap();
+    fs::write(&path, shortened).unwrap();
     path
 }
 
 /// Parse `args` as the binary does, run them, and return what they print. A
 /// `load` ends after `LOAD`, as if the source cluster were lost then.
 async fn drill(args: &[&str]) -> String {
-    let command_line = std::iter::once("krabka-soak-drill").chain(args.iter().copied());
+    let command_line = iter::once("krabka-soak-drill").chain(args.iter().copied());
     let cli = Cli::try_parse_from(command_line).unwrap();
-    run(cli, tokio::time::sleep(LOAD)).await.unwrap()
+    run(cli, time::sleep(LOAD)).await.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_drill_reads_back_every_record_a_surviving_source_acknowledged() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
     let security = manifest_dir().join("tests/fixtures/security");
     let secured: SocketAddr = format!("127.0.0.1:{}", free_port()).parse().unwrap();
     let broker = start_configured(|config| {
@@ -172,7 +176,7 @@ async fn the_drill_reads_back_every_record_a_surviving_source_acknowledged() {
     readback_args.extend(login);
     check!(drill(&readback_args).await == "");
     let evidence: Evidence =
-        serde_json::from_str(&std::fs::read_to_string(&evidence_file).unwrap()).unwrap();
+        serde_json::from_str(&fs::read_to_string(&evidence_file).unwrap()).unwrap();
 
     let verdict = judge(&contract, &evidence);
     check!(verdict.reconciliation.findings == []);

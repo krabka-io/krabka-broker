@@ -190,11 +190,7 @@ mod tests {
         let source: Arc<dyn MetadataSource> =
             Arc::new(static_source(MetadataImage::new(Uuid::nil())));
         let err = plaintext_reporter()
-            .send(
-                &source,
-                "test",
-                krabka_protocol::owned::assign_replicas_to_dirs_request::AssignReplicasToDirsRequest::default(),
-            )
+            .send(&source, "test", AssignReplicasToDirsRequest::default())
             .await
             .expect_err("no controller leader must fail");
         assert!(err == "no controller leader");
@@ -209,12 +205,12 @@ mod tests {
             .materialize_local_partition(&img, "t", 0)
             .unwrap();
         let mut local_set = HashSet::new();
-        local_set.insert(("t".to_string(), 0));
+        local_set.insert(("t".to_owned(), 0));
 
         supervisor.report_dir_assignments(&local_set, &img).await;
 
         assert!(reporter.calls.load(Ordering::SeqCst) == 1);
-        assert!(supervisor.reported_dirs.contains_key(&("t".to_string(), 0)));
+        assert!(supervisor.reported_dirs.contains_key(&("t".to_owned(), 0)));
 
         let part = partitions
             .get("t", PartitionIndex(0))
@@ -224,7 +220,7 @@ mod tests {
         assert!(
             supervisor
                 .reported_dirs
-                .get(&("t".to_string(), 0))
+                .get(&("t".to_owned(), 0))
                 .map(|e| *e)
                 == Some(expected)
         );
@@ -255,7 +251,7 @@ mod tests {
         let dir_uuid = log_dir_ids.id_for(dir.path()).expect("dir uuid resolvable");
 
         let mut local_set = HashSet::new();
-        local_set.insert(("t".to_string(), 0));
+        local_set.insert(("t".to_owned(), 0));
         let reported_dirs: dashmap::DashMap<TopicPartition, uuid::Uuid> = dashmap::DashMap::new();
 
         // First call: nothing reported yet → one wire entry + one update entry.
@@ -270,7 +266,7 @@ mod tests {
         assert!(
             updates
                 == vec![ReportedDirUpdate {
-                    topic: "t".to_string(),
+                    topic: "t".to_owned(),
                     partition: 0,
                     dir_uuid,
                 }]

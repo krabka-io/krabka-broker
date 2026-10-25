@@ -7,32 +7,69 @@
 use {
     crate::{
         cluster::{
-            admin_text_cluster, assert_reassigned, assignment, execute_plan, offline_for_partition,
-            reassignment_cluster, removed_replica,
+            RegisteredCluster, admin_text_cluster, assert_reassigned, assignment, execute_plan,
+            offline_for_partition, reassignment_cluster, removed_replica,
         },
         jvm_acceptance::{KAFKA_IMAGE_TXN, broker0_advertised, verify_console_reassignment},
         oracle::{AssignedTopicCommandSetup, CliRun, OracleComparison},
         support::{ContainerInput, jvm_docker_command},
     },
     assert2::assert,
+    krabka_metadata::NodeId,
     std::{io::Write as _, process::Stdio, time::Duration},
+    tokio::time,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker"]
-#[allow(clippy::too_many_lines)] // Keeps the external CLI lifecycle in one end-to-end test.
 async fn jvm_kafka_reassign_partitions_end_to_end() {
     const TOPIC: &str = "krabka-reassign-itest";
 
     let (cluster, _admin_props, admin_mount) = Box::pin(reassignment_cluster(TOPIC)).await;
 
+    produce_one_record(&admin_mount, TOPIC);
+
+    let (initial, new_node, staying) = assignment(&cluster.h1, TOPIC, true);
+    let (_json_file, json_mount) = execute_plan(&admin_mount, TOPIC, staying, new_node, false);
+
+    let pr_after = cluster
+        .h1
+        .partition_record_for_test(TOPIC, 0)
+        .expect("partition record after alter");
+    let removing_replica = removed_replica(&pr_after, &initial);
+    wait_for_catch_up(&cluster, TOPIC, staying, new_node).await;
+
+    wait_for_drained_reassignment(&cluster, TOPIC).await;
+    // After completion the replica set must match [staying, new_node].
+    assert_reassigned(&cluster.h1, TOPIC, staying, new_node);
+    wait_for_pruned_replica(&cluster, TOPIC, removing_replica).await;
+    eprintln!("KRABKA[test] reassignment completed; running --verify");
+
+    // --verify should report completion.
+    let verify_out = verify_console_reassignment(&admin_mount, &json_mount);
+
+    assert!(
+        String::from_utf8_lossy(&verify_out.stdout)
+            .to_ascii_lowercase()
+            .contains("complete"),
+        "verify did not report completion: {}",
+        String::from_utf8_lossy(&verify_out.stdout)
+    );
+
+    cluster.h1.shutdown().await;
+    cluster.h2.shutdown().await;
+    cluster.h3.shutdown().await;
+}
+
+/// Write one record into `topic` with `kafka-console-producer`.
+fn produce_one_record(admin_mount: &str, topic: &str) {
     let mut producer = jvm_docker_command()
         .image(KAFKA_IMAGE_TXN)
-        .mounts(&[&admin_mount])
+        .mounts(&[admin_mount])
         .args(&[
             "kafka-console-producer",
             "--topic",
-            TOPIC,
+            topic,
             "--bootstrap-server",
             broker0_advertised(),
             "--producer.config",
@@ -51,81 +88,69 @@ async fn jvm_kafka_reassign_partitions_end_to_end() {
         .expect("write record");
     drop(producer.stdin.take());
     assert!(producer.wait().expect("producer exit").success());
+}
 
-    let (initial, new_node, staying) = assignment(&cluster.h1, TOPIC, true);
-    let (_json_file, json_mount) = execute_plan(&admin_mount, TOPIC, staying, new_node, false);
-
-    let pr_after = cluster
-        .h1
-        .partition_record_for_test(TOPIC, 0)
-        .expect("partition record after alter");
-    let removing_replica = removed_replica(&pr_after, &initial);
+/// Wait until the added replica reaches the leader's log end offset.
+async fn wait_for_catch_up(cluster: &RegisteredCluster, topic: &str, staying: u64, new_node: u64) {
     let handles = [&cluster.h1, &cluster.h2, &cluster.h3];
     let leader_leo = handles[usize::try_from(staying - 1).unwrap()]
-        .local_log_end_offset(TOPIC, 0)
+        .local_log_end_offset(topic, 0)
         .expect("leader log");
     assert!(leader_leo > 0, "the reassignment must move real records");
-    tokio::time::timeout(Duration::from_secs(30), async {
+    time::timeout(Duration::from_secs(30), async {
         loop {
-            if handles[usize::try_from(new_node - 1).unwrap()].local_log_end_offset(TOPIC, 0)
+            if handles[usize::try_from(new_node - 1).unwrap()].local_log_end_offset(topic, 0)
                 == Some(leader_leo)
             {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
         }
     })
     .await
     .expect("added replica reaches the leader LEO");
+}
 
+/// Wait until the reassignment's adding and removing replicas are drained.
+async fn wait_for_drained_reassignment(cluster: &RegisteredCluster, topic: &str) {
     // Wait until adding_replicas and removing_replicas are both drained from
     // the committed metadata image.
-    let completed = tokio::time::timeout(Duration::from_secs(30), async {
+    let completed = time::timeout(Duration::from_secs(30), async {
         loop {
             if cluster
                 .h1
-                .partition_record_for_test(TOPIC, 0)
+                .partition_record_for_test(topic, 0)
                 .is_some_and(|pr| pr.adding_replicas.is_empty() && pr.removing_replicas.is_empty())
             {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
         }
     })
     .await;
     assert!(
         completed.is_ok(),
         "reassignment did not complete: {:?}",
-        cluster.h1.partition_record_for_test(TOPIC, 0)
+        cluster.h1.partition_record_for_test(topic, 0)
     );
-    // After completion the replica set must match [staying, new_node].
-    assert_reassigned(&cluster.h1, TOPIC, staying, new_node);
+}
+
+/// Wait until the removed replica's partition directory is pruned.
+async fn wait_for_pruned_replica(
+    cluster: &RegisteredCluster,
+    topic: &str,
+    removing_replica: NodeId,
+) {
     let dirs = [cluster.d1.path(), cluster.d2.path(), cluster.d3.path()];
     let removed_dir =
-        dirs[usize::try_from(removing_replica.0 - 1).unwrap()].join(format!("{TOPIC}-0"));
-    tokio::time::timeout(Duration::from_secs(30), async {
+        dirs[usize::try_from(removing_replica.0 - 1).unwrap()].join(format!("{topic}-0"));
+    time::timeout(Duration::from_secs(30), async {
         while removed_dir.exists() {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
         }
     })
     .await
     .expect("removed replica directory is pruned");
-    eprintln!("KRABKA[test] reassignment completed; running --verify");
-
-    // --verify should report completion.
-    let verify_out = verify_console_reassignment(&admin_mount, &json_mount);
-
-    assert!(
-        String::from_utf8_lossy(&verify_out.stdout)
-            .to_ascii_lowercase()
-            .contains("complete"),
-        "verify did not report completion: {}",
-        String::from_utf8_lossy(&verify_out.stdout)
-    );
-
-    cluster.h1.shutdown().await;
-    cluster.h2.shutdown().await;
-    cluster.h3.shutdown().await;
 }
 
 // ── `--generate` and `--additional` ─────────────────────────────────────────

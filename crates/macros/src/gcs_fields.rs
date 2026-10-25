@@ -5,7 +5,7 @@ use {
     moxy::{ast::ParseError, token::TokenStream},
 };
 
-pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let [prefix_doc, path_doc, key_doc, adc_doc, endpoint_doc] = mode_docs(
         meta,
         [

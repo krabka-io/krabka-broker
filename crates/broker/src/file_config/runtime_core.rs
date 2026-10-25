@@ -17,7 +17,7 @@ use {
 };
 
 impl RuntimeFileConfig {
-    pub(super) fn apply_core(&mut self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
+    pub(super) fn apply_core(&self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         let runtime = self;
 
         krabka_macros::set_runtime! {
@@ -48,10 +48,7 @@ impl RuntimeFileConfig {
         Ok(())
     }
 
-    pub(super) fn apply_replication(
-        &mut self,
-        cfg: &mut BrokerConfig,
-    ) -> Result<(), FileConfigError> {
+    pub(super) fn apply_replication(&self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         let runtime = self;
         if let Some(fetchers) = runtime.replica_fetchers {
             if fetchers == 0 {

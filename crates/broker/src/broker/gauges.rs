@@ -18,14 +18,19 @@ use {
         partition_registry::PartitionRegistry,
     },
     krabka_units::convert::TimeExt as _,
-    std::sync::Arc,
+    std::{
+        collections::HashMap,
+        sync::{Arc, atomic},
+        time::{SystemTime, UNIX_EPOCH},
+    },
+    tokio::time,
     tokio_util::sync::CancellationToken,
 };
 
 /// Epoch milliseconds for the KIP-835 time-since-last-applied-record gauge.
 fn epoch_now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|duration| i64::try_from(duration.as_millis()).ok())
         .unwrap_or(0)
@@ -209,7 +214,7 @@ pub(super) fn spawn_broker_gauge_updater(
     let static_voter_count = config.controller_quorum_voters.len();
     let audit_topic = config.audit_enabled.then(|| config.audit_topic.clone());
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(poll_interval.to_std());
+        let mut tick = time::interval(poll_interval.to_std());
         let mut previous_voted_directory = None;
         loop {
             if !super::tick_or_shutdown(&mut tick, &shutdown).await {
@@ -219,10 +224,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 .arcs()
                 .iter()
                 .filter(|partition| {
-                    partition
-                        .current_leader
-                        .load(std::sync::atomic::Ordering::Acquire)
-                        == node_id
+                    partition.current_leader.load(atomic::Ordering::Acquire) == node_id
                 })
                 .count();
             metrics
@@ -242,7 +244,7 @@ pub(super) fn spawn_broker_gauge_updater(
                 .watch_leader()
                 .borrow()
                 .is_some_and(|leader| leader == node_id);
-            let minimum_isr: std::collections::HashMap<&str, i32> = image
+            let minimum_isr: HashMap<&str, i32> = image
                 .topics()
                 .map(|topic| {
                     let minimum = node_min_insync_replicas(&image, node_id, &topic.name)
@@ -426,6 +428,8 @@ mod tests {
         assert2::{assert, check},
         krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionElrRecord},
         krabka_units::{millis, secs},
+        std::{path::PathBuf, time::Duration},
+        tokio::{task, time},
     };
 
     /// One KIP-835 sample: what the source reports, when the gauge samples
@@ -786,9 +790,9 @@ mod tests {
     impl RunningGauges {
         /// Wait up to a second for the published gauges to satisfy `done`.
         async fn wait_until(&self, what: &str, done: impl Fn(&BrokerMetrics) -> bool) {
-            let waited = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            let waited = time::timeout(Duration::from_secs(1), async {
                 while !done(&self.metrics) {
-                    tokio::task::yield_now().await;
+                    task::yield_now().await;
                 }
             })
             .await;
@@ -817,7 +821,7 @@ mod tests {
         audit_enabled: Option<bool>,
         default_min_insync_replicas: Option<i32>,
     ) -> RunningGauges {
-        let mut config = BrokerConfig::for_tests(std::path::PathBuf::new());
+        let mut config = BrokerConfig::for_tests(PathBuf::new());
         config.gauge_poll_interval = millis(1);
         config.audit_enabled = audit_enabled.unwrap_or(config.audit_enabled);
         config.default_min_insync_replicas =
@@ -879,7 +883,7 @@ mod tests {
         for (node_id, node_rack) in [(1_u64, rack), (2_u64, "dc-a")] {
             image.apply(&krabka_metadata::MetadataRecord::V1BrokerRegistration(
                 krabka_metadata::BrokerRegistrationRecord {
-                    rack: Some(node_rack.to_string()),
+                    rack: Some(node_rack.to_owned()),
                     ..broker_registration(krabka_raft::NodeId(node_id))
                 },
             ));

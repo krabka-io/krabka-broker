@@ -14,7 +14,12 @@
 
 use {
     krabka_metadata::MetadataImage,
-    std::{collections::BTreeMap, net::SocketAddr, sync::Arc},
+    std::{
+        collections::BTreeMap,
+        net::SocketAddr,
+        path::PathBuf,
+        sync::{self, Arc},
+    },
     tokio::{
         sync::{Mutex, watch},
         task::JoinHandle,
@@ -59,9 +64,11 @@ fn connection_options(
     }
 }
 
-/// Krabka-native view of the controller's current quorum state. Surfaced by
-/// [`ControllerHandle::quorum_state`] for the broker's `DescribeQuorum` admin
-/// handler so callers don't depend on engine internals directly.
+/// Krabka-native view of the controller's current quorum state.
+///
+/// Surfaced by [`ControllerHandle::quorum_state`] for the broker's
+/// `DescribeQuorum` admin handler so callers don't depend on engine internals
+/// directly.
 #[derive(Debug, Clone, Default)]
 pub struct QuorumState {
     /// `KRaft` leader epoch (on the wire as `leader_epoch`).
@@ -90,10 +97,11 @@ pub struct QuorumState {
     pub is_leader: bool,
 }
 
-/// Handle returned by [`Controller::start`]. Owns the live [`KraftController`]
-/// engine and the listener task. Drop is NOT a clean shutdown — call
-/// [`Self::shutdown`] (or [`Self::cancel`]) to drain the listener + stop the
-/// engine before the runtime is torn down.
+/// Handle returned by [`Controller::start`].
+///
+/// Owns the live [`KraftController`] engine and the listener task. Drop is NOT
+/// a clean shutdown — call [`Self::shutdown`] (or [`Self::cancel`]) to drain
+/// the listener + stop the engine before the runtime is torn down.
 pub struct ControllerHandle {
     engine: KraftController,
     leader: watch::Receiver<Option<NodeId>>,
@@ -102,7 +110,7 @@ pub struct ControllerHandle {
     fatal: watch::Receiver<Option<String>>,
     listener_task: Mutex<Option<JoinHandle<()>>>,
     /// Directory holding the metadata log + KIP-630 `.checkpoint` artifacts.
-    data_dir: std::path::PathBuf,
+    data_dir: PathBuf,
     client_id: String,
     client_dispatch_queue_capacity: krabka_client_core::ConnectionDispatchQueueCapacity,
     client_frame_max: krabka_client_core::ClientFrameMax,
@@ -115,7 +123,7 @@ pub struct ControllerHandle {
     /// Compatibility staging area for callers that still separate observer
     /// registration from promotion. Membership itself is changed only by an
     /// engine-owned KIP-853 command.
-    staged_learners: std::sync::Mutex<BTreeMap<NodeId, Node>>,
+    staged_learners: sync::Mutex<BTreeMap<NodeId, Node>>,
     /// Outbound dialer; `forward_submit_to`/`fetch_metadata_from` reach a peer's
     /// controller listener with the same TLS/SASL handshake the engine's RPCs
     /// ride on.
@@ -259,8 +267,12 @@ impl ControllerHandle {
 
     async fn stop_listener(&self) {
         self.shutdown.cancel();
-        if let Some(h) = self.listener_task.lock().await.take() {
-            let _ = h.await;
+        // The lock stays held until the listener has stopped, so a second
+        // caller waits for it too.
+        let mut task = self.listener_task.lock().await;
+        if let Some(handle) = task.as_mut() {
+            let _ = handle.await;
+            *task = None;
         }
     }
 }
@@ -279,6 +291,7 @@ mod tests {
         assert2::check,
         krabka_units::prelude::TimeExt as _,
         tempfile::TempDir,
+        tokio::time,
     };
 
     #[tokio::test]
@@ -298,14 +311,14 @@ mod tests {
             ) == (true, Some(NodeId(1)), true)
         );
 
-        tokio::time::timeout(
+        time::timeout(
             TEST_OP_TIMEOUT.to_std(),
             ctrl.submit_change(vec![committable_topic_record("ops-a")]),
         )
         .await
         .expect("submit ops-a timed out")
         .expect("submit ops-a");
-        tokio::time::timeout(
+        time::timeout(
             TEST_OP_TIMEOUT.to_std(),
             ctrl.submit_change(vec![committable_topic_record("ops-b")]),
         )

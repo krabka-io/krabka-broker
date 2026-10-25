@@ -31,6 +31,7 @@ use {
         },
         primitives::uuid::Uuid,
     },
+    std::collections::HashMap,
 };
 
 /// Kafka's message for `TOPIC_AUTHORIZATION_FAILED`
@@ -63,7 +64,7 @@ impl ShareSummaries for SharePersister {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<Option<ShareStateSummary>, BrokerError> {
-        SharePersister::read_summary(self, group, topic_id, partition).await
+        Self::read_summary(self, group, topic_id, partition).await
     }
 }
 
@@ -201,22 +202,24 @@ pub(super) async fn describe_topics(
                 message: UNKNOWN_SERVER_ERROR_MESSAGE,
             });
         }
-        let index = found
-            .iter()
-            .position(|entry| entry.topic_id == topic_id)
-            .unwrap_or_else(|| {
-                found.push(FoundTopic {
-                    topic_id,
-                    name: topic.topic_name,
-                    partitions: Vec::new(),
-                });
-                found.len() - 1
-            });
-        let entry = &mut found[index];
-        for partition in topic.partitions {
-            if !entry.partitions.contains(&partition) {
-                entry.partitions.push(partition);
+        if let Some(entry) = found.iter_mut().find(|entry| entry.topic_id == topic_id) {
+            for partition in topic.partitions {
+                if !entry.partitions.contains(&partition) {
+                    entry.partitions.push(partition);
+                }
             }
+        } else {
+            let mut partitions = Vec::with_capacity(topic.partitions.len());
+            for partition in topic.partitions {
+                if !partitions.contains(&partition) {
+                    partitions.push(partition);
+                }
+            }
+            found.push(FoundTopic {
+                topic_id,
+                name: topic.topic_name,
+                partitions,
+            });
         }
     }
     if found.is_empty() {
@@ -260,7 +263,7 @@ pub(super) async fn describe_topics(
         })
         .collect();
     let offsets = if lagging.is_empty() {
-        std::collections::HashMap::new()
+        HashMap::new()
     } else {
         end_offsets.latest_offsets(&lagging).await
     };
@@ -360,7 +363,7 @@ mod tests {
         assert2::assert,
         krabka_log::Offset,
         krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord},
-        std::collections::HashMap,
+        std::{collections::HashMap, future},
     };
 
     const ORDERS: uuid::Uuid = uuid::Uuid::from_u128(0xD5C0);
@@ -418,7 +421,7 @@ mod tests {
             topic_id: uuid::Uuid,
             partition: i32,
         ) -> impl Future<Output = Result<Option<ShareStateSummary>, BrokerError>> {
-            std::future::ready(
+            future::ready(
                 match self.0.get(&SummaryKey {
                     topic_id,
                     partition,
@@ -440,7 +443,7 @@ mod tests {
             &self,
             partitions: &[TopicPartition],
         ) -> impl Future<Output = HashMap<TopicPartition, EndOffset>> {
-            std::future::ready(
+            future::ready(
                 partitions
                     .iter()
                     .map(|partition| {

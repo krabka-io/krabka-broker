@@ -1,4 +1,5 @@
 //! End-to-end coverage for the coordinator-emitted share-group backlog gauge.
+#![cfg(test)]
 
 mod support;
 

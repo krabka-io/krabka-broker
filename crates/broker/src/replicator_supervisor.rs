@@ -46,7 +46,7 @@ mod test_support;
 mod topic_config;
 mod wal_followers;
 
-pub(crate) use self::{
+pub use self::{
     desired_sets::{desired_follower_set, desired_local_set, desired_wal_placements},
     materialize::{MaterializePartitionConfig, materialize_partition},
     topic_config::{push_topic_configs, topic_log_config},
@@ -74,7 +74,7 @@ use {
 
 /// A `(topic, partition)` pair. The supervisor keys follower tasks, local
 /// materialization, and dir-assignment reports on this pair.
-pub(crate) type TopicPartition = (String, i32);
+pub type TopicPartition = (String, i32);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WalFollowerSpec {
@@ -128,7 +128,7 @@ fn resolve_leader_endpoint(
     }
 }
 
-pub(crate) struct ReplicatorSupervisor {
+pub struct ReplicatorSupervisor {
     node_id: NodeId,
     broker_id: i32,
     controller: Arc<dyn MetadataSource>,
@@ -194,7 +194,7 @@ pub(crate) struct ReplicatorSupervisor {
     assign_dirs_reporter: Arc<dyn AssignDirsReporter>,
 }
 
-pub(crate) struct ReplicatorSupervisorConfig {
+pub struct ReplicatorSupervisorConfig {
     pub node_id: NodeId,
     pub broker_id: i32,
     pub controller: Arc<dyn MetadataSource>,
@@ -235,7 +235,7 @@ impl ReplicatorSupervisor {
     /// Clone the common dialer and policy after each initializer's identity and shutdown.
     fn connection_config(&self) -> ReplicationConnectionConfig {
         ReplicationConnectionConfig {
-            inter_broker_client: self.inter_broker_client.clone(),
+            inter_broker_client: Arc::clone(&self.inter_broker_client),
             inter_broker_listener_protocol: self.inter_broker_listener_protocol,
             inter_broker_server_name: self.inter_broker_server_name.clone(),
             replication: self.replication.clone(),

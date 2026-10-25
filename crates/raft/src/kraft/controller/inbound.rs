@@ -18,6 +18,7 @@ use {
     krabka_ids::Offset,
     krabka_metadata::VoterSet,
     krabka_protocol::owned::fetch_request::FetchRequest,
+    std::{mem, time::Duration},
     tokio::{sync::oneshot, time::Instant},
 };
 
@@ -141,7 +142,7 @@ impl Engine {
             let _ = reply.send(answer.encode(version));
             return;
         }
-        let wait = std::time::Duration::from_millis(request.max_wait_ms.unsigned_abs().into());
+        let wait = Duration::from_millis(request.max_wait_ms.unsigned_abs().into());
         self.fetch_purgatory.push(ParkedFetch {
             fetch,
             version,
@@ -170,7 +171,7 @@ impl Engine {
         let leading = self.core.role().is_leader();
         let high_watermark = self.log.hwm();
         let log_end = self.log.log_end_offset();
-        for parked in std::mem::take(&mut self.fetch_purgatory) {
+        for parked in mem::take(&mut self.fetch_purgatory) {
             if parked.reply.is_closed() {
                 continue;
             }

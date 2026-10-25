@@ -27,6 +27,7 @@ use {
         task_util::{AskError, ask},
     },
     krabka_protocol::owned::streams_group_describe_response::DescribedGroup,
+    std::slice,
 };
 
 /// Kafka's `TopologyDescriptionStatus` `NOT_STORED` (1): no description is
@@ -127,7 +128,7 @@ pub(super) async fn describe_group(
         image,
         ctx,
         included.authorized_operations,
-        std::slice::from_mut(&mut row),
+        slice::from_mut(&mut row),
     );
     row
 }

@@ -14,6 +14,7 @@ use {
     super::{super::add_partitions_to_txn::test_support::seed_topic, test_support::RowKey},
     crate::{
         api_catalog::UnstableApiVersions,
+        authorizer::AuthorizationResult,
         broker::{Broker, BrokerHandle},
         codes,
         coordinator::{
@@ -44,14 +45,19 @@ use {
     },
     assert2::check,
     krabka_ids::PartitionIndex,
-    krabka_protocol::owned::{
-        txn_offset_commit_request::{
-            self, TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition,
-            TxnOffsetCommitRequestTopic,
+    krabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE,
+    krabka_protocol::{
+        owned::{
+            txn_offset_commit_request::{
+                self, TxnOffsetCommitRequest, TxnOffsetCommitRequestPartition,
+                TxnOffsetCommitRequestTopic,
+            },
+            txn_offset_commit_response::TxnOffsetCommitResponse,
         },
-        txn_offset_commit_response::TxnOffsetCommitResponse,
+        primitives::uuid::Uuid,
+        records::Record,
     },
-    std::{collections::HashSet, sync::Arc},
+    std::{collections::HashSet, net::SocketAddr, sync::Arc},
 };
 
 const READ_ON_STAR: &str = "TransactionalId:Write+Group:Read+Topic:Read";
@@ -59,7 +65,7 @@ const NO_TOPIC_READ: &str = "TransactionalId:Write+Group:Read";
 
 /// Build the read-granted test context in the original peer/principal order.
 struct ReadIdentity {
-    address: std::net::SocketAddr,
+    address: SocketAddr,
     user: krabka_security::Principal,
 }
 
@@ -107,7 +113,7 @@ pub(super) struct TransactionSeedSetup<'a> {
     #[default("tid")]
     pub transactional_id: &'a str,
     pub producer: super::test_support::TxnCommitProducer,
-    #[default(crate::txn::state::TxnState::Ongoing)]
+    #[default(TxnState::Ongoing)]
     pub state: TxnState,
     pub group_id: Option<&'a str>,
 }
@@ -117,7 +123,7 @@ pub(super) async fn seed_transaction(
     broker: &Broker,
     #[builder(default = "tid")] transactional_id: &'_ str,
     #[builder(default)] producer: super::test_support::TxnCommitProducer,
-    #[builder(default = crate :: txn :: state :: TxnState :: Ongoing)] state: TxnState,
+    #[builder(default = TxnState::Ongoing)] state: TxnState,
     group_id: Option<&'_ str>,
 ) {
     let setup = TransactionSeedSetup {
@@ -174,7 +180,7 @@ async fn open_commit_request(
 
 pub(super) fn topic(name: &str, partitions: &[i32]) -> TxnOffsetCommitRequestTopic {
     TxnOffsetCommitRequestTopic {
-        name: name.to_string(),
+        name: name.to_owned(),
         partitions: partitions
             .iter()
             .map(|&partition_index| TxnOffsetCommitRequestPartition {
@@ -190,7 +196,7 @@ pub(super) fn topic(name: &str, partitions: &[i32]) -> TxnOffsetCommitRequestTop
 }
 
 /// Topic `a`'s first partition, addressed by its published topic id.
-fn topic_a_by_id(topic_id: krabka_protocol::primitives::uuid::Uuid) -> TxnOffsetCommitRequestTopic {
+fn topic_a_by_id(topic_id: Uuid) -> TxnOffsetCommitRequestTopic {
     TxnOffsetCommitRequestTopic {
         topic_id,
         ..topic("a", &[0])
@@ -212,14 +218,16 @@ fn with_offsets_log<T>(
     let read = log
         .read(krabka_log::Offset(0), krabka_units::mebibytes(4))
         .ok()?;
-    Some(inspect(&read))
+    let inspected = inspect(&read);
+    drop(log);
+    Some(inspected)
 }
 
 /// Matching records in physical log order, including tombstones and malformed values.
 fn records_with_key(
     read: &krabka_log::ReadOutput,
     wanted: bytes::Bytes,
-) -> impl Iterator<Item = &krabka_protocol::records::Record> {
+) -> impl Iterator<Item = &Record> {
     read.batches
         .iter()
         .flat_map(|batch| batch.records.iter())
@@ -372,7 +380,7 @@ async fn txn_offset_commit_runs_the_existence_check_after_the_topic_read_gate() 
                      partition,
                      code,
                  }| ResponseRow {
-                    topic: topic.to_string(),
+                    topic: topic.to_owned(),
                     partition,
                     code,
                 },
@@ -418,10 +426,10 @@ async fn unknown_rows_survive_a_group_fencing_failure() {
         .call()
         .await;
     let request = TxnOffsetCommitRequest {
-        member_id: "never-registered-member".to_string(),
+        member_id: "never-registered-member".to_owned(),
         generation_id_or_member_epoch: 0,
         ..super::test_support::request_for()
-            .transactional_id("tid-fencing".to_string())
+            .transactional_id("tid-fencing".to_owned())
             .group_id(group_id)
             .topics(vec![topic("a", &[0]), topic("missing", &[0])])
             .call()
@@ -431,12 +439,12 @@ async fn unknown_rows_survive_a_group_fencing_failure() {
     let got = response_rows(&response);
     let expected = vec![
         ResponseRow {
-            topic: "missing".to_string(),
+            topic: "missing".to_owned(),
             partition: 0,
             code: codes::UNKNOWN_TOPIC_OR_PARTITION,
         },
         ResponseRow {
-            topic: "a".to_string(),
+            topic: "a".to_owned(),
             partition: 0,
             code: codes::ILLEGAL_GENERATION,
         },
@@ -474,9 +482,9 @@ krabka_macros::test_authorizer! { DeniesReadOnB, request; {
         && request.operation == krabka_metadata::AclOperation::Read
         && request.resource_name == "b"
     {
-        crate::authorizer::AuthorizationResult::Deny
+        AuthorizationResult::Deny
     } else {
-        crate::authorizer::AuthorizationResult::Allow
+        AuthorizationResult::Allow
     }
 }}
 
@@ -659,7 +667,7 @@ async fn v6_resolves_topic_ids_before_the_read_gate_and_the_existence_check() {
     // The request's name and id for `topic`, and the response's as `version`
     // decodes them: v6 carries only the id and v5 only the name.
     let request_key = |topic: TopicRef| match topic {
-        TopicRef::Name(name) => (name.to_string(), WireUuid::default()),
+        TopicRef::Name(name) => (name.to_owned(), WireUuid::default()),
         TopicRef::IdOf(name) => (String::new(), WireUuid(id_of(name).into_bytes())),
         TopicRef::Id(id) => (String::new(), WireUuid(id.into_bytes())),
     };
@@ -790,9 +798,7 @@ async fn v6_answers_group_id_not_found_where_older_versions_answer_illegal_gener
                 transactional_id,
                 group_id: &group_id,
                 producer,
-                topics: vec![topic_a_by_id(krabka_protocol::primitives::uuid::Uuid(
-                    a_id.into_bytes(),
-                ))],
+                topics: vec![topic_a_by_id(Uuid(a_id.into_bytes()))],
             })
             .await
         };
@@ -812,12 +818,12 @@ async fn v6_answers_group_id_not_found_where_older_versions_answer_illegal_gener
 
 /// A consumer group whose one native member, `m`, is at member epoch 7 and
 /// was assigned partition 0 of `topic_id` at epoch 5.
-fn kip_1251_seed(topic_id: krabka_protocol::primitives::uuid::Uuid) -> GroupSeed {
+fn kip_1251_seed(topic_id: Uuid) -> GroupSeed {
     GroupSeed {
         group_epoch: 7,
         target_epoch: 7,
         assignment_timestamp_ms: 0,
-        members: [("m".to_string(), MemberMetadataValue {
+        members: [("m".to_owned(), MemberMetadataValue {
             instance_id: None,
             rack_id: None,
             client_id: "client".into(),
@@ -829,14 +835,14 @@ fn kip_1251_seed(topic_id: krabka_protocol::primitives::uuid::Uuid) -> GroupSeed
             classic: None,
         })]
         .into(),
-        target_per_member: [("m".to_string(), TargetAssignmentMemberValue {
+        target_per_member: [("m".to_owned(), TargetAssignmentMemberValue {
             topic_partitions: vec![AssignedTopicPartitions {
                 topic_id,
                 partitions: vec![0],
             }],
         })]
         .into(),
-        current_per_member: [("m".to_string(), CurrentMemberAssignmentValue {
+        current_per_member: [("m".to_owned(), CurrentMemberAssignmentValue {
             member_epoch: 7,
             previous_member_epoch: 6,
             state: MemberAssignmentState::Stable,
@@ -862,7 +868,7 @@ async fn an_older_member_epoch_commits_a_partition_assigned_before_it() {
     let broker = handle.broker_arc_for_test();
     let ReadIdentity { address, user } = read_identity();
     let ctx = request_context(&user, &address, "txn-offset-commit-kip-1251");
-    let a_id = krabka_protocol::primitives::uuid::Uuid(
+    let a_id = Uuid(
         broker
             .controller
             .current_image()
@@ -1005,7 +1011,7 @@ async fn txn_offset_commit_to_a_streams_group_follows_kafka() {
         ));
         let request = TxnOffsetCommitRequest {
             member_id: row.member_id.into(),
-            group_instance_id: row.group_instance_id.map(str::to_string),
+            group_instance_id: row.group_instance_id.map(str::to_owned),
             generation_id_or_member_epoch: row.member_epoch,
             ..open_commit_request(&broker, super::test_support::TxnCommitSetup {
                 transactional_id: format!("tid-streams-{i}"),
@@ -1222,7 +1228,7 @@ async fn a_v5_commit_adds_the_offsets_partition_on_a_transaction_version_1_clust
         .controller
         .submit_change(vec![krabka_metadata::MetadataRecord::V1FeatureLevel(
             krabka_metadata::FeatureLevelRecord {
-                name: krabka_metadata::transaction_version::TRANSACTION_VERSION_FEATURE.into(),
+                name: TRANSACTION_VERSION_FEATURE.into(),
                 level: 1,
             },
         )])
@@ -1265,12 +1271,10 @@ async fn a_v5_commit_adds_the_offsets_partition_on_a_transaction_version_1_clust
     let image = broker.controller.current_image();
     check!(
         entry.partitions
-            == [crate::txn::state::TopicPartition {
+            == HashSet::from([TopicPartition {
                 topic: OFFSETS_TOPIC.to_owned(),
                 partition: PartitionIndex(partition_for_group(&image, group_id)),
-            }]
-            .into_iter()
-            .collect::<HashSet<_>>()
+            }])
     );
     check!(entry.client_transaction_version == 2);
 

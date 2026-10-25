@@ -71,7 +71,9 @@ mod tests;
 pub const ROOT_LOGGER: &str = "root";
 
 /// The level names a `BROKER_LOGGER` value may carry, in the order Kafka
-/// renders them into its rejection message. `RuntimeLoggerManager` builds that
+/// renders them into its rejection message.
+///
+/// `RuntimeLoggerManager` builds that
 /// list as `String.join(", ", sorted(LogLevelConfig.VALID_LOG_LEVELS))`, so a
 /// caller joins these with `", "` and not with a bare comma.
 pub const VALID_LOG_LEVELS: [&str; 6] = ["DEBUG", "ERROR", "FATAL", "INFO", "TRACE", "WARN"];
@@ -357,11 +359,12 @@ impl LogLevelController {
     pub fn level(&self, name: &str) -> Option<LogLevel> {
         let model = read(&self.shared.model);
         if name == ROOT_LOGGER {
-            return Some(model.root);
+            Some(model.root)
+        } else {
+            read(&self.shared.known)
+                .contains(name)
+                .then(|| model.effective(name))
         }
-        read(&self.shared.known)
-            .contains(name)
-            .then(|| model.effective(name))
     }
 
     /// Whether a logger by this name exists on this node.
@@ -418,8 +421,7 @@ impl LogLevelController {
             // reported `A+B`.
             let mut model = write(&self.shared.model);
             mutate(&mut model);
-            let spec = model.render();
-            *write(&self.shared.filter) = EnvFilter::new(spec);
+            *write(&self.shared.filter) = EnvFilter::new(model.render());
         }
         // Outside the locks: the rebuild calls back into
         // `LogLevelFilter::callsite_enabled`, which reads them.

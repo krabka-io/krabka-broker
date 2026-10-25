@@ -26,7 +26,13 @@ use {
     assert2::{assert, check},
     krabka_metadata::MetadataImage,
     krabka_protocol::records::{Record, RecordBatch},
+    std::{path::Path, sync::Arc, time::Duration},
     tempfile::tempdir,
+    tokio::{
+        sync::Notify,
+        task::yield_now,
+        time::{advance, pause, resume, timeout},
+    },
 };
 
 /// An accepted Produce stays in the real writer's FIFO while its caller
@@ -37,7 +43,7 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
     for cancelled in [false, true] {
         let dir = tempdir().unwrap();
         let registry = Arc::new(PartitionRegistry::new());
-        let release_writer = Arc::new(tokio::sync::Notify::new());
+        let release_writer = Arc::new(Notify::new());
         let part = gated_state_partition(dir.path(), &release_writer);
         registry.insert(
             bootstrap::TOPIC.into(),
@@ -49,7 +55,7 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
             registry,
             ShareCoordinatorConfig {
                 state_topic_num_partitions: 1,
-                write_timeout: std::time::Duration::from_secs(1),
+                write_timeout: Duration::from_secs(1),
                 ..Default::default()
             },
         ));
@@ -60,13 +66,13 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
         tokio::select! {
             biased;
             result = &mut higher => panic!("paused writer completed initialize: {result:?}"),
-            () = tokio::task::yield_now() => {}
+            () = yield_now() => {}
         }
         assert!(part.writer_tx.capacity() == part.writer_tx.max_capacity() - 1);
         if cancelled {
             drop(higher);
         } else {
-            tokio::time::advance(std::time::Duration::from_secs(1)).await;
+            advance(Duration::from_secs(1)).await;
             assert!(
                 higher.await
                     == Err(ShareStateError::Operation {
@@ -125,7 +131,7 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
                 == unavailable
         );
 
-        tokio::time::resume();
+        resume();
         release_writer.notify_one();
         refresh_and_wait(&coordinator, &leadership).await;
         super::super::test_support::assert_recovered_epoch_is_fenced()
@@ -141,7 +147,7 @@ async fn abandoned_append_fences_the_shard_until_writer_barrier_and_replay() {
         let writer = part.take_writer_handle().unwrap();
         writer.abort();
         let _ = writer.await;
-        tokio::time::pause();
+        pause();
     }
 }
 
@@ -162,7 +168,7 @@ async fn recover_honors_nondefault_read_bound() {
         .expect("state partition open");
     let key = ShareStateKey {
         record_type: KEY_SHARE_SNAPSHOT,
-        group_id: "bounded".to_string(),
+        group_id: "bounded".to_owned(),
         topic_id,
         partition: 0,
     };
@@ -264,7 +270,7 @@ async fn write_persists_and_recovers() {
     {
         let coord = ShareCoordinator::new(
             krabka_audit::NodeId(1),
-            reg.clone(),
+            Arc::clone(&reg),
             ShareCoordinatorConfig::default(),
         );
         lead_all(&coord).await;
@@ -292,7 +298,7 @@ async fn write_persists_and_recovers() {
     // replays the records written above.
     let recovered = ShareCoordinator::new(
         krabka_audit::NodeId(1),
-        reg.clone(),
+        Arc::clone(&reg),
         ShareCoordinatorConfig::default(),
     );
     // `recover` derives leadership from a MetadataImage. Here every state
@@ -336,7 +342,8 @@ async fn state_records_are_stored_in_the_configured_codec_and_recover() {
             state_topic_compression_codec: codec,
             ..ShareCoordinatorConfig::default()
         };
-        let coord = ShareCoordinator::new(krabka_audit::NodeId(1), reg.clone(), config.clone());
+        let coord =
+            ShareCoordinator::new(krabka_audit::NodeId(1), Arc::clone(&reg), config.clone());
         lead_all(&coord).await;
         coord
             .initialize(&image_with_topic(tid, 1), "g", tid, 0, 2, Offset(7))
@@ -378,7 +385,7 @@ struct LedStatePartition {
     part: Arc<Partition>,
 }
 
-async fn led_state_partition(log_dir: &std::path::Path, topic_id: uuid::Uuid) -> LedStatePartition {
+async fn led_state_partition(log_dir: &Path, topic_id: uuid::Uuid) -> LedStatePartition {
     let CoordinatorWithRegistry {
         coord,
         registry: reg,
@@ -498,7 +505,7 @@ fn state_partition_image(partition: i32, leader: u64, leader_epoch: i32) -> Meta
     let node = krabka_metadata::NodeId(leader);
     MetadataImage::from_records(uuid::Uuid::nil(), &[
         krabka_metadata::MetadataRecord::V1Topic(krabka_metadata::TopicRecord {
-            name: bootstrap::TOPIC.to_string(),
+            name: bootstrap::TOPIC.to_owned(),
             topic_id: uuid::Uuid::from_bytes([44; 16]),
             partitions: ShareCoordinatorConfig::default().state_topic_num_partitions,
             replication_factor: 2,
@@ -709,11 +716,11 @@ async fn leadership_change_loads_and_unloads_the_state_partition() {
             }
             Step::AwaitActive { on: broker } => {
                 let coordinator = on(broker);
-                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                timeout(Duration::from_secs(10), async {
                     while coordinator.load_status(state_partition).await
                         != Some(super::LoadStatus::Active)
                     {
-                        tokio::task::yield_now().await;
+                        yield_now().await;
                     }
                 })
                 .await
@@ -833,7 +840,7 @@ async fn led_partition_stays_pending_until_its_log_serves_the_image_term() {
         );
         check!(
             coordinator.read_summary("g", topic_id, 0).await
-                == Err(crate::codes::COORDINATOR_LOAD_IN_PROGRESS),
+                == Err(codes::COORDINATOR_LOAD_IN_PROGRESS),
             "{catch_up:?}"
         );
 
@@ -881,7 +888,7 @@ async fn failed_load_serves_nothing_and_the_next_refresh_loads_again() {
         .await;
     loads.finished().await;
     check!(coordinator.load_status(state_partition).await == Some(super::LoadStatus::Failed));
-    check!(coordinator.read_summary("g", topic_id, 0).await == Err(crate::codes::NOT_COORDINATOR));
+    check!(coordinator.read_summary("g", topic_id, 0).await == Err(codes::NOT_COORDINATOR));
 
     check_empty_active_partition(&coordinator, &image, state_partition, topic_id).await;
 }
@@ -896,7 +903,7 @@ fn state_keys(topic_id: uuid::Uuid) -> StateKeys {
     let key = |record_type| {
         encode_state_key(&ShareStateKey {
             record_type,
-            group_id: "g".to_string(),
+            group_id: "g".to_owned(),
             topic_id,
             partition: 0,
         })
@@ -972,7 +979,7 @@ async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
     let key_of = |record_type: i16, partition: i32| {
         encode_state_key(&ShareStateKey {
             record_type,
-            group_id: "g".to_string(),
+            group_id: "g".to_owned(),
             topic_id,
             partition,
         })
@@ -1010,11 +1017,11 @@ async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
     let truncated_update = update.encode().slice(..10);
     let both_snapshots = HashMap::from([
         (
-            ("g".to_string(), topic_id, 0),
+            ("g".to_owned(), topic_id, 0),
             SharePartitionState::from_snapshot(&snapshot(0), Offset(0)),
         ),
         (
-            ("g".to_string(), topic_id, 1),
+            ("g".to_owned(), topic_id, 1),
             SharePartitionState::from_snapshot(&snapshot(10), Offset(2)),
         ),
     ]);
@@ -1047,7 +1054,7 @@ async fn replay_skips_unknown_record_types_and_fails_on_bad_records() {
                 MarkerType::Commit,
                 0,
             ),
-            expected: Some(both_snapshots.clone()),
+            expected: Some(both_snapshots),
         },
         Case {
             name: "snapshot with an unsupported value version",

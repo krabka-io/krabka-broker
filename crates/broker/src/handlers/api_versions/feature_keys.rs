@@ -45,7 +45,10 @@ pub(super) fn finalized_feature_keys(
 mod tests {
     use {
         super::*,
-        crate::features::{LATEST_PRODUCTION_METADATA_VERSION, METADATA_VERSION_MIN},
+        crate::{
+            features,
+            features::{LATEST_PRODUCTION_METADATA_VERSION, METADATA_VERSION_MIN},
+        },
         assert2::check,
         krabka_metadata::{FeatureLevelRecord, KRaftVersionRecord, MetadataRecord},
     };
@@ -85,7 +88,7 @@ mod tests {
             finalized_feature_keys(&image)
                 == vec![finalized(
                     "metadata.version",
-                    crate::features::METADATA_VERSION_MIN
+                    features::METADATA_VERSION_MIN
                 )]
         );
     }

@@ -63,6 +63,7 @@ use {
         gate::{broker_target, unregister_records, with_leaves},
         wire::not_controller_refusal,
     },
+    super::{audit_admin_success, audit_resource},
     crate::{
         break_glass::{
             gate::consumed_proposal_id,
@@ -240,15 +241,9 @@ crate::handlers::raw_request_handler!(
             },
         );
 
-        crate::handlers::audit_admin_success(
-            broker.audit_log.as_ref(),
-            ctx,
-            "UnregisterBroker",
-            vec![crate::handlers::audit_resource(
-                "Broker",
-                node_id.to_string(),
-            )],
-        );
+        audit_admin_success(broker.audit_log.as_ref(), ctx, "UnregisterBroker", vec![
+            audit_resource("Broker", node_id.to_string()),
+        ]);
 
         let resp = UnregisterBrokerResponse::error(codes::NONE, None);
         encode_response(&resp, version)

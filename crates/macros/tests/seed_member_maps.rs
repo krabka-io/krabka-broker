@@ -1,4 +1,5 @@
 //! Caller-scope seed statements preserve ordered projections and conditional restoration.
+#![cfg(test)]
 
 use {
     assert2::assert,

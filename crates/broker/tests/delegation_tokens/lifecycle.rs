@@ -17,7 +17,7 @@ use {
         wire::{sasl_plain_authenticate, sasl_scram_sha256_authenticate, token_session},
     },
     assert2::{assert, check},
-    base64::Engine,
+    base64::{Engine, engine::general_purpose},
     krabka_protocol::owned::{
         create_delegation_token_request::{CreatableRenewers, CreateDelegationTokenRequest},
         describe_delegation_token_request::{
@@ -47,8 +47,8 @@ async fn delegation_token_lifecycle_end_to_end() {
         let create_req = CreateDelegationTokenRequest {
             max_lifetime_ms: -1,
             renewers: vec![CreatableRenewers {
-                principal_type: "User".to_string(),
-                principal_name: "bob".to_string(),
+                principal_type: "User".to_owned(),
+                principal_name: "bob".to_owned(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -100,7 +100,7 @@ async fn delegation_token_lifecycle_end_to_end() {
         //         token-fallback in `handle_authenticate_scram` is what makes
         //         this succeed; without it the broker would respond
         //         "unknown user" at round 1.
-        let token_password = base64::engine::general_purpose::STANDARD.encode(&hmac_bytes);
+        let token_password = general_purpose::STANDARD.encode(&hmac_bytes);
         let tokenuser = token_session(addr, &token_id, &hmac_bytes).await?;
 
         // ── (e) Third connection: bob (a listed renewer) calls Renew.
@@ -147,8 +147,8 @@ async fn delegation_token_lifecycle_end_to_end() {
         let describe_resp =
             send_describe_delegation_token(&mut alice, 400, &DescribeDelegationTokenRequest {
                 owners: Some(vec![DescribeDelegationTokenOwner {
-                    principal_type: "User".to_string(),
-                    principal_name: "alice".to_string(),
+                    principal_type: "User".to_owned(),
+                    principal_name: "alice".to_owned(),
                     ..Default::default()
                 }]),
                 ..Default::default()

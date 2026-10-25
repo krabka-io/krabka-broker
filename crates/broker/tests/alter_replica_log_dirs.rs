@@ -1,5 +1,4 @@
-// rustc 1.95 clippy ICEs on annotate-snippets in pedantic lints on these
-// raw-wire test files; match the opt-out used by `jbod.rs`.
+#![cfg(test)]
 
 //! KIP-113: `AlterReplicaLogDirs` (`api_key` 34) end-to-end.
 //!

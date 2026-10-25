@@ -507,7 +507,7 @@ impl Engine {
             if hwm_reaches_waiter(hwm, w.need_offset) {
                 let _ = w
                     .reply
-                    .send(Err(RaftError::ChangeRejected(reason.to_string())));
+                    .send(Err(RaftError::ChangeRejected(reason.to_owned())));
             } else {
                 still.push(w);
             }

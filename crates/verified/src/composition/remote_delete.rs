@@ -92,13 +92,12 @@ pub(super) fn completed_remote_retention_bounds_floor(
         ==> forall<j: Int> 0 <= j && j < n ==> finished@[j].1@ < floor@)]
     #[variant(planned@ - i@)]
     while i < planned && i < completed.len() {
-        if !completed[i] {
+        let (Some(true), Some(&(start, end, ..))) = (completed.get(i), finished.get(i)) else {
             break;
-        }
+        };
         #[cfg(creusot)]
         let previous = floor;
-        (floor, contiguous) =
-            remote_retention_floor_step(floor, contiguous, finished[i].0, finished[i].1);
+        (floor, contiguous) = remote_retention_floor_step(floor, contiguous, start, end);
         proof_assert!(forall<offset: Int> previous@ <= offset && offset < floor@
             ==> deleted_prefix_covers(finished@, i@ + 1, offset));
         proof_assert!({

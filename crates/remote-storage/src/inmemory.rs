@@ -14,7 +14,10 @@ use {
         metadata_manager::RemoteLogMetadataManager,
     },
     krabka_ids::LeaderEpoch,
-    std::{collections::HashMap, sync::Mutex},
+    std::{
+        collections::HashMap,
+        sync::{Mutex, PoisonError},
+    },
 };
 
 /// In-memory [`RemoteLogMetadataManager`]: one `RemoteLogMetadataCache` per
@@ -38,7 +41,10 @@ impl InmemoryRemoteLogMetadataManager {
         topic_id_partition: &TopicIdPartition,
         query: impl FnOnce(&RemoteLogMetadataCache) -> Vec<RemoteLogSegmentMetadata>,
     ) -> Vec<RemoteLogSegmentMetadata> {
-        let guard = self.partitions.lock().expect("metadata mutex poisoned");
+        let guard = self
+            .partitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         guard.get(topic_id_partition).map_or_default(query)
     }
 
@@ -46,11 +52,11 @@ impl InmemoryRemoteLogMetadataManager {
     /// snapshot. The result is order-independent. [`Self::import`] re-derives
     /// the order and the epoch index.
     #[must_use]
-    /// # Panics
-    /// Panics if the partition-cache mutex is poisoned.
     pub fn export(&self) -> RlmmCacheDump {
-        let guard = self.partitions.lock().expect("metadata mutex poisoned");
-        let mut partitions: Vec<PartitionDump> = guard
+        let mut partitions: Vec<PartitionDump> = self
+            .partitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .map(|(tp, cache)| PartitionDump {
                 topic_id_partition: tp.clone(),
@@ -81,15 +87,16 @@ impl InmemoryRemoteLogMetadataManager {
     ///
     /// Use it on a freshly-constructed manager during a snapshot restore. It
     /// overwrites existing partitions.
-    ///
-    /// # Panics
-    /// Panics if the partition-cache mutex is poisoned.
     pub fn import(&self, dump: RlmmCacheDump) {
-        let mut guard = self.partitions.lock().expect("metadata mutex poisoned");
+        let mut guard = self
+            .partitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         for p in dump.partitions {
             let cache = guard.entry(p.topic_id_partition).or_default();
             cache.seed(p.segments, p.delete_state);
         }
+        drop(guard);
     }
 }
 
@@ -99,7 +106,10 @@ impl RemoteLogMetadataManager for InmemoryRemoteLogMetadataManager {
         metadata: RemoteLogSegmentMetadata,
     ) -> Result<(), RemoteStorageError> {
         let tp = metadata.remote_log_segment_id().topic_id_partition.clone();
-        let mut guard = self.partitions.lock().expect("metadata mutex poisoned");
+        let mut guard = self
+            .partitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         guard.entry(tp).or_default().add(metadata)
     }
 
@@ -108,7 +118,10 @@ impl RemoteLogMetadataManager for InmemoryRemoteLogMetadataManager {
         update: RemoteLogSegmentMetadataUpdate,
     ) -> Result<(), RemoteStorageError> {
         let tp = update.remote_log_segment_id.topic_id_partition.clone();
-        let mut guard = self.partitions.lock().expect("metadata mutex poisoned");
+        let mut guard = self
+            .partitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         match guard.get_mut(&tp) {
             Some(cache) => cache.update(&update),
             None => Err(RemoteStorageError::SegmentNotFound(
@@ -123,7 +136,10 @@ impl RemoteLogMetadataManager for InmemoryRemoteLogMetadataManager {
         leader_epoch: LeaderEpoch,
         offset: i64,
     ) -> Result<Option<RemoteLogSegmentMetadata>, RemoteStorageError> {
-        let guard = self.partitions.lock().expect("metadata mutex poisoned");
+        let guard = self
+            .partitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         Ok(guard
             .get(topic_id_partition)
             .and_then(|c| c.segment_for(leader_epoch, offset)))
@@ -134,7 +150,10 @@ impl RemoteLogMetadataManager for InmemoryRemoteLogMetadataManager {
         topic_id_partition: &TopicIdPartition,
         leader_epoch: LeaderEpoch,
     ) -> Result<Option<i64>, RemoteStorageError> {
-        let guard = self.partitions.lock().expect("metadata mutex poisoned");
+        let guard = self
+            .partitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         Ok(guard
             .get(topic_id_partition)
             .and_then(|c| c.highest_offset_for_epoch(leader_epoch)))
@@ -159,7 +178,10 @@ impl RemoteLogMetadataManager for InmemoryRemoteLogMetadataManager {
         &self,
         metadata: RemotePartitionDeleteMetadata,
     ) -> Result<(), RemoteStorageError> {
-        let mut guard = self.partitions.lock().expect("metadata mutex poisoned");
+        let mut guard = self
+            .partitions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let cache = guard
             .entry(metadata.topic_id_partition.clone())
             .or_default();
@@ -172,6 +194,7 @@ impl RemoteLogMetadataManager for InmemoryRemoteLogMetadataManager {
             });
         }
         cache.set_delete_state(metadata.state);
+        drop(guard);
         Ok(())
     }
 

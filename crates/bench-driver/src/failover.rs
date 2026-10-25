@@ -1,7 +1,9 @@
-//! Kill-broker orchestration for the `failover` scenario. This module uses the
-//! in-cluster `kube` API through the Job's `ServiceAccount`. That
-//! `ServiceAccount` needs `pods: get,list,delete` in the target namespace, and
-//! it is mounted only when a failover scenario asks for it.
+//! Kill-broker orchestration for the `failover` scenario.
+//!
+//! This module uses the in-cluster `kube` API through the Job's
+//! `ServiceAccount`. That `ServiceAccount` needs `pods: get,list,delete` in the
+//! target namespace, and it is mounted only when a failover scenario asks for
+//! it.
 //!
 //! `partition0_leader` resolves the topic metadata first and then maps the
 //! partition leader's broker id back to the matching `StatefulSet` pod. If that
@@ -33,7 +35,10 @@ use {
             atomic::{AtomicU64, Ordering},
         },
     },
-    tokio::{task::JoinSet, time::Instant},
+    tokio::{
+        task::JoinSet,
+        time::{Instant, sleep_until},
+    },
     tracing::{info, warn},
 };
 
@@ -143,7 +148,7 @@ impl FaultTask {
     ) -> Self {
         let mut tasks = JoinSet::new();
         tasks.spawn(async move {
-            tokio::time::sleep_until(deadline).await;
+            sleep_until(deadline).await;
             operation.await
         });
         Self { tasks }
@@ -216,9 +221,10 @@ where
 }
 
 /// Discovers an in-cluster Kubernetes client, which uses the in-pod
-/// `serviceAccount` token. Outside the cluster, which is useful for
-/// `cargo test`, this returns an `Err` and the caller should report the
-/// failover as skipped.
+/// `serviceAccount` token.
+///
+/// Outside the cluster, which is useful for `cargo test`, this returns an `Err`
+/// and the caller should report the failover as skipped.
 /// # Errors
 /// Returns an error when input data is invalid, required I/O fails, or the destination rejects the generated report or audit event.
 pub async fn try_client() -> Result<KubeClient> {
@@ -239,7 +245,7 @@ pub async fn partition0_leader_from_metadata(
     frame_max: ClientFrameMax,
 ) -> Result<i32> {
     let client = KafkaClient::builder()
-        .bootstrap(bootstrap.to_string())
+        .bootstrap(bootstrap.to_owned())
         .client_id("bench-failover-targeter")
         .dispatch_queue_capacity(dispatch_queue_capacity.get())
         .frame_max(frame_max.size())
@@ -257,10 +263,11 @@ pub async fn partition0_leader_from_metadata(
     Ok(leader)
 }
 
-/// Deletes the requested broker pod. When `leader_id` is `Some`, this targets
-/// the pod whose ordinal matches that broker id. Otherwise it deletes the first
-/// matching pod, for backwards-compatible smoke runs. `grace_period_seconds = 0`
-/// means SIGKILL.
+/// Deletes the requested broker pod.
+///
+/// When `leader_id` is `Some`, this targets the pod whose ordinal matches that
+/// broker id. Otherwise it deletes the first matching pod, for
+/// backwards-compatible smoke runs. `grace_period_seconds = 0` means SIGKILL.
 /// # Errors
 /// Returns an error when input data is invalid, required I/O fails, or the destination rejects the generated report or audit event.
 pub async fn kill_broker_pod(
@@ -343,34 +350,33 @@ mod tests {
         krabka_protocol::owned::metadata_response::{
             MetadataResponse, MetadataResponsePartition, MetadataResponseTopic,
         },
+        std::{sync, time::Duration},
+        tokio::{sync::oneshot, task, time},
     };
 
     #[tokio::test(start_paused = true)]
     async fn stopping_before_fault_deadline_prevents_later_deletion() {
         let kill_at = Arc::new(AtomicU64::new(0));
         let deletes = Arc::new(AtomicU64::new(0));
-        let observed = deletes.clone();
-        let marker = kill_at.clone();
-        let task = FaultTask::schedule(
-            Instant::now() + std::time::Duration::from_secs(60),
-            async move {
-                execute_fault(
-                    true,
-                    async { Ok(()) },
-                    async { Ok(2) },
-                    |(), _| async move {
-                        observed.fetch_add(1, Ordering::SeqCst);
-                        Ok("broker-2".into())
-                    },
-                    marker,
-                )
-                .await
-            },
-        );
-        tokio::task::yield_now().await;
-        tokio::time::advance(std::time::Duration::from_secs(5)).await;
+        let observed = sync::Arc::clone(&deletes);
+        let marker = sync::Arc::clone(&kill_at);
+        let task = FaultTask::schedule(Instant::now() + Duration::from_secs(60), async move {
+            execute_fault(
+                true,
+                async { Ok(()) },
+                async { Ok(2) },
+                |(), _| async move {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    Ok("broker-2".into())
+                },
+                marker,
+            )
+            .await
+        });
+        task::yield_now().await;
+        time::advance(Duration::from_secs(5)).await;
         assert2::assert!(task.stop().await == FaultOutcome::Cancelled);
-        tokio::time::advance(std::time::Duration::from_secs(120)).await;
+        time::advance(Duration::from_secs(120)).await;
         assert2::assert!(deletes.load(Ordering::SeqCst) == 0);
         assert2::assert!(kill_at.load(Ordering::SeqCst) == 0);
     }
@@ -378,27 +384,24 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn dropping_fault_owner_cancels_scheduled_operation() {
         let operations = Arc::new(AtomicU64::new(0));
-        let observed = operations.clone();
-        let task = FaultTask::schedule(
-            Instant::now() + std::time::Duration::from_secs(30),
-            async move {
-                observed.fetch_add(1, Ordering::SeqCst);
-                FaultOutcome::ClientUnavailable("injected".into())
-            },
-        );
-        tokio::task::yield_now().await;
+        let observed = sync::Arc::clone(&operations);
+        let task = FaultTask::schedule(Instant::now() + Duration::from_secs(30), async move {
+            observed.fetch_add(1, Ordering::SeqCst);
+            FaultOutcome::ClientUnavailable("injected".into())
+        });
+        task::yield_now().await;
         drop(task);
-        tokio::task::yield_now().await;
-        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        task::yield_now().await;
+        time::advance(Duration::from_secs(60)).await;
         assert2::assert!(operations.load(Ordering::SeqCst) == 0);
     }
 
     #[tokio::test(start_paused = true)]
     async fn stopping_cancels_and_joins_an_in_flight_fault() {
         let kill_at = Arc::new(AtomicU64::new(0));
-        let marker = kill_at.clone();
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let marker = sync::Arc::clone(&kill_at);
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
         let task = FaultTask::schedule(Instant::now(), async move {
             execute_fault(
                 true,
@@ -455,7 +458,7 @@ mod tests {
         ] {
             let kill_at = Arc::new(AtomicU64::new(0));
             let deletes = Arc::new(AtomicU64::new(0));
-            let observed = deletes.clone();
+            let observed = sync::Arc::clone(&deletes);
             let outcome = execute_fault(
                 true,
                 async {
@@ -481,7 +484,7 @@ mod tests {
                         Ok("broker".into())
                     }
                 },
-                kill_at.clone(),
+                sync::Arc::clone(&kill_at),
             )
             .await;
             assert2::assert!(outcome.note().as_deref() == expected_note);
@@ -526,8 +529,8 @@ mod tests {
                 }),
             }
         });
-        tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
+        task::yield_now().await;
+        task::yield_now().await;
         assert2::assert!(task.stop().await.killed_at_ms() == Some(42));
     }
 
@@ -559,9 +562,9 @@ mod tests {
     #[test]
     fn target_pod_uses_actual_leader_id_for_each_stack_naming_shape() {
         let krabka_multi = vec![
-            "demo-broker-0-0".to_string(),
-            "demo-broker-1-0".to_string(),
-            "demo-broker-2-0".to_string(),
+            "demo-broker-0-0".to_owned(),
+            "demo-broker-1-0".to_owned(),
+            "demo-broker-2-0".to_owned(),
         ];
         assert2::assert!(
             choose_target_pod(&krabka_multi, Stack::Krabka, Some(1)).as_deref()
@@ -569,9 +572,9 @@ mod tests {
         );
 
         let krabka_single_pool = vec![
-            "demo-brokers-0".to_string(),
-            "demo-brokers-1".to_string(),
-            "demo-brokers-2".to_string(),
+            "demo-brokers-0".to_owned(),
+            "demo-brokers-1".to_owned(),
+            "demo-brokers-2".to_owned(),
         ];
         assert2::assert!(
             choose_target_pod(&krabka_single_pool, Stack::Krabka, Some(2)).as_deref()
@@ -579,9 +582,9 @@ mod tests {
         );
 
         let kafka = vec![
-            "demo-kafka-0".to_string(),
-            "demo-kafka-1".to_string(),
-            "demo-kafka-2".to_string(),
+            "demo-kafka-0".to_owned(),
+            "demo-kafka-1".to_owned(),
+            "demo-kafka-2".to_owned(),
         ];
         assert2::assert!(
             choose_target_pod(&kafka, Stack::Kafka, Some(1)).as_deref() == Some("demo-kafka-1")
@@ -591,9 +594,9 @@ mod tests {
     #[test]
     fn target_pod_falls_back_to_first_matching_broker_when_leader_unknown() {
         let pods = vec![
-            "demo-kafka-2".to_string(),
-            "demo-kafka-0".to_string(),
-            "demo-kafka-1".to_string(),
+            "demo-kafka-2".to_owned(),
+            "demo-kafka-0".to_owned(),
+            "demo-kafka-1".to_owned(),
         ];
 
         assert2::assert!(

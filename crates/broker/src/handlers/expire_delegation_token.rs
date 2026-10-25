@@ -46,7 +46,7 @@ use {
     skip_all,
     fields(api = "ExpireDelegationToken")
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     req: &ExpireDelegationTokenRequest,
     auth: &ConnectionAuth,
     secret_key: Option<&SecretBytes>,

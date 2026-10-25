@@ -10,13 +10,15 @@
 //! read that never completes, and an unbounded wait would turn that into CI's
 //! 600s kill, reported as TIMEOUT with no cause; a bounded one fails in seconds
 //! and says which step hung.
+#![cfg(test)]
 
 use {
     assert2::{assert, check},
     std::{future::Future, io, net::SocketAddr, sync::Arc, time::Duration},
     tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
+        io::{AsyncReadExt, AsyncWriteExt, copy},
         net::{TcpListener, TcpStream},
+        time,
     },
 };
 
@@ -29,7 +31,7 @@ use support::relay::{Relay, SiteLink};
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 async fn within<F: Future>(what: &str, future: F) -> F::Output {
-    tokio::time::timeout(TIMEOUT, future)
+    time::timeout(TIMEOUT, future)
         .await
         .unwrap_or_else(|_| panic!("{what} did not finish within {TIMEOUT:?}"))
 }
@@ -43,7 +45,7 @@ async fn start_echo() -> SocketAddr {
         while let Ok((mut stream, _peer)) = listener.accept().await {
             tokio::spawn(async move {
                 let (mut read, mut write) = stream.split();
-                let _ = tokio::io::copy(&mut read, &mut write).await;
+                let _ = copy(&mut read, &mut write).await;
             });
         }
     });

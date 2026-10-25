@@ -17,7 +17,8 @@ use {
     },
     krabka_metadata::MetadataImage,
     krabka_raft::NodeId,
-    std::{sync::Arc, time::Duration},
+    std::{collections, collections::HashSet, sync::Arc, time::Duration},
+    tokio::time,
     tracing::warn,
 };
 
@@ -36,7 +37,7 @@ const FAILOVER_SUBMIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// same question on every tick while the broker stays dead, so it reports
 /// those partitions at debug level only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FailoverTrigger {
+pub enum FailoverTrigger {
     Edge,
     Sweep,
 }
@@ -52,7 +53,7 @@ fn is_controller_leader(controller: &Arc<dyn MetadataSource>, node_id: NodeId) -
 
 /// What the liveness ticker remembers between two ticks.
 #[derive(Default)]
-pub(crate) struct LivenessTickState {
+pub struct LivenessTickState {
     /// Whether the previous tick saw this node as controller leader. The
     /// first tick of a new term seeds the registry before anything else, so a
     /// registry that expired every session while this node was a follower
@@ -69,7 +70,7 @@ struct CleanSweep {
     /// The image the sweep walked.
     image: Arc<MetadataImage>,
     /// The dead brokers it walked it for.
-    dead: std::collections::HashSet<u64>,
+    dead: HashSet<u64>,
 }
 
 /// One tick of the controller-side failover driver. The liveness ticker in
@@ -101,7 +102,7 @@ struct CleanSweep {
 ///    `Metadata` or `DescribeTopicPartitions` request served by a follower
 ///    reports the same `offline_replicas` as one served here. It runs last,
 ///    so a death this tick detected is published in the same tick.
-pub(crate) async fn run_liveness_tick(
+pub async fn run_liveness_tick(
     controller: &Arc<dyn MetadataSource>,
     node_id: NodeId,
     liveness: &Arc<ControllerLivenessState>,
@@ -166,7 +167,7 @@ pub(crate) async fn run_liveness_tick(
 ///
 /// This is a no-op unless `controller` is currently the openraft leader. Only
 /// the leader can `submit_change`.
-pub(crate) async fn on_broker_dead(
+pub async fn on_broker_dead(
     controller: &Arc<dyn MetadataSource>,
     node_id: NodeId,
     dead: NodeId,
@@ -239,7 +240,7 @@ async fn fail_over_dead_broker(
         // ISR or epochs after another metadata mutation won the race. The next
         // sweep rebuilds a refused plan from the current image.
         let submit = controller.submit_change_if_image(plan.changes, image);
-        match tokio::time::timeout(FAILOVER_SUBMIT_TIMEOUT, submit).await {
+        match time::timeout(FAILOVER_SUBMIT_TIMEOUT, submit).await {
             Ok(result) => {
                 result.map_err(|e| BrokerError::Replication(format!("submit_change: {e}")))?;
             }
@@ -293,7 +294,7 @@ async fn fail_over_dead_broker(
 /// found nothing to re-drive. A broker that stays dead for good, for example
 /// one that was decommissioned, therefore costs one walk per image change,
 /// not one per tick.
-pub(crate) async fn sweep_dead_leaders(
+pub async fn sweep_dead_leaders(
     controller: &Arc<dyn MetadataSource>,
     node_id: NodeId,
     liveness: &Arc<ControllerLivenessState>,
@@ -318,7 +319,7 @@ pub(crate) async fn sweep_dead_leaders(
     }
     // Dead brokers that still lead a partition or still sit in an ISR. A
     // `BTreeSet` gives a stable retry order across ticks.
-    let mut stuck: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    let mut stuck: collections::BTreeSet<u64> = collections::BTreeSet::new();
     for pr in image.all_partitions() {
         if dead.contains(&pr.leader.0) {
             stuck.insert(pr.leader.0);
@@ -353,7 +354,7 @@ pub(crate) async fn sweep_dead_leaders(
 /// is a no-op. ISR expand happens on its own through
 /// `isr_maintenance` once the rejoined broker's replicator catches up.
 /// The hook is here for future enhancements, for example auto-rebalance.
-pub(crate) fn on_broker_alive(
+pub fn on_broker_alive(
     _controller: &Arc<dyn MetadataSource>,
     _node_id: NodeId,
     _alive: NodeId,

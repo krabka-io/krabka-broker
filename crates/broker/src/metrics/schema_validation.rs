@@ -13,8 +13,8 @@ impl BrokerMetrics {
     /// bounded only while it is.
     pub fn record_schema_validation_rejection(&self, topic: &str, reason: &str) {
         let lbl = SchemaRejectionLabel {
-            topic: topic.to_string(),
-            reason: reason.to_string(),
+            topic: topic.to_owned(),
+            reason: reason.to_owned(),
         };
         self.schema_validation_rejections.get_or_create(&lbl).inc();
         self.track_topic_name(topic);
@@ -63,8 +63,8 @@ mod tests {
         ];
         for (topic, reason, want) in cases {
             let lbl = SchemaRejectionLabel {
-                topic: topic.to_string(),
-                reason: reason.to_string(),
+                topic: topic.to_owned(),
+                reason: reason.to_owned(),
             };
             // One `get_or_create` guard per statement (first
             // materialization takes the family write lock).

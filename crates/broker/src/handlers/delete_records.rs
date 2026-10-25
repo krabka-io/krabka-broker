@@ -79,7 +79,7 @@ mod response;
 mod tiered;
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 #[cfg(test)]
 mod tests;
 
@@ -104,6 +104,7 @@ use {
         partition::Partition,
         partition_registry::PartitionRegistry,
     },
+    std::sync::{Arc, PoisonError, atomic},
 };
 
 fn delete_records_transition<'a>(
@@ -120,13 +121,13 @@ fn delete_records_transition<'a>(
     }
 }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DeleteRecordsRequest,
     _version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<DeleteRecordsResponse, BrokerError> {
-    let partitions = broker.partitions.clone();
+    let partitions = Arc::clone(&broker.partitions);
 
     let image = broker.controller.current_image();
 
@@ -313,7 +314,7 @@ fn trim_forbidden_by_policy(part: &Partition) -> bool {
     let policy = part
         .log
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .config_snapshot()
         .cleanup_policy;
     policy.contains_compact() && !policy.contains_delete()
@@ -388,9 +389,7 @@ async fn trim_one(
         return refused(codes::NOT_LEADER_OR_FOLLOWER);
     };
 
-    let cur_leader = part
-        .current_leader
-        .load(std::sync::atomic::Ordering::Acquire);
+    let cur_leader = part.current_leader.load(atomic::Ordering::Acquire);
     if cur_leader != env.broker.config.node_id {
         return refused(codes::NOT_LEADER_OR_FOLLOWER);
     }

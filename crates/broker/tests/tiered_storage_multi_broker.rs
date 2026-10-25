@@ -75,6 +75,7 @@
 //! boundaries. [`multi_reassign`] adds a replica to a partition whose local
 //! segments are gone and measures what that replica pulls: KIP-405 bounds it
 //! by the leader's local retention, not by the archive.
+#![cfg(test)]
 
 mod support;
 use crate::support::tiered as topic_fixture;

@@ -50,7 +50,7 @@ use {
 const NO_PLUGIN_MESSAGE: &str =
     "The broker has no streams group topology description plugin configured.";
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: StreamsGroupTopologyDescriptionUpdateRequest,
     _version: ApiVersion,

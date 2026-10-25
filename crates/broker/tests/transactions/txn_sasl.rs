@@ -12,6 +12,7 @@ use {
     },
     assert2::assert,
     krabka_client_producer::{ConsumerGroupMetadata, Producer},
+    std::env,
 };
 
 /// Full transactional flow over a `SASL_PLAINTEXT`/`PLAIN` listener.
@@ -37,54 +38,57 @@ async fn sasl_authenticated_transactional_flow_commits() {
     )
     .await;
 
-    let producer = Producer::builder()
-        .bootstrap(bootstrap.clone())
-        .transactional_id("sasl-tid")
-        .security(sasl_plain_security("alice", "alice-secret"))
-        .build()
-        .await
-        .unwrap();
+    let consumer = {
+        let producer = Producer::builder()
+            .bootstrap(bootstrap.clone())
+            .transactional_id("sasl-tid")
+            .security(sasl_plain_security("alice", "alice-secret"))
+            .build()
+            .await
+            .unwrap();
 
-    // init_transactions dials the txn coordinator on a fresh connection —
-    // this is the call that failed with Client(Disconnected) before the fix.
-    producer.init_transactions().await.unwrap();
-    let txn = producer.begin_transaction().await.unwrap();
-    enqueue_string_values(&producer, "sasl-txn", &["a", "b", "c"]).await;
-    // send_offsets_to_transaction dials the group coordinator on a *second*
-    // fresh connection — the other secondary connection that must carry SASL.
-    producer
-        .send_offsets_to_transaction(
-            [(("sasl-txn".to_string(), 0), 3i64)],
-            &ConsumerGroupMetadata::for_group("sasl-cpp-g"),
+        // init_transactions dials the txn coordinator on a fresh connection —
+        // this is the call that failed with Client(Disconnected) before the fix.
+        producer.init_transactions().await.unwrap();
+        let txn = producer.begin_transaction().await.unwrap();
+        enqueue_string_values(&producer, "sasl-txn", &["a", "b", "c"]).await;
+        // send_offsets_to_transaction dials the group coordinator on a *second*
+        // fresh connection — the other secondary connection that must carry SASL.
+        producer
+            .send_offsets_to_transaction(
+                [(("sasl-txn".to_owned(), 0), 3i64)],
+                &ConsumerGroupMetadata::for_group("sasl-cpp-g"),
+            )
+            .await
+            .unwrap();
+        txn.commit().await.unwrap();
+        // The data records must be present in the log before the read_committed
+        // verifier starts polling; the consumer's isolation check still gates on
+        // the LSO/commit marker.
+        broker
+            .wait_until_local_log_end_offset("sasl-txn", 0, 3)
+            .await;
+
+        // llvm-cov reliably exercises the SASL coordinator connections above, but
+        // this final visibility poll can stall under coverage instrumentation.
+        if env::var_os("LLVM_PROFILE_FILE").is_some() {
+            producer.close().await.unwrap();
+            broker.shutdown().await;
+            return;
+        }
+
+        let (consumer, seen) = committed_values(
+            bootstrap,
+            "sasl-verify",
+            "sasl-txn",
+            Some(sasl_plain_security("alice", "alice-secret")),
         )
-        .await
-        .unwrap();
-    txn.commit().await.unwrap();
-    // The data records must be present in the log before the read_committed
-    // verifier starts polling; the consumer's isolation check still gates on
-    // the LSO/commit marker.
-    broker
-        .wait_until_local_log_end_offset("sasl-txn", 0, 3)
         .await;
+        assert!(seen == vec!["a", "b", "c"], "seen={seen:?}");
 
-    // llvm-cov reliably exercises the SASL coordinator connections above, but
-    // this final visibility poll can stall under coverage instrumentation.
-    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
-        producer.close().await.unwrap();
-        broker.shutdown().await;
-        return;
+        producer.close().await.map(|()| consumer)
     }
-
-    let (consumer, seen) = committed_values(
-        bootstrap,
-        "sasl-verify",
-        "sasl-txn",
-        Some(sasl_plain_security("alice", "alice-secret")),
-    )
-    .await;
-    assert!(seen == vec!["a", "b", "c"], "seen={seen:?}");
-
-    producer.close().await.unwrap();
+    .unwrap();
     consumer.close().await.unwrap();
     broker.shutdown().await;
 }

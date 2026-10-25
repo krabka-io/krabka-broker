@@ -148,7 +148,7 @@ fn fill(
     output
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let mode = validate(&input.clone().into())?;
     let tokens: Vec<_> = input.into_iter().collect();
     let [

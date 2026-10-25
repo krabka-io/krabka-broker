@@ -16,7 +16,7 @@ use {
 };
 
 /// Lets a produce re-arm the delivery scheduler before its current sleep ends.
-pub(crate) struct DeliveryWaker {
+pub struct DeliveryWaker {
     /// Epoch-millisecond instant the scheduler next wakes on its own.
     /// [`i64::MAX`] until the task arms for the first time.
     wakes_at_ms: AtomicI64,

@@ -1,4 +1,5 @@
 //! The open attribute preserves local macro scopes and closure patterns.
+#![cfg(test)]
 
 use {
     assert2::assert,

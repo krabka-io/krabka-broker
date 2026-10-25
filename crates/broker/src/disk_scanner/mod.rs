@@ -13,7 +13,7 @@ use {
         metrics::{BrokerMetrics, PartitionLabel},
     },
     krabka_units::{Time, convert::TimeExt as _},
-    std::path::PathBuf,
+    std::{path::PathBuf, sync::Arc},
     tokio::time::interval,
     tokio_util::sync::CancellationToken,
     tracing::{info, warn},
@@ -63,7 +63,7 @@ impl DiskScanner {
             match scan::sum_partition_dir(&path) {
                 Ok(bytes) => {
                     let lbl = PartitionLabel {
-                        topic: std::sync::Arc::from(topic.as_str()),
+                        topic: Arc::from(topic.as_str()),
                         partition,
                     };
                     self.metrics
@@ -86,7 +86,8 @@ mod tests {
         super::*,
         assert2::assert,
         krabka_units::{hours, millis, minutes},
-        std::{io::Write, time::Duration},
+        std::{fs, fs::File, io::Write, time::Duration},
+        tokio::{task, time::timeout},
     };
 
     #[test]
@@ -95,14 +96,14 @@ mod tests {
         // Materialize two partition dirs the way the broker would.
         let p0 = tmp.path().join("t-0");
         let p1 = tmp.path().join("t-1");
-        std::fs::create_dir_all(&p0).unwrap();
-        std::fs::create_dir_all(&p1).unwrap();
+        fs::create_dir_all(&p0).unwrap();
+        fs::create_dir_all(&p1).unwrap();
         // Scope handles so they close before tick_once walks the dir
         // (Windows reports stale dir metadata while files are still open).
         {
-            let mut f0 = std::fs::File::create(p0.join("00.log")).unwrap();
+            let mut f0 = File::create(p0.join("00.log")).unwrap();
             f0.write_all(&[0u8; 1234]).unwrap();
-            let mut f1 = std::fs::File::create(p1.join("00.log")).unwrap();
+            let mut f1 = File::create(p1.join("00.log")).unwrap();
             f1.write_all(&[0u8; 5678]).unwrap();
         }
 
@@ -137,9 +138,9 @@ mod tests {
     async fn run_ticks_until_shutdown() {
         let tmp = tempfile::tempdir().unwrap();
         let p0 = tmp.path().join("run-0");
-        std::fs::create_dir_all(&p0).unwrap();
+        fs::create_dir_all(&p0).unwrap();
         {
-            let mut f0 = std::fs::File::create(p0.join("00.log")).unwrap();
+            let mut f0 = File::create(p0.join("00.log")).unwrap();
             f0.write_all(&[0u8; 321]).unwrap();
         }
 
@@ -157,19 +158,19 @@ mod tests {
             partition: 0,
         };
 
-        tokio::time::timeout(Duration::from_secs(1), async {
+        timeout(Duration::from_secs(1), async {
             loop {
                 if metrics.partition_disk_bytes.get_or_create(&label).get() == 321 {
                     break;
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
         .unwrap();
 
         shutdown.cancel();
-        tokio::time::timeout(Duration::from_secs(1), handle)
+        timeout(Duration::from_secs(1), handle)
             .await
             .unwrap()
             .unwrap();
@@ -189,14 +190,14 @@ mod tests {
         let mut handle = tokio::spawn(scanner.run());
 
         assert!(
-            tokio::time::timeout(Duration::from_millis(25), &mut handle)
+            timeout(Duration::from_millis(25), &mut handle)
                 .await
                 .is_err(),
             "disk scanner run loop exited before shutdown"
         );
 
         shutdown.cancel();
-        tokio::time::timeout(Duration::from_secs(1), handle)
+        timeout(Duration::from_secs(1), handle)
             .await
             .expect("disk scanner should observe shutdown")
             .expect("disk scanner should not panic");

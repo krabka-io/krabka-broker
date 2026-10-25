@@ -8,8 +8,9 @@ use {
         ids::{EpochMs, Seq},
         sink::AuditError,
     },
+    krabka_protocol::krabka::freeze::DescribedTopicFreeze,
     ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey},
-    std::path::Path,
+    std::{fs, path::Path},
 };
 
 /// The freeze fields shared by the broker and operator CLI. Both sides encode
@@ -31,7 +32,7 @@ pub struct FreezeSigningInput<'a> {
 #[bon::builder]
 pub fn freeze_signing_input<'a>(
     cluster_id: &'a str,
-    entry: &'a krabka_protocol::krabka::freeze::DescribedTopicFreeze,
+    entry: &'a DescribedTopicFreeze,
     frozen: bool,
 ) -> FreezeSigningInput<'a> {
     FreezeSigningInput {
@@ -66,8 +67,8 @@ impl FileEd25519Signer {
     /// Returns an error if the file at `path` cannot be read. Returns an error
     /// if the file does not hold a valid PKCS#8 Ed25519 key.
     pub fn from_pkcs8_file(path: impl AsRef<Path>, key_id: String) -> Result<Self, AuditError> {
-        let der = std::fs::read(path.as_ref())
-            .map_err(|e| AuditError::Key(format!("read key file: {e}")))?;
+        let der =
+            fs::read(path.as_ref()).map_err(|e| AuditError::Key(format!("read key file: {e}")))?;
         Self::from_pkcs8_bytes(&der, key_id)
     }
 
@@ -77,7 +78,7 @@ impl FileEd25519Signer {
     /// Returns an error if `der` is not a valid PKCS#8 Ed25519 key.
     pub fn from_pkcs8_bytes(der: &[u8], key_id: String) -> Result<Self, AuditError> {
         let key_pair = Ed25519KeyPair::from_pkcs8(der)
-            .map_err(|_| AuditError::Key("invalid PKCS#8 Ed25519 key".to_string()))?;
+            .map_err(|_| AuditError::Key("invalid PKCS#8 Ed25519 key".to_owned()))?;
         let public_key = key_pair.public_key().as_ref().to_vec();
         Ok(Self {
             key_id,
@@ -107,9 +108,6 @@ impl FileEd25519Signer {
 /// The layout is
 /// `DOMAIN ‖ key_id_len(u16 BE) ‖ key_id ‖ seq_high(u64 BE) ‖ head(32) ‖ time_ms(i64 BE)`.
 #[must_use]
-/// # Panics
-/// Panics if the key-id length does not fit a `u16`. The function caps that
-/// length at `u16::MAX` first, so this cannot happen.
 pub fn checkpoint_signing_bytes(
     key_id: &str,
     seq_high: Seq,
@@ -117,8 +115,7 @@ pub fn checkpoint_signing_bytes(
     time_ms: EpochMs,
 ) -> Vec<u8> {
     let kid = key_id.as_bytes();
-    let kid_len = u16::try_from(kid.len().min(usize::from(u16::MAX)))
-        .expect("key id length is capped at u16::MAX");
+    let kid_len = u16::try_from(kid.len()).unwrap_or(u16::MAX);
     let mut v = Vec::with_capacity(CHECKPOINT_DOMAIN.len() + 2 + kid.len() + 8 + 32 + 8);
     v.extend_from_slice(CHECKPOINT_DOMAIN);
     v.extend_from_slice(&kid_len.to_be_bytes());
@@ -143,7 +140,10 @@ pub fn verify_signature(public_key: &[u8], msg: &[u8], sig: &[u8]) -> bool {
 mod tests {
     use {
         super::*,
-        crate::test_support::{TestSigner, signer_with_key_id},
+        crate::{
+            sink::AuditError,
+            test_support::{TestSigner, signer_with_key_id},
+        },
         assert2::check,
     };
 
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn bad_pkcs8_is_a_key_error() {
         let err = FileEd25519Signer::from_pkcs8_bytes(b"not-a-key", "k".into());
-        check!(matches!(err, Err(crate::sink::AuditError::Key(_))));
+        check!(matches!(err, Err(AuditError::Key(_))));
     }
 
     #[test]

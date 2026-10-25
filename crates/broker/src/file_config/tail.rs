@@ -17,6 +17,7 @@ use {
         config::{BrokerConfig, InterBrokerCredentials, NodeRole, validate_oauthbearer_token_file},
         network::auth::GssapiConfig,
     },
+    krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW,
     krabka_units::{
         ByteSize, Time,
         convert::{ByteSizeExt as _, TimeExt as _},
@@ -181,9 +182,7 @@ fn apply_audit(audit: FileAuditConfig, cfg: &mut BrokerConfig) {
 /// Resolve the `[gssapi]` section into the accept-path configuration.
 #[cfg(not(target_family = "wasm"))]
 fn gssapi_config(gssapi: FileGssapiConfig) -> Result<GssapiConfig, FileConfigError> {
-    let max_time_skew = gssapi
-        .max_time_skew
-        .unwrap_or(krabka_security::gssapi::DEFAULT_GSSAPI_MAX_TIME_SKEW);
+    let max_time_skew = gssapi.max_time_skew.unwrap_or(DEFAULT_GSSAPI_MAX_TIME_SKEW);
     if max_time_skew < Time::ZERO {
         return Err(FileConfigError::InvalidConfig(
             "gssapi.max_time_skew must be non-negative".to_owned(),

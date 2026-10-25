@@ -16,6 +16,7 @@ use {
         },
     },
     krabka_metadata::{AclOperation, MetadataImage, ResourceType},
+    krabka_protocol::primitives::uuid::Uuid,
     std::{
         collections::{HashMap, HashSet},
         sync::Arc,
@@ -24,7 +25,7 @@ use {
 
 /// Kafka's resource-specific refusal for the two config mutation APIs.
 /// Legacy `AlterConfigs` does not support broker logger resources.
-pub(crate) fn config_resource_refusal(
+pub fn config_resource_refusal(
     authorizer: &dyn Authorizer,
     image: &krabka_metadata::MetadataImage,
     ctx: &RequestContext<'_>,
@@ -72,7 +73,7 @@ pub(crate) fn config_resource_refusal(
     .then(|| (code, message.to_owned()))
 }
 
-pub(crate) fn acl_denied(
+pub fn acl_denied(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,
     ctx: &RequestContext<'_>,
@@ -86,7 +87,7 @@ pub(crate) fn acl_denied(
     ) == AuthorizationResult::Deny
 }
 
-pub(crate) fn acl_denied_quiet(
+pub fn acl_denied_quiet(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,
     ctx: &RequestContext<'_>,
@@ -129,7 +130,7 @@ krabka_macros::named_acl_gates!(
 );
 
 /// The metadata image authorized for a cluster-wide `Describe` request.
-pub(crate) fn cluster_describe_image(
+pub fn cluster_describe_image(
     broker: &Broker,
     ctx: &RequestContext<'_>,
 ) -> Option<Arc<MetadataImage>> {
@@ -138,7 +139,7 @@ pub(crate) fn cluster_describe_image(
 }
 
 /// Kafka's cluster shortcut is quiet: a denial falls back to per-topic checks.
-pub(crate) fn cluster_shortcut_denied(
+pub fn cluster_shortcut_denied(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     ctx: &RequestContext<'_>,
@@ -159,7 +160,7 @@ pub(crate) fn cluster_shortcut_denied(
 ///
 /// Every name is authorized through [`authorize_topics`], so each denial is
 /// audited the way a per-topic refusal is.
-pub(crate) fn topic_decisions<'a>(
+pub fn topic_decisions<'a>(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,
     ctx: &RequestContext<'_>,
@@ -190,7 +191,7 @@ fn topics_decided<'a>(
 ///
 /// A name the caller never passed is absent, so a lookup reads it as allowed.
 #[krabka_macros::topic_filter(Deny)]
-pub(crate) fn denied_topics<'a>(
+pub fn denied_topics<'a>(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,
     ctx: &RequestContext<'_>,
@@ -204,7 +205,7 @@ pub(crate) fn denied_topics<'a>(
 ///
 /// A name the caller never passed is absent, so a lookup reads it as denied.
 #[krabka_macros::topic_filter(Allow)]
-pub(crate) fn allowed_topics<'a>(
+pub fn allowed_topics<'a>(
     authorizer: &dyn Authorizer,
     image: &MetadataImage,
     ctx: &RequestContext<'_>,
@@ -221,7 +222,7 @@ pub(crate) fn allowed_topics<'a>(
 /// `subscribedTopicSet` is empty, which is vacuously fully authorized.
 /// KIP-932's `ShareGroupHeartbeatRequest` carries no `SubscribedTopicRegex`,
 /// so this names gate is the whole of its topic check.
-pub(crate) fn subscribed_names_describe_denied(
+pub fn subscribed_names_describe_denied(
     authorizer: &dyn Authorizer,
     image: &krabka_metadata::MetadataImage,
     ctx: &RequestContext<'_>,
@@ -242,7 +243,7 @@ pub(crate) fn subscribed_names_describe_denied(
 }
 
 /// Subscription denial code shared by consumer and share heartbeats.
-pub(crate) fn subscribed_names_refusal(
+pub fn subscribed_names_refusal(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     ctx: &RequestContext<'_>,
@@ -255,7 +256,7 @@ pub(crate) fn subscribed_names_refusal(
 /// Build a whole-heartbeat refusal when any subscribed topic is not
 /// `Describe`-authorized. Call before coordinator routing so that routing
 /// errors cannot mask the topic authorization failure or reveal topic data.
-pub(crate) fn subscribed_names_response<Response>(
+pub fn subscribed_names_response<Response>(
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
     ctx: &RequestContext<'_>,
@@ -271,7 +272,7 @@ pub(crate) fn subscribed_names_response<Response>(
 ///
 /// It stops at the first denial, so a name after it is never authorized and
 /// never audited.
-pub(crate) fn any_topic_describe_denied(
+pub fn any_topic_describe_denied(
     authorizer: &dyn Authorizer,
     image: &krabka_metadata::MetadataImage,
     ctx: &RequestContext<'_>,
@@ -293,14 +294,14 @@ pub(crate) fn any_topic_describe_denied(
 /// wire carries one, else the name that `topic_id` resolves to in `image`.
 ///
 /// A row with neither, or an id that does not resolve, gives the empty name.
-pub(crate) fn requested_topic_name(
+pub fn requested_topic_name(
     image: &krabka_metadata::MetadataImage,
     name: &str,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    topic_id: Uuid,
 ) -> String {
     if !name.is_empty() {
         name.to_owned()
-    } else if topic_id != krabka_protocol::primitives::uuid::Uuid::ZERO {
+    } else if topic_id != Uuid::ZERO {
         image
             .topic_name_by_id(&uuid::Uuid::from_bytes(topic_id.0))
             .unwrap_or_default()
@@ -311,7 +312,7 @@ pub(crate) fn requested_topic_name(
 }
 
 /// Protocol availability precedes the audited group-read authorization check.
-pub(crate) fn group_protocol_refusal(
+pub fn group_protocol_refusal(
     enabled: bool,
     broker: &Broker,
     image: &krabka_metadata::MetadataImage,
@@ -328,7 +329,7 @@ pub(crate) fn group_protocol_refusal(
 }
 
 /// Classic group calls authorize first, release the image, then validate and route.
-pub(crate) fn classic_group_refusal(
+pub fn classic_group_refusal(
     broker: &Broker,
     ctx: &RequestContext<'_>,
     group: &str,
@@ -351,11 +352,13 @@ mod tests {
         super::*,
         crate::{
             authorizer::SimpleAclAuthorizer,
+            codes,
             handlers::test_support::operators_principal as principal,
             test_support::{allow_acl, peer},
         },
         assert2::{assert, check},
         krabka_metadata::{AclOperation, MetadataImage, ResourceType},
+        krabka_protocol::primitives::uuid::Uuid,
         std::{collections::HashSet, net::SocketAddr},
     };
 
@@ -415,7 +418,7 @@ mod tests {
 
         // The code every caller answers on a denial, and the number Kafka
         // assigns it.
-        check!(crate::codes::CLUSTER_AUTHORIZATION_FAILED == 31);
+        check!(codes::CLUSTER_AUTHORIZATION_FAILED == 31);
     }
 
     /// [`denied_topics`] and [`allowed_topics`] keep exactly the names the
@@ -468,15 +471,11 @@ mod tests {
     /// [`requested_topic_name`] prefers the wire name and gives the empty
     /// name when neither the name nor the id names a topic.
     #[yare::parameterized(
-        wire_name = { "orders", krabka_protocol::primitives::uuid::Uuid([7; 16]), "orders" },
-        neither = { "", krabka_protocol::primitives::uuid::Uuid::ZERO, "" },
-        unknown_id = { "", krabka_protocol::primitives::uuid::Uuid([7; 16]), "" },
+        wire_name = { "orders", Uuid([7; 16]), "orders" },
+        neither = { "", Uuid::ZERO, "" },
+        unknown_id = { "", Uuid([7; 16]), "" },
     )]
-    fn requested_topic_name_prefers_the_wire_name(
-        name: &str,
-        id: krabka_protocol::primitives::uuid::Uuid,
-        expected: &str,
-    ) {
+    fn requested_topic_name_prefers_the_wire_name(name: &str, id: Uuid, expected: &str) {
         let image = MetadataImage::new(uuid::Uuid::nil());
         check!(requested_topic_name(&image, name, id) == expected);
     }

@@ -1,8 +1,9 @@
 use {
     super::{ProducerDecision, ProducerSnapshotEntryFacts, completed_batches_preserve_first_retry},
+    crate::producer,
     assert2::assert,
-    proptest::prelude::*,
-    std::collections::BTreeMap,
+    proptest::{collection, prelude::*},
+    std::{collections::BTreeMap, iter},
 };
 
 type Row = ProducerSnapshotEntryFacts;
@@ -96,7 +97,7 @@ fn check(
     });
     let ends: Vec<_> = old.iter().map(|row| row.last_offset).collect();
     assert!(
-        crate::producer::producer_completion_window(
+        producer::producer_completion_window(
             current,
             incoming.producer_epoch,
             &ends,
@@ -112,7 +113,7 @@ fn check(
 proptest! {
     #[test]
     fn completed_windows_match_sorted_distinct_physical_batches(
-        batches in proptest::collection::vec((0_i32..4, 0_i32..=i32::MAX), 0..=5),
+        batches in collection::vec((0_i32..4, 0_i32..=i32::MAX), 0..=5),
         old_epoch in 0_i16..5, new_epoch in 0_i16..5, absent in any::<bool>(),
         new_last in 0_i64..100, new_delta in 0_i32..4, sequence in 0_i32..=i32::MAX,
         hwm in 0_i64..=101, request in (any::<i16>(), any::<i32>(), any::<i32>()),
@@ -125,7 +126,7 @@ proptest! {
         let current = if absent && old.is_empty() { None } else { Some(old_epoch) };
         let incoming = row(new_epoch, new_last, new_delta.min(i32::try_from(new_last).unwrap()), sequence);
         check(101, hwm, current, &old, incoming, request);
-        for batch in old.iter().chain(std::iter::once(&incoming)) {
+        for batch in old.iter().chain(iter::once(&incoming)) {
             check(101, hwm, current, &old, incoming,
                 (batch.producer_epoch, modulo(i64::from(batch.last_sequence) - i64::from(batch.offset_delta)), batch.offset_delta));
         }

@@ -2,7 +2,7 @@ use {
     super::*,
     crate::{
         core::{
-            election_jitter_ms,
+            self, election_jitter_ms,
             test_support::{
                 CellLog, EpochRun, FakeLog, MachineLogAndActions, RunsLog, machine,
                 three_voter_machine, voters, win_election,
@@ -510,9 +510,7 @@ fn check_quorum_expiry_resigns_the_leader() {
         actions
             == expected_quorum_loss("Resigned", Action::ResetTimer {
                 kind: TimerKind::Election,
-                deadline: SimInstant(
-                    3500 + 1000 + crate::core::election_jitter_ms(NodeId(1), 1, 1000)
-                ),
+                deadline: SimInstant(3500 + 1000 + core::election_jitter_ms(NodeId(1), 1, 1000)),
             })
     );
     assert2::assert!(

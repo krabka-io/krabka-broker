@@ -11,9 +11,14 @@
 use {
     crate::{config::kafka_4_3_1_max, error::RaftError},
     bytes::Bytes,
-    krabka_metadata::MetadataRecord,
+    krabka_metadata::{
+        MetadataRecord,
+        metadata_version::{
+            CORDONED_LOG_DIRS_MIN_LEVEL, METADATA_VERSION_FEATURE, SHARE_VERSION_FEATURE,
+        },
+    },
     krabka_protocol::ProtocolRequest,
-    std::{future::Future, net::SocketAddr, pin::Pin},
+    std::{collections::BTreeMap, future::Future, net::SocketAddr, pin::Pin},
 };
 
 /// Optional router for KIP-595 traffic addressed to non-metadata quorum shards.
@@ -92,12 +97,12 @@ impl From<bool> for UnstableFeatureVersions {
     }
 }
 
-/// Kafka 4.3's `MetadataVersion.LATEST_PRODUCTION`, `4.3-IV0`: the highest
-/// `metadata.version` a node supports while [`UnstableFeatureVersions`] is
+/// Kafka 4.3's `MetadataVersion.LATEST_PRODUCTION`, `4.3-IV0`.
+///
+/// It is the highest `metadata.version` a node supports while [`UnstableFeatureVersions`] is
 /// [`Disabled`][UnstableFeatureVersions::Disabled], and the level a cluster
 /// bootstraps at when no release is named.
-pub const LATEST_PRODUCTION_METADATA_VERSION: i16 =
-    krabka_metadata::metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL;
+pub const LATEST_PRODUCTION_METADATA_VERSION: i16 = CORDONED_LOG_DIRS_MIN_LEVEL;
 
 /// The latest production level of each feature that has levels past it, as
 /// Kafka's `Feature.latestProduction` gives it: what a node supports unless
@@ -109,11 +114,11 @@ pub const LATEST_PRODUCTION_METADATA_VERSION: i16 =
 /// (KIP-1191).
 const LATEST_PRODUCTION_LEVELS: [ProductionLevel; 2] = [
     ProductionLevel {
-        feature: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE,
+        feature: METADATA_VERSION_FEATURE,
         level: LATEST_PRODUCTION_METADATA_VERSION,
     },
     ProductionLevel {
-        feature: krabka_metadata::metadata_version::SHARE_VERSION_FEATURE,
+        feature: SHARE_VERSION_FEATURE,
         level: 1,
     },
 ];
@@ -124,11 +129,13 @@ struct ProductionLevel {
     level: i16,
 }
 
-/// The supported range of `feature` under `unstable`: the `krabka_metadata`
-/// registry's range, which lists the levels of Kafka trunk, capped at the
-/// feature's latest production level (see `LATEST_PRODUCTION_LEVELS`)
-/// unless unstable feature versions are enabled. A default node therefore
-/// advertises the ranges of Kafka 4.3.1.
+/// The supported range of `feature` under `unstable`.
+///
+/// It is the `krabka_metadata` registry's range, which lists the levels of Kafka trunk, capped at the
+/// feature's latest production level (see `LATEST_PRODUCTION_LEVELS`) unless
+/// unstable feature versions are enabled.
+///
+/// A default node therefore advertises the ranges of Kafka 4.3.1.
 #[must_use]
 pub fn supported_feature_range(
     feature: &dyn krabka_metadata::Feature,
@@ -146,14 +153,13 @@ pub fn supported_feature_range(
     }
 }
 
-/// The feature ranges a node registers with the controller under `unstable`,
-/// Kafka's `BrokerFeatures.createDefault(unstableFeatureVersionsEnabled)`:
+/// The feature ranges a node registers with the controller under `unstable`.
+///
+/// This is Kafka's `BrokerFeatures.createDefault(unstableFeatureVersionsEnabled)`:
 /// [`krabka_metadata::supported_feature_ranges`] with each registry feature
 /// capped by [`supported_feature_range`].
 #[must_use]
-pub fn supported_feature_ranges(
-    unstable: UnstableFeatureVersions,
-) -> std::collections::BTreeMap<String, (i16, i16)> {
+pub fn supported_feature_ranges(unstable: UnstableFeatureVersions) -> BTreeMap<String, (i16, i16)> {
     let mut ranges = krabka_metadata::supported_feature_ranges();
     for feature in krabka_metadata::feature_registry() {
         ranges.insert(

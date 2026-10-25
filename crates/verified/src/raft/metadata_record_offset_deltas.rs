@@ -150,7 +150,7 @@ pub fn control_history_frontier(offsets: &[i64], frontier: i64) -> usize {
     #[cfg_attr(creusot, variant(hi - lo))]
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        if offsets[mid] < frontier {
+        if matches!(offsets.get(mid), Some(&offset) if offset < frontier) {
             lo = mid + 1;
         } else {
             hi = mid;

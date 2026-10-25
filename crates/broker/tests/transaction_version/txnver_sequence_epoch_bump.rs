@@ -32,7 +32,10 @@ use {
     krabka_client_core::Client,
     krabka_ids::ProducerId,
     krabka_protocol::{
-        owned::{init_producer_id_request::InitProducerIdRequest, produce_request::ProduceRequest},
+        owned::{
+            init_producer_id_request::InitProducerIdRequest,
+            init_producer_id_response::InitProducerIdResponse, produce_request::ProduceRequest,
+        },
         records::RecordBatch,
     },
     std::time::Duration,
@@ -108,7 +111,7 @@ async fn produce(
 async fn until_coordinator_ready<F, Fut>(send: F) -> i16
 where
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = i16>,
+    Fut: Future<Output = i16>,
 {
     retry_coordinator(
         send,
@@ -146,7 +149,7 @@ async fn add_partition(
 async fn init_transactional_producer(
     client: &Client,
     transactional_id: &str,
-) -> krabka_protocol::owned::init_producer_id_response::InitProducerIdResponse {
+) -> InitProducerIdResponse {
     find_coordinator(client, transactional_id).await;
     initialize_transactional(
         client,

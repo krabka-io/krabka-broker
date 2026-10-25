@@ -10,7 +10,7 @@ use {
     assert2::check,
     bytes::BytesMut,
     krabka_protocol::records::{Record, RecordBatch},
-    std::path::Path,
+    std::{fs, path::Path},
     tempfile::tempdir,
 };
 
@@ -44,7 +44,7 @@ fn file(base: i64, ext: &str) -> String { format!("{}.{ext}", name::format_base_
 /// Write `files` into `dir`.
 fn populate(dir: &Path, files: &Files) {
     for (file_name, contents) in files {
-        std::fs::write(dir.join(file_name), contents).unwrap();
+        fs::write(dir.join(file_name), contents).unwrap();
     }
 }
 
@@ -216,7 +216,7 @@ fn a_committed_swap_that_overlaps_itself_is_corrupt() {
 #[test]
 fn rejects_sidecars_without_any_log() {
     let dir = tempdir().unwrap();
-    std::fs::write(swap_path(dir.path(), 0, "index"), b"").unwrap();
+    fs::write(swap_path(dir.path(), 0, "index"), b"").unwrap();
 
     check!(let Err(LogError::Corrupt(_)) = swap_orphan_recover(dir.path()));
 }

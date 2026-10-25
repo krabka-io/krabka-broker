@@ -23,10 +23,17 @@ use {
         network::client::InterBrokerClient,
     },
     krabka_client_core::ConnectionOptions,
-    krabka_protocol::owned::broker_heartbeat_request::BrokerHeartbeatRequest,
+    krabka_metadata::metadata_version,
+    krabka_protocol::{
+        owned::broker_heartbeat_request::BrokerHeartbeatRequest, primitives::uuid::Uuid,
+    },
     krabka_security::ListenerProtocol,
     krabka_units::{Time, convert::TimeExt as _, fmt::Human as _, millis, secs},
-    std::sync::Arc,
+    std::{path::PathBuf, sync::Arc, time::Duration},
+    tokio::{
+        sync::watch::{Receiver, Sender},
+        time,
+    },
     tokio_util::sync::CancellationToken,
     tracing::{debug, warn},
 };
@@ -35,7 +42,7 @@ use {
 /// `BrokerLifecycleManager.initialUnfenceFuture`, which broker startup waits
 /// on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum InitialUnfence {
+pub enum InitialUnfence {
     /// No heartbeat answer has unfenced the broker yet.
     Pending,
     /// A heartbeat answer said the broker is unfenced.
@@ -46,7 +53,7 @@ pub(crate) enum InitialUnfence {
     Refused,
 }
 
-pub(crate) struct Config {
+pub struct Config {
     pub broker_id: i32,
     /// The broker epoch this process registered at, which every heartbeat
     /// names: Kafka's `BrokerLifecycleManager.brokerEpoch`. The local image
@@ -78,14 +85,14 @@ pub(crate) struct Config {
     /// When `true`, the client stamps `want_shut_down=true` on outbound
     /// `BrokerHeartbeat` requests.
     /// [`crate::BrokerHandle::controlled_shutdown`] drives this flag.
-    pub want_shutdown: tokio::sync::watch::Receiver<bool>,
+    pub want_shutdown: Receiver<bool>,
     /// The client sets this to `true` when the controller responds with
     /// `should_shut_down=true`. The caller of `controlled_shutdown`
     /// awaits this flag.
-    pub should_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
+    pub should_shutdown: Arc<Sender<bool>>,
     /// The client moves this out of [`InitialUnfence::Pending`] on the first
     /// answer that unfences the broker or refuses it for authorization.
-    pub unfenced: tokio::sync::watch::Sender<InitialUnfence>,
+    pub unfenced: Sender<InitialUnfence>,
     /// Per-log-dir health registry. Each heartbeat reports the offline dirs
     /// to the controller as `offline_log_dirs` UUIDs (KIP-858).
     pub log_dir_status: LogDirRegistry,
@@ -93,31 +100,28 @@ pub(crate) struct Config {
     pub log_dir_ids: LogDirIds,
     /// All configured log dirs. When every one of them is offline, the
     /// broker shuts itself down (KIP-112).
-    pub all_log_dirs: Vec<std::path::PathBuf>,
+    pub all_log_dirs: Vec<PathBuf>,
     /// The broker cancels this when all dirs go offline. This stops
     /// replication and materialization against dead disks before teardown.
-    pub supervisor_shutdown: tokio_util::sync::CancellationToken,
+    pub supervisor_shutdown: CancellationToken,
     /// KIP-1066: the log directories this broker holds cordoned. Heartbeats
     /// report their ids once the broker has caught up with the metadata.
     pub cordoned_log_dirs: CordonedLogDirs,
 }
 
 /// UUIDs of the currently-offline log dirs, for the heartbeat's `offline_log_dirs`.
-fn offline_dir_uuids(
-    status: &LogDirRegistry,
-    ids: &LogDirIds,
-) -> Vec<krabka_protocol::primitives::uuid::Uuid> {
+fn offline_dir_uuids(status: &LogDirRegistry, ids: &LogDirIds) -> Vec<Uuid> {
     status
         .offline()
         .into_iter()
         .filter_map(|(path, _reason)| ids.id_for(&path))
-        .map(|u| krabka_protocol::primitives::uuid::Uuid(*u.as_bytes()))
+        .map(|u| Uuid(*u.as_bytes()))
         .collect()
 }
 
 /// True when every configured log dir is offline. The broker then shuts itself
 /// down.
-fn all_dirs_offline(all_log_dirs: &[std::path::PathBuf], status: &LogDirRegistry) -> bool {
+fn all_dirs_offline(all_log_dirs: &[PathBuf], status: &LogDirRegistry) -> bool {
     !all_log_dirs.is_empty() && all_log_dirs.iter().all(|d| status.is_offline(d))
 }
 
@@ -130,7 +134,7 @@ fn all_log_dirs_offline(cfg: &Config) -> bool {
 /// first answer that it may not stop yet: Kafka's `BrokerLifecycleManager`
 /// schedules that heartbeat 50 ms out, rather than one interval, because the
 /// controller has usually moved the broker's leaderships by then.
-const CONTROLLED_SHUTDOWN_RECHECK: std::time::Duration = std::time::Duration::from_millis(50);
+const CONTROLLED_SHUTDOWN_RECHECK: Duration = Duration::from_millis(50);
 
 fn heartbeat_rpc_timeout(interval: Time) -> Time { (interval * 2.0).max(millis(500)).min(secs(1)) }
 
@@ -157,16 +161,16 @@ fn cordoned_dir_uuids(
     image: &krabka_metadata::MetadataImage,
     cordoned: &CordonedLogDirs,
     ids: &LogDirIds,
-) -> Option<Vec<krabka_protocol::primitives::uuid::Uuid>> {
-    let supported = image.finalized_metadata_version().is_some_and(|level| {
-        level >= krabka_metadata::metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL
-    });
+) -> Option<Vec<Uuid>> {
+    let supported = image
+        .finalized_metadata_version()
+        .is_some_and(|level| level >= metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL);
     (caught_up && supported).then(|| {
         cordoned
             .cordoned()
             .iter()
             .filter_map(|dir| ids.id_for(dir))
-            .map(|id| krabka_protocol::primitives::uuid::Uuid(*id.as_bytes()))
+            .map(|id| Uuid(*id.as_bytes()))
             .collect()
     })
 }
@@ -175,9 +179,9 @@ fn cordoned_dir_uuids(
 #[derive(Debug, Default)]
 struct HeartbeatLogDirs {
     /// KIP-858 directories that went offline.
-    offline: Vec<krabka_protocol::primitives::uuid::Uuid>,
+    offline: Vec<Uuid>,
     /// KIP-1066 cordoned directories, `None` before the broker catches up.
-    cordoned: Option<Vec<krabka_protocol::primitives::uuid::Uuid>>,
+    cordoned: Option<Vec<Uuid>>,
 }
 
 fn heartbeat_request(
@@ -201,7 +205,7 @@ fn heartbeat_request(
 /// Triggers the KIP-112 self-shutdown. It latches `should_shutdown` and
 /// cancels the supervisor. Every early-exit path calls it, so the check is not
 /// accidentally skipped when the controller is temporarily unreachable.
-fn trigger_all_dirs_offline_shutdown(cfg: &mut Config, reason: &str) {
+fn trigger_all_dirs_offline_shutdown(cfg: &Config, reason: &str) {
     tracing::error!(
         reason,
         "all log dirs offline — initiating broker self-shutdown (KIP-112)"
@@ -246,7 +250,7 @@ async fn dial(
     rpc_timeout: Time,
 ) -> Option<krabka_client_core::Connection> {
     let opts = heartbeat_connection_options(cfg.broker_id, cfg.interval);
-    let dialled = tokio::time::timeout(
+    let dialled = time::timeout(
         rpc_timeout.to_std(),
         cfg.outbound_client.connect_as_connection(
             &controller.host,
@@ -283,13 +287,13 @@ async fn dial(
 /// answers `NOT_CONTROLLER`. A tick that finds no open connection to the
 /// current leader dials one, so a new leader, or a new address for the same
 /// leader, gets a new connection.
-pub(crate) async fn run(mut cfg: Config) {
+pub async fn run(mut cfg: Config) {
     // A node that never registered as a broker has no heartbeat to send, as a
     // Kafka controller-only node has no `BrokerLifecycleManager`.
     if cfg.broker_epoch < 0 {
         return;
     }
-    let mut tick = tokio::time::interval(cfg.interval.to_std());
+    let mut tick = time::interval(cfg.interval.to_std());
     let mut channel: Option<ControllerChannel> = None;
     // Kafka's `initialCatchUpFuture`: set by the first answer that says the
     // broker has caught up, and never cleared.
@@ -309,7 +313,7 @@ pub(crate) async fn run(mut cfg: Config) {
         // KIP-112 check: even if we cannot reach the controller, self-shutdown
         // must fire as long as every log dir is offline.
         if all_log_dirs_offline(&cfg) {
-            trigger_all_dirs_offline_shutdown(&mut cfg, "detected before controller resolution");
+            trigger_all_dirs_offline_shutdown(&cfg, "detected before controller resolution");
             return;
         }
         // Resolve the current controller leader's CONTROLLER-listener address
@@ -359,7 +363,7 @@ pub(crate) async fn run(mut cfg: Config) {
                 &cfg.log_dir_ids,
             ),
         };
-        let resp = tokio::time::timeout(
+        let resp = time::timeout(
             rpc_timeout.to_std(),
             open.connection.send(heartbeat_request(
                 cfg.broker_id,
@@ -425,7 +429,7 @@ pub(crate) async fn run(mut cfg: Config) {
         // top-of-tick check already handles dirs that were offline before
         // leader resolution; this one handles the same-tick race.
         if all_log_dirs_offline(&cfg) {
-            trigger_all_dirs_offline_shutdown(&mut cfg, "detected after heartbeat send");
+            trigger_all_dirs_offline_shutdown(&cfg, "detected after heartbeat send");
             // Returning stops heartbeats; if shutdown drags, the controller's
             // session timeout fences this broker independently.
             return;
@@ -460,8 +464,14 @@ mod tests {
             },
         },
         std::{
+            mem,
+            path::Path,
             sync::Mutex,
             time::{Duration, Instant},
+        },
+        tokio::{
+            sync::watch,
+            time::{sleep, timeout},
         },
     };
 
@@ -532,20 +542,22 @@ mod tests {
                     return MockReply::Respond(body.to_vec());
                 }
                 seen.heartbeats += 1;
-                let error_code = match std::mem::replace(&mut seen.next_answer, Answer::Accept) {
+                let error_code = match mem::replace(&mut seen.next_answer, Answer::Accept) {
                     Answer::Accept => NONE,
                     Answer::NotController => NOT_CONTROLLER,
                     Answer::Silent => return MockReply::Silent,
                     Answer::Close => return MockReply::Close,
                 };
+                let should_shut_down = seen
+                    .shut_down_from
+                    .is_some_and(|from| seen.heartbeats >= from);
+                drop(seen);
                 // `BrokerHeartbeat` is flexible, so its response header ends
                 // with an empty tagged-field section.
                 body.extend_from_slice(&[0]);
                 BrokerHeartbeatResponse {
                     error_code,
-                    should_shut_down: seen
-                        .shut_down_from
-                        .is_some_and(|from| seen.heartbeats >= from),
+                    should_shut_down,
                     ..Default::default()
                 }
                 .encode(&mut body, version)
@@ -573,7 +585,7 @@ mod tests {
             let deadline = Instant::now() + Duration::from_secs(10);
             while self.heartbeats() < target {
                 assert!(Instant::now() < deadline, "no heartbeat #{target} in 10s");
-                tokio::time::sleep(Duration::from_millis(5)).await;
+                sleep(Duration::from_millis(5)).await;
             }
         }
     }
@@ -602,12 +614,10 @@ mod tests {
         shutdown: &CancellationToken,
         interval: Time,
         controllers: &[&FakeController],
-        want_shutdown: tokio::sync::watch::Receiver<bool>,
-        #[builder(default = Arc::new(tokio::sync::watch::channel(false).0))] should_shutdown: Arc<
-            tokio::sync::watch::Sender<bool>,
-        >,
+        want_shutdown: Receiver<bool>,
+        #[builder(default = Arc::new(watch::channel(false).0))] should_shutdown: Arc<Sender<bool>>,
     ) -> Config {
-        let no_dirs: Vec<std::path::PathBuf> = Vec::new();
+        let no_dirs: Vec<PathBuf> = Vec::new();
         Config {
             broker_id: 7,
             broker_epoch: 11,
@@ -626,7 +636,7 @@ mod tests {
                 .collect(),
             want_shutdown,
             should_shutdown,
-            unfenced: tokio::sync::watch::channel(InitialUnfence::Pending).0,
+            unfenced: watch::channel(InitialUnfence::Pending).0,
             log_dir_status: LogDirRegistry::probe(&no_dirs),
             log_dir_ids: LogDirIds::resolve(&no_dirs),
             all_log_dirs: no_dirs.clone(),
@@ -645,7 +655,7 @@ mod tests {
         let second = FakeController::start().await;
         let dials = || (first.connections(), second.connections());
         let source = registered_broker_source();
-        let (_want_shutdown, want_shutdown) = tokio::sync::watch::channel(false);
+        let (_want_shutdown, want_shutdown) = watch::channel(false);
         let shutdown = CancellationToken::new();
         let heartbeats = tokio::spawn(run(heartbeat_config()
             .source(&source)
@@ -697,8 +707,8 @@ mod tests {
         // and the third is told it may.
         controller.shut_down_from(3);
         let source = registered_broker_source();
-        let (want_shutdown_tx, want_shutdown) = tokio::sync::watch::channel(false);
-        let should_shutdown = Arc::new(tokio::sync::watch::channel(false).0);
+        let (want_shutdown_tx, want_shutdown) = watch::channel(false);
+        let should_shutdown = Arc::new(watch::channel(false).0);
         let shutdown = CancellationToken::new();
         let heartbeats = tokio::spawn(run(heartbeat_config()
             .source(&source)
@@ -713,7 +723,7 @@ mod tests {
         let asked = Instant::now();
         want_shutdown_tx.send_replace(true);
         let mut told = should_shutdown.subscribe();
-        let answered = tokio::time::timeout(Duration::from_secs(10), told.wait_for(|stop| *stop))
+        let answered = timeout(Duration::from_secs(10), told.wait_for(|stop| *stop))
             .await
             .is_ok();
         let took = asked.elapsed();
@@ -782,8 +792,8 @@ mod tests {
 
     #[test]
     fn heartbeat_request_reports_registration_and_applied_metadata() {
-        let offline = krabka_protocol::primitives::uuid::Uuid([7; 16]);
-        let cordoned = krabka_protocol::primitives::uuid::Uuid([9; 16]);
+        let offline = Uuid([7; 16]);
+        let cordoned = Uuid([9; 16]);
         let req = heartbeat_request(3, 41, 47, true, HeartbeatLogDirs {
             offline: vec![offline],
             cordoned: Some(vec![cordoned]),
@@ -810,9 +820,7 @@ mod tests {
     fn heartbeats_carry_cordoned_dirs_once_caught_up_on_a_supporting_version() {
         let (_a, b, paths) = two_log_dirs();
         let ids = LogDirIds::resolve(&paths);
-        let wire = |dir: &std::path::Path| {
-            krabka_protocol::primitives::uuid::Uuid(*ids.id_for(dir).unwrap().as_bytes())
-        };
+        let wire = |dir: &Path| Uuid(*ids.id_for(dir).unwrap().as_bytes());
         let image_at = |level: Option<i16>| {
             let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
             if let Some(lvl) = level {
@@ -825,7 +833,7 @@ mod tests {
             image
         };
         let one = CordonedLogDirs::new(paths.clone(), Some(b.path().display().to_string()));
-        let none = CordonedLogDirs::new(paths.clone(), None);
+        let none = CordonedLogDirs::new(paths, None);
         let cases = [
             ("not caught up", false, Some(30), &one, None),
             (

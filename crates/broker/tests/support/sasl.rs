@@ -1,10 +1,14 @@
 //! Canonical loopback SASL listener fixtures for integration tests.
 
 use {
-    crate::support::heartbeat_config,
-    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    crate::support::{heartbeat_config, listeners},
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer},
+    krabka_protocol::owned::{
+        alter_user_scram_credentials_request::ScramCredentialUpsertion,
+        sasl_authenticate_request::SaslAuthenticateRequest,
+    },
     krabka_security::{ListenerProtocol, SaslMechanism},
-    std::{net::SocketAddr, path::PathBuf},
+    std::{iter, net::SocketAddr, path::PathBuf, sync::Arc},
     tempfile::TempDir,
 };
 
@@ -55,7 +59,7 @@ pub fn scram_upsertion(
     #[builder(into, default)] iterations: ScramIterations,
     #[builder(default = bytes :: Bytes :: from (vec ! [0u8 ; 16]))] salt: bytes::Bytes,
     #[builder(default = bytes :: Bytes :: from (vec ! [0u8 ; 64]))] salted_password: bytes::Bytes,
-) -> krabka_protocol::owned::alter_user_scram_credentials_request::ScramCredentialUpsertion {
+) -> ScramCredentialUpsertion {
     let setup = ScramUpsertionSetup {
         name,
         mechanism,
@@ -63,7 +67,7 @@ pub fn scram_upsertion(
         salt,
         salted_password,
     };
-    krabka_protocol::owned::alter_user_scram_credentials_request::ScramCredentialUpsertion {
+    ScramCredentialUpsertion {
         name: setup.name,
         mechanism: setup.mechanism.wire_code(),
         iterations: setup.iterations.0,
@@ -77,11 +81,11 @@ pub fn scram_upsertion(
 /// Mechanisms, credentials and authorization remain explicit at the call site.
 pub fn sasl_plaintext_config(log_dir: PathBuf) -> BrokerConfig {
     let mut cfg = BrokerConfig::for_tests(log_dir);
-    cfg.listeners = vec![crate::support::listeners::loopback_listener(
+    cfg.listeners = vec![listeners::loopback_listener(
         "SASL_PLAINTEXT",
         ListenerProtocol::SaslPlaintext,
     )];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_owned();
     cfg
 }
 
@@ -118,9 +122,9 @@ pub fn sasl_plaintext_with_users(
     let mut cfg = sasl_plaintext_mechanisms(log_dir, vec![SaslMechanism::Plain]);
     cfg.plain_credentials = users
         .iter()
-        .map(|(name, pass)| ((*name).to_string(), (*pass).to_string()))
+        .map(|(name, pass)| ((*name).to_owned(), (*pass).to_owned()))
         .collect();
-    cfg.super_users = std::iter::once(super_user.to_string()).collect();
+    cfg.super_users = iter::once(super_user.to_owned()).collect();
     cfg
 }
 
@@ -138,7 +142,7 @@ pub async fn start_broker(
 pub fn start_single_broker_sasl_plaintext_with_users(
     super_user: &str,
     users: &[(&str, &str)],
-) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
+) -> impl Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     start_configured_users(super_user, users, |_| {})
 }
 
@@ -146,17 +150,16 @@ pub fn start_single_broker_sasl_plaintext_with_users(
 pub fn start_sasl_plaintext_with_acl_users(
     super_user: &str,
     users: &[(&str, &str)],
-) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
+) -> impl Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     start_configured_users(super_user, users, |config| {
-        config.authorizer =
-            std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-                config
-                    .super_users
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once("ANONYMOUS".to_string()))
-                    .collect(),
-            ));
+        config.authorizer = Arc::new(SimpleAclAuthorizer::new(
+            config
+                .super_users
+                .iter()
+                .cloned()
+                .chain(iter::once("ANONYMOUS".to_owned()))
+                .collect(),
+        ));
     })
 }
 
@@ -221,7 +224,7 @@ pub async fn provision_scram(
 /// Panics if the temporary directory or broker cannot be created.
 pub fn start_plaintext_configured(
     customize: impl FnOnce(&mut BrokerConfig),
-) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
+) -> impl Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let log_dir = tempfile::tempdir().unwrap();
     let mut cfg = heartbeat_config(log_dir.path());
     customize(&mut cfg);
@@ -238,7 +241,7 @@ fn start_configured_users(
     super_user: &str,
     users: &[(&str, &str)],
     configure: impl FnOnce(&mut BrokerConfig),
-) -> impl std::future::Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
+) -> impl Future<Output = (BrokerHandle, TempDir, SocketAddr)> {
     let dir = tempfile::tempdir().unwrap();
     let mut config = sasl_plaintext_with_users(dir.path().to_path_buf(), super_user, users);
     config.heartbeat_timeout = krabka_units::secs(30);
@@ -252,7 +255,7 @@ fn start_configured_users(
 /// Panics if the protocol encoder rejects the request.
 pub fn plain_authentication_body(user: &str, password: &[u8]) -> bytes::BytesMut {
     use krabka_protocol::Encode as _;
-    let request = krabka_protocol::owned::sasl_authenticate_request::SaslAuthenticateRequest {
+    let request = SaslAuthenticateRequest {
         auth_bytes: plain_payload(user, password),
         ..Default::default()
     };

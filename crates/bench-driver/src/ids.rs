@@ -1,8 +1,9 @@
 //! Newtypes over the bare integers that the driver and report layers thread
-//! around. A mix-up between two same-typed values becomes a compile error and
-//! not a silently wrong benchmark number. Two such pairs are a message count
-//! against a window length, and a wallclock epoch-ms against a ms-into-run
-//! offset.
+//! around.
+//!
+//! A mix-up between two same-typed values becomes a compile error and not a
+//! silently wrong benchmark number. Two such pairs are a message count against
+//! a window length, and a wallclock epoch-ms against a ms-into-run offset.
 //!
 //! Each type is `#[serde(transparent)]`, so the on-disk `RunOutput` JSON is
 //! byte-identical to the bare primitive it wraps. The report aggregator and
@@ -15,10 +16,12 @@ use {crate::numeric::saturating_u64_to_i64, krabka_units::prelude::*};
 #[derive(Default)]
 pub struct MessageCount(pub u64);
 
-/// Milliseconds **into a run**. This is a time-series sample offset relative to
-/// the start of the measurement window or the wallclock window. It is ordered,
-/// so it can key the per-offset averaging maps. Do not confuse it with
-/// [`WallclockMs`], which is an absolute unix-epoch timestamp.
+/// Milliseconds **into a run**.
+///
+/// This is a time-series sample offset relative to the start of the measurement
+/// window or the wallclock window. It is ordered, so it can key the per-offset
+/// averaging maps. Do not confuse it with [`WallclockMs`], which is an absolute
+/// unix-epoch timestamp.
 ///
 /// This stays an integer and does not become a [`Time`], because it is a
 /// *coordinate* on the fixed sampling grid. The cross-run averaging in
@@ -42,10 +45,11 @@ impl TimeOffsetMs {
     }
 }
 
-/// An **absolute** wallclock timestamp in unix-epoch milliseconds. It is an
-/// `i64` to match `chrono::Utc::now().timestamp_millis()`. It is distinct from
-/// the run-relative [`TimeOffsetMs`], so no one can swap the paired start and
-/// end fields on `RunOutput`.
+/// An **absolute** wallclock timestamp in unix-epoch milliseconds.
+///
+/// It is an `i64` to match `chrono::Utc::now().timestamp_millis()`. It is
+/// distinct from the run-relative [`TimeOffsetMs`], so no one can swap the
+/// paired start and end fields on `RunOutput`.
 #[krabka_macros::scalar_id]
 pub struct WallclockMs(pub i64);
 

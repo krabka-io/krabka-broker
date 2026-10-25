@@ -16,7 +16,8 @@ use {
         },
     },
     crate::coordinator::{
-        persistence::GroupMetadataValue, unified::actor::test_support::rpc::describe,
+        persistence::GroupMetadataValue,
+        unified::actor::{GroupKindTag, test_support::rpc::describe},
     },
     assert2::assert,
 };
@@ -158,7 +159,7 @@ async fn surviving_k6_write_cannot_resurrect_next_gen_ownership() {
     assert!(
         coord
             .find("g")
-            .is_some_and(|h| h.kind == crate::coordinator::unified::actor::GroupKindTag::Classic)
+            .is_some_and(|h| h.kind == GroupKindTag::Classic)
     );
 }
 
@@ -177,7 +178,7 @@ async fn upgraded_group_without_tombstone_replays_as_consumer() {
 
     assert!(coord.group_type("g") != Some(GroupType::Classic));
     let handle = coord.find("g").expect("consumer actor present");
-    assert!(handle.kind == crate::coordinator::unified::actor::GroupKindTag::Consumer);
+    assert!(handle.kind == GroupKindTag::Consumer);
 }
 
 /// PROBLEM B, the facade is not restored: a k5 `MemberMetadataValue` that

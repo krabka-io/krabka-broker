@@ -26,12 +26,14 @@ use {
     },
     krabka_security::{
         AuthMethod, KafkaPrincipal, Principal, SaslMechanism, SecretBytes, compute_token_hmac,
-        scram::hash_scram_password_with_salt,
+        scram::{self, hash_scram_password_with_salt},
     },
+    krabka_verified::delegation_token::{TokenApi, TokenApiAdmission},
     pbkdf2::{
         hmac::{Hmac, KeyInit, Mac},
         sha2::{Digest, Sha256, Sha512},
     },
+    std::str,
 };
 
 krabka_macros::scram_client_proof_fixture!(scram_client_proof);
@@ -98,7 +100,7 @@ impl KafkaScramClient {
     /// with, after `server_first`.
     fn server_final(&self, server_first: &[u8], client_final: &[u8]) -> Vec<u8> {
         let (server_first, salted) = self.salted(server_first);
-        let client_final = std::str::from_utf8(client_final).expect("client-final is UTF-8");
+        let client_final = str::from_utf8(client_final).expect("client-final is UTF-8");
         let (without_proof, _) = client_final.rsplit_once(",p=").expect("client-final proof");
         let auth_message = format!("{},{server_first},{without_proof}", self.client_first_bare);
         let server_key = self.hmac(&salted, b"Server Key");
@@ -109,19 +111,14 @@ impl KafkaScramClient {
     /// `server_first` as text, and the password salted with its `s=` and
     /// `i=`.
     fn salted<'a>(&self, server_first: &'a [u8]) -> (&'a str, Vec<u8>) {
-        let server_first = std::str::from_utf8(server_first).expect("server-first is UTF-8");
+        let server_first = str::from_utf8(server_first).expect("server-first is UTF-8");
         let salt = B64
             .decode(server_first_attribute(server_first, "s="))
             .expect("salt is base64");
         let iterations: u32 = server_first_attribute(server_first, "i=")
             .parse()
             .expect("iterations");
-        let salted = krabka_security::scram::pbkdf2_salted(
-            &self.password,
-            self.mechanism,
-            iterations,
-            &salt,
-        );
+        let salted = scram::pbkdf2_salted(&self.password, self.mechanism, iterations, &salt);
         (server_first, salted)
     }
 
@@ -724,10 +721,7 @@ fn token_round_one_threads_the_token_expiry() {
     assert!(!auth.expired_for_request(0, expiry, None));
     assert!(auth.expired_for_request(0, expiry + 1, None));
     assert!(!auth.expired_for_request(17, expiry + 1, None));
-    assert!(
-        auth.token_api_admission(krabka_verified::delegation_token::TokenApi::Describe)
-            == krabka_verified::delegation_token::TokenApiAdmission::Reject
-    );
+    assert!(auth.token_api_admission(TokenApi::Describe) == TokenApiAdmission::Reject);
 }
 
 /// Kafka authenticates a token that is still in its cache whatever its

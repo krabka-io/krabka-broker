@@ -1,15 +1,20 @@
 //! Reaper attributes retain borrowed futures, ordinary signatures and caller-target logs.
+#![cfg(test)]
 
 use {
     assert2::assert,
     krabka_units::{Time, convert::TimeExt as _},
-    std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+    std::{
+        fmt,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
     },
     tracing::{
         Event, Level, Subscriber,
         field::{Field, Visit},
+        subscriber,
     },
     tracing_subscriber::{
         Layer,
@@ -29,10 +34,10 @@ impl CancellationToken {
 }
 
 mod task_util {
-    use super::CancellationToken;
+    use {super::CancellationToken, tokio::time::Interval};
 
-    pub(crate) async fn run_every<F: Future<Output = ()>>(
-        mut tick: tokio::time::Interval,
+    pub async fn run_every<F: Future<Output = ()>>(
+        mut tick: Interval,
         shutdown: &CancellationToken,
         mut body: impl FnMut() -> F,
     ) {
@@ -52,31 +57,37 @@ struct Sweeps {
 }
 
 mod abort_reaper {
-    use super::{Arc, CancellationToken, Ordering, Sweeps, Time};
+    use {
+        super::{Arc, CancellationToken, Ordering, Sweeps, Time},
+        tokio::task,
+    };
 
     /// The complete operation stays visible and can borrow owned task inputs.
     #[krabka_macros::reaper_task(shutdown_message = "txn idle-transaction reaper shutting down")]
-    pub(super) async fn run(coord: Arc<Sweeps>, interval: Time, shutdown: CancellationToken) {
+    pub async fn run(coord: Arc<Sweeps>, interval: Time, shutdown: CancellationToken) {
         if coord.completed.fetch_add(1, Ordering::SeqCst) == 1 {
             shutdown.cancel();
         } else {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     }
 }
 
 mod id_reaper {
-    use super::{Arc, CancellationToken, Ordering, Sweeps, Time};
+    use {
+        super::{Arc, CancellationToken, Ordering, Sweeps, Time},
+        tokio::task,
+    };
 
     #[krabka_macros::reaper_task(shutdown_message = "transactional-id expiry sweep shutting down")]
-    pub(super) async fn run(
+    pub async fn run(
         coord: Arc<Sweeps>,
         interval: Time,
         expiration: Time,
         shutdown: CancellationToken,
     ) {
         coord.expiry_values.lock().unwrap().push(expiration);
-        tokio::task::yield_now().await;
+        task::yield_now().await;
         coord.completed.fetch_add(1, Ordering::SeqCst);
         shutdown.cancel();
     }
@@ -85,7 +96,7 @@ mod id_reaper {
 struct Message(String);
 
 impl Visit for Message {
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         if field.name() == "message" {
             self.0 = format!("{value:?}");
         }
@@ -129,7 +140,7 @@ async fn both_reapers_delegate_borrowing_bodies_and_log_at_the_original_targets(
     let subscriber = tracing_subscriber::registry().with(ShutdownLog {
         events: Arc::clone(&events),
     });
-    let _guard = tracing::subscriber::set_default(subscriber);
+    let _guard = subscriber::set_default(subscriber);
     let coord = Arc::new(Sweeps::default());
     let interval = Time::from_millis(1);
     is_send(abort_reaper::run(

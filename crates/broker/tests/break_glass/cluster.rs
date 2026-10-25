@@ -9,7 +9,7 @@
 use {
     crate::{
         principals::{APPROVERS, USERS, principal},
-        support::{self, OperatorKeysSetup, client::connect_owned},
+        support::{self, OperatorKeysSetup, client::connect_owned, listeners},
         topics::create_topic,
     },
     assert2::assert,
@@ -19,8 +19,9 @@ use {
     },
     krabka_client_core::Client,
     krabka_security::{ListenerProtocol, SaslMechanism},
-    std::time::Duration,
+    std::{path::Path, time::Duration},
     tempfile::TempDir,
+    tokio::{time, time::Instant},
 };
 
 /// A live broker behind SASL, the operator keys it trusts, and the directory
@@ -28,7 +29,7 @@ use {
 ///
 /// The `TempDir` is held so the log directory and the public key files outlive
 /// the broker, exactly as `guard_cli.rs` holds its own.
-pub(super) struct Cluster {
+pub struct Cluster {
     pub(super) broker: BrokerHandle,
     bootstrap: String,
     keys: Vec<support::OperatorKey>,
@@ -56,13 +57,13 @@ impl Cluster {
     }
 }
 
-pub(super) struct ClusterClients<const N: usize> {
+pub struct ClusterClients<const N: usize> {
     pub(super) cluster: Cluster,
     pub(super) clients: [Client; N],
 }
 
 /// Connect the requested principals in order before creating their shared topic.
-pub(super) async fn client_fixture<const N: usize>(
+pub async fn client_fixture<const N: usize>(
     cluster: Cluster,
     users: [&str; N],
     topic: &str,
@@ -81,7 +82,7 @@ pub(super) async fn client_fixture<const N: usize>(
 }
 
 /// Mint one operator key per approver under `dir`.
-fn mint_keys(dir: &std::path::Path) -> Vec<support::OperatorKey> {
+fn mint_keys(dir: &Path) -> Vec<support::OperatorKey> {
     APPROVERS
         .iter()
         .map(|user| support::mint_operator_key(dir, &format!("{user}-yubi"), &principal(user)))
@@ -93,7 +94,7 @@ fn mint_keys(dir: &std::path::Path) -> Vec<support::OperatorKey> {
 /// `break_glass` keeps its defaults: two required approvals, a thirty-minute
 /// lifetime, and no signed action. Every case that needs one of those changed
 /// says so at its own call site.
-pub(super) async fn boot() -> Cluster {
+pub async fn boot() -> Cluster {
     let dir = TempDir::new().expect("tempdir");
     let keys = mint_keys(dir.path());
     let borrowed: Vec<&support::OperatorKey> = keys.iter().collect();
@@ -123,7 +124,7 @@ pub(super) async fn boot() -> Cluster {
 /// case that needs a signed action rebuilds the same SASL broker here. Keeping
 /// the field at its default in the shared helper is right: a suite that changed
 /// it there would make every other case demand signatures it does not test.
-pub(super) async fn boot_with_signed_actions(actions: &[&str]) -> Cluster {
+pub async fn boot_with_signed_actions(actions: &[&str]) -> Cluster {
     let dir = TempDir::new().expect("tempdir");
     let keys = mint_keys(dir.path());
     let entries: Vec<_> = keys.iter().map(support::OperatorKey::entry).collect();
@@ -132,7 +133,7 @@ pub(super) async fn boot_with_signed_actions(actions: &[&str]) -> Cluster {
     config.operator_keys = OperatorKeys::load(&entries).expect("load the operator trust set");
     config.break_glass.approvers = APPROVERS.iter().copied().map(principal).collect();
     config.break_glass.signed_actions = actions.iter().map(|a| (*a).to_owned()).collect();
-    config.listeners = vec![crate::support::listeners::loopback_listener(
+    config.listeners = vec![listeners::loopback_listener(
         "SASL_PLAINTEXT",
         ListenerProtocol::SaslPlaintext,
     )];
@@ -157,7 +158,7 @@ pub(super) async fn boot_with_signed_actions(actions: &[&str]) -> Cluster {
 // ── multi-node ───────────────────────────────────────────────────────────────
 
 /// A client on a `PLAINTEXT` listener, which authenticates as `User:ANONYMOUS`.
-pub(super) async fn plain_client(bootstrap: &str) -> Client {
+pub async fn plain_client(bootstrap: &str) -> Client {
     connect_owned(bootstrap, "break-glass-test", "client build").await
 }
 
@@ -167,7 +168,7 @@ pub(super) async fn plain_client(bootstrap: &str) -> Client {
 /// wraps [`support::start_n_node_with`] in the same retry: short raft timings
 /// split-vote on a slow runner, and a fresh port set usually wins on the second
 /// attempt.
-pub(super) async fn start_gated_cluster(
+pub async fn start_gated_cluster(
     n: u64,
     background: BackgroundUncleanRecovery,
 ) -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
@@ -186,7 +187,7 @@ pub(super) async fn start_gated_cluster(
 }
 
 /// Where `node` sits in `cluster`.
-pub(super) fn index_of(cluster: &[(BrokerHandle, BrokerConfig, TempDir)], node: NodeId) -> usize {
+pub fn index_of(cluster: &[(BrokerHandle, BrokerConfig, TempDir)], node: NodeId) -> usize {
     cluster
         .iter()
         .position(|(_, config, _)| config.node_id == node)
@@ -194,8 +195,8 @@ pub(super) fn index_of(cluster: &[(BrokerHandle, BrokerConfig, TempDir)], node: 
 }
 
 /// Await a controller leader that is not `gone`.
-pub(super) async fn wait_for_new_leader(handle: &BrokerHandle, gone: NodeId) -> NodeId {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+pub async fn wait_for_new_leader(handle: &BrokerHandle, gone: NodeId) -> NodeId {
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(leader) = handle.controller_leader_id()
             && leader != gone
@@ -203,9 +204,9 @@ pub(super) async fn wait_for_new_leader(handle: &BrokerHandle, gone: NodeId) -> 
             return leader;
         }
         assert!(
-            tokio::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "no controller leader replaced {gone:?} within 30s"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }

@@ -1,6 +1,9 @@
 //! Peer identity and distinct-rack placement for native diskless WAL clusters.
 
-use {crate::support::NodeIndex, krabka_broker::NodeId};
+use {
+    crate::support::NodeIndex,
+    krabka_broker::{NodeId, config::InterBrokerCredentials},
+};
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct WalVoterCount(pub usize);
@@ -64,7 +67,7 @@ pub fn configure_identity(
         voters,
         password,
     };
-    config.inter_broker_credentials = Some(krabka_broker::config::InterBrokerCredentials::Plain {
+    config.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
         username: broker_principal(setup.node),
         password: setup.password.to_owned(),
     });

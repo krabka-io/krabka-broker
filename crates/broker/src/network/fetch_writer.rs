@@ -47,7 +47,9 @@ use {
     },
     bytes::{BufMut, Bytes, BytesMut},
     krabka_protocol::{
-        api_key::ApiKey, owned::fetch_response::FetchResponse, records::RecordsPayload,
+        api_key::ApiKey,
+        owned::fetch_response::FetchResponse,
+        records::{FileRegion, RecordsPayload},
     },
 };
 
@@ -61,10 +63,12 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::body_plan::records_to_serve;
 #[krabka_macros::sendfile_cfg]
 pub use self::resolve::resolve_records_sendfile;
-pub use self::{drain::write_fetch_plan, resolve::resolve_records_inline, sink::SendfileSink};
+pub use self::{
+    body_plan::records_to_serve, drain::write_fetch_plan, resolve::resolve_records_inline,
+    sink::SendfileSink,
+};
 
 /// One ordered segment of the fetch response wire frame.
 #[derive(Debug)]
@@ -86,7 +90,7 @@ pub enum WriteOp {
         target_os = "freebsd",
         target_os = "dragonfly",
     ))]
-    File(krabka_protocol::records::FileRegion),
+    File(FileRegion),
 }
 
 impl WriteOp {

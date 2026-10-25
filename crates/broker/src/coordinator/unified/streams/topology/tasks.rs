@@ -23,10 +23,10 @@ mod tests {
     #[test]
     fn task_set_enumerates_zero_to_n() {
         let mut num_tasks = BTreeMap::new();
-        num_tasks.insert("0".to_string(), 3);
-        num_tasks.insert("1".to_string(), 0);
+        num_tasks.insert("0".to_owned(), 3);
+        num_tasks.insert("1".to_owned(), 0);
         let set = task_set(&num_tasks);
-        assert!(set.get("0").unwrap() == &vec![0, 1, 2]);
-        assert!(set.get("1").unwrap().is_empty());
+        assert!(set["0"] == vec![0, 1, 2]);
+        assert!(set["1"].is_empty());
     }
 }

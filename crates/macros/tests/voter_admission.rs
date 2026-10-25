@@ -1,4 +1,5 @@
 //! Admission answers and failures return before the unchanged voter operation runs.
+#![cfg(test)]
 
 use {assert2::assert, std::cell::RefCell};
 
@@ -27,7 +28,10 @@ mod handlers {
         use {
             super::super::{AdmissionMode, ApiVersion, Broker, BrokerError, Bytes, RequestContext},
             assert2::assert,
-            std::ops::ControlFlow,
+            std::{
+                future::{self, Ready},
+                ops::ControlFlow,
+            },
         };
 
         pub struct Admitted<R> {
@@ -44,13 +48,13 @@ mod handlers {
             api: i16,
             gate: fn() -> bool,
             refusals: Refusal,
-        ) -> std::future::Ready<Result<ControlFlow<Bytes, Admitted<R>>, BrokerError>> {
+        ) -> Ready<Result<ControlFlow<Bytes, Admitted<R>>, BrokerError>> {
             broker.events.borrow_mut().push("admission");
             assert!(version == 2);
             assert!(api == 80);
             assert!(ctx.principal == "admin");
             assert!(gate());
-            std::future::ready(match broker.mode {
+            future::ready(match broker.mode {
                 AdmissionMode::Continue => Ok(ControlFlow::Continue(Admitted {
                     req: R::from(req_bytes[0]),
                     image: 2,

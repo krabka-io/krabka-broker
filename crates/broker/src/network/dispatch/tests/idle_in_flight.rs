@@ -27,7 +27,10 @@ use {
     krabka_protocol::Encode as _,
     krabka_units::{Time, convert::TimeExt as _},
     std::time::Duration,
-    tokio::{net::TcpStream, time::Instant},
+    tokio::{
+        net::TcpStream,
+        time::{self, Instant},
+    },
     tokio_util::codec::Framed,
 };
 
@@ -102,7 +105,7 @@ async fn timeline(measured: Measured) -> Vec<Seen> {
         create_topic(&mut framed, TOPIC).await;
     }
 
-    tokio::time::pause();
+    time::pause();
     let sent_at = Instant::now();
     match measured {
         Measured::Fetch { max_wait } => {
@@ -116,10 +119,10 @@ async fn timeline(measured: Measured) -> Vec<Seen> {
         }
         Measured::Throttled { .. } => send_api_versions(&mut framed, 1).await,
     }
-    let seen = tokio::time::timeout(TIMELINE_BOUND, record(&mut framed, sent_at))
+    let seen = time::timeout(TIMELINE_BOUND, record(&mut framed, sent_at))
         .await
         .expect("the broker must close the connection");
-    tokio::time::resume();
+    time::resume();
 
     drop(framed);
     server.await.expect("serve loop joins");

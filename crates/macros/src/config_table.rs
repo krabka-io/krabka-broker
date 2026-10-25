@@ -5,7 +5,7 @@ use crate::{
     prelude::*,
 };
 
-pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let mode = mode(meta, ["strict", "open"])?;
     let ItemBody { tokens: item, .. } =
         item_body(item, "config_table", TokenTree::is_keyword_struct)?;

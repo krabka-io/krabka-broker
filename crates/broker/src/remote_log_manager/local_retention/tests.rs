@@ -23,10 +23,14 @@ use {
     krabka_ids::PartitionIndex,
     krabka_log::Log,
     krabka_units::{bytes, millis},
+    std::{
+        path::Path,
+        sync::{Arc, PoisonError},
+    },
 };
 
 /// A rolled, tiered partition whose sealed segments expire after one millisecond.
-fn short_retention_partition(log_dir: &std::path::Path) -> std::sync::Arc<Partition> {
+fn short_retention_partition(log_dir: &Path) -> Arc<Partition> {
     rolled_tiered_partition_with_config(log_dir, LogConfig {
         segment_size: bytes(256),
         remote_storage_enable: true,
@@ -925,7 +929,7 @@ async fn the_roll_waits_for_the_high_watermark_and_for_the_walk_to_reach_it(
     let log_end = partition
         .log
         .lock()
-        .expect("partition log mutex poisoned")
+        .unwrap_or_else(PoisonError::into_inner)
         .log_end_offset();
     partition.replica_state.lock().await.hw = if unreplicated { log_end - 1 } else { log_end };
 
@@ -945,7 +949,7 @@ async fn the_roll_waits_for_the_high_watermark_and_for_the_walk_to_reach_it(
     let active_after = partition
         .log
         .lock()
-        .expect("partition log mutex poisoned")
+        .unwrap_or_else(PoisonError::into_inner)
         .active_segment_export()
         .map(|active| active.base_offset);
     check!(removed == exports.len(), "{name}: the copied segments go");

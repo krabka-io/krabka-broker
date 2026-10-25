@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use {
     crate::{share_coordinator::coordinator::ShareCoordinator, txn::coordinator::TxnCoordinator},
     krabka_metadata::MetadataImage,
-    std::sync::Arc,
+    std::{future, sync::Arc},
     tokio::{sync::watch, task::JoinHandle},
     tokio_util::sync::CancellationToken,
 };
 
-pub(crate) struct CoordinatorDriver {
+pub struct CoordinatorDriver {
     ready: watch::Receiver<Option<Arc<MetadataImage>>>,
     txn: Option<Arc<TxnCoordinator>>,
     share: Option<Arc<ShareCoordinator>>,
@@ -76,7 +76,7 @@ impl CoordinatorDriver {
                 () = async {
                     match &self.share {
                         Some(share) => share.recovery_requested().await,
-                        None => std::future::pending().await,
+                        None => future::pending().await,
                     }
                 }, if image.is_some() => {
                     // Only the last reconciled image is safe for recovery.

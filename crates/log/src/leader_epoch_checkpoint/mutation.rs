@@ -173,10 +173,18 @@ fn truncate_start_of(entries: &mut Vec<EpochEntry>, start_offset: Offset) -> boo
         .iter()
         .take_while(|entry| entry.start_offset <= start_offset)
         .count();
-    let Some(newest_removed) = removed.checked_sub(1).map(|index| entries[index].epoch) else {
+    let Some(newest_removed) = removed
+        .checked_sub(1)
+        .and_then(|index| entries.get(index))
+        .map(|entry| entry.epoch)
+    else {
         return false;
     };
-    if removed == 1 && entries[0].start_offset == start_offset {
+    if removed == 1
+        && entries
+            .first()
+            .is_some_and(|entry| entry.start_offset == start_offset)
+    {
         // The one entry at the new start is put back unchanged.
         return false;
     }
@@ -198,6 +206,7 @@ mod tests {
             },
             test_support::TempPath,
         },
+        std::fs,
     };
 
     #[test]
@@ -231,12 +240,12 @@ mod tests {
             dir: _d,
             checkpoint: mut c,
         } = checkpoint(&[entry(0, 0), entry(5, 100)]);
-        let before = std::fs::read(&c.path).unwrap();
+        let before = fs::read(&c.path).unwrap();
 
         let error = c.append(LeaderEpoch(epoch), Offset(offset)).unwrap_err();
         assert2::assert!(matches!(error, LogError::InvalidArgument(_)));
 
-        assert2::assert!(std::fs::read(&c.path).unwrap() == before);
+        assert2::assert!(fs::read(&c.path).unwrap() == before);
         assert2::assert!(c.entries() == &[entry(0, 0), entry(5, 100)]);
     }
 

@@ -27,8 +27,6 @@ impl Message {
     /// Returns `NegativeLength` if the `key` or `value` length is negative and is not -1.
     /// Returns `Truncated` if the `key` or `value` bytes stop early.
     /// Returns `Malformed` if bytes remain after the value.
-    /// # Panics
-    /// Panics if a nonnegative `i32` length does not fit in a `usize`. This cannot occur on any target Krabka builds for.
     pub fn decode_from<B: Buf>(buf: &mut B, frame_size: usize) -> Result<Self, LegacyRecordsError> {
         if buf.remaining() < frame_size {
             return Err(LegacyRecordsError::Truncated {
@@ -43,8 +41,13 @@ impl Message {
         let mut frame = vec![0u8; frame_size];
         buf.copy_to_slice(&mut frame);
 
-        let expected_crc = u32::from_be_bytes(frame[0..4].try_into().unwrap());
-        let computed = crc32fast::hash(&frame[4..]);
+        let Some((&crc_bytes, body)) = frame.split_first_chunk::<4>() else {
+            return Err(LegacyRecordsError::Malformed(format!(
+                "message frame {frame_size} bytes < 6 minimum"
+            )));
+        };
+        let expected_crc = u32::from_be_bytes(crc_bytes);
+        let computed = crc32fast::hash(body);
         if expected_crc != computed {
             return Err(LegacyRecordsError::CrcMismatch {
                 expected: expected_crc,
@@ -52,7 +55,7 @@ impl Message {
             });
         }
 
-        let mut cur = &frame[4..];
+        let mut cur = body;
         let magic = Magic::from_i8(cur.get_i8())?;
         let attributes = cur.get_i8();
         let timestamp = match magic {
@@ -94,20 +97,18 @@ fn get_nullable_bytes(
         });
     }
     let len = buf.get_i32();
-    if len < 0 {
-        if len == -1 {
-            return Ok(None);
-        }
-        return Err(LegacyRecordsError::NegativeLength { label, len });
-    }
-    let n = usize::try_from(len).expect("nonnegative i32 fits usize");
-    if buf.remaining() < n {
+    let n = match usize::try_from(len) {
+        Ok(n) => n,
+        Err(_) if len == -1 => return Ok(None),
+        Err(_) => return Err(LegacyRecordsError::NegativeLength { label, len }),
+    };
+    let Some((data, rest)) = buf.split_at_checked(n) else {
         return Err(LegacyRecordsError::Truncated {
             needed: n - buf.remaining(),
         });
-    }
-    let data = Bytes::copy_from_slice(&buf[..n]);
-    buf.advance(n);
+    };
+    let data = Bytes::copy_from_slice(data);
+    *buf = rest;
     Ok(Some(data))
 }
 

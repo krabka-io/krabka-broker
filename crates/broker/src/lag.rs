@@ -53,7 +53,10 @@ use {
         collections::{BTreeMap, HashMap, HashSet},
         sync::{Arc, atomic::Ordering},
     },
-    tokio::sync::oneshot,
+    tokio::{
+        sync::{mpsc::Sender, oneshot},
+        time::{self, MissedTickBehavior},
+    },
     tokio_util::sync::CancellationToken,
 };
 
@@ -79,7 +82,7 @@ struct WatermarkProbe<'a> {
 /// led partitions and asks each group's actor for its committed offsets, and
 /// half a minute keeps that off the data path's back while still catching a
 /// stalled follower well inside a scrape window.
-pub(crate) const LAG_POLL_INTERVAL: Time = secs(30);
+pub const LAG_POLL_INTERVAL: Time = secs(30);
 
 /// How long one pass waits for any single answer it does not compute itself:
 /// one group actor's round trip, or one remote leader's watermark probe.
@@ -89,11 +92,11 @@ pub(crate) const LAG_POLL_INTERVAL: Time = secs(30);
 /// has not arrived well inside [`LAG_POLL_INTERVAL`] costs its own series this
 /// pass and the pass carries on with the rest, which is the same rule the
 /// samplers already follow for a watermark they cannot read.
-pub(crate) const SAMPLE_WAIT: Time = secs(5);
+pub const SAMPLE_WAIT: Time = secs(5);
 
 /// The periodic sampler behind `replica_lag_records`,
 /// `replica_lag_max_records` and `consumer_group_lag_records`.
-pub(crate) struct LagPoller {
+pub struct LagPoller {
     pub node_id: NodeId,
     pub coordinator: Arc<GroupCoordinator>,
     pub metadata: Arc<dyn MetadataSource>,
@@ -119,8 +122,8 @@ impl LagPoller {
     /// worse than a missing one for the alert an operator writes on it.
     pub(crate) fn spawn(self) {
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(self.period.to_std());
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut interval = time::interval(self.period.to_std());
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
                     () = self.shutdown.cancelled() => break,
@@ -306,7 +309,7 @@ impl LagPoller {
             connection.close();
             Ok(probed_high_watermarks(&response, &names))
         };
-        tokio::time::timeout(SAMPLE_WAIT.to_std(), exchange)
+        time::timeout(SAMPLE_WAIT.to_std(), exchange)
             .await
             .map_err(|_| format!("watermark probe to broker {leader} timed out"))?
     }
@@ -482,7 +485,7 @@ fn coordinates_group(image: &MetadataImage, node_id: NodeId, group_id: &str) -> 
 /// to have kept, so reporting lag from it is the honest reading of where the
 /// group stands.
 async fn committed_offsets(
-    actor: &tokio::sync::mpsc::Sender<GroupActorMessage>,
+    actor: &Sender<GroupActorMessage>,
 ) -> HashMap<TopicPartition, OffsetEntry> {
     let (reply, response) = oneshot::channel();
     let exchange = async {
@@ -492,7 +495,7 @@ async fn committed_offsets(
             .ok()?;
         response.await.ok()
     };
-    let Ok(offsets) = tokio::time::timeout(SAMPLE_WAIT.to_std(), exchange).await else {
+    let Ok(offsets) = time::timeout(SAMPLE_WAIT.to_std(), exchange).await else {
         tracing::debug!("a group actor did not answer the lag sampler in time");
         return HashMap::new();
     };
@@ -522,7 +525,7 @@ async fn committed_offsets(
 /// series, and the gauge falls to the real lag on the follower's first fetch.
 /// A partition the image no longer names is skipped: there is no assignment
 /// left to justify a series.
-pub(crate) async fn replica_lag_samples(
+pub async fn replica_lag_samples(
     partitions: &PartitionRegistry,
     node_id: NodeId,
     image: &MetadataImage,
@@ -537,16 +540,22 @@ pub(crate) async fn replica_lag_samples(
             continue;
         };
         let leader_log_end = partition.log_end_offset().0;
-        let state = partition.replica_state.lock().await;
-        for follower in record
-            .replicas
-            .iter()
-            .filter(|replica| **replica != node_id)
-        {
-            let follower_leo = state
-                .per_follower
-                .get(follower)
-                .map_or(0, |stats| stats.leo.0);
+        let follower_leos: Vec<(NodeId, i64)> = {
+            let state = partition.replica_state.lock().await;
+            record
+                .replicas
+                .iter()
+                .filter(|replica| **replica != node_id)
+                .map(|follower| {
+                    let leo = state
+                        .per_follower
+                        .get(follower)
+                        .map_or(0, |stats| stats.leo.0);
+                    (*follower, leo)
+                })
+                .collect()
+        };
+        for (follower, follower_leo) in follower_leos {
             samples.insert(
                 ReplicaLagLabel {
                     topic: partition.topic.clone(),

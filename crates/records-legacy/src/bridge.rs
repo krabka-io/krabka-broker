@@ -202,9 +202,7 @@ pub fn legacy_to_v2_with_policy(
 }
 
 impl From<RecordsError> for LegacyRecordsError {
-    fn from(e: RecordsError) -> Self {
-        LegacyRecordsError::Malformed(format!("v2 records error: {e}"))
-    }
+    fn from(e: RecordsError) -> Self { Self::Malformed(format!("v2 records error: {e}")) }
 }
 
 #[cfg(test)]
@@ -212,10 +210,10 @@ mod tests {
 
     use {
         super::*,
-        crate::{decode_message_set, message::Message},
+        crate::{decode_message_set, message::Message, set::test_support::sample_records_v1_at},
         bytes::Bytes,
         krabka_compression::{CompressionError, RecordDecompressionPolicy},
-        krabka_protocol::records::{Record, RecordBatch},
+        krabka_protocol::records::{Record, RecordBatch, RecordHeader},
         krabka_units::{bytes, fraction},
     };
 
@@ -396,8 +394,8 @@ mod tests {
     #[test]
     fn headers_are_dropped_on_down_conversion() {
         let mut v2 = v2_batch(CompressionType::None);
-        v2.records[0].headers = vec![krabka_protocol::records::RecordHeader {
-            key: "x".to_string(),
+        v2.records[0].headers = vec![RecordHeader {
+            key: "x".to_owned(),
             value: Some(Bytes::from_static(b"y")),
         }];
         let legacy_bytes = v2_to_legacy(&v2, Magic::V1).unwrap();
@@ -405,11 +403,7 @@ mod tests {
         let recs = decode_message_set(&mut cur, legacy_bytes.len()).unwrap();
         // No structural representation of headers in v0/v1.
         assert2::assert!(
-            recs == crate::set::test_support::sample_records_v1_at(1000, [
-                1_700_000_000,
-                1_700_000_100,
-                1_700_000_500
-            ])
+            recs == sample_records_v1_at(1000, [1_700_000_000, 1_700_000_100, 1_700_000_500])
         );
     }
 

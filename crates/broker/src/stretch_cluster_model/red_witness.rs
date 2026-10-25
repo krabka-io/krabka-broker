@@ -40,14 +40,16 @@ fn legacy_elect(
         .collect();
     if record.leader == dead {
         // BUG: no witness filter on the leader pick.
-        return match alive_isr.first().copied() {
-            Some(leader) => FailoverDecision::Elect {
-                leader,
-                isr: alive_isr,
-                unclean: false,
-            },
-            None => FailoverDecision::Unavailable,
-        };
+        return alive_isr
+            .first()
+            .copied()
+            .map_or(FailoverDecision::Unavailable, |leader| {
+                FailoverDecision::Elect {
+                    leader,
+                    isr: alive_isr,
+                    unclean: false,
+                }
+            });
     }
     if alive_isr.len() < record.isr.len() {
         return FailoverDecision::ShrinkIsr { isr: alive_isr };

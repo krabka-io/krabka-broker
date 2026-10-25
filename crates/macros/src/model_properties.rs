@@ -60,7 +60,7 @@ fn declaration(input: &TokenStream) -> Result<PropertyDeclaration, ParseError> {
     Ok(PropertyDeclaration { state, properties })
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let PropertyDeclaration { state, properties } = declaration(&input.clone().into())?;
     let oracles = native_braced_bodies(input);
     if properties.len() != oracles.len() {
@@ -76,7 +76,12 @@ pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, Pars
             kind,
             label,
             binding,
-        } = properties.next().expect("validated native oracle count");
+        } = properties.next().ok_or_else(|| {
+            ParseError::new(
+                state.span(),
+                "each property needs its own native oracle block",
+            )
+        })?;
         let mut arguments: NativeTokenStream =
             moxy::template! { {{ label }}, |_, {{ binding }}: &{{ state }}| }.into();
         arguments.extend([TokenTree::Group(oracle)]);

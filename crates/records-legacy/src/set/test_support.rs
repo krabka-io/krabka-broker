@@ -10,7 +10,7 @@ pub(super) fn sample_records_v1() -> Vec<ParsedRecord> {
     sample_records_v1_at(100, [1_700_000_000, 1_700_000_010, 1_700_000_020])
 }
 
-pub(crate) fn sample_records_v1_at(base: i64, timestamps: [i64; 3]) -> Vec<ParsedRecord> {
+pub fn sample_records_v1_at(base: i64, timestamps: [i64; 3]) -> Vec<ParsedRecord> {
     [
         (0, Some(b"a"), b"1"),
         (1, Some(b"b"), b"2"),
@@ -27,7 +27,7 @@ pub(crate) fn sample_records_v1_at(base: i64, timestamps: [i64; 3]) -> Vec<Parse
     .collect()
 }
 
-pub(crate) fn decode_bytes(wire: &[u8]) -> Vec<ParsedRecord> {
+pub fn decode_bytes(wire: &[u8]) -> Vec<ParsedRecord> {
     let mut cursor = wire;
     super::decode_message_set(&mut cursor, wire.len()).unwrap()
 }

@@ -48,8 +48,12 @@ const UNKNOWN_NAME: &str = "no-such-topic";
 /// The highest `Fetch` version that the broker serves.
 const MAX_VERSION: i16 = krabka_protocol::owned::fetch_request::MAX_VERSION;
 
-use crate::handlers::test_support::{
-    TopicCaseOutcome, TopicRef, TopicResolutionCase as Case, unauthorized_topic_cases,
+use {
+    crate::handlers::test_support::{
+        TopicCaseOutcome, TopicRef, TopicResolutionCase as Case, unauthorized_topic_cases,
+    },
+    std::time::Duration,
+    tokio::time,
 };
 
 type Outcome = TopicCaseOutcome<FetchResponse>;
@@ -232,7 +236,7 @@ async fn every_unresolved_id_keeps_its_own_topic_row() {
         topic_id,
         partitions: vec![refused_partition(
             krabka_ids::PartitionIndex(0),
-            crate::test_support::KafkaErrorCode(codes::UNKNOWN_TOPIC_ID),
+            KafkaErrorCode(codes::UNKNOWN_TOPIC_ID),
         )],
         ..Default::default()
     };
@@ -286,7 +290,7 @@ async fn a_fetch_session_repeats_unknown_topic_id() {
             topic_id: UNKNOWN_ID,
             partitions: vec![refused_partition(
                 krabka_ids::PartitionIndex(0),
-                crate::test_support::KafkaErrorCode(codes::UNKNOWN_TOPIC_ID),
+                KafkaErrorCode(codes::UNKNOWN_TOPIC_ID),
             )],
             ..Default::default()
         }],
@@ -327,13 +331,13 @@ async fn a_partition_the_metadata_holds_and_this_broker_does_not_host_is_not_lea
         .leader_epoch(4)
         .call()
         .await;
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    time::timeout(Duration::from_secs(10), async {
         while broker
             .controller_image_for_test()
             .partition("moved", UNHOSTED)
             .is_none()
         {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -396,7 +400,7 @@ async fn a_partition_the_metadata_holds_and_this_broker_does_not_host_is_not_lea
                 hosted_elsewhere,
                 refused_partition(
                     krabka_ids::PartitionIndex(ABSENT),
-                    crate::test_support::KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
+                    KafkaErrorCode(codes::UNKNOWN_TOPIC_OR_PARTITION),
                 ),
             ],
             ..Default::default()

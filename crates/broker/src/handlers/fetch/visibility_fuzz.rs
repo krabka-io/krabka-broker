@@ -24,7 +24,7 @@ proptest! {
     ) {
         let mut v = [a, b, c, d];
         v.sort_unstable();
-        let (log_start, lso, hw, log_end) = (v[0], v[1], v[2], v[3]);
+        let [log_start, lso, hw, log_end] = v;
         // KFC-1: `plan_read` clamps the delivery watermark into the range
         // the log still holds, so the kernel sees `log_start <= d <= hw`.
         let deliverable = deliverable_raw.clamp(log_start, hw);

@@ -68,14 +68,19 @@ use {
         write_share_group_state_response::WriteShareGroupStateResponse,
     },
     krabka_security::ListenerProtocol,
-    std::{sync::Arc, time::Duration},
+    std::{
+        fmt::{self, Debug, Formatter},
+        sync::Arc,
+        time::Duration,
+    },
+    tokio::time::{Instant, sleep},
 };
 
 /// Group-coordinator-side client for the share-state persister. `Broker::start`
 /// constructs it after both the [`ShareCoordinator`] and the
 /// `GroupCoordinator` exist, and hands it to the `GroupCoordinator` so its
 /// per-group share actors can drive Initialize and Delete lifecycle calls.
-pub(crate) struct SharePersister {
+pub struct SharePersister {
     node_id: NodeId,
     share_coordinator: Arc<ShareCoordinator>,
     controller: Arc<dyn MetadataSource>,
@@ -86,8 +91,8 @@ pub(crate) struct SharePersister {
     inter_broker_listener_name: String,
 }
 
-impl std::fmt::Debug for SharePersister {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for SharePersister {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("SharePersister")
             .field("node_id", &self.node_id)
             .finish_non_exhaustive()
@@ -303,7 +308,7 @@ impl SharePersister {
             self.auto_topic_creation.request(bootstrap::TOPIC);
         }
 
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let image = self.controller.current_image();
             drop(
@@ -315,16 +320,16 @@ impl SharePersister {
             match image.partition(bootstrap::TOPIC, state_partition.get()) {
                 Some(metadata) if metadata.leader != self.node_id => return Ok(()),
                 Some(_) if status == Some(LoadStatus::Active) => return Ok(()),
-                Some(_) if status.is_some() && tokio::time::Instant::now() >= deadline => {
+                Some(_) if status.is_some() && Instant::now() >= deadline => {
                     return Ok(());
                 }
-                _ if tokio::time::Instant::now() >= deadline => {
+                _ if Instant::now() >= deadline => {
                     return Err(BrokerError::Share(format!(
                         "timed out waiting for {}-{state_partition} to materialize locally",
                         bootstrap::TOPIC
                     )));
                 }
-                _ => tokio::time::sleep(Duration::from_millis(10)).await,
+                _ => sleep(Duration::from_millis(10)).await,
             }
         }
     }

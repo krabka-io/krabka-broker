@@ -27,7 +27,10 @@ use {
     krabka_protocol::owned::{
         create_topics_request::{self},
         init_producer_id_request::InitProducerIdRequest,
+        init_producer_id_response,
     },
+    std::time::Duration,
+    tokio::time,
 };
 
 const TOPIC: &str = "orders";
@@ -70,22 +73,22 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
         .wait_for_image(|img| (0..PARTITIONS).all(|p| img.partition(TOPIC, p).is_some()))
         .await;
     for partition in 0..PARTITIONS {
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        time::timeout(Duration::from_secs(10), async {
             while broker
                 .partitions
                 .get(TOPIC, PartitionIndex(partition))
                 .is_none()
             {
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                time::sleep(Duration::from_millis(25)).await;
             }
         })
         .await
         .expect("topic partition becomes local");
     }
 
-    let init_version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+    let init_version = init_producer_id_response::MAX_VERSION;
     let init = InitProducerIdRequest {
-        transactional_id: Some(TXN_ID.to_string()),
+        transactional_id: Some(TXN_ID.to_owned()),
         transaction_timeout_ms: 60_000,
         producer_id: -1,
         producer_epoch: -1,
@@ -104,11 +107,11 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
 
     let version = 12;
     let request = ProduceRequest {
-        transactional_id: Some(TXN_ID.to_string()),
+        transactional_id: Some(TXN_ID.to_owned()),
         acks: 1,
         timeout_ms: 5_000,
         topic_data: vec![TopicProduceData {
-            name: TOPIC.to_string(),
+            name: TOPIC.to_owned(),
             partition_data: (0..PARTITIONS)
                 .map(|index| PartitionProduceData {
                     index,
@@ -164,7 +167,7 @@ async fn a_produce_that_starts_a_transaction_on_many_partitions_makes_one_coordi
     let enlisted = entry.lock().await.partitions.clone();
     let expected: Vec<TopicPartition> = (0..PARTITIONS)
         .map(|partition| TopicPartition {
-            topic: TOPIC.to_string(),
+            topic: TOPIC.to_owned(),
             partition: PartitionIndex(partition),
         })
         .collect();

@@ -9,6 +9,7 @@ use {
         BreakGlassAction, BrokerRegistrationRecord, PartitionOffsetAdvanceRecord, PatternType,
     },
     krabka_security::KafkaPrincipal,
+    std::{collections::BTreeMap, iter, slice},
     uuid::Uuid,
 };
 
@@ -75,7 +76,7 @@ fn token_tail_refuses_even_an_applied_retry_or_missing_delete() {
             image: &image,
             uncommitted_tail: false,
         }
-        .delegation_token_mutations(std::slice::from_ref(&mutation), 200)
+        .delegation_token_mutations(slice::from_ref(&mutation), 200)
         .unwrap();
         assert!(idle.is_empty());
         let busy = MutationAdmission {
@@ -208,7 +209,7 @@ fn registration(id: u64) -> MetadataRecord {
         rack: None,
         endpoints: vec![],
         log_dirs: vec![],
-        features: std::collections::BTreeMap::new(),
+        features: BTreeMap::new(),
     })
 }
 
@@ -221,7 +222,7 @@ fn preparation_stamps_each_registration_at_its_replay_offset() {
         image.overlay(),
         Offset(42),
         3,
-        &std::iter::empty(),
+        &iter::empty(),
     )
     .unwrap();
     assert!(prepared.registration_nodes == vec![NodeId(7), NodeId(8)]);

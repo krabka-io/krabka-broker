@@ -30,7 +30,7 @@ use {
         },
         snapshot_install_decision,
     },
-    std::sync::Arc,
+    std::{cmp::Ordering, sync::Arc},
 };
 
 /// Whether a Fetch answer that the leader fence refused still sends this
@@ -92,9 +92,9 @@ pub enum FetchBatchDisposition {
 
 pub fn classify_fetch_batch(at: Offset, log_end: Offset) -> FetchBatchDisposition {
     match at.cmp(&log_end) {
-        std::cmp::Ordering::Less => FetchBatchDisposition::AlreadyPresent,
-        std::cmp::Ordering::Equal => FetchBatchDisposition::Append,
-        std::cmp::Ordering::Greater => FetchBatchDisposition::Gap,
+        Ordering::Less => FetchBatchDisposition::AlreadyPresent,
+        Ordering::Equal => FetchBatchDisposition::Append,
+        Ordering::Greater => FetchBatchDisposition::Gap,
     }
 }
 
@@ -110,7 +110,7 @@ pub fn should_start_snapshot_fetch(
 pub fn snapshot_fetch_response_invalid(error_code: i16, from: NodeId, leader_id: NodeId) -> bool {
     !matches!(
         (error_code.cmp(&0), from.cmp(&leader_id)),
-        (std::cmp::Ordering::Equal, std::cmp::Ordering::Equal)
+        (Ordering::Equal, Ordering::Equal)
     )
 }
 
@@ -156,8 +156,8 @@ impl Engine {
             diverging,
             snapshot_id,
             hwm,
-            log_start_offset: _,
             records,
+            ..
         })) = wire::PeerResponse::decode_fetch(body)
         else {
             return;
@@ -441,6 +441,8 @@ impl Engine {
                 "invalid snapshot identity or mandatory metadata downgrade snapshot pending".into(),
             ));
         }
+        let installed_epoch = u32::try_from(epoch)
+            .map_err(|_| RaftError::ChangeRejected("snapshot epoch must be nonnegative".into()))?;
         // Validate the bytes decode before mutating any durable state.
         let contents = SnapshotReader::read(bytes)?;
         if install == SnapshotInstallDecision::Stale {
@@ -479,9 +481,7 @@ impl Engine {
         // checkpoint rewritten at the same boundary would contain.
         self.last_snapshot_timestamp_ms = contents.last_contained_log_timestamp;
         self.last_applied_record_timestamp_ms = contents.last_contained_log_timestamp;
-        self.installed_snapshot_epoch = Some(
-            u32::try_from(epoch).expect("snapshot install admission requires a nonnegative epoch"),
-        );
+        self.installed_snapshot_epoch = Some(installed_epoch);
         self.publish_image();
         retain_recent_checkpoints(&self.data_dir);
         Ok(())

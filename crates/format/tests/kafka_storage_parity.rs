@@ -4,14 +4,18 @@
 //! printed. The Kafka behaviour each case pins was observed with
 //! `kafka-storage format` on `apache/kafka:4.3.1`; `docs/format-divergences.md`
 //! lists the places krabka differs on purpose.
+#![cfg(test)]
 
 use {
+    krabka_broker::bootstrap,
     krabka_format::{ClusterId, DirectoryId, FAIL_AFTER_ENV, META_PROPERTIES, MetaProperties},
     krabka_metadata::MetadataRecord,
     std::{
         collections::BTreeSet,
+        fs,
         path::{Path, PathBuf},
         process::{Command, Output},
+        thread,
     },
 };
 
@@ -71,7 +75,7 @@ fn written_directory_id(dir: &Path) -> String {
 
 fn manifest_cluster_id(dir: &Path) -> String {
     let manifest: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(dir.join("bootstrap.json")).expect("manifest"))
+        serde_json::from_slice(&fs::read(dir.join("bootstrap.json")).expect("manifest"))
             .expect("manifest is json");
     manifest["cluster_id"]
         .as_str()
@@ -91,7 +95,7 @@ krabka_macros::directory_tree_fixture!(
     (PathBuf, Vec<u8>),
     { /// Every file under `dir` with its bytes, for an unchanged-on-rerun check.
     },
-    (|_dir: &Path, path: &Path| (path.to_path_buf(), std::fs::read(path).expect("read")))
+    (|_dir: &Path, path: &Path| (path.to_path_buf(), fs::read(path).expect("read")))
 );
 
 /// The id form: whatever `--cluster-id` names, the directory, the manifest,
@@ -232,7 +236,7 @@ fn the_cluster_id_is_written_and_printed_in_kafka_form(scenario: &str) {
 )]
 fn directory_ids_are_written_in_kafka_form(extra: &[&str]) {
     const DIRECTORY_ID: &str = "AAAAAAAAAAAAAAAAAAAAZA";
-    let current = std::thread::current();
+    let current = thread::current();
     let what = current.name().expect("case name");
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join("data");
@@ -248,7 +252,7 @@ fn directory_ids_are_written_in_kafka_form(extra: &[&str]) {
     format_successfully(&args, what);
     // The broker reads back exactly what was written.
     assert2::assert!(
-        krabka_broker::bootstrap::read_meta_properties(&dir).ok()
+        bootstrap::read_meta_properties(&dir).ok()
             == Some(MetaProperties {
                 cluster_id: CLUSTER_ID.parse().expect("cluster id"),
                 node_id: NODE_ID,
@@ -273,7 +277,7 @@ fn formatted(dir: &Path) -> Formatted {
         cluster_id: written_cluster_id(dir),
         has_checkpoint: checkpoint(dir).is_file(),
         has_manifest: dir.join("bootstrap.json").is_file(),
-        bootstrap_records: krabka_broker::bootstrap::load_bootstrap_records(dir)
+        bootstrap_records: bootstrap::load_bootstrap_records(dir)
             .expect("bootstrap records")
             .len(),
     }
@@ -308,7 +312,7 @@ fn standalone_seed_records(root: &Path) -> usize {
     let mut args = vec!["--log-dir", path_str(&probe), "--cluster-id", CLUSTER_ID];
     args.extend_from_slice(STANDALONE);
     assert2::assert!(krabka_format(&args, None).status.success());
-    krabka_broker::bootstrap::load_bootstrap_records(&probe)
+    bootstrap::load_bootstrap_records(&probe)
         .expect("records")
         .len()
 }
@@ -693,7 +697,7 @@ fn an_interrupted_run_can_be_run_again(fault: &str, rerun_exit: i32) {
     }
 
     for dir in [&meta_dir, &data_dir] {
-        let meta = krabka_broker::bootstrap::read_meta_properties(dir)
+        let meta = bootstrap::read_meta_properties(dir)
             .unwrap_or_else(|e| panic!("{fault}: {} does not read: {e}", dir.display()));
         assert2::assert!(
             (meta.cluster_id, meta.node_id)
@@ -719,7 +723,7 @@ fn an_interrupted_run_can_be_run_again(fault: &str, rerun_exit: i32) {
             ],
         "{fault}"
     );
-    let records = krabka_broker::bootstrap::load_bootstrap_records(&meta_dir).expect("records");
+    let records = bootstrap::load_bootstrap_records(&meta_dir).expect("records");
     assert2::assert!(
         records
             .iter()
@@ -786,7 +790,7 @@ fn meta_properties_is_the_file_kafka_writes() {
         (&meta_dir, DIRECTORY_ID.to_owned()),
         (&data_dir, written_directory_id(&data_dir)),
     ] {
-        let text = std::fs::read_to_string(dir.join(META_PROPERTIES)).expect("meta.properties");
+        let text = fs::read_to_string(dir.join(META_PROPERTIES)).expect("meta.properties");
         let mut lines: Vec<&str> = text.split_inclusive('\n').collect();
         let date = lines.get(1).map(|line| line.trim_end_matches('\n'));
         assert2::assert!(
@@ -807,7 +811,7 @@ fn meta_properties_is_the_file_kafka_writes() {
     }
 }
 
-fn format_successfully(args: &[&str], what: &str) -> std::process::Output {
+fn format_successfully(args: &[&str], what: &str) -> Output {
     let out = krabka_format(args, None);
     assert2::assert!(out.status.code() == Some(0), "{what}: {}", stderr(&out));
     out

@@ -23,6 +23,9 @@
 
 use {
     crate::{UnstableFeatureVersions, supported_feature_range},
+    krabka_metadata::metadata_version::{
+        KRAFT_VERSION_FEATURE, METADATA_VERSION_FEATURE, METADATA_VERSION_MIN,
+    },
     krabka_protocol::owned::api_versions_response::{FinalizedFeatureKey, SupportedFeatureKey},
 };
 
@@ -76,10 +79,10 @@ pub fn finalized_feature_keys(image: &krabka_metadata::MetadataImage) -> Vec<Fin
     // (MetadataVersion.MINIMUM_VERSION) and keeps that until a feature delta
     // arrives. An empty Krabka image represents that same startup state.
     levels
-        .entry(krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.to_owned())
-        .or_insert(krabka_metadata::metadata_version::METADATA_VERSION_MIN);
+        .entry(METADATA_VERSION_FEATURE.to_owned())
+        .or_insert(METADATA_VERSION_MIN);
     levels.insert(
-        krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE.to_owned(),
+        KRAFT_VERSION_FEATURE.to_owned(),
         i16::try_from(image.kraft_version()).unwrap_or(i16::MAX),
     );
     levels

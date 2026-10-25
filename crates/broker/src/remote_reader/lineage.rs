@@ -20,7 +20,7 @@ use {
 ///
 /// An epoch whose start offset equals the next epoch's start offset wrote
 /// nothing, so it is dropped. The last epoch is always kept.
-pub(crate) fn filtered_leader_epochs(
+pub fn filtered_leader_epochs(
     leader_epochs: &BTreeMap<LeaderEpoch, LogOffset>,
 ) -> BTreeMap<LeaderEpoch, LogOffset> {
     let mut filtered = BTreeMap::new();
@@ -64,7 +64,7 @@ fn higher_entry(
 ///   `log_end_offset`.
 ///
 /// Kafka throws on an empty segment or lineage map; this answers `false`.
-pub(crate) fn segment_within_leader_epochs(
+pub fn segment_within_leader_epochs(
     segment_epochs: &BTreeMap<LeaderEpoch, LogOffset>,
     segment_end: LogOffset,
     log_end_offset: LogOffset,
@@ -115,7 +115,7 @@ pub(crate) fn segment_within_leader_epochs(
 /// it: the epoch checkpoint, filtered as Kafka filters it, and the log end
 /// offset.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EpochLineage {
+pub struct EpochLineage {
     epochs: BTreeMap<LeaderEpoch, LogOffset>,
     log_end_offset: LogOffset,
 }

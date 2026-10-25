@@ -5,7 +5,11 @@
 
 use {
     crate::schema_md::render_sectioned_field_table,
-    krabka_broker::api_catalog::{ClientMetricsReceiver, ListenerKind},
+    krabka_broker::{
+        api_catalog,
+        api_catalog::{ClientMetricsReceiver, ListenerKind, VersionGates},
+        file_config,
+    },
     std::fmt::Write,
 };
 
@@ -20,7 +24,7 @@ use {
 /// separator. The result is not one dense flat table.
 #[must_use]
 pub fn server_config_md() -> String {
-    let value = krabka_broker::file_config::config_schema();
+    let value = file_config::config_schema();
     let mut out = String::from(
         "Krabka brokers are configured from a TOML file. Each section below maps \
          to a top-level key or `[table]` of that file.\n\n",
@@ -167,10 +171,10 @@ pub fn protocol_apis_md() -> String {
          | API Key | Name | Min Version | Max Version | Spec |\n\
          |---------|------|-------------|-------------|------|\n",
     );
-    let mut apis = krabka_broker::api_catalog::supported_apis(
+    let mut apis = api_catalog::supported_apis(
         ListenerKind::Client,
         ClientMetricsReceiver::Configured,
-        krabka_broker::api_catalog::VersionGates::default(),
+        VersionGates::default(),
     );
     apis.sort_by_key(|a| a.api_key);
     for a in apis {

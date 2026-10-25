@@ -11,9 +11,9 @@ use {
     crate::{
         harness::admin_plain_password,
         support::{
-            ClusterNodeSetup, NodeIndex, broker_config,
+            self, ClusterNodeSetup, NodeIndex, broker_config,
             client::connect_client,
-            controller_voters, init_tracing_with,
+            controller_voters, init_tracing_with, listeners,
             produce::{batch_request, replicated_topic_produce_for},
             records::{batch_from_records, value_record},
             shutdown_cluster,
@@ -23,14 +23,19 @@ use {
     krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::InterBrokerCredentials},
     krabka_protocol::{owned::create_topics_request::CreateTopicsRequest, records::RecordBatch},
     krabka_security::{ListenerProtocol, SaslMechanism},
-    std::net::SocketAddr,
+    rustls::crypto::aws_lc_rs,
+    std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        path::Path,
+    },
     tempfile::TempDir,
+    tokio::net::TcpListener,
 };
 
 /// Ephemeral loopback ports and the open listeners that hold them.
 struct ReservedListeners {
     addrs: Vec<SocketAddr>,
-    listeners: Vec<tokio::net::TcpListener>,
+    listeners: Vec<TcpListener>,
 }
 
 /// Reserve `n` ephemeral loopback ports and keep their listeners open.
@@ -38,7 +43,7 @@ async fn reserve_listeners(n: usize) -> ReservedListeners {
     let mut addrs = Vec::with_capacity(n);
     let mut listeners = Vec::with_capacity(n);
     for _ in 0..n {
-        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
         addrs.push(l.local_addr().unwrap());
         listeners.push(l);
     }
@@ -51,10 +56,8 @@ async fn reserve_listeners(n: usize) -> ReservedListeners {
 /// `listen_addr`. The test clients use it, because they do not speak SASL
 /// yet. The second listener is a `SASL_PLAINTEXT` inter-broker listener.
 /// The replicator and the heartbeat use it against the peer broker.
-const DEFAULT_SASL_ENDPOINTS: [SocketAddr; 1] = [SocketAddr::new(
-    std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
-    0,
-)];
+const DEFAULT_SASL_ENDPOINTS: [SocketAddr; 1] =
+    [SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)];
 
 #[derive(krabka_macros::FieldDefaults)]
 struct SaslNodeSetup<'a> {
@@ -65,7 +68,7 @@ struct SaslNodeSetup<'a> {
 
 #[bon::builder]
 fn sasl_two_listener_config(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     #[builder(default)] cluster: ClusterNodeSetup<'_>,
     #[builder(default = & DEFAULT_SASL_ENDPOINTS)] sasl_addrs: &'_ [SocketAddr],
 ) -> BrokerConfig {
@@ -84,19 +87,15 @@ fn sasl_two_listener_config(
         .mode(setup.cluster.mode)
         .call();
     cfg.listeners = vec![
-        crate::support::listeners::listener("PLAINTEXT", listen, ListenerProtocol::Plaintext),
-        crate::support::listeners::listener(
-            "SASL_PLAINTEXT",
-            sasl,
-            ListenerProtocol::SaslPlaintext,
-        ),
+        listeners::listener("PLAINTEXT", listen, ListenerProtocol::Plaintext),
+        listeners::listener("SASL_PLAINTEXT", sasl, ListenerProtocol::SaslPlaintext),
     ];
-    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_string();
+    cfg.inter_broker_listener_name = "SASL_PLAINTEXT".to_owned();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
-        .insert("broker".to_string(), admin_plain_password());
+        .insert("broker".to_owned(), admin_plain_password());
     cfg.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
-        username: "broker".to_string(),
+        username: "broker".to_owned(),
         password: admin_plain_password(),
     });
     cfg
@@ -109,7 +108,7 @@ fn sasl_two_listener_config(
 /// two-listener config above. It returns `(handle, config, tempdir)`
 /// triples in broker id order.
 async fn start_two_node_sasl() -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
     init_tracing_with("warn");
 
     let ReservedListeners {
@@ -161,15 +160,15 @@ async fn start_two_node_sasl() -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
         .into_iter()
         .zip(sasl_listeners)
         .zip(controller_listeners);
-    let ((plaintext0, sasl0), controller0) = listeners.next().unwrap();
-    let ((plaintext1, sasl1), controller1) = listeners.next().unwrap();
+    let (data0, controller0) = listeners.next().unwrap();
+    let (data1, controller1) = listeners.next().unwrap();
     let cfg0_for_spawn = cfg0.clone();
     let cfg1_for_spawn = cfg1.clone();
     let join0 = tokio::spawn(async move {
-        Broker::start_with_listeners(cfg0_for_spawn, Some(controller0), [plaintext0, sasl0]).await
+        Broker::start_with_listeners(cfg0_for_spawn, Some(controller0), <[_; 2]>::from(data0)).await
     });
     let join1 = tokio::spawn(async move {
-        Broker::start_with_listeners(cfg1_for_spawn, Some(controller1), [plaintext1, sasl1]).await
+        Broker::start_with_listeners(cfg1_for_spawn, Some(controller1), <[_; 2]>::from(data1)).await
     });
     let broker0 = join0.await.expect("join0 spawn").expect("broker0 start");
     let broker1 = join1.await.expect("join1 spawn").expect("broker1 start");
@@ -193,7 +192,7 @@ async fn two_broker_sasl_plaintext_replication() {
     let resp = admin
         .send(CreateTopicsRequest {
             // Node 1, which the produce below goes to, leads the partition.
-            topics: vec![crate::support::topic_on("sasl-repl", &[&[1, 2]])],
+            topics: vec![support::topic_on("sasl-repl", &[&[1, 2]])],
             timeout_ms: 5_000,
             ..Default::default()
         })

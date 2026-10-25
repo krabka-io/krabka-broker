@@ -7,6 +7,7 @@
 
 use {
     clap::{Parser, Subcommand},
+    krabka_docgen::emit,
     std::path::PathBuf,
 };
 
@@ -38,14 +39,13 @@ enum Command {
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::All { out } => {
-            krabka_docgen::emit::write_reference_tree(&out)?;
+            emit::write_reference_tree(&out)?;
             eprintln!("wrote reference tree to {}", out.display());
-            Ok(())
         }
         Command::Snippets { content, crates } => {
             let changed = krabka_docgen::sync_snippets(&content, &crates)?;
             eprintln!("synced snippets in {changed} file(s)");
-            Ok(())
         }
     }
+    Ok(())
 }

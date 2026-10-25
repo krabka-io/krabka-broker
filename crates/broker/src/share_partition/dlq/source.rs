@@ -21,7 +21,10 @@ use {
     krabka_protocol::records::RecordBatch,
     krabka_remote_storage::TopicIdPartition,
     krabka_units::{ByteSize, convert::ByteSizeExt as _, mebibytes},
-    std::{collections::BTreeMap, sync::Arc},
+    std::{
+        collections::BTreeMap,
+        sync::{Arc, PoisonError},
+    },
 };
 
 /// The most bytes of one log read. Most dead-letter ranges are one record, so
@@ -146,7 +149,7 @@ async fn read_raw(
     let local_start = partition
         .log
         .lock()
-        .expect("log mutex poisoned")
+        .unwrap_or_else(PoisonError::into_inner)
         .local_log_start_offset();
     if partition.diskless
         && let Some(tier) = tier
@@ -186,9 +189,9 @@ async fn read_raw(
             }
         };
     }
-    let log = partition.log.clone();
+    let log = Arc::clone(&partition.log);
     let read = spawn_blocking(move || {
-        let log = log.lock().expect("log mutex poisoned");
+        let log = log.lock().unwrap_or_else(PoisonError::into_inner);
         log.read_raw(Offset(first), Offset(last.saturating_add(1)), MAX_FETCH)
     })
     .await;
@@ -252,10 +255,11 @@ mod tests {
         super::*,
         crate::{
             partition_registry::PartitionRegistry,
-            share_partition::manager::test_support::open_data_partition,
+            share_partition::manager::test_support::open_data_partition, test_support::UnixMillis,
         },
         assert2::assert,
         bytes::Bytes,
+        krabka_protocol::records::Record,
     };
 
     #[tokio::test]
@@ -350,15 +354,15 @@ mod tests {
             .log_dir(dir.path())
             .batches(vec![
                 crate::share_partition::manager::test_support::TimedValues {
-                    timestamp: crate::test_support::UnixMillis(1_000),
+                    timestamp: UnixMillis(1_000),
                     values: &[b"a", b"b"],
                 },
                 crate::share_partition::manager::test_support::TimedValues {
-                    timestamp: crate::test_support::UnixMillis(2_000),
+                    timestamp: UnixMillis(2_000),
                     values: &[b"c", b"d"],
                 },
                 crate::share_partition::manager::test_support::TimedValues {
-                    timestamp: crate::test_support::UnixMillis(3_000),
+                    timestamp: UnixMillis(3_000),
                     values: &[b"e"],
                 },
             ])
@@ -404,7 +408,7 @@ mod tests {
         let TestPartition { dir: _dir, part } = partition().await;
         // One record of these is a few bytes of value and overhead.
         let one = RecordBatch {
-            records: vec![krabka_protocol::records::Record {
+            records: vec![Record {
                 value: Some(Bytes::from_static(b"a")),
                 ..Default::default()
             }],

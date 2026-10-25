@@ -35,12 +35,14 @@ use {
         spool_append_decision,
     },
     std::{
-        fs::{File, OpenOptions},
-        io::{Read, Seek, SeekFrom, Write},
+        fmt::Display,
+        fs::{self, File, OpenOptions},
+        io::{ErrorKind, Read, Seek, SeekFrom, Write},
         num::NonZeroU64,
         path::{Path, PathBuf},
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, PoisonError},
     },
+    tracing::field::Empty,
 };
 
 mod codec;
@@ -132,17 +134,24 @@ impl PendingLosses {
     fn open(dir: &Path) -> Result<Arc<Self>, AuditError> {
         let path = dir.join(LOSS_STATE_FILE);
         let state = if path.exists() {
-            let bytes = std::fs::read(&path).map_err(io)?;
+            let bytes = fs::read(&path).map_err(io)?;
             let bytes = strip_file_header(LOSS_STATE_FILE, &bytes)?;
-            if bytes.len() != LOSS_STATE_LEN {
+            // `LOSS_STATE_LEN` bytes: the generation, then exactly eight count bytes.
+            let Some((generation, count)) =
+                bytes
+                    .split_first_chunk::<8>()
+                    .and_then(|(generation, count)| {
+                        Some((*generation, <[u8; 8]>::try_from(count).ok()?))
+                    })
+            else {
                 return Err(AuditError::Io(format!(
                     "invalid audit loss state length {}",
                     bytes.len()
                 )));
-            }
+            };
             AuditLosses {
-                generation: u64::from_be_bytes(bytes[..8].try_into().unwrap()),
-                count: u64::from_be_bytes(bytes[8..].try_into().unwrap()),
+                generation: u64::from_be_bytes(generation),
+                count: u64::from_be_bytes(count),
             }
         } else {
             let state = AuditLosses::default();
@@ -156,10 +165,7 @@ impl PendingLosses {
     }
 
     pub(crate) fn add(&self, count: u64) {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         (state.generation, state.count) = add_loss_state(state.generation, state.count, count);
     }
 
@@ -167,23 +173,15 @@ impl PendingLosses {
     pub(crate) fn count(&self) -> u64 {
         self.state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .count
     }
 
     #[cfg(test)]
-    fn state(&self) -> AuditLosses {
-        *self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
+    fn state(&self) -> AuditLosses { *self.state.lock().unwrap_or_else(PoisonError::into_inner) }
 
     pub(crate) fn snapshot(&self) -> Option<AuditLosses> {
-        let state = *self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = *self.state.lock().unwrap_or_else(PoisonError::into_inner);
         (state.count > 0).then_some(state)
     }
 
@@ -200,14 +198,10 @@ impl PendingLosses {
     }
 
     pub(crate) fn persist(&self) -> Result<(), AuditError> {
-        let state = *self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match &self.path {
-            Some(path) => persist_loss_state(path, state),
-            None => Ok(()),
-        }
+        let state = *self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        self.path
+            .as_ref()
+            .map_or(Ok(()), |path| persist_loss_state(path, state))
     }
 
     pub(crate) fn persist_with<T>(
@@ -246,10 +240,7 @@ impl PendingLosses {
 
     fn update_and_persist(&self, update: impl FnOnce(&mut AuditLosses) -> bool) {
         let state = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             if !update(&mut state) {
                 return;
             }
@@ -279,7 +270,7 @@ fn loss_marker_batch(record: &AuditRecord) -> Option<AuditLosses> {
     })
 }
 
-fn io<E: std::fmt::Display>(e: E) -> AuditError { AuditError::Io(e.to_string()) }
+fn io<E: Display>(e: E) -> AuditError { AuditError::Io(e.to_string()) }
 
 fn persist_loss_state(path: &Path, state: AuditLosses) -> Result<(), AuditError> {
     let mut bytes = [0_u8; LOSS_STATE_LEN];
@@ -289,11 +280,11 @@ fn persist_loss_state(path: &Path, state: AuditLosses) -> Result<(), AuditError>
 }
 
 fn read_or_create_u64(path: &Path, tmp_name: &str) -> Result<u64, AuditError> {
-    match std::fs::read(path) {
+    match fs::read(path) {
         Ok(bytes) => <[u8; 8]>::try_from(strip_file_header(&file_name(path), &bytes)?)
             .map(u64::from_be_bytes)
             .map_err(|_| AuditError::Io(format!("invalid state length for {}", path.display()))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(error) if error.kind() == ErrorKind::NotFound => {
             persist_u64(path, tmp_name, 0)?;
             Ok(0)
         }
@@ -331,7 +322,7 @@ fn persist_bytes(path: &Path, tmp_name: &str, bytes: &[u8]) -> Result<(), AuditE
         .map_err(io)?;
     file.write_all(bytes).map_err(io)?;
     file.sync_all().map_err(io)?;
-    std::fs::rename(tmp, path).map_err(io)?;
+    fs::rename(tmp, path).map_err(io)?;
     sync_parent(path)
 }
 
@@ -362,7 +353,7 @@ impl Spool {
     #[tracing::instrument(
         level = "debug",
         skip_all,
-        fields(dir = %dir.display(), max_size = %max_size.human(), count = tracing::field::Empty, bytes = tracing::field::Empty),
+        fields(dir = %dir.display(), max_size = %max_size.human(), count = Empty, bytes = Empty),
         err
     )]
     /// # Errors
@@ -380,7 +371,7 @@ impl Spool {
     #[tracing::instrument(
         level = "debug",
         skip_all,
-        fields(dir = %dir.display(), max_size = %max_size.human(), sync_every = sync_every.get(), count = tracing::field::Empty, bytes = tracing::field::Empty),
+        fields(dir = %dir.display(), max_size = %max_size.human(), sync_every = sync_every.get(), count = Empty, bytes = Empty),
         err
     )]
     /// # Errors
@@ -391,7 +382,7 @@ impl Spool {
         max_size: ByteSize,
         sync_every: NonZeroU64,
     ) -> Result<Self, AuditError> {
-        std::fs::create_dir_all(dir).map_err(io)?;
+        fs::create_dir_all(dir).map_err(io)?;
         let pending_losses = PendingLosses::open(dir)?;
         let path = dir.join(SPOOL_FILE);
         let replay_offset_path = dir.join(REPLAY_OFFSET_FILE);
@@ -499,7 +490,7 @@ impl Spool {
     pub(crate) fn begin_replay(&self, record: &AuditRecord) -> Result<(), AuditError> {
         let path = self.path.with_file_name(REPLAY_POISON_FILE);
         let mut poison = self.replay_offset.to_be_bytes().to_vec();
-        poison.extend_from_slice(&encode_frame(record));
+        poison.extend_from_slice(&encode_frame(record)?);
         persist_with_header(&path, REPLAY_POISON_TMP, &poison)
     }
 
@@ -520,25 +511,25 @@ impl Spool {
 
     #[cfg(test)]
     fn commit_replay(&mut self, record: &AuditRecord) -> Result<(), AuditError> {
-        self.commit_replay_frame(u64::try_from(encode_frame(record).len()).unwrap_or(u64::MAX))
+        self.commit_replay_frame(u64::try_from(encode_frame(record)?.len()).unwrap_or(u64::MAX))
     }
 
     pub(crate) fn abort_replay(&self) -> Result<(), AuditError> { self.clear_replay_poison() }
 
     fn clear_replay_poison(&self) -> Result<(), AuditError> {
         let path = self.path.with_file_name(REPLAY_POISON_FILE);
-        match std::fs::remove_file(&path) {
+        match fs::remove_file(&path) {
             Ok(()) => sync_parent(&path),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(error) => Err(io(error)),
         }
     }
 
     fn reconcile_replay_poison(&self) -> Result<(), AuditError> {
         let path = self.path.with_file_name(REPLAY_POISON_FILE);
-        let bytes = match std::fs::read(&path) {
+        let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(io(error)),
         };
         let bytes = strip_file_header(REPLAY_POISON_FILE, &bytes)?;
@@ -561,7 +552,7 @@ impl Spool {
     }
 
     fn append_inner(&mut self, record: &AuditRecord) -> Result<bool, AuditError> {
-        let frame = encode_frame(record);
+        let frame = encode_frame(record)?;
         let frame_len = u64::try_from(frame.len()).unwrap_or(u64::MAX);
         let decision = spool_append_decision(
             self.bytes.0,
@@ -601,7 +592,7 @@ impl Spool {
         Ok(())
     }
 
-    fn rollback_append<E: std::fmt::Display>(&mut self, old_len: u64, error: E) -> AuditError {
+    fn rollback_append<E: Display>(&mut self, old_len: u64, error: E) -> AuditError {
         let original = error.to_string();
         let rollback = self
             .file
@@ -625,26 +616,21 @@ impl Spool {
     #[tracing::instrument(
         level = "debug",
         skip_all,
-        fields(records = tracing::field::Empty, valid_bytes = tracing::field::Empty),
+        fields(records = Empty, valid_bytes = Empty),
         err
     )]
     fn scan(&self) -> Result<ScannedSpool, AuditError> {
-        let mut buf = Vec::new();
-        {
-            let mut f = File::open(&self.path).map_err(io)?;
-            f.read_to_end(&mut buf).map_err(io)?;
-        }
+        let buf = fs::read(&self.path).map_err(io)?;
         let mut out = Vec::new();
         let mut frame_lengths = Vec::new();
         let mut cur: &[u8] = strip_file_header(SPOOL_FILE, &buf)?;
         let mut valid_bytes = SpoolBytes(0);
-        while cur.len() >= 4 {
-            let len =
-                usize::try_from(u32::from_be_bytes([cur[0], cur[1], cur[2], cur[3]])).unwrap_or(0);
-            if cur.len() < 4 + len {
+        while let Some((prefix, rest)) = cur.split_first_chunk::<4>() {
+            let len = usize::try_from(u32::from_be_bytes(*prefix)).unwrap_or(0);
+            let Some((frame, tail)) = rest.split_at_checked(len) else {
                 break; // truncated tail frame
-            }
-            match decode_record(&cur[4..4 + len]) {
+            };
+            match decode_record(frame) {
                 Some(rec) => {
                     out.push(rec);
                     let frame_len = u64::try_from(4 + len).unwrap_or(0);
@@ -653,7 +639,7 @@ impl Spool {
                 }
                 None => break, // corrupt frame: stop (visible)
             }
-            cur = &cur[4 + len..];
+            cur = tail;
         }
         let span = tracing::Span::current();
         span.record("records", out.len());
@@ -724,7 +710,10 @@ impl Spool {
             match file.read(&mut prefix) {
                 Ok(0) => break,
                 Ok(read) => {
-                    file.read_exact(&mut prefix[read..]).map_err(io)?;
+                    let unread = prefix.get_mut(read..).ok_or_else(|| {
+                        AuditError::Io("audit spool read past the frame prefix".into())
+                    })?;
+                    file.read_exact(unread).map_err(io)?;
                 }
                 Err(error) => return Err(io(error)),
             }
@@ -781,7 +770,10 @@ impl Spool {
 }
 
 /// [`HEADER_LEN`] as a file offset.
-fn header_len_u64() -> u64 { u64::try_from(HEADER_LEN).expect("a six-byte header fits u64") }
+fn header_len_u64() -> u64 {
+    // A six-byte header always fits; the saturation is never reached.
+    u64::try_from(HEADER_LEN).unwrap_or(u64::MAX)
+}
 
 // cargo-mutants: I/O-only wrapper with no in-process signal (fsyncs directory entry).
 #[cfg(unix)]
@@ -826,12 +818,18 @@ mod tests {
         },
         assert2::check,
         krabka_units::prelude::ByteSize,
+        std::{
+            env,
+            fs::{self, Permissions},
+            path::Path,
+            process::{self, Command, Stdio},
+        },
     };
 
-    fn append_torn_frame(path: &std::path::Path, partial_body: &[u8]) {
+    fn append_torn_frame(path: &Path, partial_body: &[u8]) {
         use std::io::Write;
 
-        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
         file.write_all(&100u32.to_be_bytes()).unwrap();
         file.write_all(partial_body).unwrap();
     }
@@ -1002,7 +1000,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             drop(Spool::open(dir.path(), ByteSize::from_bytes(u64::MAX)).unwrap());
             let record = chained_record(0, &GENESIS_HEAD, &vec![b'x'; 8 * 1_024]);
-            let frame = encode_frame(&record);
+            let frame = encode_frame(&record).unwrap();
             let committed = backlog - REPLAY_BATCH_RECORDS;
             let replay_offset = u64::try_from(committed * frame.len()).unwrap();
 
@@ -1027,7 +1025,7 @@ mod tests {
             let batch = spool.read_replay_batch().unwrap();
             let replay = started.elapsed();
             let replay_bytes: u64 = batch.iter().map(|record| record.frame_len).sum();
-            let peak_kib = std::fs::read_to_string("/proc/self/status")
+            let peak_kib = fs::read_to_string("/proc/self/status")
                 .ok()
                 .and_then(|status| {
                     status.lines().find_map(|line| {
@@ -1080,9 +1078,7 @@ mod tests {
         let mut s = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         s.append(&chained_record(0, &GENESIS_HEAD, b"payload"))
             .unwrap();
-        let on_disk = std::fs::metadata(dir.path().join(SPOOL_FILE))
-            .unwrap()
-            .len();
+        let on_disk = fs::metadata(dir.path().join(SPOOL_FILE)).unwrap().len();
         check!(s.size() == ByteSize::from_bytes(on_disk - header_len_u64()));
     }
 
@@ -1114,18 +1110,18 @@ mod tests {
         drop(spool);
         let spool_file = dir.path().join(SPOOL_FILE);
 
-        let intact_len = std::fs::metadata(&spool_file).unwrap().len();
+        let intact_len = fs::metadata(&spool_file).unwrap().len();
         {
             let intact = Spool::open(dir.path(), ROOMY_CAP).unwrap();
             check!(!intact.recovered_torn_tail());
         }
-        check!(std::fs::metadata(&spool_file).unwrap().len() == intact_len);
+        check!(fs::metadata(&spool_file).unwrap().len() == intact_len);
 
         // A crash mid-append: a length prefix promising 100 bytes, 3 behind it.
         append_torn_frame(&spool_file, b"abc");
         let healed = Spool::open(dir.path(), ROOMY_CAP).unwrap();
         check!(healed.recovered_torn_tail());
-        check!(std::fs::metadata(&spool_file).unwrap().len() == intact_len);
+        check!(fs::metadata(&spool_file).unwrap().len() == intact_len);
     }
 
     #[test]
@@ -1171,7 +1167,7 @@ mod tests {
     #[test]
     fn acknowledged_record_survives_child_crash_and_torn_tail() {
         const CHILD_DIR: &str = "KRABKA_AUDIT_SPOOL_CRASH_DIR";
-        if let Some(dir) = std::env::var_os(CHILD_DIR) {
+        if let Some(dir) = env::var_os(CHILD_DIR) {
             let dir = PathBuf::from(dir);
             let mut spool = Spool::open(&dir, ROOMY_CAP).unwrap();
             let record = chained_record(0, &GENESIS_HEAD, b"acknowledged");
@@ -1181,15 +1177,15 @@ mod tests {
             // Model a process dying after the next frame's prefix and only a
             // fragment of its body reached the file.
             append_torn_frame(&dir.join(SPOOL_FILE), b"torn");
-            std::process::abort();
+            process::abort();
         }
 
         let dir = tempfile::tempdir().unwrap();
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let status = Command::new(env::current_exe().unwrap())
             .arg("acknowledged_record_survives_child_crash_and_torn_tail")
             .env(CHILD_DIR, dir.path())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .unwrap();
         check!(!status.success());
@@ -1352,7 +1348,7 @@ mod tests {
 
     #[cfg(unix)]
     fn is_root() -> bool {
-        if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        if let Ok(status) = fs::read_to_string("/proc/self/status") {
             for line in status.lines() {
                 if let Some(rest) = line.strip_prefix("Uid:") {
                     let fields: Vec<&str> = rest.split_whitespace().collect();
@@ -1371,9 +1367,9 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("forbidden");
-        std::fs::write(&path, [0u8; 8]).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
-        if is_root() || std::fs::File::open(&path).is_ok() {
+        fs::write(&path, [0u8; 8]).unwrap();
+        fs::set_permissions(&path, Permissions::from_mode(0o000)).unwrap();
+        if is_root() || fs::File::open(&path).is_ok() {
             return;
         }
         let result = read_or_create_u64(&path, "tmp");
@@ -1401,10 +1397,10 @@ mod tests {
         corrupted.extend_from_slice(&0u64.to_be_bytes());
         corrupted.extend_from_slice(&100u32.to_be_bytes());
         corrupted.extend_from_slice(b"abcd");
-        std::fs::write(&poison_path, &corrupted).unwrap();
+        fs::write(&poison_path, &corrupted).unwrap();
 
         let replay_offset_path = dir.path().join(REPLAY_OFFSET_FILE);
-        std::fs::write(&replay_offset_path, with_header(&100u64.to_be_bytes())).unwrap();
+        fs::write(&replay_offset_path, with_header(&100u64.to_be_bytes())).unwrap();
 
         let res = Spool::open(dir.path(), ROOMY_CAP);
         check!(matches!(res, Err(AuditError::Poisoned(_))));
@@ -1432,7 +1428,7 @@ mod tests {
         drop(spool);
 
         let replay_offset_path = dir.path().join(REPLAY_OFFSET_FILE);
-        std::fs::write(
+        fs::write(
             &replay_offset_path,
             with_header(&(valid_len + 100).to_be_bytes()),
         )
@@ -1449,14 +1445,14 @@ mod tests {
         let SeededSpool { dir, record, spool } = seeded_spool(b"data");
         spool.begin_replay(&record).unwrap();
 
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
-        if is_root() || std::fs::write(dir.path().join("probe"), b"probe").is_ok() {
-            let _ = std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755));
-            let _ = std::fs::remove_file(dir.path().join("probe"));
+        fs::set_permissions(dir.path(), Permissions::from_mode(0o555)).unwrap();
+        if is_root() || fs::write(dir.path().join("probe"), b"probe").is_ok() {
+            let _ = fs::set_permissions(dir.path(), Permissions::from_mode(0o755));
+            let _ = fs::remove_file(dir.path().join("probe"));
             return;
         }
         let res = spool.clear_replay_poison();
-        let _ = std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755));
+        let _ = fs::set_permissions(dir.path(), Permissions::from_mode(0o755));
         check!(matches!(res, Err(AuditError::Io(_))));
     }
 
@@ -1466,15 +1462,15 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let poison_path = dir.path().join(REPLAY_POISON_FILE);
-        std::fs::write(&poison_path, [0u8; 16]).unwrap();
-        std::fs::set_permissions(&poison_path, std::fs::Permissions::from_mode(0o000)).unwrap();
-        if is_root() || std::fs::File::open(&poison_path).is_ok() {
-            let _ = std::fs::set_permissions(&poison_path, std::fs::Permissions::from_mode(0o644));
+        fs::write(&poison_path, [0u8; 16]).unwrap();
+        fs::set_permissions(&poison_path, Permissions::from_mode(0o000)).unwrap();
+        if is_root() || fs::File::open(&poison_path).is_ok() {
+            let _ = fs::set_permissions(&poison_path, Permissions::from_mode(0o644));
             return;
         }
 
         let res = Spool::open(dir.path(), ROOMY_CAP);
-        let _ = std::fs::set_permissions(&poison_path, std::fs::Permissions::from_mode(0o644));
+        let _ = fs::set_permissions(&poison_path, Permissions::from_mode(0o644));
         check!(matches!(res, Err(AuditError::Io(_))));
     }
 
@@ -1525,13 +1521,13 @@ mod tests {
     fn spool_file_is_the_golden_bytes() {
         let TempSpool { dir, spool: _spool } = spooled_golden_record();
 
-        check!(std::fs::read(dir.path().join(SPOOL_FILE)).unwrap() == GOLDEN_SPOOL);
+        check!(fs::read(dir.path().join(SPOOL_FILE)).unwrap() == GOLDEN_SPOOL);
     }
 
     #[test]
     fn golden_spool_file_reads_back_as_its_record() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(SPOOL_FILE), GOLDEN_SPOOL).unwrap();
+        fs::write(dir.path().join(SPOOL_FILE), GOLDEN_SPOOL).unwrap();
         let spool = Spool::open(dir.path(), ROOMY_CAP).unwrap();
 
         check!(
@@ -1565,10 +1561,7 @@ mod tests {
             },
         ];
         for ExpectedSidecar { file, want } in cases {
-            check!(
-                std::fs::read(dir.path().join(file)).unwrap() == want,
-                "{file}"
-            );
+            check!(fs::read(dir.path().join(file)).unwrap() == want, "{file}");
         }
     }
 
@@ -1581,18 +1574,18 @@ mod tests {
         let header: &[u8] = &[b'K', b'A', b'U', b'D', 0x00, 0x00];
         let frame_len = u64::try_from(GOLDEN_SPOOL.len() - 6).unwrap();
         let golden_two = [GOLDEN_SPOOL, &GOLDEN_SPOOL[6..]].concat();
-        std::fs::write(dir.path().join(SPOOL_FILE), &golden_two).unwrap();
-        std::fs::write(
+        fs::write(dir.path().join(SPOOL_FILE), &golden_two).unwrap();
+        fs::write(
             dir.path().join(LOSS_STATE_FILE),
             [header, &1u64.to_be_bytes(), &3u64.to_be_bytes()].concat(),
         )
         .unwrap();
-        std::fs::write(
+        fs::write(
             dir.path().join(REPLAY_OFFSET_FILE),
             [header, &frame_len.to_be_bytes()].concat(),
         )
         .unwrap();
-        std::fs::write(
+        fs::write(
             dir.path().join(REPLAY_POISON_FILE),
             [header, &0u64.to_be_bytes(), &GOLDEN_SPOOL[6..]].concat(),
         )
@@ -1655,7 +1648,7 @@ mod tests {
         found: Option<i16>,
     ) {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(file), &contents).unwrap();
+        fs::write(dir.path().join(file), &contents).unwrap();
         let got = match Spool::open(dir.path(), ROOMY_CAP) {
             Err(AuditError::UnsupportedSpoolFormat { file, found }) => Some((file, found)),
             _ => None,

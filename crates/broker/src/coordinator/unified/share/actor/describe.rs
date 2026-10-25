@@ -65,7 +65,7 @@ impl ShareDescribeView {
                         parts.sort_unstable();
                         Some(TopicPartitions {
                             topic_id: tid,
-                            topic_name: name.to_string(),
+                            topic_name: name.to_owned(),
                             partitions: parts,
                             ..Default::default()
                         })

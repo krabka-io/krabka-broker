@@ -90,7 +90,7 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     // auto-elects either: failover is transition-triggered on AliveToDead, and
     // 99 never went alive→dead.)
     let forged = MetadataRecord::V1Partition(PartitionRecord {
-        topic: "foo-unclean".to_string(),
+        topic: "foo-unclean".to_owned(),
         partition: 0,
         leader: krabka_broker::NodeId(99),
         isr: vec![krabka_broker::NodeId(99)],
@@ -116,7 +116,7 @@ async fn unclean_election_via_wire_picks_alive_replica() {
         .addr(addr)
         .client_id(CLIENT_ID)
         .election(ElectionSetup {
-            topic: ("foo-unclean").to_string(),
+            topic: ("foo-unclean").to_owned(),
             kind: ElectionKind::Unclean,
             ..Default::default()
         })

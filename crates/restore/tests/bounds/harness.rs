@@ -12,6 +12,7 @@ use {
     crate::archive::build_archive,
     clap::Parser as _,
     krabka_log::{Log, LogConfig, name},
+    krabka_protocol::records::RecordBatch,
     krabka_restore::{Cli, RestoreArgs, restore},
     std::path::{Path, PathBuf},
     tempfile::TempDir,
@@ -23,7 +24,7 @@ use {
 /// `--node-id` requirement -- via `Cli::try_parse_from`, the same path the
 /// binary and the crate's own tests use. `extra` carries the bound flags
 /// under test.
-pub(crate) fn restore_args(archive_dir: &Path, target_dir: &Path, extra: &[&str]) -> RestoreArgs {
+pub fn restore_args(archive_dir: &Path, target_dir: &Path, extra: &[&str]) -> RestoreArgs {
     let argv = cli_args::restore_argv(archive_dir, target_dir, cli_args::RestoreOptions {
         extra,
         ..Default::default()
@@ -35,7 +36,7 @@ pub(crate) fn restore_args(archive_dir: &Path, target_dir: &Path, extra: &[&str]
 /// empty target directory. Returns the target's `TempDir` (keep it alive
 /// for as long as the returned path is read) and the target log directory
 /// itself.
-pub(crate) async fn run_restore(archive_dir: &Path, extra: &[&str]) -> (TempDir, PathBuf) {
+pub async fn run_restore(archive_dir: &Path, extra: &[&str]) -> (TempDir, PathBuf) {
     let target = tempfile::tempdir().expect("target tempdir");
     let target_dir = target.path().join("restored");
     let args = restore_args(archive_dir, &target_dir, extra);
@@ -45,16 +46,12 @@ pub(crate) async fn run_restore(archive_dir: &Path, extra: &[&str]) -> (TempDir,
 
 /// Reopen the partition `restore()` wrote, the way an operator would after
 /// the tool exits.
-pub(crate) fn reopen(target_dir: &Path, topic: &str, partition: i32) -> Log {
+pub fn reopen(target_dir: &Path, topic: &str, partition: i32) -> Log {
     let dir = name::partition_dir(target_dir, topic, partition);
     Log::open(&dir, LogConfig::default()).expect("reopen restored partition")
 }
 
-pub(crate) fn check_batches(
-    target: &Path,
-    end: i64,
-    expected: &[krabka_protocol::records::RecordBatch],
-) {
+pub fn check_batches(target: &Path, end: i64, expected: &[RecordBatch]) {
     let log = reopen(target, "orders", 0);
     assert2::check!(log.log_end_offset() == krabka_ids::Offset(end));
     let read = log
@@ -64,11 +61,9 @@ pub(crate) fn check_batches(
 }
 
 /// A filtered first batch still claims its offsets; the following batch is unchanged.
-pub(crate) fn empty_first_batch(
-    fixture: &[krabka_protocol::records::RecordBatch],
-) -> Vec<krabka_protocol::records::RecordBatch> {
+pub fn empty_first_batch(fixture: &[RecordBatch]) -> Vec<RecordBatch> {
     vec![
-        krabka_protocol::records::RecordBatch {
+        RecordBatch {
             records: Vec::new(),
             ..fixture[0].clone()
         },
@@ -77,9 +72,7 @@ pub(crate) fn empty_first_batch(
 }
 
 /// Keep both archive and restore directories alive while checking key-filtered bytes.
-pub(crate) async fn restore_excluding_keys(
-    fixture: &mut [krabka_protocol::records::RecordBatch],
-) -> (TempDir, TempDir, PathBuf) {
+pub async fn restore_excluding_keys(fixture: &mut [RecordBatch]) -> (TempDir, TempDir, PathBuf) {
     let archive = build_archive("orders", 0, fixture);
     let (target, dir) = run_restore(archive.path(), &["--exclude-key", "^drop"]).await;
     (archive, target, dir)

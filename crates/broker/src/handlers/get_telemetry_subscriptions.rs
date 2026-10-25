@@ -7,8 +7,10 @@
 
 use {
     crate::{
+        api_catalog::ClientMetricsReceiver,
         broker::Broker,
         client_metrics::manager::{ACCEPTED_COMPRESSION_TYPES, SubscriptionDecision},
+        codes,
         handlers::{
             ApiVersion, CorrelationId, DispatchResult, context::TelemetryContext, encode_response,
         },
@@ -33,12 +35,10 @@ crate::handlers::raw_request_handler!(
     ctx,
     TelemetryContext,
     {
-        if broker.config.client_metrics_receiver()
-            == crate::api_catalog::ClientMetricsReceiver::Absent
-        {
+        if broker.config.client_metrics_receiver() == ClientMetricsReceiver::Absent {
             return encode_response(
                 &GetTelemetrySubscriptionsResponse {
-                    error_code: crate::codes::UNSUPPORTED_VERSION,
+                    error_code: codes::UNSUPPORTED_VERSION,
                     ..Default::default()
                 },
                 version,

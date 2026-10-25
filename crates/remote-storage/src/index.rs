@@ -18,7 +18,13 @@
 //! sparse indexes can only point near. The offset vocabulary and the two error
 //! constructors they share stay here.
 
-use crate::error::RemoteStorageError;
+use {
+    crate::error::RemoteStorageError,
+    std::{
+        fmt,
+        io::{self, ErrorKind},
+    },
+};
 
 mod batch;
 mod offset;
@@ -51,17 +57,17 @@ pub type BytePosition = u32;
 /// This helper therefore returns a `RemoteStorageError` instead of a panic,
 /// because a panic would be a `DoS` surface.
 fn corrupt_index(kind: &str) -> RemoteStorageError {
-    RemoteStorageError::Io(std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
+    RemoteStorageError::Io(io::Error::new(
+        ErrorKind::InvalidData,
         format!("corrupt remote {kind} index bytes"),
     ))
 }
 
 /// Wraps a decode failure on a remote segment's `.log` bytes.
 #[must_use]
-pub fn corrupt_log(detail: impl std::fmt::Display) -> RemoteStorageError {
-    RemoteStorageError::Io(std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
+pub fn corrupt_log(detail: impl fmt::Display) -> RemoteStorageError {
+    RemoteStorageError::Io(io::Error::new(
+        ErrorKind::InvalidData,
         format!("corrupt remote log bytes: {detail}"),
     ))
 }

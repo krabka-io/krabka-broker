@@ -32,6 +32,7 @@ use {
         error::BrokerError,
         metadata_source::MetadataSource,
     },
+    std::{collections::BTreeMap, sync::Arc, time::Instant},
 };
 
 /// The records of one streams-group transition, as Kafka's
@@ -180,8 +181,8 @@ fn current_assignment_value(m: &StreamsMemberState) -> StreamsGroupCurrentMember
 /// `toTaskIdsWithEpochs` writes one for every active entry.
 fn active_epochs(
     m: &StreamsMemberState,
-    tasks: &std::collections::BTreeMap<String, Vec<i32>>,
-) -> std::collections::BTreeMap<String, Vec<i32>> {
+    tasks: &BTreeMap<String, Vec<i32>>,
+) -> BTreeMap<String, Vec<i32>> {
     tasks
         .iter()
         .map(|(subtopology_id, partitions)| {
@@ -200,8 +201,8 @@ fn active_epochs(
 fn replayed_active_epochs(
     group_id: &str,
     member_epoch: i32,
-    tasks: &std::collections::BTreeMap<String, Vec<i32>>,
-    epochs: &std::collections::BTreeMap<String, Vec<i32>>,
+    tasks: &BTreeMap<String, Vec<i32>>,
+    epochs: &BTreeMap<String, Vec<i32>>,
 ) -> impl Iterator<Item = ((String, i32), i32)> {
     let mut out = Vec::new();
     for (subtopology_id, partitions) in tasks {
@@ -268,7 +269,7 @@ pub(super) async fn flush_pending(
 pub(super) async fn reconcile_and_flush(
     actor: &mut ActorState,
     config: &super::super::config::StreamsGroupConfig,
-    metadata_source: Option<&std::sync::Arc<dyn MetadataSource>>,
+    metadata_source: Option<&Arc<dyn MetadataSource>>,
     offsets_log: &dyn OffsetsLog,
     coordinator: &GroupCoordinator,
 ) -> Result<(), BrokerError> {
@@ -378,7 +379,7 @@ pub(super) fn apply_seed(actor: &mut ActorState, seed: StreamsGroupSeed) {
             state.target.warmup.insert(mid, tv.warmup);
         }
     }
-    state.arm_loaded_rebalance_timeouts(std::time::Instant::now());
+    state.arm_loaded_rebalance_timeouts(Instant::now());
     state.phase = if actor.topology.is_none() {
         StreamsGroupStatePhase::NotReady
     } else {
@@ -397,14 +398,14 @@ mod tests {
             test_support::{plain_streams_member, stable_streams_assignment},
         },
         assert2::check,
-        std::collections::BTreeMap,
+        std::collections::{BTreeMap, HashMap},
     };
 
     #[test]
     fn seed_hydrates_state() {
         let mut actor = ActorState::new("g".into());
-        let mut members = std::collections::HashMap::new();
-        members.insert("m1".to_string(), StreamsGroupMemberMetadataValue {
+        let mut members = HashMap::new();
+        members.insert("m1".to_owned(), StreamsGroupMemberMetadataValue {
             instance_id: Some("i1".into()),
             rack_id: Some("r1".into()),
             client_id: "c1".into(),
@@ -418,14 +419,14 @@ mod tests {
             rebalance_timeout_ms: 60_000,
             topology_epoch: 2,
         });
-        let mut current = std::collections::HashMap::new();
-        current.insert("m1".to_string(), StreamsGroupCurrentMemberAssignmentValue {
-            active_epochs: maplit::btreemap! {"0".to_string() => vec![3, 4]},
-            ..stable_streams_assignment((4, 3), maplit::btreemap! {"0".to_string() => vec![0, 1]})
+        let mut current = HashMap::new();
+        current.insert("m1".to_owned(), StreamsGroupCurrentMemberAssignmentValue {
+            active_epochs: maplit::btreemap! {"0".to_owned() => vec![3, 4]},
+            ..stable_streams_assignment((4, 3), maplit::btreemap! {"0".to_owned() => vec![0, 1]})
         });
-        let mut target = std::collections::HashMap::new();
-        target.insert("m1".to_string(), StreamsGroupTargetAssignmentMemberValue {
-            active: maplit::btreemap! {"0".to_string() => vec![0, 1]},
+        let mut target = HashMap::new();
+        target.insert("m1".to_owned(), StreamsGroupTargetAssignmentMemberValue {
+            active: maplit::btreemap! {"0".to_owned() => vec![0, 1]},
             standby: BTreeMap::new(),
             warmup: BTreeMap::new(),
         });
@@ -434,7 +435,7 @@ mod tests {
             metadata_hash: 11,
             validated_topology_epoch: 2,
             last_assignment_configs: maplit::btreemap! {
-                "num.standby.replicas".to_string() => "1".to_string(),
+                "num.standby.replicas".to_owned() => "1".to_owned(),
             },
             description_epochs: DescriptionEpochs {
                 stored: 2,
@@ -465,7 +466,7 @@ mod tests {
         check!(
             actor.last_assignment_configs
                 == maplit::btreemap! {
-                    "num.standby.replicas".to_string() => "1".to_string(),
+                    "num.standby.replicas".to_owned() => "1".to_owned(),
                 }
         );
         check!(actor.state.target.epoch == 4);
@@ -474,14 +475,12 @@ mod tests {
         check!(m.member_epoch == 4);
         check!(m.previous_member_epoch == 3);
         check!(m.process_id == "p1");
-        check!(m.active == maplit::btreemap! {"0".to_string() => vec![0, 1]});
+        check!(m.active == maplit::btreemap! {"0".to_owned() => vec![0, 1]});
         check!(
             m.active_epochs
-                == maplit::btreemap! {("0".to_string(), 0) => 3, ("0".to_string(), 1) => 4}
+                == maplit::btreemap! {("0".to_owned(), 0) => 3, ("0".to_owned(), 1) => 4}
         );
-        check!(
-            actor.state.target.active["m1"] == maplit::btreemap! {"0".to_string() => vec![0, 1]}
-        );
+        check!(actor.state.target.active["m1"] == maplit::btreemap! {"0".to_owned() => vec![0, 1]});
         check!(actor.state.phase == StreamsGroupStatePhase::Stable);
     }
 
@@ -491,7 +490,7 @@ mod tests {
     /// revocation alike.
     #[test]
     fn a_seed_restores_the_active_task_epochs() {
-        let task = |partition| ("0".to_string(), partition);
+        let task = |partition| ("0".to_owned(), partition);
         // (case, AssignmentEpochs of the active entry, expected epochs)
         let rows = [
             (
@@ -513,23 +512,20 @@ mod tests {
         for (case, epochs, expected) in rows {
             let mut actor = ActorState::new("g".into());
             let seed = StreamsGroupSeed {
-                members: [("m1".to_string(), plain_streams_member(0))].into(),
-                current_per_member: [(
-                    "m1".to_string(),
-                    StreamsGroupCurrentMemberAssignmentValue {
-                        member_epoch: 7,
-                        previous_member_epoch: 6,
-                        state: StreamsMemberWireState::UnrevokedTasks,
-                        active: maplit::btreemap! {"0".to_string() => vec![0, 1]},
-                        active_pending_revocation: maplit::btreemap! {"0".to_string() => vec![2]},
-                        active_epochs: epochs
-                            .map_or_default(|epochs| maplit::btreemap! {"0".to_string() => epochs}),
-                        active_pending_revocation_epochs: maplit::btreemap! {
-                            "0".to_string() => vec![6],
-                        },
-                        ..StreamsGroupCurrentMemberAssignmentValue::default()
+                members: [("m1".to_owned(), plain_streams_member(0))].into(),
+                current_per_member: [("m1".to_owned(), StreamsGroupCurrentMemberAssignmentValue {
+                    member_epoch: 7,
+                    previous_member_epoch: 6,
+                    state: StreamsMemberWireState::UnrevokedTasks,
+                    active: maplit::btreemap! {"0".to_owned() => vec![0, 1]},
+                    active_pending_revocation: maplit::btreemap! {"0".to_owned() => vec![2]},
+                    active_epochs: epochs
+                        .map_or_default(|epochs| maplit::btreemap! {"0".to_owned() => epochs}),
+                    active_pending_revocation_epochs: maplit::btreemap! {
+                        "0".to_owned() => vec![6],
                     },
-                )]
+                    ..StreamsGroupCurrentMemberAssignmentValue::default()
+                })]
                 .into(),
                 ..StreamsGroupSeed::default()
             };
