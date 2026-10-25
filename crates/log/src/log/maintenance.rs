@@ -8,7 +8,10 @@ use {
         retention::{self, DirSync},
     },
     krabka_ids::Offset,
-    krabka_units::{Time, prelude::TimeExt as _},
+    krabka_units::{
+        Time,
+        prelude::{ByteSizeExt as _, TimeExt as _},
+    },
     std::{
         collections::hash_map::RandomState,
         hash::BuildHasher,
@@ -223,6 +226,63 @@ impl Log {
             self.flush_if_due(Instant::now())?;
         }
         Ok(())
+    }
+
+    /// Start a background sync of the active segment after every
+    /// `writeback_window` bytes appended through the page cache, and wait for
+    /// the oldest one while two are still running.
+    ///
+    /// This is what bounds the dirty data the kernel holds for the segment,
+    /// to about two windows: see [`crate::LogConfig::writeback_window`]. The
+    /// wait is the only time an append stops for it, and it ends when a sync
+    /// of one window's bytes ends. A segment written through `O_DIRECT` has
+    /// no dirty pages, and `flush_on_append` syncs every append, so neither
+    /// counts bytes here.
+    pub(super) fn pace_writeback(&mut self, appended: usize) -> Result<(), LogError> {
+        #[cfg(target_os = "wasi")]
+        {
+            let _ = appended;
+            Ok(())
+        }
+        #[cfg(not(target_os = "wasi"))]
+        {
+            let window = {
+                let config = self.config.read().unwrap();
+                if config.flush_on_append {
+                    0
+                } else {
+                    config.writeback_window.bytes_u64()
+                }
+            };
+            let active = self
+                .active
+                .as_ref()
+                .expect("active segment must exist after Log::open");
+            if window == 0 || active.writes_direct() {
+                self.writeback_unsynced = 0;
+                return Ok(());
+            }
+            self.writeback_unsynced = self
+                .writeback_unsynced
+                .saturating_add(u64::try_from(appended).unwrap_or(u64::MAX));
+            if self.writeback_unsynced < window {
+                return Ok(());
+            }
+            self.writeback_unsynced = 0;
+            while self.writeback_jobs.len() >= 2 {
+                let oldest = self
+                    .writeback_jobs
+                    .pop_front()
+                    .expect("two jobs are queued");
+                self.rollover_flusher.finish_through(oldest)?;
+            }
+            let file = active.log_file_handle();
+            self.rollover_flusher
+                .submit_writeback(file, self.io.clone())?;
+            self.writeback_jobs
+                .push_back(self.rollover_flusher.ticket());
+            Ok(())
+        }
     }
 
     pub(super) fn flush_if_due(&mut self, now: Instant) -> Result<(), LogError> {

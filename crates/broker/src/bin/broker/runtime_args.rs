@@ -80,6 +80,7 @@ pub struct RuntimeArgs {
     pub log_read_buffer_cap: Option<ByteSize>,
     pub log_read_ahead_max: Option<ByteSize>,
     pub log_tail_cache_size: Option<ByteSize>,
+    pub log_writeback_window: Option<ByteSize>,
     pub log_flush_start_offset_checkpoint_interval: Option<Time>,
     pub log_timestamp_scan_window: Option<ByteSize>,
     pub log_delivery_clock_uncertainty: Option<Time>,

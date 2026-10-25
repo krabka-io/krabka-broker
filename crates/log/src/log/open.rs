@@ -223,6 +223,8 @@ impl Log {
             opened_end: Offset(0),
             unflushed_messages: 0,
             last_flush: std::time::Instant::now(),
+            writeback_unsynced: 0,
+            writeback_jobs: std::collections::VecDeque::new(),
             roll_jitter: None,
             pending_deletes: Vec::new(),
             start_offset,

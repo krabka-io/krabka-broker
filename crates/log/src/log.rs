@@ -112,6 +112,11 @@ pub struct Log {
     opened_end: Offset,
     unflushed_messages: u64,
     last_flush: std::time::Instant,
+    /// Bytes appended through the page cache since the last background sync
+    /// of the active segment started, and the syncs still running, oldest
+    /// first. See [`LogConfig::writeback_window`] and `Log::pace_writeback`.
+    writeback_unsynced: u64,
+    writeback_jobs: std::collections::VecDeque<rollover_flush::FlushTicket>,
     roll_jitter: Option<RollJitter>,
     pending_deletes: Vec<PendingDelete>,
     /// The global log start (Kafka's `logStartOffset`): the first offset any
