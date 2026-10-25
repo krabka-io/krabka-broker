@@ -35,7 +35,7 @@ pub fn supported_features_fixture(input: TokenStream) -> Result<TokenStream, Par
                 {{ supported }}("streams.version", 0, 1),
                 {{ supported }}("eligible.leader.replicas.version", 0, 1),
                 {{ supported }}("kraft.version", 0, 1),
-                {{ supported }}("krabka.version", 0, 1),
+                {{ supported }}("krabka.version", 0, 2),
             ]
         }
     })

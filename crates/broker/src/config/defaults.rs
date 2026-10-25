@@ -99,6 +99,14 @@ mod tests {
             )
         );
         assert!(
+            (
+                config.client_metrics_prom_max_series,
+                config.client_metrics_prom_max_series_per_principal,
+                config.client_metrics_prom_max_series_per_client,
+                config.client_metrics_prom_max_series_per_instance,
+            ) == (10_000, 2_500, 1_000, 500)
+        );
+        assert!(
             config.replication
                 == ReplicationRuntimeConfig {
                     // Kafka's `num.replica.fetchers` default.

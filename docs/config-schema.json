@@ -1034,7 +1034,7 @@
           ]
         },
         "prefix": {
-          "description": "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket).",
+          "description": "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket). Tiered segments and new diskless WAL objects are\nwritten under it, and the diskless reclaimer lists and deletes only\nbelow `<prefix>/diskless-wal/`. WAL objects written at the bucket root\nbefore a prefix was set stay readable at their recorded keys, and the\nreclaimer of a prefixed cluster never deletes them.",
           "type": [
             "string",
             "null"
@@ -1158,7 +1158,7 @@
           ]
         },
         "prefix": {
-          "description": "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket).",
+          "description": "Optional key prefix inside the bucket (lets multiple clusters\nshare a bucket). Tiered segments and new diskless WAL objects are\nwritten under it, and the diskless reclaimer lists and deletes only\nbelow `<prefix>/diskless-wal/`. WAL objects written at the bucket root\nbefore a prefix was set stay readable at their recorded keys, and the\nreclaimer of a prefixed cluster never deletes them.",
           "type": [
             "string",
             "null"
@@ -1632,6 +1632,42 @@
         },
         "client_metrics_otlp_queue_capacity": {
           "description": "Capacity of the client-metrics OTLP forwarding queue.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "client_metrics_prom_max_series": {
+          "description": "Maximum number of client-metric series that one Prometheus scrape\nrenders, across all clients. A histogram counts one series for each\nbucket, plus one for `_sum` and one for `_count`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "client_metrics_prom_max_series_per_client": {
+          "description": "Maximum number of Prometheus client-metric series for one\n`client_id`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "client_metrics_prom_max_series_per_instance": {
+          "description": "Maximum number of Prometheus client-metric series for one client\ninstance id.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "client_metrics_prom_max_series_per_principal": {
+          "description": "Maximum number of Prometheus client-metric series for one\nauthenticated principal, in Kafka's `User:name` form. Every anonymous\nclient shares `User:ANONYMOUS`. This ceiling stops a principal that\nrotates its `client_id` from filling the global ceiling.",
           "format": "uint",
           "minimum": 0,
           "type": [

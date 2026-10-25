@@ -132,6 +132,71 @@ pub struct WalDeleteFloorKey {
     pub partition: i32,
 }
 
+/// Reserved delete-floor partition used to protect an uploaded object until
+/// its range records are committed. Its key/value remain readable by 1.x
+/// brokers: older readers project it as floor zero on a negative partition,
+/// which no data partition can address.
+pub const WAL_OBJECT_RESERVATION_PARTITION: i32 = i32::MIN;
+
+/// Object UUID encoded into the existing delete-floor key space.
+///
+/// Diskless object names use `UUIDv4`. Changing only the version nibble to v8
+/// creates a reversible namespace that cannot collide with generated diskless
+/// topic IDs, while the negative partition sentinel keeps the record inert to
+/// older delete-floor projections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WalObjectReservationKey {
+    object_id: Uuid,
+}
+
+impl WalObjectReservationKey {
+    const KEY_VERSION: i16 = WalDeleteFloorKey::KEY_VERSION;
+
+    #[must_use]
+    pub fn new(object_id: Uuid) -> Self { Self { object_id } }
+
+    #[must_use]
+    pub fn object_id(self) -> Uuid { self.object_id }
+
+    #[must_use]
+    pub fn to_bytes(self) -> Bytes {
+        WalDeleteFloorKey {
+            topic_id: reservation_topic_id(self.object_id),
+            partition: WAL_OBJECT_RESERVATION_PARTITION,
+        }
+        .to_bytes()
+    }
+
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let key = WalDeleteFloorKey::from_bytes(bytes)?;
+        if key.partition != WAL_OBJECT_RESERVATION_PARTITION || key.topic_id.get_version_num() != 8
+        {
+            return None;
+        }
+        Some(Self {
+            object_id: object_id_from_reservation_topic(key.topic_id),
+        })
+    }
+
+    /// This record deliberately shares the v1 delete-floor key/value
+    /// versions, so persisted 1.x readers can still replay it.
+    #[must_use]
+    pub const fn key_version() -> i16 { Self::KEY_VERSION }
+}
+
+fn reservation_topic_id(object_id: Uuid) -> Uuid {
+    let mut bytes = *object_id.as_bytes();
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
+fn object_id_from_reservation_topic(topic_id: Uuid) -> Uuid {
+    let mut bytes = *topic_id.as_bytes();
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    Uuid::from_bytes(bytes)
+}
+
 impl WalDeleteFloorKey {
     /// Key version of a delete-floor key, whose value is a
     /// [`WalDeleteFloorRecord`].

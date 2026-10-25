@@ -80,6 +80,10 @@ pub(super) struct FetchPreparation {
     pub(super) effective_replica_id: i32,
     pub(super) is_follower_fetch: bool,
     pub(super) read_committed: bool,
+    /// The partitions the fetch's session forgot lately and has not named
+    /// again; see [`crate::fetch_session::ForgottenPartition`]. Empty for a
+    /// sessionless or a full fetch.
+    pub(super) forgotten: Vec<FetchSessionKey>,
 }
 
 /// A fetch that its fetch session refuses before any read: Kafka's
@@ -101,13 +105,17 @@ pub(super) fn prepare_fetch(
         request.replica_state.replica_id
     };
     let is_follower_fetch = effective_replica_id >= 0;
-    let decision = broker.fetch_session_cache.classify(request, version);
+    let mut decision = broker.fetch_session_cache.classify(request, version);
     if let SessionDecision::Error { code } = decision {
         return Err(SessionRefusal {
             code,
             is_follower_fetch,
         });
     }
+    let forgotten = match &mut decision {
+        SessionDecision::Incremental { forgotten, .. } => std::mem::take(forgotten),
+        _ => Vec::new(),
+    };
     let effective_topics = match &decision {
         SessionDecision::Incremental { partitions, .. } => {
             group_cached_into_effective_topics(partitions)
@@ -153,6 +161,7 @@ pub(super) fn prepare_fetch(
         effective_replica_id,
         is_follower_fetch,
         read_committed: !is_follower_fetch && request.isolation_level == 1,
+        forgotten,
     })
 }
 

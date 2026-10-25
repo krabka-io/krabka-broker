@@ -562,6 +562,34 @@ fn enabling_elr_writes_kafkas_safety_config_records() {
     }
 }
 
+/// One `UpdateFeatures` case: its name, the image it plans against, the one
+/// update it carries, and the plan or error it must produce.
+type PlanCase<'a> = (
+    &'a str,
+    krabka_metadata::MetadataImage,
+    FeatureUpdateKey,
+    Result<UpdatePlan, UpdateError>,
+);
+
+/// Plan every case's update on its own, as a validate-only request, against
+/// the local controller, and compare all of them at once.
+fn assert_planned<const N: usize>(cases: [PlanCase<'_>; N]) {
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(case, image, update, _)| {
+            (
+                *case,
+                plan_updates(&validate_only(vec![update.clone()]), image, LOCAL),
+            )
+        })
+        .collect();
+    let expected: Vec<_> = cases
+        .into_iter()
+        .map(|(case, _, _, want)| (case, want))
+        .collect();
+    assert!(actual == expected);
+}
+
 /// `krabka.version` finalizes as Kafka 4.3.1's `FeatureControlManager`
 /// finalizes a feature other than `metadata.version` and `kraft.version`,
 /// `transaction.version` for one: a level every node supports writes a
@@ -634,11 +662,11 @@ fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
                 name: mv,
                 level: 30,
             }]),
-            named_update(kv, 2, UPGRADE),
+            named_update(kv, 3, UPGRADE),
             Err(invalid(
                 kv,
-                2,
-                "Local controller 1 only supports versions 0-1",
+                3,
+                "Local controller 1 only supports versions 0-2",
             )),
         ),
         (
@@ -719,18 +747,50 @@ fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
             Err(invalid(kv, 1, "Can't downgrade to a newer version.")),
         ),
     ];
-    let actual: Vec<_> = cases
-        .iter()
-        .map(|(case, image, update, _)| {
-            (
-                *case,
-                plan_updates(&validate_only(vec![update.clone()]), image, LOCAL),
-            )
-        })
-        .collect();
-    let expected: Vec<_> = cases
-        .into_iter()
-        .map(|(case, _, _, want)| (case, want))
-        .collect();
-    assert!(actual == expected);
+    assert_planned(cases);
+}
+
+/// krabka-io/krabka-broker#1763: `krabka.version` level 2 turns on diskless
+/// WAL object reservations. The controller finalizes it only once every
+/// registered broker advertises it, so no 1.0.0 broker, which writes no
+/// reservations, runs beside it. Lowering it again is an ordinary downgrade:
+/// every broker that supports level 2 reads reservations at every level.
+#[test]
+fn krabka_version_reservation_level_finalizes_only_when_every_broker_supports_it() {
+    let kv = krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE;
+    let level = krabka_metadata::krabka_version::DISKLESS_OBJECT_RESERVATION_LEVEL;
+    let mv = FeatureLevel {
+        name: "metadata.version",
+        level: 30,
+    };
+    let with_broker = |levels: &[FeatureLevel<'_>], range| {
+        let mut features = krabka_metadata::supported_feature_ranges();
+        features.insert(kv.to_owned(), range);
+        remote_feature_image()
+            .image(image(levels))
+            .ranges(features)
+            .call()
+    };
+    let at_level = [mv, FeatureLevel { name: kv, level }];
+    let cases = [
+        (
+            "every broker advertises the reservation level",
+            with_broker(&[mv], (0, level)),
+            named_update(kv, level, UPGRADE),
+            Ok(plan(vec![feature_record(kv, level)], &[kv])),
+        ),
+        (
+            "a 1.0.0 broker advertises only level 1",
+            with_broker(&[mv], (0, 1)),
+            named_update(kv, level, UPGRADE),
+            Err(invalid(kv, level, "Broker 2 only supports versions 0-1")),
+        ),
+        (
+            "a safe downgrade below the reservation level",
+            with_broker(&at_level, (0, level)),
+            named_update(kv, 1, SAFE),
+            Ok(plan(vec![feature_record(kv, 1)], &[kv])),
+        ),
+    ];
+    assert_planned(cases);
 }

@@ -98,6 +98,7 @@ impl FetchSessionCache {
             uses_topic_ids,
             creator_principal,
             partitions,
+            recently_forgotten: Vec::new(),
         };
         let added_partitions = session.partitions.len();
         guard.sessions.insert(id, session);

@@ -356,7 +356,7 @@ mod tests {
                     ("eligible.leader.replicas.version", (0, 1)),
                     ("group.version", (0, 1)),
                     ("krabka.metadata.downgrade", (1, 1)),
-                    ("krabka.version", (0, 1)),
+                    ("krabka.version", (0, 2)),
                     ("kraft.version", (0, 1)),
                     ("metadata.version", (METADATA_VERSION_MIN, metadata_max)),
                     ("share.version", (0, share_max)),

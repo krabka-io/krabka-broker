@@ -85,13 +85,15 @@ pub(crate) struct FetchPartitionKey<T> {
 #[cfg(test)]
 pub(crate) use self::diff::apply_incremental;
 pub use self::{
-    cache::{FetchSession, FetchSessionCache},
+    cache::{FetchSession, FetchSessionCache, RECENTLY_FORGOTTEN_CAP, RECENTLY_FORGOTTEN_TTL},
     classify::SessionDecision,
     epoch::{
         FINAL_EPOCH, FIRST_TOPIC_ID_FETCH_VERSION, FetchSessionEpoch, FetchSessionId,
         INITIAL_EPOCH, INVALID_SESSION_ID, next_epoch,
     },
-    state::{CachedPartitionState, FetchSessionKey, SentPartition, SessionPartitions},
+    state::{
+        CachedPartitionState, FetchSessionKey, ForgottenPartition, SentPartition, SessionPartitions,
+    },
 };
 
 #[cfg(test)]

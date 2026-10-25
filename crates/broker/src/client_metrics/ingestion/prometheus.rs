@@ -20,6 +20,24 @@ const MAX_ATTRIBUTE_KEY_BYTES: usize = 256;
 const MAX_ATTRIBUTE_VALUE_BYTES: usize = 1_024;
 const MAX_HISTOGRAM_BUCKETS: usize = 128;
 
+/// The number of data points in `md` of the shapes the sink stores: the bound
+/// [`flatten_for_prometheus`] enforces, and the unit a rejected push counts
+/// in.
+pub(super) fn point_count(md: &opentelemetry_proto::tonic::metrics::v1::MetricsData) -> usize {
+    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
+    md.resource_metrics
+        .iter()
+        .flat_map(|rm| &rm.scope_metrics)
+        .flat_map(|sm| &sm.metrics)
+        .map(|m| match &m.data {
+            Some(Data::Gauge(g)) => g.data_points.len(),
+            Some(Data::Sum(s)) => s.data_points.len(),
+            Some(Data::Histogram(h)) => h.data_points.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
 /// Flattens an OTLP `MetricsData` into Prometheus data points. Sum and Gauge
 /// become numbers, and a Histogram becomes count and sum gauges. The function
 /// is best-effort and skips unknown shapes.
@@ -34,18 +52,7 @@ pub(super) fn flatten_for_prometheus(
     };
     // Count the points before flattening any, so a compact payload cannot
     // make the broker materialize more than the bound.
-    let point_count = md
-        .resource_metrics
-        .iter()
-        .flat_map(|rm| &rm.scope_metrics)
-        .flat_map(|sm| &sm.metrics)
-        .map(|m| match &m.data {
-            Some(Data::Gauge(g)) => g.data_points.len(),
-            Some(Data::Sum(s)) => s.data_points.len(),
-            Some(Data::Histogram(h)) => h.data_points.len(),
-            _ => 0,
-        })
-        .sum::<usize>();
+    let point_count = point_count(md);
     if point_count > MAX_POINTS_PER_PUSH {
         return Err(());
     }

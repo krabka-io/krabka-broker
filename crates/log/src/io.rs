@@ -152,7 +152,9 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// This is the one read-side method, and it is a hint, not a read: it
     /// starts `posix_fadvise(POSIX_FADV_WILLNEED)` readahead of the range and
-    /// returns without waiting for it. A failure changes nothing a reader can
+    /// returns without waiting for it. The real implementation issues the hint
+    /// in 128 KiB calls, because Linux reads only the start of one large
+    /// `WILLNEED` range. A failure changes nothing a reader can
     /// observe, so it is dropped. The targets without `posix_fadvise` do
     /// nothing.
     fn advise_will_need(&self, file: &File, offset: u64, len: u64) {
@@ -335,11 +337,36 @@ fn reserve(file: &File, offset: u64, len: u64) -> io::Result<()> {
     Err(ErrorKind::Unsupported.into())
 }
 
+/// The size of one `POSIX_FADV_WILLNEED` call.
+///
+/// Linux reads at most `max(max_sectors_kb, read_ahead_kb)` of one `WILLNEED`
+/// call and drops the rest of the range. That is about 4 MiB on a local disk
+/// and often less than 1 MiB on a cloud disk, so a hint over a whole window
+/// reads only its start. 128 KiB is the default `read_ahead_kb`, so each call
+/// of this size reads all of its range.
+#[cfg(any(target_os = "linux", test))]
+const WILL_NEED_CHUNK: u64 = 128 * 1024;
+
+/// The `(offset, len)` ranges, each at most [`WILL_NEED_CHUNK`] long, that
+/// cover the `len` bytes from `offset` in order. The range stops at
+/// `u64::MAX` when `offset + len` is larger.
+#[cfg(any(target_os = "linux", test))]
+fn will_need_chunks(offset: u64, len: u64) -> impl Iterator<Item = (u64, u64)> {
+    let end = offset.saturating_add(len);
+    std::iter::successors(Some(offset), |start| {
+        Some(start.saturating_add(WILL_NEED_CHUNK))
+    })
+    .take_while(move |start| *start < end)
+    .map(move |start| (start, WILL_NEED_CHUNK.min(end - start)))
+}
+
 #[cfg(target_os = "linux")]
 fn advise_will_need(file: &File, offset: u64, len: u64) {
-    if let Some(len) = NonZeroU64::new(len) {
-        // A refused hint leaves the read exactly as it was without one.
-        let _ = fadvise(file, offset, Some(len), Advice::WillNeed);
+    for (offset, len) in will_need_chunks(offset, len) {
+        if let Some(len) = NonZeroU64::new(len) {
+            // A refused hint leaves the read exactly as it was without one.
+            let _ = fadvise(file, offset, Some(len), Advice::WillNeed);
+        }
     }
 }
 
@@ -546,6 +573,31 @@ mod tests {
         let tmp = dir.path().join("state.tmp");
         fs::write(&path, contents).unwrap();
         ExistingState { dir, path, tmp }
+    }
+
+    #[test]
+    fn will_need_chunks_cover_the_span_in_chunks() {
+        const C: u64 = WILL_NEED_CHUNK;
+        let cases = [
+            ("empty", 4096, 0, vec![]),
+            ("shorter than a chunk", 4096, 100, vec![(4096, 100)]),
+            ("one chunk", 0, C, vec![(0, C)]),
+            ("exact multiple", 10, 3 * C, vec![
+                (10, C),
+                (10 + C, C),
+                (10 + 2 * C, C),
+            ]),
+            ("remainder", 0, 2 * C + 7, vec![(0, C), (C, C), (2 * C, 7)]),
+            ("saturates at u64::MAX", u64::MAX - C - 5, 3 * C, vec![
+                (u64::MAX - C - 5, C),
+                (u64::MAX - 5, 5),
+            ]),
+            ("starts at u64::MAX", u64::MAX, C, vec![]),
+        ];
+        for (name, offset, len, expected) in cases {
+            let chunks: Vec<_> = will_need_chunks(offset, len).collect();
+            check!(chunks == expected, "{name}");
+        }
     }
 
     #[test]

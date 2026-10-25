@@ -25,6 +25,12 @@ impl BrokerMetrics {
     /// startup, with `Broker::ktls_enabled`. It is `false` on a broker with no
     /// TLS listener and on every non-Linux target.
     pub fn set_ktls_enabled(&self, enabled: bool) { self.ktls_enabled.set(i64::from(enabled)); }
+
+    /// Account one parked consumer fetch that the read loop answered early
+    /// because a partition its session had forgotten lately received records.
+    pub fn record_fetch_forgotten_partition_wake(&self) {
+        self.fetch_forgotten_partition_wakes_total.inc();
+    }
 }
 
 #[cfg(test)]

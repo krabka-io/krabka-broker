@@ -37,6 +37,7 @@ use {
 };
 
 mod idle_in_flight;
+mod telemetry_close;
 mod throttle_mute;
 
 use crate::network::test_support::{FrameCorrelationId, broker_config, request_frame};

@@ -56,6 +56,24 @@ pub struct CachedPartitionState {
     pub last_error_code: i16,
 }
 
+/// A partition an incremental fetch dropped from its session, with the cache
+/// clock's reading when it did.
+///
+/// The Java consumer leaves a partition out of its next fetch, and so forgets
+/// it, while it still holds that partition's records from the previous
+/// response (`AbstractFetch.fetchablePartitions` excludes the buffered
+/// partitions). It names the partition again as soon as it has drained them,
+/// a few polls later. The session keeps the partition for that long, so a
+/// fetch parked on the partitions the consumer did ask for can answer when
+/// the forgotten one moves. See `handlers::fetch::read_loop`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForgottenPartition {
+    pub key: FetchSessionKey,
+    /// `MonotonicClock::elapsed_since_origin` of the cache when the client
+    /// forgot the partition.
+    pub forgotten_at: std::time::Duration,
+}
+
 /// What an incremental response sent for one cached partition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SentPartition {

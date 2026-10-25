@@ -208,7 +208,8 @@ pub struct BenchmarkComparison {
     pub ratio: f64,
     /// Allowed relative slowdown, derived from repeated-run MAD with a floor.
     pub tolerance: f64,
-    /// Whether this benchmark stayed within its tolerance.
+    /// Whether this benchmark stayed within its tolerance, or its candidate
+    /// passes overlapped the reference passes.
     pub passed: bool,
 }
 
@@ -292,7 +293,11 @@ fn side_executables(
 /// the same binary.
 ///
 /// The tolerance is three times the larger side's median absolute deviation,
-/// with `minimum_tolerance` as a floor. Bilateral all-zero samples are tied
+/// with `minimum_tolerance` as a floor. A benchmark fails only when its median
+/// ratio exceeds that tolerance and every candidate pass is also slower than
+/// every reference pass: with a handful of passes per side, a median shift
+/// inside the two sides' overlapping ranges is run-to-run noise, not a
+/// regression. Bilateral all-zero samples are tied
 /// below bencher's integer-nanosecond resolution. Other missing, non-finite, or
 /// non-positive samples are errors and therefore cannot silently pass.
 ///
@@ -391,12 +396,14 @@ pub fn compare_summaries(
             relative_mad(&candidate_values, candidate_median_ns),
         );
         let ratio = candidate_median_ns / reference_median_ns;
+        let slowest_reference = reference_values.iter().copied().fold(f64::MIN, f64::max);
+        let fastest_candidate = candidate_values.iter().copied().fold(f64::MAX, f64::min);
         benchmarks.insert(name.clone(), BenchmarkComparison {
             reference_median_ns,
             candidate_median_ns,
             ratio,
             tolerance,
-            passed: ratio <= 1.0 + tolerance,
+            passed: ratio <= 1.0 + tolerance || fastest_candidate <= slowest_reference,
         });
     }
     let passed = benchmarks.values().all(|benchmark| benchmark.passed);

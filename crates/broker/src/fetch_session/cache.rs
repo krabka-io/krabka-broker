@@ -10,8 +10,9 @@ use {
     super::{
         epoch::{FIRST_SESSION_ID, FetchSessionEpoch, FetchSessionId},
         order::SessionOrder,
-        state::{SentPartition, SessionPartitions},
+        state::{FetchSessionKey, ForgottenPartition, SentPartition, SessionPartitions},
     },
+    krabka_protocol::{owned::fetch_request::ForgottenTopic, primitives::uuid::Uuid as WireUuid},
     qubit_clock::{MonotonicClock, StdMonotonicClock},
     std::{
         collections::HashMap,
@@ -20,8 +21,19 @@ use {
             Arc, Mutex, PoisonError,
             atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering},
         },
+        time::Duration,
     },
 };
+
+/// How long a session remembers a partition the client forgot. The Java
+/// consumer names a partition it forgot over buffered records again within a
+/// few polls, so a longer memory buys nothing there, and it only costs a
+/// consumer that unsubscribed from a busy partition early answers for that
+/// long. See [`ForgottenPartition`].
+pub const RECENTLY_FORGOTTEN_TTL: Duration = Duration::from_millis(100);
+
+/// How many forgotten partitions a session remembers. The oldest go first.
+pub const RECENTLY_FORGOTTEN_CAP: usize = 16;
 
 pub struct FetchSession {
     pub id: FetchSessionId,
@@ -35,6 +47,66 @@ pub struct FetchSession {
     pub uses_topic_ids: bool,
     pub creator_principal: String,
     pub partitions: SessionPartitions,
+    /// The partitions the client forgot in the last [`RECENTLY_FORGOTTEN_TTL`]
+    /// and has not named again, oldest first, at most
+    /// [`RECENTLY_FORGOTTEN_CAP`] of them.
+    pub recently_forgotten: Vec<ForgottenPartition>,
+}
+
+impl FetchSession {
+    /// Record the partitions an incremental fetch forgot, drop the ones the
+    /// client has named again and the ones older than the TTL, and return the
+    /// keys the session still remembers.
+    ///
+    /// Call it after `apply_incremental`, so a partition the same request
+    /// forgets and adds back (which Kafka's diff treats as an update) is not
+    /// remembered as forgotten.
+    pub(super) fn note_forgotten(
+        &mut self,
+        forgotten: &[ForgottenTopic],
+        now: Duration,
+    ) -> Vec<FetchSessionKey> {
+        for topic in forgotten {
+            for &partition in &topic.partitions {
+                let key = FetchSessionKey {
+                    topic_name: topic.topic.clone(),
+                    topic_id: topic.topic_id,
+                    partition,
+                };
+                // Forgotten again: the newer stamp replaces the older one.
+                self.recently_forgotten
+                    .retain(|entry| !same_partition(&entry.key, &key));
+                self.recently_forgotten.push(ForgottenPartition {
+                    key,
+                    forgotten_at: now,
+                });
+            }
+        }
+        let partitions = &self.partitions;
+        self.recently_forgotten.retain(|entry| {
+            now.saturating_sub(entry.forgotten_at) <= RECENTLY_FORGOTTEN_TTL
+                && !partitions
+                    .keys()
+                    .any(|cached| same_partition(cached, &entry.key))
+        });
+        if self.recently_forgotten.len() > RECENTLY_FORGOTTEN_CAP {
+            let excess = self.recently_forgotten.len() - RECENTLY_FORGOTTEN_CAP;
+            self.recently_forgotten.drain(..excess);
+        }
+        self.recently_forgotten
+            .iter()
+            .map(|entry| entry.key.clone())
+            .collect()
+    }
+}
+
+/// Whether two keys name the same partition, by whichever half of the topic's
+/// identity the request carried: a v13 request names a topic by id alone and
+/// an older one by name alone, and the cache may hold either or both.
+fn same_partition(a: &FetchSessionKey, b: &FetchSessionKey) -> bool {
+    a.partition == b.partition
+        && ((!a.topic_name.is_empty() && a.topic_name == b.topic_name)
+            || (a.topic_id != WireUuid::ZERO && a.topic_id == b.topic_id))
 }
 
 pub(super) struct Inner {

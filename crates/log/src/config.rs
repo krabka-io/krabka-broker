@@ -233,7 +233,10 @@ pub struct LogConfig {
     /// read ahead, as a `POSIX_FADV_WILLNEED` hint, so a consumer that is
     /// behind finds its next fetch in the page cache. The hint covers the
     /// window and then up to one more window, capped at this. `0` hints only
-    /// the window itself. The hint is a no-op off Linux.
+    /// the window itself. The broker gives the hint as one `WILLNEED` call
+    /// for each 128 KiB of the range, because Linux reads only about
+    /// `max(max_sectors_kb, read_ahead_kb)` of one call. The hint is a no-op
+    /// off Linux.
     #[default(DEFAULT_READ_AHEAD_MAX)]
     pub read_ahead_max: ByteSize,
 

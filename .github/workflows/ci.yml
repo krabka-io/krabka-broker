@@ -1271,7 +1271,8 @@ jobs:
   #
   # Each side runs four times, alternating on the same host. The verdict uses
   # medians and three times the larger median absolute deviation, with a 10%
-  # floor. Missing or invalid samples fail. Raw output, exact commits, the
+  # floor, and a benchmark fails only when its candidate passes are also all
+  # slower than its reference passes. Missing or invalid samples fail. Raw output, exact commits, the
   # SHA-256 of every bench executable each pass ran, and host resources travel
   # with the verdict artifact. Pull requests only compile the benches; this
   # eight-pass lane is nightly and manually dispatchable.

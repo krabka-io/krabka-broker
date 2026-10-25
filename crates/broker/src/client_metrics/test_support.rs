@@ -2,12 +2,31 @@
 //!
 //! Both the live-broker handler tests and the Prometheus flattening tests need
 //! the same minimal OTLP payload shapes, so the builders live here rather than
-//! being duplicated in each module.
+//! being duplicated in each module. The live-broker tests also share the
+//! subscription their payloads need.
 
-use opentelemetry_proto::tonic::metrics::v1::{
-    Gauge, Metric, MetricsData, NumberDataPoint, ResourceMetrics, ScopeMetrics, metric,
-    number_data_point,
+use {
+    crate::broker::BrokerHandle,
+    krabka_metadata::{ClientMetricsConfigRecord, MetadataRecord},
+    opentelemetry_proto::tonic::metrics::v1::{
+        Gauge, Metric, MetricsData, NumberDataPoint, ResourceMetrics, ScopeMetrics, metric,
+        number_data_point,
+    },
 };
+
+/// Subscribes every client to `cpu.utilization`, the one metric the live-broker
+/// telemetry tests push. The broker accepts only subscribed metrics.
+pub async fn subscribe_to_cpu(handle: &BrokerHandle) {
+    handle
+        .submit_metadata_record_for_test(MetadataRecord::V1ClientMetricsConfig(
+            ClientMetricsConfigRecord {
+                name: "cpu".into(),
+                configs: [("metrics".to_owned(), "cpu.utilization".to_owned())].into(),
+            },
+        ))
+        .await
+        .expect("submit client-metrics subscription");
+}
 
 pub fn number_point(value: number_data_point::Value) -> NumberDataPoint {
     NumberDataPoint {

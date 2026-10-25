@@ -1311,7 +1311,10 @@ mod tests {
     #[tokio::test]
     async fn a_remote_band_fetch_answers_replica_not_available_while_the_rlmm_catches_up() {
         use {
-            super::super::{read_loop::execute_pending_reads, response::GroupedResponses},
+            super::super::{
+                read_loop::{ReadBudget, execute_pending_reads},
+                response::GroupedResponses,
+            },
             crate::{codes, config::KafkaRlmmConfig, metrics::RequestPhases},
             std::time::Duration,
         };
@@ -1345,10 +1348,13 @@ mod tests {
             execute_pending_reads(
                 &broker,
                 vec![local_miss],
-                1,
-                1 << 20,
-                30_000,
-                false,
+                &[],
+                ReadBudget {
+                    min_bytes: 1,
+                    response_max_bytes: 1 << 20,
+                    max_wait_ms: 30_000,
+                    sendfile_capable: false,
+                },
                 &RequestPhases::default(),
             ),
         )

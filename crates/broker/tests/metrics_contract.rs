@@ -214,12 +214,9 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         controller_leader_changes_total: _controller_leader_changes_total,
         controller_fencing_publications_total: _controller_fencing_publications_total,
         controller_event_queue_time_seconds: _controller_event_queue_time_seconds,
-        controller_event_queue_processing_time_seconds:
-            _controller_event_queue_processing_time_seconds,
-        controller_event_queue_operations_started_total:
-            _controller_event_queue_operations_started_total,
-        controller_event_queue_operations_timed_out_total:
-            _controller_event_queue_operations_timed_out_total,
+        controller_event_queue_processing_time_seconds: _controller_event_queue_processing_time_seconds,
+        controller_event_queue_operations_started_total: _controller_event_queue_operations_started_total,
+        controller_event_queue_operations_timed_out_total: _controller_event_queue_operations_timed_out_total,
         controller_event_queue_idle_seconds_total: _controller_event_queue_idle_seconds_total,
         isr_shrinks_total: _isr_shrinks_total,
         isr_expands_total: _isr_expands_total,
@@ -228,6 +225,7 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         incremental_fetch_sessions: _incremental_fetch_sessions,
         incremental_fetch_session_evictions_total: _incremental_fetch_session_evictions_total,
         incremental_fetch_partitions_cached: _incremental_fetch_partitions_cached,
+        fetch_forgotten_partition_wakes_total: _fetch_forgotten_partition_wakes_total,
         client_software_versions: _client_software_versions,
         successful_authentication: _successful_authentication,
         failed_authentication: _failed_authentication,
@@ -262,6 +260,10 @@ fn every_family_is_accounted_for(metrics: &BrokerMetrics) {
         audit_records_dropped_total: _audit_records_dropped_total,
         client_metrics_otlp_dropped_total: _client_metrics_otlp_dropped_total,
         client_metrics_otlp_failed_total: _client_metrics_otlp_failed_total,
+        client_metrics_series_accepted_total: _client_metrics_series_accepted_total,
+        client_metrics_series_rejected: _client_metrics_series_rejected,
+        client_metrics_series_evicted: _client_metrics_series_evicted,
+        client_metrics_retained_series: _client_metrics_retained_series,
         log_cleaner_runs_total: _log_cleaner_runs_total,
         log_cleaner_failures: _log_cleaner_failures,
         log_retention_runs_total: _log_retention_runs_total,
@@ -434,8 +436,9 @@ fn seed_grouped_families(metrics: &BrokerMetrics) {
 /// Gives one label set to every family whose label type no other family
 /// shares. [`seed_grouped_families`] marks each of these with `_`.
 ///
-/// `fetch_response_drain` is also marked `_`, but needs no seed: registration
-/// creates all three of its `path` series at zero.
+/// `fetch_response_drain`, `client_metrics_series_rejected` and
+/// `client_metrics_series_evicted` are also marked `_`, but need no seed:
+/// registration creates every one of their closed-enum series at zero.
 fn seed_single_families(metrics: &BrokerMetrics) {
     drop(metrics.replica_lag.get_or_create(&ReplicaLagLabel {
         topic: "orders".into(),

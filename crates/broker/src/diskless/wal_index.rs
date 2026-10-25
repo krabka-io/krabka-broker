@@ -2,7 +2,10 @@
 
 pub use krabka_remote_storage::diskless::{
     WalIndexEntry,
-    index::{WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexKey},
+    index::{
+        WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexKey,
+        WalObjectReservationKey,
+    },
 };
 use {
     krabka_verified::{
@@ -76,6 +79,10 @@ pub struct WalIndexCache {
     /// a range that straddles the floor, and the newest range that retention
     /// never expires, keep records below the floor in the projection.
     delete_floors: HashMap<PartitionKey, i64>,
+    /// UUIDs of objects whose bytes may exist before their range records are
+    /// committed. Reservations are encoded in the existing 1.x delete-floor
+    /// key space on an impossible negative partition.
+    object_reservations: HashSet<Uuid>,
 }
 
 impl WalIndexCache {
@@ -162,6 +169,16 @@ impl WalIndexCache {
             .remove(&PartitionKey::new(key.topic_id, key.partition));
     }
 
+    /// Protect an uploaded or in-flight object until its index ranges commit.
+    pub(crate) fn reserve_object(&mut self, object_id: Uuid) {
+        self.object_reservations.insert(object_id);
+    }
+
+    /// Drop a reservation after its range records are committed.
+    pub(crate) fn release_object_reservation(&mut self, object_id: Uuid) {
+        self.object_reservations.remove(&object_id);
+    }
+
     /// The partition's `DeleteRecords` floor, or zero when none was set.
     #[must_use]
     pub(crate) fn delete_floor(&self, topic_id: Uuid, partition: i32) -> i64 {
@@ -235,15 +252,9 @@ impl WalIndexCache {
             .collect()
     }
 
-    /// Object keys referenced by at least one projected range.
+    /// Object UUIDs whose publication is in flight.
     #[must_use]
-    pub(crate) fn referenced_objects(&self) -> HashSet<String> {
-        self.by_topic_partition
-            .values()
-            .flat_map(BTreeMap::values)
-            .map(|range| range.object_key.clone())
-            .collect()
-    }
+    pub(crate) fn reserved_objects(&self) -> HashSet<Uuid> { self.object_reservations.clone() }
 
     /// Whether at least one projected range still names this object.
     #[must_use]
@@ -252,6 +263,8 @@ impl WalIndexCache {
             .values()
             .flat_map(BTreeMap::values)
             .any(|range| range.object_key == object_key)
+            || object_id_from_key(object_key)
+                .is_some_and(|object_id| self.object_reservations.contains(&object_id))
     }
 
     /// Return whether every entry from this flush record is present in the
@@ -371,6 +384,13 @@ impl WalIndexCache {
             .next()
             .map(|range| range.entry.first_offset.max(floor))
     }
+}
+
+/// The UUID an object key `.../<uuid>.ckwl` names, which a reservation is
+/// keyed by.
+pub(crate) fn object_id_from_key(object_key: &str) -> Option<Uuid> {
+    let filename = object_key.rsplit('/').next()?;
+    Uuid::parse_str(filename.strip_suffix(".ckwl")?).ok()
 }
 
 #[cfg(test)]
@@ -776,14 +796,14 @@ mod tests {
             format_version: WalFlushRecord::FORMAT_VERSION,
             entries: vec![shared],
         });
-        assert!(cache.referenced_objects() == ["new".into(), "old".into()].into());
+        assert!(["new", "old"].map(|key| cache.references_object(key)) == [true, true]);
 
         cache.remove(WalIndexKey {
             topic_id: Uuid::from_u128(1),
             partition: 1,
             first_offset: 0,
         });
-        assert!(cache.referenced_objects() == ["new".into()].into());
+        assert!(["new", "old"].map(|key| cache.references_object(key)) == [true, false]);
     }
 
     /// One keyed index event for the range `entry(0, 0, 4)`.

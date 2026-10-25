@@ -53,11 +53,13 @@ pub use self::{
     labels::{
         ApiKeyLabel, AuthorizationDeniedLabel, BarrierGroupLabel, BreakGlassAction,
         BreakGlassActionLabel, BreakGlassState, BreakGlassStateLabel, CleanerFailureLabel,
-        CleanerFailureReason, ClientSoftwareLabel, ConnectionCloseReason,
-        ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel, FetchDrainPath,
-        FetchDrainPathLabel, MetadataPartitionLabel, PartitionLabel, QuotaEntityLabel, QuotaType,
-        QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel, SaslMechanismLabel, SchemaRejectionLabel,
-        ShareGroupIdLabel, ShareGroupLabel, TopicLabel, WalShardLabel, WalVoterLabel,
+        CleanerFailureReason, ClientMetricsEviction, ClientMetricsEvictionLabel,
+        ClientMetricsRejection, ClientMetricsRejectionLabel, ClientSoftwareLabel,
+        ConnectionCloseReason, ConnectionCloseReasonLabel, ConsumerGroupLabel, DirectoryLabel,
+        FetchDrainPath, FetchDrainPathLabel, MetadataPartitionLabel, PartitionLabel,
+        QuotaEntityLabel, QuotaType, QuotaTypeLabel, RaftStateLabel, ReplicaLagLabel,
+        SaslMechanismLabel, SchemaRejectionLabel, ShareGroupIdLabel, ShareGroupLabel, TopicLabel,
+        WalShardLabel, WalVoterLabel,
     },
     lag::LagSeriesIndex,
     remote_reader::{RemoteReaderLevels, RemoteReaderTotals},
@@ -513,6 +515,15 @@ pub struct BrokerMetrics {
         incremental-fetch session (gauge)."
     )]
     pub incremental_fetch_partitions_cached: Gauge,
+    /// Consumer fetches parked below `min_bytes` that the read loop answered
+    /// early, with no records, because a partition their session had
+    /// forgotten lately received records. See
+    /// `handlers::fetch::read_loop::arm_forgotten_waits`.
+    #[metric(
+        help = "Parked consumer fetches answered early because a partition their fetch \
+        session forgot lately received new records."
+    )]
+    pub fetch_forgotten_partition_wakes_total: Counter,
     /// KIP-511: per-(name, version) counter of accepted v3+ `ApiVersions`
     /// handshakes. Operators graph this to see which client libraries
     /// and versions are connecting.
@@ -885,6 +896,38 @@ pub struct BrokerMetrics {
     /// failed at the transport layer.
     #[metric(help = "Cumulative failed KIP-714 client-metric OTLP export attempts")]
     pub client_metrics_otlp_failed_total: Counter,
+    /// KIP-714 client-metric series the Prometheus sink stored, a new series
+    /// or an update to one it held. A series is one line a scrape renders, so
+    /// a histogram point counts each bucket plus `_sum` and `_count`.
+    #[metric(
+        help = "Cumulative KIP-714 client-metric series stored by the Prometheus sink, \
+        counted as the series a scrape renders"
+    )]
+    pub client_metrics_series_accepted_total: Counter,
+    /// KIP-714 client-metric series the Prometheus sink refused, labelled by
+    /// [`ClientMetricsRejection`]: one of the four retained-series ceilings,
+    /// or `validation` for a push the broker answered with an error. A
+    /// rejected push counts one per OTLP data point it decoded to, and one
+    /// when it did not decode at all.
+    #[metric(
+        help = "Cumulative KIP-714 client-metric series refused by the Prometheus sink, \
+        labelled by reason: instance_ceiling, client_ceiling, principal_ceiling, \
+        global_ceiling, validation"
+    )]
+    pub client_metrics_series_rejected: Family<ClientMetricsRejectionLabel, Counter>,
+    /// KIP-714 client-metric series the Prometheus sink dropped, labelled by
+    /// [`ClientMetricsEviction`]: `ttl` when the series went stale, and
+    /// `disconnect` when the connection that created its instance closed.
+    #[metric(
+        help = "Cumulative KIP-714 client-metric series dropped by the Prometheus sink, \
+        labelled by reason: ttl, disconnect"
+    )]
+    pub client_metrics_series_evicted: Family<ClientMetricsEvictionLabel, Counter>,
+    /// KIP-714 client-metric series the Prometheus sink currently holds,
+    /// counted as the series a scrape renders. It never exceeds
+    /// `client_metrics_prom_max_series`.
+    #[metric(help = "KIP-714 client-metric series currently held by the Prometheus sink")]
+    pub client_metrics_retained_series: Gauge,
     /// Cumulative count of *clean* log-compaction sweeps run by this
     /// broker's cleaner — one increment per `tick_all` pass that dispatched
     /// no compaction which then failed, whether or not any partition was

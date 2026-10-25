@@ -540,8 +540,12 @@ fn throttle_of<R: for<'de> Decode<'de>>(body: &[u8], version: i16, read: fn(&R) 
 /// KIP-124 (#692): every request that Kafka charges to the request quota is
 /// charged. Each response
 /// reports the delay in `throttle_time_ms`, wherever the schema puts the
-/// field, and the connection is muted afterwards. `WriteTxnMarkers` is exempt,
-/// as Kafka answers it through `sendResponseExemptThrottle`.
+/// field, and the connection is muted afterwards. Both KIP-714 telemetry APIs
+/// are charged, as Kafka answers them through `sendMaybeThrottle`; this broker
+/// has no client-metrics receiver, so `PushTelemetry` answers
+/// `UNSUPPORTED_VERSION`, and Kafka throttles that response too.
+/// `WriteTxnMarkers` is exempt, as Kafka answers it through
+/// `sendResponseExemptThrottle`.
 #[tokio::test]
 async fn every_charged_api_reports_its_delay_and_mutes() {
     use krabka_protocol::owned::{
@@ -553,6 +557,8 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
         get_telemetry_subscriptions_response::GetTelemetrySubscriptionsResponse,
         metadata_request::MetadataRequest, metadata_response::MetadataResponse,
         offset_delete_request::OffsetDeleteRequest, offset_delete_response::OffsetDeleteResponse,
+        push_telemetry_request::PushTelemetryRequest,
+        push_telemetry_response::PushTelemetryResponse,
         write_txn_markers_request::WriteTxnMarkersRequest,
     };
 
@@ -649,6 +655,18 @@ async fn every_charged_api_reports_its_delay_and_mutes() {
                     version,
                     |r| r.throttle_time_ms,
                 ))
+            },
+        },
+        QuotaCase {
+            name: "PushTelemetry, a telemetry dispatch",
+            api_key: 72,
+            version: 0,
+            flexible: true,
+            body: encoded(&PushTelemetryRequest::default(), 0),
+            throttle_time_ms: |body, version| {
+                Some(throttle_of::<PushTelemetryResponse>(body, version, |r| {
+                    r.throttle_time_ms
+                }))
             },
         },
         QuotaCase {

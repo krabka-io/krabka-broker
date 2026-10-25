@@ -48,6 +48,12 @@ pub enum SessionDecision {
         /// *next* expected epoch for the following request.
         new_epoch: FetchSessionEpoch,
         partitions: Vec<(FetchSessionKey, CachedPartitionState)>,
+        /// The partitions the session forgot in the last
+        /// [`super::RECENTLY_FORGOTTEN_TTL`] and has not named again, this
+        /// request's included. The read loop wakes a parked consumer fetch
+        /// when one of them moves; see
+        /// [`super::ForgottenPartition`].
+        forgotten: Vec<FetchSessionKey>,
     },
     /// Protocol violation. Emit an empty response with this top-level
     /// `error_code` and `session_id = 0`.
@@ -159,6 +165,7 @@ impl FetchSessionCache {
                 session_id: INVALID_SESSION_ID,
                 new_epoch: next_epoch(epoch),
                 partitions: Vec::new(),
+                forgotten: Vec::new(),
             };
         }
 
@@ -170,22 +177,21 @@ impl FetchSessionCache {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+        let now = self.clock.now().elapsed_since_origin();
+        let forgotten = session.note_forgotten(&req.forgotten_topics_data, now);
 
         // Kafka's `touch`: the session was used now, and holds the partitions
         // the merge above left it. This is the only place a live session moves
         // in the eviction index. It happens after the `session` borrow above
         // ends, because both halves of the cache live behind the one `guard`.
-        guard.order.touch(
-            sid,
-            partitions_after,
-            self.clock.now().elapsed_since_origin(),
-        );
+        guard.order.touch(sid, partitions_after, now);
         drop(guard);
 
         SessionDecision::Incremental {
             session_id: sid,
             new_epoch,
             partitions,
+            forgotten,
         }
     }
 }
@@ -194,10 +200,14 @@ impl FetchSessionCache {
 mod tests {
     use {
         super::*,
-        crate::fetch_session::test_support::{
-            AllocatedCache, NAME_FETCH_VERSION, RequestSessionId, SessionRequestSetup,
-            TopicAddressing, allocate_session, allocated_cache, error_code, forgotten_topic, req,
-            seed_resolved_partition, session_key, topic,
+        crate::fetch_session::{
+            RECENTLY_FORGOTTEN_CAP, RECENTLY_FORGOTTEN_TTL,
+            test_support::{
+                AllocatedCache, ManualCache, NAME_FETCH_VERSION, RequestSessionId,
+                SessionRequestSetup, SessionSlotCount, TICK, TopicAddressing, allocate_session,
+                allocated_cache, error_code, forgotten_topic, manual_cache, req,
+                seed_resolved_partition, session_key, topic,
+            },
         },
         assert2::{assert, check},
         krabka_protocol::{
@@ -470,10 +480,12 @@ mod tests {
                 session_id,
                 new_epoch,
                 partitions,
+                forgotten,
             } => {
                 check!(session_id == id);
                 check!(new_epoch == 2);
                 check!(partitions.len() == 2);
+                check!(forgotten.is_empty());
             }
             other => panic!("expected Incremental, got {other:?}"),
         }
@@ -664,6 +676,92 @@ mod tests {
         if matches!(case, ForgottenPartitionsCase::RemoveAll) {
             assert2::assert!(cache.len() == 0);
             assert2::assert!(cache.total_partitions_cached() == 0);
+        }
+    }
+
+    /// A partition an incremental fetch forgets stays with the session, for
+    /// the read loop to wake a parked fetch on, until the client names it
+    /// again or `RECENTLY_FORGOTTEN_TTL` passes.
+    #[test]
+    fn a_forgotten_partition_is_remembered_until_named_again_or_expired() {
+        let ManualCache { cache, clock } = manual_cache(SessionSlotCount(10));
+        let initial = vec![
+            (
+                session_key().partition(0).call(),
+                CachedPartitionState::default(),
+            ),
+            (
+                session_key().partition(1).call(),
+                CachedPartitionState::default(),
+            ),
+        ];
+        let id = allocate_session().cache(&cache).partitions(initial).call();
+        let forgets_one = |epoch| {
+            req()
+                .session_id(id)
+                .session_epoch(epoch)
+                .forgotten(vec![
+                    forgotten_topic()
+                        .partitions(vec![krabka_ids::PartitionIndex(1)])
+                        .call(),
+                ])
+                .call()
+        };
+        let names_nothing = |epoch| req().session_id(id).session_epoch(epoch).call();
+        let forgotten_of = |r: &FetchRequest| match cache.classify(r, NAME_FETCH_VERSION) {
+            SessionDecision::Incremental { forgotten, .. } => forgotten,
+            other => panic!("expected Incremental, got {other:?}"),
+        };
+
+        assert!(forgotten_of(&forgets_one(1)) == vec![session_key().partition(1).call()]);
+        // A later fetch that says nothing about the partition still remembers it.
+        assert!(forgotten_of(&names_nothing(2)).len() == 1);
+        // Naming it again ends the memory.
+        let names_it_again = req()
+            .session_id(id)
+            .session_epoch(3)
+            .topics(vec![topic("t", &[krabka_ids::PartitionIndex(1)])])
+            .call();
+        assert!(forgotten_of(&names_it_again).is_empty());
+        // Forgotten once more, then left alone past the TTL.
+        assert!(forgotten_of(&forgets_one(4)).len() == 1);
+        clock
+            .advance(RECENTLY_FORGOTTEN_TTL + TICK)
+            .expect("advance the manual clock");
+        assert!(forgotten_of(&names_nothing(5)).is_empty());
+    }
+
+    /// The memory is bounded: a fetch that forgets more partitions than the
+    /// cap keeps the newest ones.
+    #[test]
+    fn a_session_remembers_at_most_the_newest_forgotten_partitions() {
+        let cache = FetchSessionCache::new(10);
+        let cap = i32::try_from(RECENTLY_FORGOTTEN_CAP).unwrap();
+        let initial: Vec<_> = (0..=cap + 1)
+            .map(|p| {
+                (
+                    session_key().partition(p).call(),
+                    CachedPartitionState::default(),
+                )
+            })
+            .collect();
+        let id = allocate_session().cache(&cache).partitions(initial).call();
+        // Forget every partition but the last, so the session stays open.
+        let r = req()
+            .session_id(id)
+            .session_epoch(1)
+            .forgotten(vec![
+                forgotten_topic()
+                    .partitions((0..=cap).map(krabka_ids::PartitionIndex).collect())
+                    .call(),
+            ])
+            .call();
+        match cache.classify(&r, NAME_FETCH_VERSION) {
+            SessionDecision::Incremental { forgotten, .. } => {
+                let kept: Vec<i32> = forgotten.iter().map(|k| k.partition).collect();
+                assert!(kept == (1..=cap).collect::<Vec<_>>());
+            }
+            other => panic!("expected Incremental, got {other:?}"),
         }
     }
 }

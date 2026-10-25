@@ -49,12 +49,26 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- A consumer fetch parked below `fetch.min.bytes` is answered early, with no
+  records, when a partition its fetch session forgot in the last 100 ms
+  receives records. The Java consumer leaves a partition out of its next fetch
+  while it still holds that partition's records, and names it again once it
+  has drained them. Before, that fetch waited out `fetch.max.wait.ms` on the
+  idle partitions it did name while the busy partition it left out gathered
+  records, which held a single consumer behind one busy partition for up to
+  `fetch.max.wait.ms`. The new `fetch_forgotten_partition_wakes_total` counter
+  counts the early answers.
 - CPU profiling initializes the sampler and builds, encodes, and compresses
   reports on blocking workers, keeping that work off runtime workers.
 - Direct-mode reads covered by the tail cache and ordinary verbatim appends
   that fit an initialized direct-write queue can run without a blocking-worker
   handoff. Segment setup, flushes, epoch checkpoint changes, cold reads and
   queue backpressure still use blocking placement.
+- The fetch path gives its `POSIX_FADV_WILLNEED` readahead hint as one call
+  for each 128 KiB of the range. Linux reads only about
+  `max(max_sectors_kb, read_ahead_kb)` of one call, so one hint over the
+  window and the 4 MiB after it read only the start of that range. The
+  range is unchanged (#1333).
 - Large in-memory fetch payloads share vectored writes with their headers,
   reducing socket calls without copying records. Small responses retain
   coalescing. [Small-record profiling](docs/operations/omb-small-record-profiling.md)
@@ -65,9 +79,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 - Scheduled delivery checks over archived segments buffer bounded byte ranges
   instead of fetching each batch header separately, reducing remote requests for
   ListOffsets LATEST and retention scans (#1682).
-- The RF3 regression contract is now `rf3-regression-v2`. It raises the
-  variance budget of records/s from 10% to 15%, and of p99 latency from 25% to
-  50%. The first measured run of `rf3-regression-v1` exceeded both, and
+- The RF3 regression contract is now `rf3-regression-v3`. It raises the
+  variance budget of records/s from 10% to 15%, of p99 latency from 25% to
+  50%, and of CPU per record from 10% to 15%. The first measured run of
+  `rf3-regression-v1` exceeded the first two, and the first `before_after` run
+  of `rf3-regression-v2` exceeded the third.
   [Performance budget results](docs/operations/performance-budget-results.md#calibration)
   records the calibration runs. Every materiality floor and spread multiplier
   is unchanged (#1395).
@@ -275,6 +291,18 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- A controller that starts over a feature level it does not support now
+  refuses before it writes anything, also when its recovered high watermark is
+  below the record that finalized the level. Startup rebuilt the image from
+  the committed prefix only, and the high watermark comes from a cache file
+  that can lag or be missing. The engine then started, elected itself,
+  appended to the metadata log and wrote `quorum-state`, the leader-epoch
+  checkpoint and the high watermark, and refused the level only when it
+  committed it. The startup guard now also reads every feature level that the
+  log holds above the high watermark. This is release blocker F5: a rollback
+  to a release that refuses the level must change no byte. The fix protects a
+  rollback to a release that carries it. `v1.0.8` and earlier releases
+  still have the window.
 - Diskless upload and maintenance stop when the index projection fails, including during an object-store request (#1703).
 
 - Require `ClusterAction` for `PushTelemetry`, refuse both client-telemetry
