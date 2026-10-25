@@ -115,7 +115,10 @@ pub struct Log {
     /// Bytes appended through the page cache since the last background sync
     /// of the active segment started, and the syncs still running, oldest
     /// first. See [`LogConfig::writeback_window`] and `Log::pace_writeback`.
+    /// `wasm32-wasip1` has no flush pool, so it paces nothing.
+    #[cfg(not(target_os = "wasi"))]
     writeback_unsynced: u64,
+    #[cfg(not(target_os = "wasi"))]
     writeback_jobs: std::collections::VecDeque<rollover_flush::FlushTicket>,
     roll_jitter: Option<RollJitter>,
     pending_deletes: Vec<PendingDelete>,

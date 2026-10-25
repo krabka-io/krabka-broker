@@ -223,7 +223,9 @@ impl Log {
             opened_end: Offset(0),
             unflushed_messages: 0,
             last_flush: std::time::Instant::now(),
+            #[cfg(not(target_os = "wasi"))]
             writeback_unsynced: 0,
+            #[cfg(not(target_os = "wasi"))]
             writeback_jobs: std::collections::VecDeque::new(),
             roll_jitter: None,
             pending_deletes: Vec::new(),

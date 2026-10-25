@@ -59,8 +59,11 @@ impl Log {
     pub fn sync(&mut self) -> Result<(), LogError> {
         self.rollover_flusher.finish()?;
         // Everything is synced below, so the next window starts from zero.
-        self.writeback_unsynced = 0;
-        self.writeback_jobs.clear();
+        #[cfg(not(target_os = "wasi"))]
+        {
+            self.writeback_unsynced = 0;
+            self.writeback_jobs.clear();
+        }
         for segment in &mut self.segments {
             Self::segment_flush(segment)?;
         }
