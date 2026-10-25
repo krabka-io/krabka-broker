@@ -5,7 +5,13 @@ use {
     crate::{
         authorizer::AllowAllAuthorizer,
         clean_shutdown::UNPROVEN,
-        client_metrics::config::INTERVAL_MS_DEFAULT,
+        client_metrics::{
+            config::INTERVAL_MS_DEFAULT,
+            prometheus_sink::{
+                MAX_RETAINED_SERIES, MAX_RETAINED_SERIES_PER_CLIENT,
+                MAX_RETAINED_SERIES_PER_INSTANCE, MAX_RETAINED_SERIES_PER_PRINCIPAL,
+            },
+        },
         config::{
             BreakGlassConfig, BrokerConfig, DEFAULT_AUDIT_CHECKPOINT_EVERY,
             DEFAULT_AUDIT_CHECKPOINT_EVERY_N, DEFAULT_AUDIT_SPOOL_DIR, DEFAULT_AUDIT_SPOOL_MAX,
@@ -81,6 +87,10 @@ impl Default for BrokerConfig {
             client_metrics_otlp_queue_capacity: 256,
             client_metrics_telemetry_max: mebibytes(1),
             client_metrics_prom_snapshot_ttl: minutes(5),
+            client_metrics_prom_max_series: MAX_RETAINED_SERIES,
+            client_metrics_prom_max_series_per_principal: MAX_RETAINED_SERIES_PER_PRINCIPAL,
+            client_metrics_prom_max_series_per_client: MAX_RETAINED_SERIES_PER_CLIENT,
+            client_metrics_prom_max_series_per_instance: MAX_RETAINED_SERIES_PER_INSTANCE,
             rlmm_reconcile_tick: secs(30),
             rlmm_bootstrap_backoff_initial: millis(250),
             rlmm_bootstrap_backoff_max: secs(10),
@@ -404,6 +414,14 @@ mod tests {
                 secs(10),
                 millis(500),
             )
+        );
+        assert!(
+            (
+                config.client_metrics_prom_max_series,
+                config.client_metrics_prom_max_series_per_principal,
+                config.client_metrics_prom_max_series_per_client,
+                config.client_metrics_prom_max_series_per_instance,
+            ) == (10_000, 2_500, 1_000, 500)
         );
         assert!(
             config.replication

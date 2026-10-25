@@ -12,7 +12,7 @@ use {
 
 #[test]
 fn rejects_non_positive_runtime_scalars() {
-    let cases: [RuntimeInvalidator; 23] = [
+    let cases: [RuntimeInvalidator; 27] = [
         RuntimeInvalidator {
             expected: "startup_leader_wait_timeout",
             invalidate: |c| {
@@ -65,6 +65,30 @@ fn rejects_non_positive_runtime_scalars() {
             expected: "client_metrics_otlp_queue_capacity",
             invalidate: |c| {
                 c.client_metrics_otlp_queue_capacity = 0;
+            },
+        },
+        RuntimeInvalidator {
+            expected: "client_metrics_prom_max_series",
+            invalidate: |c| {
+                c.client_metrics_prom_max_series = 0;
+            },
+        },
+        RuntimeInvalidator {
+            expected: "client_metrics_prom_max_series_per_principal",
+            invalidate: |c| {
+                c.client_metrics_prom_max_series_per_principal = 0;
+            },
+        },
+        RuntimeInvalidator {
+            expected: "client_metrics_prom_max_series_per_client",
+            invalidate: |c| {
+                c.client_metrics_prom_max_series_per_client = 0;
+            },
+        },
+        RuntimeInvalidator {
+            expected: "client_metrics_prom_max_series_per_instance",
+            invalidate: |c| {
+                c.client_metrics_prom_max_series_per_instance = 0;
             },
         },
         RuntimeInvalidator {

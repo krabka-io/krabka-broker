@@ -1639,6 +1639,42 @@
             "null"
           ]
         },
+        "client_metrics_prom_max_series": {
+          "description": "Maximum number of client-metric series that one Prometheus scrape\nrenders, across all clients. A histogram counts one series for each\nbucket, plus one for `_sum` and one for `_count`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "client_metrics_prom_max_series_per_client": {
+          "description": "Maximum number of Prometheus client-metric series for one\n`client_id`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "client_metrics_prom_max_series_per_instance": {
+          "description": "Maximum number of Prometheus client-metric series for one client\ninstance id.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "client_metrics_prom_max_series_per_principal": {
+          "description": "Maximum number of Prometheus client-metric series for one\nauthenticated principal, in Kafka's `User:name` form. Every anonymous\nclient shares `User:ANONYMOUS`. This ceiling stops a principal that\nrotates its `client_id` from filling the global ceiling.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "client_metrics_prom_snapshot_ttl": {
           "default": null,
           "description": "Lifetime of a Prometheus client-metrics snapshot.",

@@ -3,7 +3,10 @@
 //! `#[metric(buckets = ...)]` attributes on [`BrokerMetrics`] name, and the
 //! entry point that runs the derived constructor and registration.
 
-use crate::metrics::{BrokerMetrics, FetchDrainPath, FetchDrainPathLabel};
+use crate::metrics::{
+    BrokerMetrics, ClientMetricsEviction, ClientMetricsEvictionLabel, ClientMetricsRejection,
+    ClientMetricsRejectionLabel, FetchDrainPath, FetchDrainPathLabel,
+};
 
 #[cfg(test)]
 mod tests;
@@ -79,6 +82,18 @@ impl BrokerMetrics {
             let _ = metrics
                 .fetch_response_drain
                 .get_or_create(&FetchDrainPathLabel { path });
+        }
+        // The client-metrics reasons are closed enums too, and an alert on a
+        // ceiling has to find its series before the first refusal.
+        for reason in ClientMetricsRejection::ALL {
+            let _ = metrics
+                .client_metrics_series_rejected
+                .get_or_create(&ClientMetricsRejectionLabel { reason });
+        }
+        for reason in ClientMetricsEviction::ALL {
+            let _ = metrics
+                .client_metrics_series_evicted
+                .get_or_create(&ClientMetricsEvictionLabel { reason });
         }
         metrics
     }

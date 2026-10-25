@@ -25,7 +25,7 @@ mod tests;
 use crate::{
     api_catalog::{ClientMetricsReceiver, UnstableApiVersions},
     client_metrics::{
-        ingestion::IngestionError,
+        ingestion::{IngestionError, PushSource},
         manager::{PushCheck, PushDecision},
     },
     codes,
@@ -116,8 +116,11 @@ crate::handlers::raw_request_handler!(
                     ct,
                     &req.metrics,
                     &subscribed,
-                    instance,
-                    ctx.client_id,
+                    PushSource {
+                        instance,
+                        client_id: ctx.client_id,
+                        principal: ctx.principal,
+                    },
                 ) {
                     Ok(()) => codes::NONE,
                     Err(IngestionError::TooLarge) if unstable == UnstableApiVersions::Enabled => {

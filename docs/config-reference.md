@@ -391,6 +391,10 @@ Validated operational policy loaded from `[runtime]`.
 | `client_metrics_enable` | boolean | broker default |  | Whether the broker advertises the KIP-714 client-metrics RPCs, `GetTelemetrySubscriptions` (71) and `PushTelemetry` (72). Kafka advertises them only when `metric.reporters` holds a `ClientTelemetry` implementation, so the default here is `false` as well and a client starts no telemetry handshake the broker has nowhere to forward. A configured `[telemetry]` OTLP endpoint turns them on without this key. |
 | `client_metrics_eviction_tick` | string | broker default | duration | Cadence at which the KIP-714 client-metrics cache evicts entries. |
 | `client_metrics_otlp_queue_capacity` | integer (uint) | broker default |  | Capacity of the client-metrics OTLP forwarding queue. |
+| `client_metrics_prom_max_series` | integer (uint) | broker default |  | Maximum number of client-metric series that one Prometheus scrape renders, across all clients. A histogram counts one series for each bucket, plus one for `_sum` and one for `_count`. |
+| `client_metrics_prom_max_series_per_client` | integer (uint) | broker default |  | Maximum number of Prometheus client-metric series for one `client_id`. |
+| `client_metrics_prom_max_series_per_instance` | integer (uint) | broker default |  | Maximum number of Prometheus client-metric series for one client instance id. |
+| `client_metrics_prom_max_series_per_principal` | integer (uint) | broker default |  | Maximum number of Prometheus client-metric series for one authenticated principal, in Kafka's `User:name` form. Every anonymous client shares `User:ANONYMOUS`. This ceiling stops a principal that rotates its `client_id` from filling the global ceiling. |
 | `client_metrics_prom_snapshot_ttl` | string | broker default | duration | Lifetime of a Prometheus client-metrics snapshot. |
 | `client_metrics_stale_floor` | string | broker default | duration | Minimum age at which a client-metrics entry counts as stale. |
 | `client_metrics_stale_push_intervals` | integer (uint32) | broker default |  | Number of missed push intervals after which client metrics expire. |
