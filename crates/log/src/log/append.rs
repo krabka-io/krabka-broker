@@ -501,6 +501,8 @@ impl Log {
                 batch.last_offset_delta,
                 flush_on_append || writes_durable_sidecar,
             )?;
+            #[cfg(not(target_os = "wasi"))]
+            self.pace_writeback(stored_bytes.len())?;
 
             // Sidecars are written only after the batch bytes. Any failure in
             // this block takes the full-log rollback path below.
@@ -654,6 +656,13 @@ impl Log {
         let stamp_index_path = new_seg.stamp_index_path();
         self.active = Some(new_seg);
         self.roll_jitter = None;
+        // The rollover flush syncs what the sealed segment's background
+        // syncs had not reached; the new segment starts with nothing unsynced.
+        #[cfg(not(target_os = "wasi"))]
+        {
+            self.writeback_unsynced = 0;
+            self.writeback_jobs.clear();
+        }
         self.dir_sync_needed = true;
         self.reopen_active_stamp_index(new_base, stamp_index_path)?;
         Ok(())

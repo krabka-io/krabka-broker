@@ -630,3 +630,67 @@ fn a_ticket_waits_only_for_the_flushes_before_it() {
     assert!(matches!(pending, Err(mpsc::RecvTimeoutError::Timeout)));
     assert!(matches!(await_progress(&later), Ok(Ok(()))));
 }
+
+/// Performs every `sync_data` and counts the ones on the `.log` file.
+#[derive(Debug, Default)]
+struct CountingIo {
+    syncs: std::sync::atomic::AtomicUsize,
+}
+
+impl LogIo for CountingIo {
+    fn sync_data(&self, file: &File) -> io::Result<()> {
+        self.syncs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        file.sync_data()
+    }
+}
+
+/// A log with `window` as its writeback window and a private flush pool,
+/// after `appends` appends of one 1 KiB record each.
+fn appended_through_page_cache(
+    dir: &std::path::Path,
+    window: u32,
+    appends: usize,
+) -> (Log, Arc<CountingIo>) {
+    let mut log = Log::open(dir, LogConfig {
+        writeback_window: bytes(window),
+        retention: None,
+        ..LogConfig::default()
+    })
+    .unwrap();
+    let io = Arc::new(CountingIo::default());
+    log.test_set_io(io.clone());
+    log.rollover_flusher.executor =
+        Some(super::executor::Executor::new(2, 256, 64 * 1024 * 1024).unwrap());
+    for _ in 0..appends {
+        let mut batch = krabka_protocol::records::RecordBatch {
+            records: vec![krabka_protocol::records::Record {
+                value: Some(bytes::Bytes::from(vec![7u8; 1024])),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        log.append(&mut batch).unwrap();
+    }
+    (log, io)
+}
+
+/// Through the page cache, every `writeback_window` appended bytes start one
+/// background sync of the active segment, and nothing else syncs it.
+#[test]
+fn appends_through_the_page_cache_start_a_sync_every_writeback_window() {
+    let dir = tempdir().unwrap();
+    // 32 KiB of records through a 4 KiB window: at least 7 windows filled.
+    let (log, io) = appended_through_page_cache(dir.path(), 4096, 32);
+    log.rollover_flusher.finish().unwrap();
+    let syncs = io.syncs.load(std::sync::atomic::Ordering::SeqCst);
+    assert!((7..=8).contains(&syncs), "{syncs} syncs");
+}
+
+/// A window of zero leaves write-back to the kernel.
+#[test]
+fn a_zero_writeback_window_starts_no_sync() {
+    let dir = tempdir().unwrap();
+    let (log, io) = appended_through_page_cache(dir.path(), 0, 32);
+    log.rollover_flusher.finish().unwrap();
+    assert!(io.syncs.load(std::sync::atomic::Ordering::SeqCst) == 0);
+}

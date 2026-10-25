@@ -49,6 +49,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- A partition written through the page cache starts a background `fdatasync`
+  of its active segment every `log_writeback_window` bytes (8 MiB by
+  default), and an append waits only while two such syncs are still running.
+  The kernel then holds about 16 MiB of dirty data per segment at most, so
+  its dirty-page throttling and the sync at segment roll no longer pause an
+  append for hundreds of milliseconds. `log_writeback_window = "0B"` leaves
+  write-back to the kernel, as before. Partitions with `preallocate=true`
+  write through `O_DIRECT` and are unchanged.
 - A consumer fetch parked below `fetch.min.bytes` is answered early, with no
   records, when a partition its fetch session forgot in the last 100 ms
   receives records. The Java consumer leaves a partition out of its next fetch

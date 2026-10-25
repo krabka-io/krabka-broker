@@ -130,6 +130,17 @@ pub struct RuntimeFileConfig {
     /// Every such partition holds up to this much, plus one batch. The
     /// default is 32 MiB, and 0 keeps only the newest batch.
     pub log_tail_cache_size: Option<ByteSize>,
+    /// How many bytes a partition written through the page cache appends
+    /// between background syncs of its active segment. The broker starts an
+    /// `fdatasync` of the segment file every this many bytes, off the writer,
+    /// and makes an append wait while two are still running, so the kernel
+    /// holds about twice this much dirty data for the segment at most. That
+    /// keeps the kernel's dirty-page throttling, which pauses a writer for up
+    /// to 200 ms at a time, and the sync at segment roll from holding an
+    /// append for long. A partition with `preallocate=true` writes through
+    /// `O_DIRECT` and needs none of this. The default is 8 MiB, and 0 leaves
+    /// write-back to the kernel.
+    pub log_writeback_window: Option<ByteSize>,
     /// How often a partition writes the log start offset that local retention
     /// moved to its `log-start-offset-checkpoint` file, Kafka's
     /// `log.flush.start.offset.checkpoint.interval.ms`. Retention moves the
