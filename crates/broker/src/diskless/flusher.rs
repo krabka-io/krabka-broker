@@ -619,7 +619,10 @@ mod tests {
             let orphan = format!("{cluster}/diskless-wal/7/orphan.ckwl");
             for key in [&live, &orphan] {
                 store
-                    .put(&Path::from(key.as_str()), PutPayload::from_static(b"object"))
+                    .put(
+                        &Path::from(key.as_str()),
+                        PutPayload::from_static(b"object"),
+                    )
                     .await
                     .unwrap();
             }
