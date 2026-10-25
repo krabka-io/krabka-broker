@@ -1,30 +1,37 @@
 """Measure what profile-guided optimization does for the broker.
 
-The task builds the broker three times with the repository's release profile.
-The first build is the baseline, the second records a profile, and the third
-uses that profile. It then runs the baseline and the optimized broker against
-the same benchmark scenarios and writes the comparison to `report.md`.
+The task builds the broker with the repository's release profile in up to
+four variants, and one more time to record a profile. `baseline` is the
+plain release build, `pgo` uses the recorded profile, `v3` targets
+`x86-64-v3`, and `v3-pgo` does both. It then runs every selected variant
+against the same benchmark scenarios and writes the comparison to
+`report.md`.
 
     aspect pgo
     aspect pgo --dry-run
-    aspect pgo --phase compare --trials 7
+    aspect pgo --phase compare --trials 8
+    aspect pgo --phase build,optimize,compare --variants baseline,v3,v3-pgo
     aspect pgo --work-dir /var/tmp/pgo
 
 The phases run in this order: `build`, `train`, `merge`, `optimize`,
-`compare`. `--phase` names the first phase to run, and every later phase
-runs after it, so a run that failed can continue from the phase that failed.
-`--dry-run` prints every command with its environment, and runs nothing.
+`compare`. A single `--phase` names the first phase to run, and every later
+phase runs after it, so a run that failed can continue from the phase that
+failed. A comma list runs exactly the phases it names, in pipeline order.
+`--variants` picks the builds that `build` and `optimize` make and that
+`compare` runs, and always includes `baseline`. `--dry-run` prints every
+command with its environment, and runs nothing.
 
 1. `build` makes the baseline `krabka-broker`, `krabka-format` and
-   `krabka-bench-driver`, and a broker built with `-Cprofile-generate`.
+   `krabka-bench-driver`, a broker built with `-Cprofile-generate`, and the
+   `v3` broker.
 2. `train` runs the instrumented broker under shortened copies of the
    scenarios in `bench/scenarios/`. Each broker stops on SIGTERM, which makes
    it write its `.profraw` file.
 3. `merge` merges the `.profraw` files with `llvm-profdata`.
-4. `optimize` builds the broker with `-Cprofile-use`.
-5. `compare` runs both brokers in alternating order for `--trials` rounds.
-   It records the driver's producer throughput and p99 ack latency and the
-   broker's CPU seconds from `/proc/<pid>/stat`.
+4. `optimize` builds the `pgo` and `v3-pgo` brokers with `-Cprofile-use`.
+5. `compare` runs every selected broker for `--trials` rounds, in an order
+   that rotates each round. It records the driver's producer throughput and
+   p99 ack latency and the broker's CPU seconds from `/proc/<pid>/stat`.
 
 `docs/operations/pgo.md` explains how to read the report.
 """
@@ -72,7 +79,41 @@ EVALUATION = [
     struct(name = "large-msg", source = "large-msg", duration = "30s"),
 ]
 
-BINARIES = ["baseline", "pgo"]
+# The broker builds that `compare` can run, in the order a round rotates
+# through them. `phase` is the phase that builds one, `cpu` its
+# `-Ctarget-cpu`, and `profile` whether it uses the merged profile. Each one
+# builds into `target-<name>` under the work directory.
+VARIANTS = [
+    struct(name = "baseline", label = "Baseline", phase = "build", cpu = None, profile = False),
+    struct(name = "pgo", label = "PGO", phase = "optimize", cpu = None, profile = True),
+    struct(name = "v3", label = "v3", phase = "build", cpu = "x86-64-v3", profile = False),
+    struct(name = "v3-pgo", label = "v3-PGO", phase = "optimize", cpu = "x86-64-v3", profile = True),
+]
+DEFAULT_VARIANTS = ",".join([v.name for v in VARIANTS])
+
+_VARIANT = {v.name: v for v in VARIANTS}
+
+# The `/proc/cpuinfo` flags of every feature that LLVM's `x86-64-v3` level
+# assumes: the `x86-64-v2` set, then AVX, AVX2, BMI1, BMI2, F16C, FMA, LZCNT
+# (`abm`), MOVBE and XSAVE.
+X86_64_V3_FLAGS = [
+    "cx16",
+    "lahf_lm",
+    "popcnt",
+    "pni",
+    "ssse3",
+    "sse4_1",
+    "sse4_2",
+    "avx",
+    "avx2",
+    "bmi1",
+    "bmi2",
+    "f16c",
+    "fma",
+    "abm",
+    "movbe",
+    "xsave",
+]
 
 # The report's metrics, in the order the report lists them.
 METRICS = [
@@ -106,19 +147,26 @@ def resolve_path(path, cwd):
         path = cwd.rstrip("/") + "/" + path
     return path.rstrip("/") or "/"
 
+def variant_target_dir(work, name):
+    """The `CARGO_TARGET_DIR` of variant `name`: `<work>/target-<name>`."""
+    return "%s/target-%s" % (work, name)
+
 def binaries(work):
-    """Where each build leaves the binaries that the later phases run."""
-    baseline = work + "/target-baseline/release/"
+    """Where each build leaves the binaries that the later phases run.
+
+    `brokers` maps every variant's name to its broker. The baseline build
+    also makes `format` and `driver`.
+    """
+    baseline = variant_target_dir(work, "baseline") + "/release/"
     return struct(
-        baseline = baseline + "krabka-broker",
         format = baseline + "krabka-format",
         driver = baseline + "krabka-bench-driver",
         instrumented = work + "/target-instrumented/release/krabka-broker",
-        pgo = work + "/target-pgo/release/krabka-broker",
+        brokers = {v.name: variant_target_dir(work, v.name) + "/release/krabka-broker" for v in VARIANTS},
     )
 
 def phases_from(phase):
-    """The phases to run for `--phase`: that phase and every one after it.
+    """The phases to run for a single `--phase`: that phase and every one after it.
 
     Returns `None` for a name that is not a phase.
     """
@@ -127,6 +175,71 @@ def phases_from(phase):
     if phase not in PHASES:
         return None
     return PHASES[PHASES.index(phase):]
+
+def _comma_list(text):
+    return [word.strip() for word in text.split(",")]
+
+def _duplicate(names):
+    seen = []
+    for name in names:
+        if name in seen:
+            return name
+        seen.append(name)
+    return None
+
+def parse_phases(text):
+    """The phases `--phase` selects, in pipeline order, and an error.
+
+    A single name keeps its `phases_from` meaning. A comma list such as
+    `build,optimize,compare` selects exactly the phases it names. Returns
+    `(phases, None)`, or `(None, message)` for a value that selects nothing.
+    """
+    if "," not in text:
+        phases = phases_from(text.strip())
+        if phases == None:
+            return None, "--phase must be all, one of %s, or a comma list of them, got %r" % (", ".join(PHASES), text)
+        return phases, None
+    names = _comma_list(text)
+    for name in names:
+        if name not in PHASES:
+            return None, "a --phase list names phases from %s, got %r in %r" % (", ".join(PHASES), name, text)
+    repeated = _duplicate(names)
+    if repeated != None:
+        return None, "--phase names %r twice in %r" % (repeated, text)
+    return [phase for phase in PHASES if phase in names], None
+
+def parse_variants(text):
+    """The variants `--variants` selects, in `VARIANTS` order, and an error.
+
+    Returns `(names, None)`, or `(None, message)` for an unknown or repeated
+    name, or a list without `baseline`, which every report compares against.
+    """
+    known = [v.name for v in VARIANTS]
+    names = _comma_list(text)
+    for name in names:
+        if name not in known:
+            return None, "--variants names variants from %s, got %r in %r" % (", ".join(known), name, text)
+    repeated = _duplicate(names)
+    if repeated != None:
+        return None, "--variants names %r twice in %r" % (repeated, text)
+    if "baseline" not in names:
+        return None, "--variants must include baseline, which every variant is compared against, got %r" % text
+    return [name for name in known if name in names], None
+
+def variant_label(name):
+    """The name the report gives variant `name`: `Baseline`, `PGO`, `v3`, `v3-PGO`."""
+    return _VARIANT[name].label
+
+def missing_cpu_flags(cpuinfo, wanted):
+    """The flags of `wanted` that the first `flags` line of `/proc/cpuinfo` lacks.
+
+    A text with no `flags` line lacks them all.
+    """
+    for line in cpuinfo.splitlines():
+        if line.startswith("flags") and ":" in line:
+            have = line.split(":", 1)[1].split()
+            return [flag for flag in wanted if flag not in have]
+    return list(wanted)
 
 # ── Scenarios ────────────────────────────────────────────────────────────────
 
@@ -231,16 +344,72 @@ def cargo_build(root, target_dir, packages, rustflags = None):
         env["RUSTFLAGS"] = rustflags
     return command(argv, env = env, cwd = root)
 
-def build_commands(root, work):
-    """The two builds of the `build` phase: the baseline, then the instrumented broker."""
-    return [
-        cargo_build(root, work + "/target-baseline", BASELINE_PACKAGES),
+def variant_rustflags(work, name):
+    """The `RUSTFLAGS` of variant `name`, or `None` for the plain release build.
+
+    The `-Ctarget-cpu` flag comes before `-Cprofile-use`. LLVM only warns
+    when a function's control flow no longer matches the profile, so a
+    `v3-pgo` build accepts the profile of the instrumented generic build.
+    """
+    variant = _VARIANT[name]
+    flags = []
+    if variant.cpu:
+        flags.append("-Ctarget-cpu=" + variant.cpu)
+    if variant.profile:
+        flags.append("-Cprofile-use=" + work + "/merged.profdata")
+    return " ".join(flags) if flags else None
+
+def variant_build(root, work, name):
+    """The build of variant `name`. The baseline also builds the format tool and the driver."""
+    packages = BASELINE_PACKAGES if name == "baseline" else BROKER_PACKAGE
+    return cargo_build(root, variant_target_dir(work, name), packages, variant_rustflags(work, name))
+
+def build_commands(root, work, variants):
+    """The builds of the `build` phase.
+
+    The baseline comes first, then the instrumented broker that `train` runs,
+    then every other selected variant that this phase builds.
+    """
+    cmds = [
+        variant_build(root, work, "baseline"),
         cargo_build(root, work + "/target-instrumented", BROKER_PACKAGE, "-Cprofile-generate=" + work + "/profraw"),
     ]
+    for name in variants:
+        if name != "baseline" and _VARIANT[name].phase == "build":
+            cmds.append(variant_build(root, work, name))
+    return cmds
 
-def optimize_command(root, work):
-    """The `optimize` phase's build of the broker with the merged profile."""
-    return cargo_build(root, work + "/target-pgo", BROKER_PACKAGE, "-Cprofile-use=" + work + "/merged.profdata")
+def optimize_commands(root, work, variants):
+    """The `optimize` phase's builds: every selected variant that uses the merged profile."""
+    return [variant_build(root, work, name) for name in variants if _VARIANT[name].phase == "optimize"]
+
+def phase_needs(phase, work, variants):
+    """The files `phase` reads that an earlier phase makes.
+
+    Returns `(path, phase that makes it)` pairs. `merge` checks its own
+    `.profraw` files, so it has none here.
+    """
+    bin = binaries(work)
+    tools = [(bin.format, "build"), (bin.driver, "build")]
+    if phase == "train":
+        return [(bin.instrumented, "build")] + tools
+    if phase == "optimize":
+        if optimize_commands("", work, variants):
+            return [(work + "/merged.profdata", "merge")]
+        return []
+    if phase == "compare":
+        return [(bin.brokers[name], _VARIANT[name].phase) for name in variants] + tools
+    return []
+
+def needs_to_check(needs, phases, dry):
+    """The needs to check before a phase runs.
+
+    A real run checks every one. A dry run makes nothing, so it checks only
+    the files that no phase of this run makes.
+    """
+    if not dry:
+        return list(needs)
+    return [need for need in needs if need[1] not in phases]
 
 def pinned(argv, cpus):
     """`argv` under `taskset -c cpus`, or as it is when `cpus` is empty."""
@@ -337,24 +506,27 @@ def merge_command(llvm_profdata, work, profraws):
 
 # ── Trials ───────────────────────────────────────────────────────────────────
 
-def round_order(round):
-    """The binaries in the order round `round` runs them, counted from 1.
+def round_order(round, variants):
+    """The variants in the order round `round` runs them, counted from 1.
 
-    The baseline goes first in odd rounds and the optimized broker in even
-    ones. A drift over the run, such as a warming disk or a hotter CPU,
-    then falls on both binaries alike.
+    The order rotates: round 1 starts at the first variant, and each round
+    starts one variant later than the one before, so round `r` starts at
+    variant `(r - 1) mod n`. Over `n` rounds every variant runs once in
+    every position, and a drift over the run, such as a warming disk or a
+    hotter CPU, falls on every variant alike.
     """
-    return list(BINARIES) if round % 2 == 1 else list(reversed(BINARIES))
+    start = (round - 1) % len(variants)
+    return variants[start:] + variants[:start]
 
-def trial_plan(trials, scenarios):
+def trial_plan(trials, scenarios, variants):
     """Every trial of the compare phase, in the order it runs.
 
-    A round runs each scenario once on each binary, in `round_order`.
+    A round runs each scenario once on each variant, in `round_order`.
     """
     plan = []
     for round in range(1, trials + 1):
         for scenario in scenarios:
-            for binary in round_order(round):
+            for binary in round_order(round, variants):
                 plan.append(struct(round = round, scenario = scenario, binary = binary))
     return plan
 
@@ -447,55 +619,54 @@ def trial_values(results, scenario, binary, key):
     picked = [r for r in results if r["scenario"] == scenario and r["binary"] == binary]
     return [r["metrics"][key] for r in sorted(picked, key = lambda r: r["round"])]
 
+def _table_row(cells):
+    return "| " + " | ".join(cells) + " |"
+
 def render_report(setup, scenarios, results):
     """The Markdown comparison: one table per scenario, one row per metric.
 
-    `setup` is a struct of `work`, `trials` and `clock_ticks`. `results`
+    `setup` is a struct of `work`, `trials`, `clock_ticks` and `variants`,
+    the selected variant names with `baseline` first. A row gives the
+    baseline median, then each other variant's median and its change against
+    the baseline, then every variant's trial values. A median with no trials
+    behind it, and a change without both medians, stay empty. `results`
     holds one dict per trial: `round`, `scenario`, `binary` and `metrics`.
     """
+    others = [name for name in setup.variants if name != "baseline"]
+    brokers = binaries(setup.work).brokers
     lines = [
         "# PGO comparison",
         "",
-        "Baseline `%s` against PGO `%s`, %d rounds." % (
-            binaries(setup.work).baseline,
-            binaries(setup.work).pgo,
-            setup.trials,
-        ),
-        "Each round runs both brokers, in alternating order, on a fresh log directory.",
+        "%d rounds of these brokers:" % setup.trials,
+        "",
+    ]
+    lines.extend(["- %s: `%s`" % (variant_label(name), brokers[name]) for name in setup.variants])
+    lines.extend([
+        "",
+        "Each round runs every broker on a fresh log directory. The order rotates: each round starts one broker later than the round before.",
         "The broker runs on CPUs %s and the driver on CPUs %s." % (BROKER_CPUS, DRIVER_CPUS),
         "Broker CPU is utime plus stime from `/proc/<pid>/stat` before SIGTERM, at %d ticks a second." % setup.clock_ticks,
-        "A change is the PGO median against the baseline median.",
-    ]
+        "A change is a broker's median against the baseline median.",
+    ])
+    header = ["Metric", "Better", "Baseline median"]
+    for name in others:
+        header.extend([variant_label(name) + " median", variant_label(name) + " change"])
+    header.extend([variant_label(name) + " trials" for name in setup.variants])
+    align = [":---", ":---"] + ["---:"] * (1 + 2 * len(others)) + [":---"] * len(setup.variants)
     for scenario in scenarios:
-        lines.extend([
-            "",
-            "## " + scenario,
-            "",
-            "| Metric | Better | Baseline median | PGO median | Change | Baseline trials | PGO trials |",
-            "| :--- | :--- | ---: | ---: | ---: | :--- | :--- |",
-        ])
+        lines.extend(["", "## " + scenario, "", _table_row(header), _table_row(align)])
         for metric in METRICS:
-            baseline = trial_values(results, scenario, "baseline", metric.key)
-            optimized = trial_values(results, scenario, "pgo", metric.key)
-            if not baseline or not optimized:
-                lines.append("| %s | %s | | | | %s | %s |" % (
-                    metric.label,
-                    metric.better,
-                    ", ".join([fixed(v, metric.digits) for v in baseline]),
-                    ", ".join([fixed(v, metric.digits) for v in optimized]),
-                ))
-                continue
-            base_median = median(baseline)
-            pgo_median = median(optimized)
-            lines.append("| %s | %s | %s | %s | %s | %s | %s |" % (
-                metric.label,
-                metric.better,
-                fixed(base_median, metric.digits),
-                fixed(pgo_median, metric.digits),
-                signed_percent(percent_change(base_median, pgo_median)),
-                ", ".join([fixed(v, metric.digits) for v in baseline]),
-                ", ".join([fixed(v, metric.digits) for v in optimized]),
-            ))
+            values = {name: trial_values(results, scenario, name, metric.key) for name in setup.variants}
+            medians = {name: median(values[name]) if values[name] else None for name in setup.variants}
+            base = medians["baseline"]
+            cells = [metric.label, metric.better, fixed(base, metric.digits) if base != None else ""]
+            for name in others:
+                mid = medians[name]
+                cells.append(fixed(mid, metric.digits) if mid != None else "")
+                cells.append(signed_percent(percent_change(base, mid)) if base != None and mid != None else "")
+            for name in setup.variants:
+                cells.append(", ".join([fixed(v, metric.digits) for v in values[name]]))
+            lines.append(_table_row(cells))
     return "\n".join(lines) + "\n"
 
 # ── IO ───────────────────────────────────────────────────────────────────────
@@ -553,12 +724,19 @@ def _write(r, path, contents):
         r.ctx.std.fs.create_dir_all(path.rsplit("/", 1)[0])
         r.ctx.std.fs.write(path, contents)
 
-def _require(r, paths, phase):
-    if r.dry:
-        return
-    for path in paths:
-        if not r.ctx.std.fs.exists(path):
-            fail("%s is missing: run `aspect pgo --phase %s` first" % (path, phase))
+def _require(r, phase):
+    """Check that the files `phase` reads exist.
+
+    A real run stops at the first missing one. A dry run only checks the
+    files no phase of this run makes, and says which a real run would miss.
+    """
+    for path, maker in needs_to_check(phase_needs(phase, r.work, r.variants), r.phases, r.dry):
+        if r.ctx.std.fs.exists(path):
+            continue
+        if r.dry:
+            _say(r, "missing %s, and no phase of this run makes it: a real run stops here. The `%s` phase makes it." % (path, maker))
+        else:
+            fail("%s is missing: the `%s` phase makes it" % (path, maker))
 
 def _started(r, logs):
     for path in logs:
@@ -631,11 +809,11 @@ def _read_scenarios(r, entries):
     return sources
 
 def _phase_build(r):
-    for cmd in build_commands(r.root, r.work):
+    for cmd in build_commands(r.root, r.work, r.variants):
         _must(r, cmd)
 
 def _phase_train(r):
-    _require(r, [r.bin.instrumented, r.bin.format, r.bin.driver], "build")
+    _require(r, "train")
 
     # The instrumented build runs instrumented build scripts, and they leave
     # profiles here too. Only the broker's profiles go into the merge.
@@ -671,21 +849,25 @@ def _phase_merge(r):
     _must(r, merge_command(tool, r.work, profraws))
 
 def _phase_optimize(r):
-    _require(r, [r.work + "/merged.profdata"], "merge")
-    _must(r, optimize_command(r.root, r.work))
+    _require(r, "optimize")
+    cmds = optimize_commands(r.root, r.work, r.variants)
+    if not cmds:
+        _say(r, "no selected variant uses the profile")
+    for cmd in cmds:
+        _must(r, cmd)
 
 def _phase_compare(r):
-    _require(r, [r.bin.baseline, r.bin.pgo, r.bin.format, r.bin.driver], "optimize")
+    _require(r, "compare")
     sources = _read_scenarios(r, EVALUATION)
     texts = {}
     for entry in EVALUATION:
         texts[entry.name] = evaluation_scenario(entry, sources[entry.source])
         _write(r, "%s/scenarios/eval/%s.yaml" % (r.work, entry.name), texts[entry.name])
 
-    brokers = {"baseline": r.bin.baseline, "pgo": r.bin.pgo}
+    brokers = r.bin.brokers
     results = []
     results_path = r.work + "/compare/results.json"
-    for trial in trial_plan(r.trials, [entry.name for entry in EVALUATION]):
+    for trial in trial_plan(r.trials, [entry.name for entry in EVALUATION], r.variants):
         label = trial_label(trial)
         text = texts[trial.scenario]
         out = "%s/compare/%s.json" % (r.work, label)
@@ -710,7 +892,7 @@ def _phase_compare(r):
         r.ctx.std.fs.write(results_path, json.encode(results))
 
     report = r.work + "/report.md"
-    setup = struct(work = r.work, trials = r.trials, clock_ticks = r.clock_ticks)
+    setup = struct(work = r.work, trials = r.trials, clock_ticks = r.clock_ticks, variants = r.variants)
     _write(r, report, render_report(setup, [entry.name for entry in EVALUATION], results))
     r.ctx.std.io.stdout.write("report: %s\n" % report)
 
@@ -724,14 +906,28 @@ _PHASE_IMPLS = {
 
 def _impl(ctx: TaskContext) -> int:
     root = ctx.std.env.bazel_root_dir()
-    phases = phases_from(ctx.args.phase)
-    if phases == None:
-        ctx.std.io.stderr.write("--phase must be all or one of %s, got %r\n" % (", ".join(PHASES), ctx.args.phase))
+    phases, error = parse_phases(ctx.args.phase)
+    if error == None:
+        variants, error = parse_variants(ctx.args.variants)
+    if error != None:
+        ctx.std.io.stderr.write(error + "\n")
         return 2
     if ctx.args.trials < 1:
         ctx.std.io.stderr.write("--trials must be at least 1, got %d\n" % ctx.args.trials)
         return 2
     work = resolve_path(ctx.args.work_dir, ctx.std.env.current_dir()) if ctx.args.work_dir else default_work_dir(root)
+
+    # A `v3` build compiles its build scripts for `x86-64-v3` too, and runs
+    # them here, so the build host needs the level as much as the compare host.
+    targeted = [n for n in variants if _VARIANT[n].cpu and (_VARIANT[n].phase in phases or "compare" in phases)]
+    if targeted:
+        missing = missing_cpu_flags(ctx.std.fs.read_to_string("/proc/cpuinfo"), X86_64_V3_FLAGS)
+        if missing:
+            message = "this CPU lacks %s, which the %s build needs for x86-64-v3; leave it out of --variants" % (" ".join(missing), ", ".join(targeted))
+            if not ctx.args.dry_run:
+                ctx.std.io.stderr.write(message + "\n")
+                return 2
+            ctx.std.io.stdout.write("# warning: %s\n" % message)
 
     clock_ticks = 100
     if "train" in phases or "compare" in phases:
@@ -745,8 +941,10 @@ def _impl(ctx: TaskContext) -> int:
         bin = binaries(work),
         trials = ctx.args.trials,
         clock_ticks = clock_ticks,
+        phases = phases,
+        variants = variants,
     )
-    _say(r, "work directory %s, phases %s%s" % (work, " ".join(phases), ", dry run" if r.dry else ""))
+    _say(r, "work directory %s, phases %s, variants %s%s" % (work, " ".join(phases), " ".join(variants), ", dry run" if r.dry else ""))
     if not r.dry:
         ctx.std.fs.create_dir_all(work + "/logs")
     for phase in phases:
@@ -755,12 +953,13 @@ def _impl(ctx: TaskContext) -> int:
     return 0
 
 pgo = task(
-    summary = "Build a profile-guided broker and compare it with the baseline",
+    summary = "Build profile-guided and x86-64-v3 brokers and compare them with the baseline",
     implementation = _impl,
     args = {
         "work_dir": args.string(default = "", description = "Where builds, profiles and results go. Default: pgo-work beside the repository root."),
-        "phase": args.string(default = "all", description = "The first phase to run: all, build, train, merge, optimize or compare. Every later phase runs after it."),
-        "trials": args.int(default = 5, description = "Compare rounds. Each round runs both brokers on every evaluation scenario."),
+        "phase": args.string(default = "all", description = "all, or the first phase to run (build, train, merge, optimize or compare) and every later one after it, or a comma list of phases that runs exactly those, in pipeline order."),
+        "variants": args.string(default = DEFAULT_VARIANTS, description = "Comma list of the brokers to build and compare: baseline, pgo, v3, v3-pgo. Must include baseline."),
+        "trials": args.int(default = 5, description = "Compare rounds. Each round runs every selected broker on every evaluation scenario."),
         "dry_run": args.boolean(default = False, description = "Print every command with its environment, and run nothing."),
     },
 )
