@@ -18,7 +18,7 @@ use {
         owned::produce_response::BatchIndexAndErrorMessage,
         records::{
             Attributes, CRC_COVERAGE_START, HEADER_LEN, Record, RecordBatch, RecordsError,
-            RecordsPayload, TimestampType, ValidatedBatch, validate_one_v2_batch,
+            RecordsPayload, TimestampType, ValidatedBatch, crc32c, validate_one_v2_batch,
         },
     },
     krabka_verified::produce::{ProduceBatchAdmission, produce_batch_admission},
@@ -433,9 +433,9 @@ fn prepare_source(
         let now_ms = record_now;
         let mut index = 0_i32;
         validated
-            .validate_records_with(policy, |record| {
+            .validate_record_summaries_with(policy, |record| {
                 if let Some(limit) = record_limit {
-                    oversized |= exceeds_record_limit(record.body_len(), limit);
+                    oversized |= exceeds_record_limit(record.body_len, limit);
                 }
                 let timestamp = record_timestamp(header.base_timestamp, record.timestamp_delta);
                 max_timestamp.observe(timestamp);
@@ -544,7 +544,7 @@ fn with_max_timestamp(bytes: &Bytes, max_timestamp: i64) -> Bytes {
     patched[MAX_TIMESTAMP_RANGE].copy_from_slice(&max_timestamp.to_be_bytes());
     // The CRC covers the header from `attributes` to the end of the batch,
     // and the body follows the header without a gap.
-    let crc = crc_fast::crc32_iscsi(&patched[CRC_COVERAGE_START..]);
+    let crc = crc32c(&patched[CRC_COVERAGE_START..]);
     patched[CRC_RANGE].copy_from_slice(&crc.to_be_bytes());
     patched.freeze()
 }

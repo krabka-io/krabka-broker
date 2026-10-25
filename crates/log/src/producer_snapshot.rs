@@ -8,6 +8,7 @@ use {
     },
     bytes::BufMut as _,
     krabka_ids::{Offset, ProducerId},
+    krabka_protocol::records::crc32c,
     krabka_verified::producer_snapshot::{self as kernel, ProducerReloadRange},
     std::{
         collections::HashMap,
@@ -335,7 +336,7 @@ fn encode(entries: &HashMap<ProducerId, ProducerSnapshotEntry>) -> Result<Vec<u8
         buffer.put_i64(entry.current_txn_first_offset.map_or(-1, |offset| offset.0));
     }
 
-    let crc = crc_fast::crc32_iscsi(&buffer[HEADER_LEN..]);
+    let crc = crc32c(&buffer[HEADER_LEN..]);
     buffer[2..6].copy_from_slice(&crc.to_be_bytes());
     Ok(buffer)
 }
@@ -435,7 +436,7 @@ pub fn decode(
     }
 
     let stored = u32::from_be_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]);
-    let computed = crc_fast::crc32_iscsi(&bytes[HEADER_LEN..]);
+    let computed = crc32c(&bytes[HEADER_LEN..]);
     if stored != computed {
         return Err(SnapshotDecodeError::ChecksumMismatch { stored, computed });
     }

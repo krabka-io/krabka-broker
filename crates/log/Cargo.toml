@@ -38,7 +38,6 @@ krabka-compression = { version = "0.7.0", default-features = false }
 krabka-verified = { version = "1.0.8", path = "../verified" }
 krabka-units = { workspace = true }
 bytes = { workspace = true }
-crc-fast = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 zerocopy = { workspace = true }
@@ -62,7 +61,7 @@ tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 # An independent CRC-32C oracle for the checksums the library computes with
-# `crc-fast`.
+# `krabka_protocol::records::crc32c`.
 crc32c = { workspace = true }
 bon = { workspace = true }
 yare = { workspace = true }
