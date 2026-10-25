@@ -1,0 +1,518 @@
+"""Unit tests for `pgo.axl`."""
+
+load(
+    "./pgo.axl",
+    "DEFAULT_VARIANTS",
+    "EVALUATION",
+    "TRAINING",
+    "X86_64_V3_FLAGS",
+    "binaries",
+    "broker_command",
+    "build_commands",
+    "command",
+    "cpu_seconds",
+    "default_work_dir",
+    "driver_command",
+    "driver_metrics",
+    "evaluation_scenario",
+    "fixed",
+    "format_command",
+    "host_triple",
+    "llvm_profdata_path",
+    "median",
+    "merge_command",
+    "missing_cpu_flags",
+    "needs_to_check",
+    "optimize_commands",
+    "parse_phases",
+    "parse_proc_stat",
+    "parse_seconds",
+    "parse_variants",
+    "percent_change",
+    "phase_needs",
+    "phases_from",
+    "profraw_files",
+    "render_command",
+    "render_report",
+    "resolve_path",
+    "round_order",
+    "run_errors",
+    "scenario_partitions",
+    "scenario_seconds",
+    "session_verdict",
+    "set_scenario_key",
+    "shell_quote",
+    "shorten_scenario",
+    "signed_percent",
+    "training_env",
+    "training_scenario",
+    "trial_label",
+    "trial_plan",
+    "trial_verdict",
+    "variant_rustflags",
+)
+load("./testing.axl", "check_eq", "suite", "suite_task")
+
+_SMALL = """# Saturate the broker with small (100 B) records and a single producer.
+name: small-msg-saturate
+mode_tag: ci
+msg_size: 100B
+partitions: 6
+replication_factor: 1
+mode:
+  kind: saturate
+compression: none
+warmup: 10s
+duration: 60s
+"""
+
+_BROKER_FLAGS = [
+    "--broker-id",
+    "1",
+    "--listen-addr",
+    "127.0.0.1:19092",
+    "--controller-listen-addr",
+    "127.0.0.1:19093",
+    "--metrics-listen-addr",
+    "none",
+    "--health-listen-addr",
+    "none",
+    "--offsets-topic-replication-factor",
+    "1",
+    "--transaction-state-replication-factor",
+    "1",
+    "--transaction-state-min-isr",
+    "1",
+]
+
+def _test_work_dir_defaults_beside_the_root(_ctx):
+    check_eq("default", default_work_dir("/home/user/krabka-broker"), "/home/user/pgo-work")
+    check_eq("trailing slash", default_work_dir("/home/user/krabka-broker/"), "/home/user/pgo-work")
+    check_eq("relative", resolve_path("pgo", "/tmp/here/"), "/tmp/here/pgo")
+    check_eq("absolute", resolve_path("/var/pgo/", "/tmp"), "/var/pgo")
+
+def _test_phase_runs_itself_and_every_later_phase(_ctx):
+    for phase, want in [
+        ("all", ["build", "train", "merge", "optimize", "compare"]),
+        ("build", ["build", "train", "merge", "optimize", "compare"]),
+        ("merge", ["merge", "optimize", "compare"]),
+        ("compare", ["compare"]),
+        ("deploy", None),
+    ]:
+        check_eq("phase " + phase, phases_from(phase), want)
+
+def _test_phase_list_runs_exactly_its_phases_in_pipeline_order(_ctx):
+    for text, want in [
+        ("compare", (["compare"], None)),
+        ("all", (["build", "train", "merge", "optimize", "compare"], None)),
+        ("build,optimize,compare", (["build", "optimize", "compare"], None)),
+        ("compare, build", (["build", "compare"], None)),
+        ("optimize,", (None, "a --phase list names phases from build, train, merge, optimize, compare, got \"\" in \"optimize,\"")),
+        ("build,all", (None, "a --phase list names phases from build, train, merge, optimize, compare, got \"all\" in \"build,all\"")),
+        ("build,build", (None, "--phase names \"build\" twice in \"build,build\"")),
+        ("deploy", (None, "--phase must be all, one of build, train, merge, optimize, compare, or a comma list of them, got \"deploy\"")),
+    ]:
+        check_eq("phase " + text, parse_phases(text), want)
+
+def _test_variants_keep_their_order_and_require_baseline(_ctx):
+    check_eq("default", DEFAULT_VARIANTS, "baseline,pgo,v3,v3-pgo")
+    for text, want in [
+        ("baseline,pgo,v3,v3-pgo", (["baseline", "pgo", "v3", "v3-pgo"], None)),
+        ("v3-pgo, baseline", (["baseline", "v3-pgo"], None)),
+        ("baseline", (["baseline"], None)),
+        ("pgo,v3", (None, "--variants must include baseline, which every variant is compared against, got \"pgo,v3\"")),
+        ("baseline,v4", (None, "--variants names variants from baseline, pgo, v3, v3-pgo, got \"v4\" in \"baseline,v4\"")),
+        ("", (None, "--variants names variants from baseline, pgo, v3, v3-pgo, got \"\" in \"\"")),
+        ("baseline,v3,v3", (None, "--variants names \"v3\" twice in \"baseline,v3,v3\"")),
+    ]:
+        check_eq("variants " + text, parse_variants(text), want)
+
+def _test_v3_needs_every_x86_64_v3_flag(_ctx):
+    cpuinfo = "processor\t: 0\nflags\t\t: fpu sse2 %s\n\nprocessor\t: 1\nflags\t\t: fpu\n" % " ".join(X86_64_V3_FLAGS)
+    check_eq("haswell", missing_cpu_flags(cpuinfo, X86_64_V3_FLAGS), [])
+    check_eq("sandy bridge", missing_cpu_flags("flags\t\t: cx16 lahf_lm popcnt pni ssse3 sse4_1 sse4_2 avx xsave\n", X86_64_V3_FLAGS), ["avx2", "bmi1", "bmi2", "f16c", "fma", "abm", "movbe"])
+    check_eq("no flags line", missing_cpu_flags("processor\t: 0\n", ["avx2", "fma"]), ["avx2", "fma"])
+
+def _test_shortening_rewrites_only_warmup_and_duration(_ctx):
+    check_eq("shortened", shorten_scenario(_SMALL), """# Saturate the broker with small (100 B) records and a single producer.
+name: small-msg-saturate
+mode_tag: ci
+msg_size: 100B
+partitions: 6
+replication_factor: 1
+mode:
+  kind: saturate
+compression: none
+warmup: 2s
+duration: 20s
+""")
+
+def _test_a_missing_key_is_appended(_ctx):
+    check_eq("appended", set_scenario_key("name: x\nmode:\n  warmup: 9s\n", "warmup", "2s"), "name: x\nmode:\n  warmup: 9s\nwarmup: 2s\n")
+
+def _test_compressed_variant_renames_and_sets_the_codec(_ctx):
+    entry = struct(name = "small-msg-saturate-zstd", source = "small-msg-saturate", compression = "zstd")
+    check_eq("variant", training_scenario(entry, _SMALL), """# Saturate the broker with small (100 B) records and a single producer.
+name: small-msg-saturate-zstd
+mode_tag: ci
+msg_size: 100B
+partitions: 6
+replication_factor: 1
+mode:
+  kind: saturate
+compression: zstd
+warmup: 2s
+duration: 20s
+""")
+
+def _test_training_set_covers_compression_and_consumers(_ctx):
+    check_eq("training", [(e.name, e.source, e.compression) for e in TRAINING], [
+        ("small-msg-saturate", "small-msg-saturate", None),
+        ("small-msg-saturate-zstd", "small-msg-saturate", "zstd"),
+        ("large-msg", "large-msg", None),
+        ("fan-out", "fan-out", None),
+        ("fixed-rate-latency", "fixed-rate-latency", None),
+        ("mixed-acks", "mixed-acks", None),
+    ])
+
+def _test_evaluation_keeps_small_and_cuts_large_to_30s(_ctx):
+    small, large = EVALUATION
+    check_eq("small unchanged", evaluation_scenario(small, _SMALL), _SMALL)
+    check_eq("large", evaluation_scenario(large, "name: large-msg\ncompression: lz4\nwarmup: 10s\nduration: 60s\n"), "name: large-msg\ncompression: lz4\nwarmup: 10s\nduration: 30s\n")
+
+def _test_scenario_values(_ctx):
+    check_eq("seconds", [parse_seconds(v) for v in ["20s", "2m", "500ms", "1h"]], [20, 120, 0.5, 3600])
+    check_eq("duration", scenario_seconds(_SMALL), 60)
+    check_eq("default duration", scenario_seconds("name: x\n"), 60)
+    check_eq("partitions", scenario_partitions(_SMALL), 6)
+    check_eq("partitions with comment", scenario_partitions("partitions: 24  # fan out\n"), 24)
+
+_ALL = ["baseline", "pgo", "v3", "v3-pgo"]
+
+def _broker_build(target_dir, rustflags):
+    return command(
+        ["cargo", "build", "--release", "--locked", "-p", "krabka-broker", "--bin", "krabka-broker"],
+        env = {"CARGO_TARGET_DIR": target_dir, "RUSTFLAGS": rustflags},
+        cwd = "/src/krabka",
+    )
+
+_BASELINE_BUILD = command(
+    ["cargo", "build", "--release", "--locked", "-p", "krabka-broker", "--bin", "krabka-broker", "-p", "krabka-format", "--bin", "krabka-format", "-p", "krabka-bench-driver", "--bin", "krabka-bench-driver"],
+    env = {"CARGO_TARGET_DIR": "/w/target-baseline"},
+    cwd = "/src/krabka",
+)
+_INSTRUMENTED_BUILD = _broker_build("/w/target-instrumented", "-Cprofile-generate=/w/profraw")
+_PGO_BUILD = _broker_build("/w/target-pgo", "-Cprofile-use=/w/merged.profdata")
+_V3_BUILD = _broker_build("/w/target-v3", "-Ctarget-cpu=x86-64-v3")
+_V3_PGO_BUILD = _broker_build("/w/target-v3-pgo", "-Ctarget-cpu=x86-64-v3 -Cprofile-use=/w/merged.profdata")
+
+def _test_variant_rustflags(_ctx):
+    check_eq("rustflags", [variant_rustflags("/w", name) for name in _ALL], [
+        None,
+        "-Cprofile-use=/w/merged.profdata",
+        "-Ctarget-cpu=x86-64-v3",
+        "-Ctarget-cpu=x86-64-v3 -Cprofile-use=/w/merged.profdata",
+    ])
+
+def _test_builds(_ctx):
+    for variants, build, optimize in [
+        (_ALL, [_BASELINE_BUILD, _INSTRUMENTED_BUILD, _V3_BUILD], [_PGO_BUILD, _V3_PGO_BUILD]),
+        (["baseline", "pgo"], [_BASELINE_BUILD, _INSTRUMENTED_BUILD], [_PGO_BUILD]),
+        (["baseline", "v3-pgo"], [_BASELINE_BUILD, _INSTRUMENTED_BUILD], [_V3_PGO_BUILD]),
+        (["baseline", "v3"], [_BASELINE_BUILD, _INSTRUMENTED_BUILD, _V3_BUILD], []),
+    ]:
+        label = ",".join(variants)
+        check_eq("build " + label, build_commands("/src/krabka", "/w", variants), build)
+        check_eq("optimize " + label, optimize_commands("/src/krabka", "/w", variants), optimize)
+
+def _test_phase_needs_cover_every_selected_variant(_ctx):
+    tools = [("/w/target-baseline/release/krabka-format", "build"), ("/w/target-baseline/release/krabka-bench-driver", "build")]
+    check_eq("compare", phase_needs("compare", "/w", _ALL), [
+        ("/w/target-baseline/release/krabka-broker", "build"),
+        ("/w/target-pgo/release/krabka-broker", "optimize"),
+        ("/w/target-v3/release/krabka-broker", "build"),
+        ("/w/target-v3-pgo/release/krabka-broker", "optimize"),
+    ] + tools)
+    check_eq("compare baseline,v3", phase_needs("compare", "/w", ["baseline", "v3"]), [
+        ("/w/target-baseline/release/krabka-broker", "build"),
+        ("/w/target-v3/release/krabka-broker", "build"),
+    ] + tools)
+    check_eq("train", phase_needs("train", "/w", _ALL), [("/w/target-instrumented/release/krabka-broker", "build")] + tools)
+    check_eq("optimize", phase_needs("optimize", "/w", ["baseline", "v3-pgo"]), [("/w/merged.profdata", "merge")])
+    check_eq("optimize nothing", phase_needs("optimize", "/w", ["baseline", "v3"]), [])
+    check_eq("build", phase_needs("build", "/w", _ALL), [])
+
+def _test_a_dry_run_checks_only_what_the_run_does_not_make(_ctx):
+    needs = [("/w/target-v3/release/krabka-broker", "build"), ("/w/merged.profdata", "merge")]
+    check_eq("real", needs_to_check(needs, ["build", "optimize", "compare"], False), needs)
+    check_eq("dry", needs_to_check(needs, ["build", "optimize", "compare"], True), [("/w/merged.profdata", "merge")])
+    check_eq("dry compare", needs_to_check(needs, ["compare"], True), needs)
+
+def _test_binaries(_ctx):
+    check_eq("binaries", binaries("/w"), struct(
+        format = "/w/target-baseline/release/krabka-format",
+        driver = "/w/target-baseline/release/krabka-bench-driver",
+        instrumented = "/w/target-instrumented/release/krabka-broker",
+        brokers = {
+            "baseline": "/w/target-baseline/release/krabka-broker",
+            "pgo": "/w/target-pgo/release/krabka-broker",
+            "v3": "/w/target-v3/release/krabka-broker",
+            "v3-pgo": "/w/target-v3-pgo/release/krabka-broker",
+        },
+    ))
+
+def _test_format_command(_ctx):
+    check_eq("format", format_command("/b/krabka-format", "/w/data/x"), command([
+        "/b/krabka-format",
+        "--log-dir",
+        "/w/data/x",
+        "--standalone",
+        "--node-id",
+        "1",
+        "--controller-listener",
+        "127.0.0.1:19093",
+    ]))
+
+def _test_training_broker_is_unpinned_and_names_its_profile(_ctx):
+    check_eq("training broker", broker_command("/b/broker", "/w/data/t", 24, env = training_env("/w", "fan-out")), command(
+        ["/b/broker", "--log-dir", "/w/data/t"] + _BROKER_FLAGS + ["--num-partitions", "24", "--default-replication-factor", "1"],
+        env = {"LLVM_PROFILE_FILE": "/w/profraw/fan-out-%p-%m.profraw"},
+    ))
+
+def _test_compare_processes_are_pinned(_ctx):
+    check_eq("compare broker", broker_command("/b/broker", "/w/data/c", 6, cpus = "2,3"), command(
+        ["taskset", "-c", "2,3", "/b/broker", "--log-dir", "/w/data/c"] + _BROKER_FLAGS + ["--num-partitions", "6", "--default-replication-factor", "1"],
+    ))
+    check_eq("compare driver", driver_command("/b/driver", "/w/s.yaml", "/w/o.json", cpus = "0,1"), command([
+        "timeout",
+        "--kill-after=10",
+        "600",
+        "taskset",
+        "-c",
+        "0,1",
+        "/b/driver",
+        "--scenario",
+        "/w/s.yaml",
+        "--bootstrap",
+        "127.0.0.1:19092",
+        "--stack",
+        "krabka",
+        "--out",
+        "/w/o.json",
+    ]))
+
+def _test_render_command_quotes_what_the_shell_would_split(_ctx):
+    check_eq("plain", shell_quote("-Cprofile-use=/w/m.profdata"), "-Cprofile-use=/w/m.profdata")
+    check_eq("glob", shell_quote("/w/*.profraw"), "'/w/*.profraw'")
+    check_eq("quote", shell_quote("it's"), "'it'\\''s'")
+    check_eq("empty", shell_quote(""), "''")
+    check_eq("line", render_command(command(["cargo", "build"], env = {"A": "x y", "B": "1"}, cwd = "/src")), "cd /src && A='x y' B=1 cargo build")
+    check_eq("no cwd", render_command(command(["echo", "%p"])), "echo %p")
+
+def _test_merge(_ctx):
+    check_eq("triple", host_triple("rustc 1.90.0 (abc 2026-01-01)\nbinary: rustc\nhost: x86_64-unknown-linux-gnu\nrelease: 1.90.0\n"), "x86_64-unknown-linux-gnu")
+    check_eq("tool", llvm_profdata_path("/r/toolchains/stable\n", "x86_64-unknown-linux-gnu"), "/r/toolchains/stable/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata")
+    check_eq("profraws", profraw_files("/w/profraw", ["b.profraw", "notes.txt", "a.profraw"]), ["/w/profraw/a.profraw", "/w/profraw/b.profraw"])
+    check_eq("merge", merge_command("/t/llvm-profdata", "/w", ["/w/profraw/a.profraw"]), command(["/t/llvm-profdata", "merge", "-o", "/w/merged.profdata", "/w/profraw/a.profraw"]))
+
+def _test_rounds_rotate_which_variant_goes_first(_ctx):
+    check_eq("rotation", [round_order(r, _ALL) for r in range(1, 6)], [
+        ["baseline", "pgo", "v3", "v3-pgo"],
+        ["pgo", "v3", "v3-pgo", "baseline"],
+        ["v3", "v3-pgo", "baseline", "pgo"],
+        ["v3-pgo", "baseline", "pgo", "v3"],
+        ["baseline", "pgo", "v3", "v3-pgo"],
+    ])
+    check_eq("two alternate", [round_order(r, ["baseline", "pgo"]) for r in range(1, 4)], [["baseline", "pgo"], ["pgo", "baseline"], ["baseline", "pgo"]])
+    check_eq("one", round_order(3, ["baseline"]), ["baseline"])
+    plan = trial_plan(2, ["small", "large"], ["baseline", "pgo", "v3"])
+    check_eq("plan", [(t.round, t.scenario, t.binary) for t in plan], [
+        (1, "small", "baseline"),
+        (1, "small", "pgo"),
+        (1, "small", "v3"),
+        (1, "large", "baseline"),
+        (1, "large", "pgo"),
+        (1, "large", "v3"),
+        (2, "small", "pgo"),
+        (2, "small", "v3"),
+        (2, "small", "baseline"),
+        (2, "large", "pgo"),
+        (2, "large", "v3"),
+        (2, "large", "baseline"),
+    ])
+    check_eq("label", trial_label(plan[7]), "r2-v3-small")
+
+def _test_proc_stat_splits_after_the_last_parenthesis(_ctx):
+    # The command name holds a space and a `) ` of its own.
+    line = "4242 (krabka) broker) S 1 4242 4242 0 -1 4194560 1234 0 0 0 1530 245 0 0 20 0 9 0 777 1000 200 18446744073709551615\n"
+    check_eq("stat", parse_proc_stat(line), struct(utime = 1530, stime = 245))
+    check_eq("seconds", cpu_seconds(struct(utime = 1530, stime = 245), 100), 17.75)
+
+def _test_driver_metrics_divide_by_the_measured_window(_ctx):
+    run = {
+        "throughput": {"msgs_produced": 3000000, "bytes_in": 300000000, "producer_rate": "50k/s"},
+        "producer_latency": {"p50": 1000000, "p99": 4250000},
+    }
+    check_eq("metrics", driver_metrics(run, 60), {"msgs_per_s": 50000.0, "mb_per_s": 5.0, "p99_ms": 4.25})
+
+def _test_a_hung_driver_gets_one_more_session(_ctx):
+    check_eq("verdicts", [
+        session_verdict(0, 1, 2),
+        session_verdict(124, 1, 2),
+        session_verdict(137, 1, 2),
+        session_verdict(124, 2, 2),
+        session_verdict(1, 1, 2),
+    ], ["ok", "retry", "retry", "fail", "fail"])
+
+def _test_a_run_reports_the_errors_its_driver_recorded(_ctx):
+    check_eq("errors", [
+        run_errors({}),
+        run_errors({"errors": None}),
+        run_errors({"errors": []}),
+        run_errors({"errors": ["consumer-0-build"]}),
+    ], [[], [], [], ["consumer-0-build"]])
+
+def _test_a_trial_with_errors_gets_one_more_session_and_never_counts(_ctx):
+    check_eq("verdicts", [
+        trial_verdict([], 1, 2),
+        trial_verdict([], 2, 2),
+        trial_verdict(["producer-0-enqueue-timeout"], 1, 2),
+        trial_verdict(["producer-0-enqueue-timeout"], 2, 2),
+    ], ["ok", "ok", "retry", "fail"])
+
+def _test_median_and_change(_ctx):
+    check_eq("odd", median([3, 1, 2]), 2)
+    check_eq("even", median([4, 1, 3, 2]), 2.5)
+    check_eq("change", percent_change(200, 210), 5.0)
+    check_eq("no baseline", percent_change(0, 1), None)
+    check_eq("signed", [signed_percent(5.0), signed_percent(-0.5), signed_percent(0), signed_percent(None)], ["+5.00%", "-0.50%", "+0.00%", "n/a"])
+
+def _test_fixed_rounds_half_away_from_zero(_ctx):
+    check_eq("fixed", [fixed(3.14159, 2), fixed(2.5, 0), fixed(-1.005, 1), fixed(0.004, 2), fixed(-0.004, 2), fixed(123456.0, 0), fixed(7, 3)], [
+        "3.14",
+        "3",
+        "-1.0",
+        "0.00",
+        "0.00",
+        "123456",
+        "7.000",
+    ])
+
+def _result(round, binary, msgs, mb, p99, cpu, scenario = "small"):
+    return {"round": round, "scenario": scenario, "binary": binary, "metrics": {"msgs_per_s": msgs, "mb_per_s": mb, "p99_ms": p99, "cpu_s": cpu}}
+
+_REPORT_NOTES = """
+Each round runs every broker on a fresh log directory. The order rotates: each round starts one broker later than the round before.
+The broker runs on CPUs 2,3 and the driver on CPUs 0,1.
+Broker CPU is utime plus stime from `/proc/<pid>/stat` before SIGTERM, at 100 ticks a second.
+A change is a broker's median against the baseline median.
+"""
+
+def _test_report_lists_medians_changes_and_every_trial(_ctx):
+    results = [
+        _result(2, "pgo", 120000.0, 12.0, 3.0, 40.0),
+        _result(1, "baseline", 100000.0, 10.0, 5.0, 50.0),
+        _result(1, "pgo", 110000.0, 11.0, 4.0, 45.0),
+        _result(2, "baseline", 100000.0, 10.0, 4.0, 48.0),
+    ]
+    setup = struct(work = "/w", trials = 2, clock_ticks = 100, variants = ["baseline", "pgo"])
+    check_eq("report", render_report(setup, ["small", "large"], results), """# PGO comparison
+
+2 rounds of these brokers:
+
+- Baseline: `/w/target-baseline/release/krabka-broker`
+- PGO: `/w/target-pgo/release/krabka-broker`
+""" + _REPORT_NOTES + """
+## small
+
+| Metric | Better | Baseline median | PGO median | PGO change | Baseline trials | PGO trials |
+| :--- | :--- | ---: | ---: | ---: | :--- | :--- |
+| Producer throughput, msgs/s | higher | 100000 | 115000 | +15.00% | 100000, 100000 | 110000, 120000 |
+| Producer throughput, MB/s | higher | 10.00 | 11.50 | +15.00% | 10.00, 10.00 | 11.00, 12.00 |
+| Producer p99 ack latency, ms | lower | 4.500 | 3.500 | -22.22% | 5.000, 4.000 | 4.000, 3.000 |
+| Broker CPU, s | lower | 49.00 | 42.50 | -13.27% | 50.00, 48.00 | 45.00, 40.00 |
+
+## large
+
+| Metric | Better | Baseline median | PGO median | PGO change | Baseline trials | PGO trials |
+| :--- | :--- | ---: | ---: | ---: | :--- | :--- |
+| Producer throughput, msgs/s | higher |  |  |  |  |  |
+| Producer throughput, MB/s | higher |  |  |  |  |  |
+| Producer p99 ack latency, ms | lower |  |  |  |  |  |
+| Broker CPU, s | lower |  |  |  |  |  |
+""")
+
+def _test_report_gives_each_variant_a_median_and_a_change(_ctx):
+    results = [
+        _result(1, "baseline", 100000.0, 10.0, 5.0, 50.0),
+        _result(1, "pgo", 110000.0, 11.0, 4.0, 45.0),
+        _result(1, "v3", 105000.0, 10.5, 4.5, 47.0),
+        _result(1, "v3-pgo", 125000.0, 12.5, 2.5, 38.0),
+        _result(2, "v3", 103000.0, 10.3, 4.7, 49.0),
+        _result(2, "baseline", 100000.0, 10.0, 4.0, 48.0),
+        _result(2, "pgo", 120000.0, 12.0, 3.0, 40.0),
+        _result(1, "baseline", 50000.0, 50.0, 8.0, 30.0, scenario = "large"),
+    ]
+    setup = struct(work = "/w", trials = 2, clock_ticks = 100, variants = _ALL)
+    header = """| Metric | Better | Baseline median | PGO median | PGO change | v3 median | v3 change | v3-PGO median | v3-PGO change | Baseline trials | PGO trials | v3 trials | v3-PGO trials |
+| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | :--- | :--- |
+"""
+    check_eq("report", render_report(setup, ["small", "large"], results), """# PGO comparison
+
+2 rounds of these brokers:
+
+- Baseline: `/w/target-baseline/release/krabka-broker`
+- PGO: `/w/target-pgo/release/krabka-broker`
+- v3: `/w/target-v3/release/krabka-broker`
+- v3-PGO: `/w/target-v3-pgo/release/krabka-broker`
+""" + _REPORT_NOTES + """
+## small
+
+""" + header + """| Producer throughput, msgs/s | higher | 100000 | 115000 | +15.00% | 104000 | +4.00% | 125000 | +25.00% | 100000, 100000 | 110000, 120000 | 105000, 103000 | 125000 |
+| Producer throughput, MB/s | higher | 10.00 | 11.50 | +15.00% | 10.40 | +4.00% | 12.50 | +25.00% | 10.00, 10.00 | 11.00, 12.00 | 10.50, 10.30 | 12.50 |
+| Producer p99 ack latency, ms | lower | 4.500 | 3.500 | -22.22% | 4.600 | +2.22% | 2.500 | -44.44% | 5.000, 4.000 | 4.000, 3.000 | 4.500, 4.700 | 2.500 |
+| Broker CPU, s | lower | 49.00 | 42.50 | -13.27% | 48.00 | -2.04% | 38.00 | -22.45% | 50.00, 48.00 | 45.00, 40.00 | 47.00, 49.00 | 38.00 |
+
+## large
+
+""" + header + """| Producer throughput, msgs/s | higher | 50000 |  |  |  |  |  |  | 50000 |  |  |  |
+| Producer throughput, MB/s | higher | 50.00 |  |  |  |  |  |  | 50.00 |  |  |  |
+| Producer p99 ack latency, ms | lower | 8.000 |  |  |  |  |  |  | 8.000 |  |  |  |
+| Broker CPU, s | lower | 30.00 |  |  |  |  |  |  | 30.00 |  |  |  |
+""")
+
+pgo_tests = suite("pgo", [
+    _test_a_hung_driver_gets_one_more_session,
+    _test_a_run_reports_the_errors_its_driver_recorded,
+    _test_a_trial_with_errors_gets_one_more_session_and_never_counts,
+    _test_work_dir_defaults_beside_the_root,
+    _test_phase_runs_itself_and_every_later_phase,
+    _test_phase_list_runs_exactly_its_phases_in_pipeline_order,
+    _test_variants_keep_their_order_and_require_baseline,
+    _test_v3_needs_every_x86_64_v3_flag,
+    _test_shortening_rewrites_only_warmup_and_duration,
+    _test_a_missing_key_is_appended,
+    _test_compressed_variant_renames_and_sets_the_codec,
+    _test_training_set_covers_compression_and_consumers,
+    _test_evaluation_keeps_small_and_cuts_large_to_30s,
+    _test_scenario_values,
+    _test_variant_rustflags,
+    _test_builds,
+    _test_phase_needs_cover_every_selected_variant,
+    _test_a_dry_run_checks_only_what_the_run_does_not_make,
+    _test_binaries,
+    _test_format_command,
+    _test_training_broker_is_unpinned_and_names_its_profile,
+    _test_compare_processes_are_pinned,
+    _test_render_command_quotes_what_the_shell_would_split,
+    _test_merge,
+    _test_rounds_rotate_which_variant_goes_first,
+    _test_proc_stat_splits_after_the_last_parenthesis,
+    _test_driver_metrics_divide_by_the_measured_window,
+    _test_median_and_change,
+    _test_fixed_rounds_half_away_from_zero,
+    _test_report_lists_medians_changes_and_every_trial,
+    _test_report_gives_each_variant_a_median_and_a_change,
+])
+
+test_pgo = suite_task(pgo_tests)
