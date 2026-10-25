@@ -1615,18 +1615,38 @@ mod tests {
         assert!(outcomes == (true, false));
     }
 
+    /// The phase signal and failover markers a producer's observations
+    /// read, for a one-producer scenario sampled every 10 ms.
+    struct ObservationHandles {
+        grid: Grid,
+        stop: Arc<AtomicU8>,
+        first_ack: Arc<AtomicU64>,
+        kill_at: Arc<AtomicU64>,
+    }
+
+    impl ObservationHandles {
+        fn new(phase: u8) -> Self {
+            Self {
+                grid: Grid::new(Instant::now(), 0, &scenario(1), millis(10)),
+                stop: Arc::new(AtomicU8::new(phase)),
+                first_ack: Arc::new(AtomicU64::new(0)),
+                kill_at: Arc::new(AtomicU64::new(0)),
+            }
+        }
+
+        fn shared(&self) -> SharedHandles<'_> {
+            SharedHandles {
+                stop: &self.stop,
+                first_ack: &self.first_ack,
+                kill_at: &self.kill_at,
+            }
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_teardown_timeout_names_its_step_and_keeps_an_earlier_error() {
-        let scenario = scenario(1);
-        let grid = Grid::new(Instant::now(), 0, &scenario, millis(10));
-        let stop = Arc::new(AtomicU8::new(STATE_STOP));
-        let first_ack = Arc::new(AtomicU64::new(0));
-        let kill_at = Arc::new(AtomicU64::new(0));
-        let shared = SharedHandles {
-            stop: &stop,
-            first_ack: &first_ack,
-            kill_at: &kill_at,
-        };
+        let handles = ObservationHandles::new(STATE_STOP);
+        let (grid, shared) = (handles.grid, handles.shared());
 
         let mut stalled = ProducerObservations::new(4, 100, grid, shared);
         stalled.record_teardown_timeout("flush");
@@ -1647,16 +1667,14 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn settled_acknowledgements_observe_phase_and_shared_failover_markers() {
-        let scenario = scenario(1);
-        let grid = Grid::new(Instant::now(), 0, &scenario, millis(10));
-        let stop = Arc::new(AtomicU8::new(STATE_RUN));
-        let first_ack = Arc::new(AtomicU64::new(0));
-        let kill_at = Arc::new(AtomicU64::new(0));
-        let shared = SharedHandles {
-            stop: &stop,
-            first_ack: &first_ack,
-            kill_at: &kill_at,
-        };
+        let handles = ObservationHandles::new(STATE_RUN);
+        let ObservationHandles {
+            grid,
+            stop,
+            first_ack,
+            kill_at,
+        } = &handles;
+        let (grid, shared) = (*grid, handles.shared());
         let metadata = RecordMetadata {
             topic: "t".into(),
             partition: 0,
