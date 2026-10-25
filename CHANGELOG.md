@@ -55,6 +55,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   that fit an initialized direct-write queue can run without a blocking-worker
   handoff. Segment setup, flushes, epoch checkpoint changes, cold reads and
   queue backpressure still use blocking placement.
+- The fetch path gives its `POSIX_FADV_WILLNEED` readahead hint as one call
+  for each 128 KiB of the range. Linux reads only about
+  `max(max_sectors_kb, read_ahead_kb)` of one call, so one hint over the
+  window and the 4 MiB after it read only the start of that range. The
+  range is unchanged (#1333).
 - Large in-memory fetch payloads share vectored writes with their headers,
   reducing socket calls without copying records. Small responses retain
   coalescing. [Small-record profiling](docs/operations/omb-small-record-profiling.md)
@@ -65,9 +70,11 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 - Scheduled delivery checks over archived segments buffer bounded byte ranges
   instead of fetching each batch header separately, reducing remote requests for
   ListOffsets LATEST and retention scans (#1682).
-- The RF3 regression contract is now `rf3-regression-v2`. It raises the
-  variance budget of records/s from 10% to 15%, and of p99 latency from 25% to
-  50%. The first measured run of `rf3-regression-v1` exceeded both, and
+- The RF3 regression contract is now `rf3-regression-v3`. It raises the
+  variance budget of records/s from 10% to 15%, of p99 latency from 25% to
+  50%, and of CPU per record from 10% to 15%. The first measured run of
+  `rf3-regression-v1` exceeded the first two, and the first `before_after` run
+  of `rf3-regression-v2` exceeded the third.
   [Performance budget results](docs/operations/performance-budget-results.md#calibration)
   records the calibration runs. Every materiality floor and spread multiplier
   is unchanged (#1395).

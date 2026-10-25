@@ -88,8 +88,8 @@ DATA_FILES = ["docs/config-reference.md", "docs/config-schema.json"]
 DATA_PREFIXES = ["bench/scenarios/", "docs/examples/", "docs/operations/"]
 
 # The kind smoke test's inputs. `packaging/` builds the image it loads and
-# holds the manifests and the script it applies; `.github/kind.yaml` shapes
-# the cluster. The workflow itself is here so that an edit to the job runs the
+# holds the manifests it applies; `.aspect/kind_smoke.axl` is the test itself;
+# `.github/kind.yaml` shapes the cluster. The workflow itself is here so that an edit to the job runs the
 # job it edits.
 CI_WORKFLOW = ".github/workflows/ci.yml"
 
@@ -97,7 +97,7 @@ CI_WORKFLOW = ".github/workflows/ci.yml"
 # machine, with which flags -- so an edit to either runs the jobs it could
 # change, as it does for the kind smoke test and the proofs.
 CI_ACTIONS_PREFIX = ".github/actions/"
-KUBERNETES_FILES = [".github/kind.yaml", CI_WORKFLOW]
+KUBERNETES_FILES = [".aspect/kind_smoke.axl", ".github/kind.yaml", CI_WORKFLOW]
 KUBERNETES_PREFIXES = ["packaging/"]
 
 # What the Creusot proofs read. `crates/verified/` is the one proved package

@@ -1,8 +1,21 @@
 """Run the secured reference deployment on an existing three-worker Kind cluster.
 
-The task builds and loads the local broker image, creates short-lived mTLS
-identities, applies the reference manifests, and proves an RF3 record survives
-a rolling restart.
+The task first proves the cluster enforces NetworkPolicy, with a canary that
+must connect before a deny policy and must time out after it. It then builds
+and loads the local broker image, creates short-lived mTLS identities, applies
+the reference manifests, and checks both sides of the security contract:
+
+- an RF3 record written by the `CN=admin` client survives a rolling restart;
+- a client without a certificate is refused at the TLS handshake, a PLAINTEXT
+  client fails, and a CA-signed `CN=nobody` certificate with no ACLs is
+  denied creating and producing and sees no topics;
+- only `krabka.io/client=true` pods reach Kafka (9092), only
+  `krabka.io/monitor=true` pods reach metrics (9404), and no non-broker pod
+  reaches the controller port (9093).
+
+Every negative check runs inside the cluster through `kubectl exec` under a
+bounded timeout. A connect or an operation that succeeds where it should not
+is a test failure.
 
     aspect kind-smoke
     aspect kind-smoke --cluster krabka
@@ -10,6 +23,30 @@ a rolling restart.
 
 _REFERENCE_IMAGE = "ghcr.io/krabka-io/krabka-broker@sha256:ad5195370c6e55fbb9bb5c31a2dd244c62e5b407f9f6f6e89c01a45aee2e4222"
 _LOCAL_IMAGE = "docker.io/krabka-io/krabka-broker:dev"
+
+# apache/kafka 4.0.0, pinned to its multi-platform index.
+KAFKA_TOOLS_IMAGE = "docker.io/apache/kafka:4.0.0@sha256:3f7b939115cd4872e9cee9369d80bd69712fde55f9902f46d793f64848dedc75"
+
+# The Kubernetes e2e test image. `agnhost connect` is what upstream
+# NetworkPolicy conformance tests probe with: exit 0 on connect, otherwise
+# exit 1 and one of TIMEOUT, REFUSED, DNS or OTHER on stderr.
+AGNHOST_IMAGE = "registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85"
+
+# Seconds `agnhost connect` waits for a handshake, the in-pod bound around it
+# (longer, so agnhost reports TIMEOUT itself), the bound on a Kafka tool, and
+# the slack the host-side `timeout` around `kubectl exec` adds on top.
+CONNECT_TIMEOUT = 5
+_PROBE_BOUND = CONNECT_TIMEOUT + 10
+KAFKA_TOOL_TIMEOUT = 60
+_EXEC_SLACK = 30
+
+_KAFKA = "/opt/kafka/bin/"
+_BOOTSTRAP = "krabka-bootstrap:9092"
+_TOPIC = "kind-smoke"
+_DENIED_TOPIC = "kind-smoke-denied"
+_RECORD = "survives-restart"
+
+_CANARY_NAMESPACE = "krabka-netpol-canary"
 
 _PERSISTENT_VOLUMES = """apiVersion: storage.k8s.io/v1
 kind: StorageClass
@@ -60,6 +97,9 @@ spec:
             - {key: kubernetes.io/hostname, operator: In, values: [krabka-worker3]}
 """
 
+# Four client identities share one trust store: the bootstrap super user, a
+# CA-signed subject with no ACLs, a client with no certificate, and one that
+# does not speak TLS at all.
 _CLIENT_CONFIG = """apiVersion: v1
 kind: ConfigMap
 metadata: {name: kafka-client-config}
@@ -71,6 +111,19 @@ data:
     ssl.keystore.password=changeit
     ssl.truststore.type=PEM
     ssl.truststore.location=/etc/krabka/tls/ca.crt
+  nobody.properties: |
+    security.protocol=SSL
+    ssl.keystore.type=PKCS12
+    ssl.keystore.location=/etc/krabka/tls/nobody.p12
+    ssl.keystore.password=changeit
+    ssl.truststore.type=PEM
+    ssl.truststore.location=/etc/krabka/tls/ca.crt
+  no-certificate.properties: |
+    security.protocol=SSL
+    ssl.truststore.type=PEM
+    ssl.truststore.location=/etc/krabka/tls/ca.crt
+  plaintext.properties: |
+    security.protocol=PLAINTEXT
 ---
 apiVersion: v1
 kind: Pod
@@ -82,8 +135,8 @@ spec:
   restartPolicy: Never
   containers:
     - name: kafka-tools
-      image: apache/kafka:4.0.0
-      command: ["sleep", "3600"]
+      image: %s
+      command: ["sleep", "7200"]
       volumeMounts:
         - {name: tls, mountPath: /etc/krabka/tls, readOnly: true}
         - {name: config, mountPath: /etc/krabka/client, readOnly: true}
@@ -92,7 +145,35 @@ spec:
       secret: {secretName: krabka-tls}
     - name: config
       configMap: {name: kafka-client-config}
-"""
+""" % KAFKA_TOOLS_IMAGE
+
+# The probe pods of the reachability matrix, by name, with their labels.
+# `probe-all` carries every opt-in label a non-broker pod can have, so a port
+# it cannot reach is one no non-broker pod can reach.
+PROBE_PODS = {
+    "probe-none": {},
+    "probe-client": {"krabka.io/client": "true"},
+    "probe-monitor": {"krabka.io/monitor": "true"},
+    "probe-all": {"krabka.io/client": "true", "krabka.io/monitor": "true"},
+}
+
+# (pod, host, port, expect connect). Every denial of 9092 or 9404 is paired
+# with a pod that reaches the same port, so a denial cannot pass because the
+# port is dead. Only brokers reach 9093; the running quorum is its control.
+REACHABILITY = [
+    ("probe-client", "krabka-bootstrap", 9092, True),
+    ("probe-client", "krabka-0.krabka", 9092, True),
+    ("probe-none", "krabka-bootstrap", 9092, False),
+    ("probe-none", "krabka-0.krabka", 9092, False),
+    ("probe-monitor", "krabka-bootstrap", 9092, False),
+    ("probe-monitor", "krabka-0.krabka", 9404, True),
+    ("probe-none", "krabka-0.krabka", 9404, False),
+    ("probe-client", "krabka-0.krabka", 9404, False),
+    ("probe-none", "krabka-0.krabka", 9093, False),
+    ("probe-all", "krabka-0.krabka", 9093, False),
+    ("probe-all", "krabka-1.krabka", 9093, False),
+    ("probe-all", "krabka-2.krabka", 9093, False),
+]
 
 def statefulset_for_kind(source, image = _LOCAL_IMAGE):
     """The production StatefulSet adapted only for local image and storage."""
@@ -109,6 +190,149 @@ def statefulset_for_kind(source, image = _LOCAL_IMAGE):
 def broker_extension(ordinal):
     return "subjectAltName=DNS:krabka,DNS:krabka-bootstrap,DNS:krabka-%d.krabka\nextendedKeyUsage=serverAuth,clientAuth\n" % ordinal
 
+def probe_pod(name, labels, namespace = "", command = ["pause"]):
+    """An agnhost pod manifest; `command` is the agnhost subcommand and flags."""
+    lines = [
+        "apiVersion: v1",
+        "kind: Pod",
+        "metadata:",
+        "  name: " + name,
+    ]
+    if namespace:
+        lines.append("  namespace: " + namespace)
+    lines.append("  labels:")
+    lines.append("    krabka.io/smoke-probe: \"true\"")
+    for key in sorted(labels.keys()):
+        lines.append("    %s: \"%s\"" % (key, labels[key]))
+    lines += [
+        "spec:",
+        "  restartPolicy: Never",
+        "  containers:",
+        "    - name: agnhost",
+        "      image: " + AGNHOST_IMAGE,
+        "      args: [%s]" % ", ".join(["\"%s\"" % word for word in command]),
+    ]
+    return "\n".join(lines) + "\n"
+
+def canary_manifests():
+    """A namespace with a listening server and a client to probe it from."""
+    return "\n---\n".join([
+        "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n" % _CANARY_NAMESPACE,
+        probe_pod("canary-server", {"krabka.io/canary": "server"}, _CANARY_NAMESPACE, ["netexec", "--http-port=8080"]),
+        probe_pod("canary-client", {}, _CANARY_NAMESPACE),
+    ])
+
+def canary_deny_policy():
+    """Deny all ingress to the canary server."""
+    return """apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: canary-deny
+  namespace: %s
+spec:
+  podSelector:
+    matchLabels:
+      krabka.io/canary: server
+  policyTypes: [Ingress]
+""" % _CANARY_NAMESPACE
+
+def bounded_exec(pod, argv, seconds, namespace = ""):
+    """`kubectl exec` with the in-pod command and kubectl itself both bounded.
+
+    The in-pod `timeout` stops a hung client; the host-side one stops a hung
+    exec stream, so no single check can stall the job.
+    """
+    kubectl = ["kubectl"]
+    if namespace:
+        kubectl += ["--namespace", namespace]
+    return [
+        "timeout",
+        "--kill-after=10",
+        str(seconds + _EXEC_SLACK),
+    ] + kubectl + ["exec", pod, "--", "timeout", str(seconds)] + argv
+
+def connect_argv(host, port):
+    return ["/agnhost", "connect", "%s:%d" % (host, port), "--timeout=%ds" % CONNECT_TIMEOUT]
+
+def connect_outcome(code, output):
+    """Classify an `agnhost connect` run.
+
+    Only `timeout` is a policy drop. `refused` means the packet reached a pod
+    with nothing listening, and `dns` means the probe never left the pod, so
+    neither proves a policy denied it.
+    """
+    if code == 0:
+        return "connected"
+    for marker, outcome in [("TIMEOUT", "timeout"), ("REFUSED", "refused"), ("DNS", "dns")]:
+        if marker in output:
+            return outcome
+    return "other"
+
+def reachability_problem(pod, host, port, expect_connect, code, output):
+    """The failure for one matrix row, or "" when the row holds."""
+    outcome = connect_outcome(code, output)
+    target = "%s:%d from %s" % (host, port, pod)
+    if expect_connect:
+        if outcome == "connected":
+            return ""
+        return "%s should connect, got %s: %s" % (target, outcome, output.strip())
+    if outcome == "connected":
+        return "%s connected, but NetworkPolicy should deny it" % target
+    if outcome == "timeout":
+        return ""
+    return "%s should time out on a NetworkPolicy drop, got %s: %s" % (target, outcome, output.strip())
+
+def handshake_rejected(code, output):
+    """Whether a client without a certificate was refused during TLS.
+
+    Under TLS 1.3 the server's `certificate_required` alert arrives after the
+    client's own Finished, which the Java client reports as a failure to
+    process post-handshake messages.
+    """
+    if code == 0:
+        return False
+    return "certificate_required" in output or "SslAuthenticationException" in output
+
+def plaintext_failed(code, output):
+    """Whether a PLAINTEXT client got nothing from the TLS listener.
+
+    The Java client reads the TLS alert as a Kafka frame length, so it fails
+    with an exited admin thread or a heap error rather than a clean refusal.
+    Any successful exit is the failure this check exists for.
+    """
+    return code != 0 and output.strip() != ""
+
+def authorization_denied(code, output, require_failure_exit = True):
+    """Whether the broker answered with TOPIC_ or CLUSTER_AUTHORIZATION_FAILED.
+
+    `kafka-console-producer` logs the error and still exits 0, which is
+    Kafka's own behavior, so the producer check does not require a failing
+    exit; the caller confirms separately that no record landed.
+    """
+    if require_failure_exit and code == 0:
+        return False
+    return "TopicAuthorizationException" in output or "ClusterAuthorizationException" in output
+
+def listed_topics(output):
+    """The topic names `kafka-topics --list` printed, without log lines."""
+    topics = []
+    for line in output.splitlines():
+        name = line.strip()
+        if name and not name.startswith("[") and " " not in name:
+            topics.append(name)
+    return topics
+
+def end_offset(output, topic, partition = 0):
+    """The end offset `kafka-get-offsets` printed for one partition, or -1."""
+    prefix = "%s:%d:" % (topic, partition)
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            value = stripped[len(prefix):]
+            if value.isdigit():
+                return int(value)
+    return -1
+
 def _run(ctx, argv, root):
     return ctx.std.process.command(argv[0]).args(argv[1:]).current_dir(root).spawn().wait().code
 
@@ -123,6 +347,17 @@ def _capture(ctx, argv, root):
         fail("%s failed:\n%s" % (" ".join(argv), result.stderr))
     return result.stdout
 
+def _attempt(ctx, argv, root):
+    """Run `argv` and return (exit code, stdout and stderr), never failing.
+
+    A process killed by a signal has no exit code; it counts as -1.
+    """
+    result = ctx.std.process.command(argv[0]).args(argv[1:]).current_dir(root).stdout("piped").stderr("piped").spawn().wait_with_output()
+    code = result.status.code
+    if code == None:
+        code = -1
+    return code, result.stdout + result.stderr
+
 def _write(ctx, root, name, contents):
     path = root + "/" + name
     ctx.std.fs.write(path, contents)
@@ -136,8 +371,14 @@ def _certificate(ctx, work, name, subject, extension):
     _must(ctx, ["openssl", "req", "-newkey", "rsa:2048", "-nodes", "-subj", subject, "-keyout", key, "-out", request], work)
     _must(ctx, ["openssl", "x509", "-req", "-days", "1", "-in", request, "-CA", work + "/ca.crt", "-CAkey", work + "/ca.key", "-CAcreateserial", "-extfile", extension_path, "-out", certificate], work)
 
+def _pkcs12(ctx, work, name):
+    _must(ctx, ["openssl", "pkcs12", "-export", "-passout", "pass:changeit", "-name", name, "-inkey", work + "/" + name + ".key", "-in", work + "/" + name + ".crt", "-certfile", work + "/ca.crt", "-out", work + "/" + name + ".p12"], work)
+
 def _kubectl_exec(ctx, root, argv):
     _must(ctx, ["kubectl", "exec", "kafka-tools", "--"] + argv, root)
+
+def _kafka_tool(ctx, root, argv):
+    return _attempt(ctx, bounded_exec("kafka-tools", argv, KAFKA_TOOL_TIMEOUT), root)
 
 def _consume(ctx, root):
     return _capture(ctx, [
@@ -145,11 +386,11 @@ def _consume(ctx, root):
         "exec",
         "kafka-tools",
         "--",
-        "/opt/kafka/bin/kafka-console-consumer.sh",
+        _KAFKA + "kafka-console-consumer.sh",
         "--bootstrap-server",
-        "krabka-bootstrap:9092",
+        _BOOTSTRAP,
         "--topic",
-        "kind-smoke",
+        _TOPIC,
         "--consumer.config",
         "/etc/krabka/client/client.properties",
         "--from-beginning",
@@ -159,12 +400,138 @@ def _consume(ctx, root):
         "30000",
     ], root).strip()
 
+def _topics(ctx, root, config, extra):
+    return _kafka_tool(ctx, root, [
+        _KAFKA + "kafka-topics.sh",
+        "--bootstrap-server",
+        _BOOTSTRAP,
+        "--command-config",
+        "/etc/krabka/client/" + config,
+    ] + extra)
+
+def _connect(ctx, root, pod, host, port, namespace = ""):
+    return _attempt(ctx, bounded_exec(pod, connect_argv(host, port), _PROBE_BOUND, namespace), root)
+
+def _wait_ready(ctx, root, pods, namespace = ""):
+    argv = ["kubectl"]
+    if namespace:
+        argv += ["--namespace", namespace]
+    _must(ctx, argv + ["wait", "--for=condition=Ready", "--timeout=3m"] + ["pod/" + pod for pod in pods], root)
+
+def _canary(ctx, root, work):
+    """Fail unless this cluster's CNI enforces NetworkPolicy.
+
+    Without enforcement every reachability denial below would pass for the
+    wrong reason, so the task proves it on a throwaway server first: it must
+    connect, then time out once a deny-all policy selects it.
+    """
+    _must(ctx, ["kubectl", "apply", "-f", _write(ctx, work, "canary.yaml", canary_manifests())], root)
+    _wait_ready(ctx, root, ["canary-server", "canary-client"], _CANARY_NAMESPACE)
+    server = _capture(ctx, ["kubectl", "--namespace", _CANARY_NAMESPACE, "get", "pod", "canary-server", "-o", "jsonpath={.status.podIP}"], root).strip()
+    if not server:
+        fail("the canary server has no pod IP")
+
+    reached = False
+    for _ in range(12):
+        code, output = _connect(ctx, root, "canary-client", server, 8080, _CANARY_NAMESPACE)
+        if connect_outcome(code, output) == "connected":
+            reached = True
+            break
+        _must(ctx, ["sleep", "5"], root)
+    if not reached:
+        fail("the canary client never reached the canary server before any policy applied")
+
+    _must(ctx, ["kubectl", "apply", "-f", _write(ctx, work, "canary-deny.yaml", canary_deny_policy())], root)
+    denied = False
+    outcome = ""
+    for _ in range(12):
+        code, output = _connect(ctx, root, "canary-client", server, 8080, _CANARY_NAMESPACE)
+        outcome = connect_outcome(code, output)
+        if outcome == "timeout":
+            denied = True
+            break
+        _must(ctx, ["sleep", "5"], root)
+    if not denied:
+        fail("NetworkPolicy is not enforced on this cluster: a deny-all policy still left the canary %s after 60s; install a policy-enforcing CNI" % outcome)
+    _must(ctx, ["kubectl", "delete", "namespace", _CANARY_NAMESPACE, "--wait=false"], root)
+    ctx.std.io.stdout.write("kind-smoke: NetworkPolicy enforcement canary passed\n")
+
+def _check_listeners(ctx, root):
+    code, output = _topics(ctx, root, "no-certificate.properties", ["--list"])
+    if not handshake_rejected(code, output):
+        fail("a client without a certificate was not refused at the TLS handshake (exit %d):\n%s" % (code, output))
+
+    code, output = _topics(ctx, root, "plaintext.properties", ["--list"])
+    if not plaintext_failed(code, output):
+        fail("a PLAINTEXT client did not fail against the TLS listener (exit %d):\n%s" % (code, output))
+    ctx.std.io.stdout.write("kind-smoke: no-certificate and PLAINTEXT clients are refused\n")
+
+def _check_authorization(ctx, root):
+    # Kafka filters a Metadata response down to the topics the caller may
+    # describe, so an unprivileged `--list` exits 0 with the topic missing.
+    code, output = _topics(ctx, root, "nobody.properties", ["--list"])
+    if code != 0:
+        fail("CN=nobody --list should succeed with no topics, as in Kafka (exit %d):\n%s" % (code, output))
+    if _TOPIC in listed_topics(output):
+        fail("CN=nobody can see %s without a Describe ACL:\n%s" % (_TOPIC, output))
+
+    code, output = _topics(ctx, root, "nobody.properties", ["--create", "--topic", _DENIED_TOPIC, "--partitions", "1", "--replication-factor", "3"])
+    if not authorization_denied(code, output):
+        fail("CN=nobody --create was not denied (exit %d):\n%s" % (code, output))
+
+    code, output = _kafka_tool(ctx, root, [
+        "/bin/bash",
+        "-ceu",
+        "printf 'denied\\n' | %skafka-console-producer.sh --bootstrap-server %s --topic %s --producer.config /etc/krabka/client/nobody.properties" % (_KAFKA, _BOOTSTRAP, _TOPIC),
+    ])
+    if not authorization_denied(code, output, require_failure_exit = False):
+        fail("CN=nobody produce was not denied (exit %d):\n%s" % (code, output))
+
+    code, output = _topics(ctx, root, "client.properties", ["--list"])
+    if code != 0:
+        fail("CN=admin --list failed (exit %d):\n%s" % (code, output))
+    topics = listed_topics(output)
+    if _TOPIC not in topics:
+        fail("CN=admin cannot see %s:\n%s" % (_TOPIC, output))
+    if _DENIED_TOPIC in topics:
+        fail("the denied --create made %s anyway" % _DENIED_TOPIC)
+
+    code, output = _kafka_tool(ctx, root, [
+        _KAFKA + "kafka-get-offsets.sh",
+        "--bootstrap-server",
+        _BOOTSTRAP,
+        "--command-config",
+        "/etc/krabka/client/client.properties",
+        "--topic",
+        _TOPIC,
+    ])
+    if code != 0 or end_offset(output, _TOPIC) != 1:
+        fail("the denied produce changed %s: want end offset 1 (exit %d):\n%s" % (_TOPIC, code, output))
+    ctx.std.io.stdout.write("kind-smoke: CN=nobody is denied create and produce and sees no topics\n")
+
+def _check_reachability(ctx, root, work):
+    manifests = "---\n".join([probe_pod(name, labels) for name, labels in PROBE_PODS.items()])
+    _must(ctx, ["kubectl", "apply", "-f", _write(ctx, work, "probes.yaml", manifests)], root)
+    _wait_ready(ctx, root, PROBE_PODS.keys())
+    problems = []
+    for pod, host, port, expect_connect in REACHABILITY:
+        code, output = _connect(ctx, root, pod, host, port)
+        problem = reachability_problem(pod, host, port, expect_connect, code, output)
+        if problem:
+            problems.append(problem)
+    if problems:
+        fail("NetworkPolicy reachability:\n  " + "\n  ".join(problems))
+    _must(ctx, ["kubectl", "delete", "pod", "-l", "krabka.io/smoke-probe=true", "--wait=false"], root)
+    ctx.std.io.stdout.write("kind-smoke: %d reachability checks passed\n" % len(REACHABILITY))
+
 def _impl(ctx: TaskContext) -> int:
     root = ctx.std.env.bazel_root_dir()
     cluster = ctx.args.cluster or ctx.std.env.var("KIND_CLUSTER_NAME") or "krabka"
     k8s = root + "/packaging/k8s"
     work = ctx.std.fs.mkdtemp(prefix = "krabka-kind-smoke-")
     ctx.defer(ctx.std.fs.remove_dir_all, work)
+
+    _canary(ctx, root, work)
 
     _must(ctx, ["bazel", "run", "-c", "opt", "//packaging:image_load"], root)
     _must(ctx, ["kind", "load", "docker-image", "--name", cluster, _LOCAL_IMAGE], root)
@@ -178,10 +545,12 @@ def _impl(ctx: TaskContext) -> int:
     for ordinal in range(3):
         _certificate(ctx, work, "broker-%d" % ordinal, "/CN=broker-%d" % ordinal, broker_extension(ordinal))
     _certificate(ctx, work, "admin", "/CN=admin", "extendedKeyUsage=clientAuth\n")
-    _must(ctx, ["openssl", "pkcs12", "-export", "-passout", "pass:changeit", "-name", "admin", "-inkey", work + "/admin.key", "-in", work + "/admin.crt", "-certfile", work + "/ca.crt", "-out", work + "/admin.p12"], work)
+    _certificate(ctx, work, "nobody", "/CN=nobody", "extendedKeyUsage=clientAuth\n")
+    _pkcs12(ctx, work, "admin")
+    _pkcs12(ctx, work, "nobody")
 
     secret_args = ["kubectl", "create", "secret", "generic", "krabka-tls", "--dry-run=client", "-o", "yaml"]
-    for name in ["ca.crt", "broker-0.crt", "broker-0.key", "broker-1.crt", "broker-1.key", "broker-2.crt", "broker-2.key", "admin.p12"]:
+    for name in ["ca.crt", "broker-0.crt", "broker-0.key", "broker-1.crt", "broker-1.key", "broker-2.crt", "broker-2.key", "admin.p12", "nobody.p12"]:
         secret_args.append("--from-file=" + work + "/" + name)
     secret = _write(ctx, work, "secret.yaml", _capture(ctx, secret_args, root))
     _must(ctx, ["kubectl", "apply", "-f", secret], root)
@@ -198,15 +567,19 @@ def _impl(ctx: TaskContext) -> int:
 
     client = _write(ctx, work, "client.yaml", _CLIENT_CONFIG)
     _must(ctx, ["kubectl", "apply", "-f", client], root)
-    _must(ctx, ["kubectl", "wait", "--for=condition=Ready", "pod/kafka-tools", "--timeout=2m"], root)
-    _kubectl_exec(ctx, root, ["/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "krabka-bootstrap:9092", "--command-config", "/etc/krabka/client/client.properties", "--create", "--topic", "kind-smoke", "--partitions", "1", "--replication-factor", "3"])
-    _kubectl_exec(ctx, root, ["/bin/bash", "-ceu", "printf 'survives-restart\\n' | /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server krabka-bootstrap:9092 --topic kind-smoke --producer.config /etc/krabka/client/client.properties"])
-    if _consume(ctx, root) != "survives-restart":
+    _wait_ready(ctx, root, ["kafka-tools"])
+    _kubectl_exec(ctx, root, [_KAFKA + "kafka-topics.sh", "--bootstrap-server", _BOOTSTRAP, "--command-config", "/etc/krabka/client/client.properties", "--create", "--topic", _TOPIC, "--partitions", "1", "--replication-factor", "3"])
+    _kubectl_exec(ctx, root, ["/bin/bash", "-ceu", "printf '%s\\n' | %skafka-console-producer.sh --bootstrap-server %s --topic %s --producer.config /etc/krabka/client/client.properties" % (_RECORD, _KAFKA, _BOOTSTRAP, _TOPIC)])
+    if _consume(ctx, root) != _RECORD:
         fail("the secured client did not read the produced record")
+
+    _check_listeners(ctx, root)
+    _check_authorization(ctx, root)
+    _check_reachability(ctx, root, work)
 
     _must(ctx, ["kubectl", "rollout", "restart", "statefulset/krabka"], root)
     _must(ctx, ["kubectl", "rollout", "status", "statefulset/krabka", "--timeout=5m"], root)
-    if _consume(ctx, root) != "survives-restart":
+    if _consume(ctx, root) != _RECORD:
         fail("the secured record did not survive the rolling restart")
     return 0
 

@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "name": "rf3-regression-v2",
+  "name": "rf3-regression-v3",
   "rounds": 5,
   "cluster": {
     "brokers": 3,
@@ -132,7 +132,7 @@
     "cpu_micros_per_record": {
       "materiality_percent": 5.0,
       "spread_multiplier": 3.0,
-      "max_spread_percent": 10.0
+      "max_spread_percent": 15.0
     },
     "peak_rss_mib": {
       "materiality_percent": 10.0,

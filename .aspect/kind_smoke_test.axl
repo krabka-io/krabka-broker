@@ -1,9 +1,56 @@
-"""Unit tests for `kind_smoke.axl`."""
+"""Unit tests for `kind_smoke.axl`.
 
-load("./kind_smoke.axl", "broker_extension", "statefulset_for_kind")
-load("./testing.axl", "check_eq", "suite", "suite_task")
+The Kafka tool outputs below are trimmed from real runs of apache/kafka 4.0.0
+against the pinned broker image with the reference mTLS configuration.
+"""
+
+load(
+    "./kind_smoke.axl",
+    "AGNHOST_IMAGE",
+    "CONNECT_TIMEOUT",
+    "KAFKA_TOOLS_IMAGE",
+    "PROBE_PODS",
+    "REACHABILITY",
+    "authorization_denied",
+    "bounded_exec",
+    "broker_extension",
+    "canary_deny_policy",
+    "canary_manifests",
+    "connect_argv",
+    "connect_outcome",
+    "end_offset",
+    "handshake_rejected",
+    "listed_topics",
+    "plaintext_failed",
+    "probe_pod",
+    "reachability_problem",
+    "statefulset_for_kind",
+)
+load("./testing.axl", "check", "check_contains", "check_eq", "suite", "suite_task")
 
 _PIN = "ghcr.io/krabka-io/krabka-broker@sha256:ad5195370c6e55fbb9bb5c31a2dd244c62e5b407f9f6f6e89c01a45aee2e4222"
+
+_NO_CERTIFICATE = """Error while executing topic command : Failed to process post-handshake messages
+[2026-10-25 04:57:17,830] ERROR org.apache.kafka.common.errors.SslAuthenticationException: Failed to process post-handshake messages
+Caused by: javax.net.ssl.SSLHandshakeException: Received fatal alert: certificate_required
+ (org.apache.kafka.tools.TopicCommand)
+"""
+
+_PLAINTEXT = """Error while executing topic command : The AdminClient thread has exited. Call: listTopics
+[2026-10-25 04:57:20,166] ERROR Uncaught exception in thread 'kafka-admin-client-thread | adminclient-1': (org.apache.kafka.common.utils.KafkaThread)
+java.lang.OutOfMemoryError: Java heap space
+"""
+
+_CREATE_DENIED = """Error while executing topic command : Authorization failed.
+[2026-10-25 04:57:46,732] ERROR org.apache.kafka.common.errors.TopicAuthorizationException: Authorization failed.
+ (org.apache.kafka.tools.TopicCommand)
+"""
+
+_PRODUCE_DENIED = """org.apache.kafka.common.errors.TopicAuthorizationException: Not authorized to access topics: [kind-smoke]
+"""
+
+def _sole(text):
+    return [line.strip() for line in text.splitlines() if line.strip().startswith("image: ")]
 
 def _test_statefulset_substitution_is_narrow(_ctx):
     source = """image: %s
@@ -27,9 +74,167 @@ def _test_broker_extensions_bind_the_shared_and_ordinal_names(_ctx):
         "subjectAltName=DNS:krabka,DNS:krabka-bootstrap,DNS:krabka-2.krabka\nextendedKeyUsage=serverAuth,clientAuth\n",
     )
 
+def _test_test_images_are_pinned_by_digest(_ctx):
+    for image in [AGNHOST_IMAGE, KAFKA_TOOLS_IMAGE]:
+        digest = image.rsplit("@sha256:", 1)
+        check(len(digest) == 2 and len(digest[1]) == 64, "%s is not pinned by digest" % image)
+
+def _test_bounded_exec_bounds_both_sides(_ctx):
+    check_eq("default namespace", bounded_exec("p", ["/agnhost", "connect", "h:1"], 15), [
+        "timeout",
+        "--kill-after=10",
+        "45",
+        "kubectl",
+        "exec",
+        "p",
+        "--",
+        "timeout",
+        "15",
+        "/agnhost",
+        "connect",
+        "h:1",
+    ])
+    check_eq("namespaced", bounded_exec("p", ["true"], 1, "ns")[3:6], ["kubectl", "--namespace", "ns"])
+
+def _test_connect_argv_names_target_and_timeout(_ctx):
+    check_eq("argv", connect_argv("krabka-0.krabka", 9093), ["/agnhost", "connect", "krabka-0.krabka:9093", "--timeout=%ds" % CONNECT_TIMEOUT])
+
+def _test_connect_outcome_tells_a_drop_from_a_dead_port(_ctx):
+    for code, output, want in [
+        (0, "", "connected"),
+        (1, "TIMEOUT\ncommand terminated with exit code 1\n", "timeout"),
+        (1, "REFUSED\n", "refused"),
+        (1, "DNS: lookup nosuch on 10.96.0.10:53: no such host\n", "dns"),
+        (124, "", "other"),
+        (-1, "", "other"),
+    ]:
+        check_eq("%d %r" % (code, output), connect_outcome(code, output), want)
+
+def _test_reachability_problem_accepts_only_the_expected_outcome(_ctx):
+    check_eq("allowed and connected", reachability_problem("probe-client", "krabka-bootstrap", 9092, True, 0, ""), "")
+    check_eq("denied and dropped", reachability_problem("probe-none", "krabka-bootstrap", 9092, False, 1, "TIMEOUT\n"), "")
+    check_eq(
+        "denied but connected",
+        reachability_problem("probe-none", "krabka-bootstrap", 9092, False, 0, ""),
+        "krabka-bootstrap:9092 from probe-none connected, but NetworkPolicy should deny it",
+    )
+    check_eq(
+        "denied but refused is not a policy drop",
+        reachability_problem("probe-all", "krabka-0.krabka", 9093, False, 1, "REFUSED\n"),
+        "krabka-0.krabka:9093 from probe-all should time out on a NetworkPolicy drop, got refused: REFUSED",
+    )
+    check_eq(
+        "allowed but dropped",
+        reachability_problem("probe-monitor", "krabka-0.krabka", 9404, True, 1, "TIMEOUT\n"),
+        "krabka-0.krabka:9404 from probe-monitor should connect, got timeout: TIMEOUT",
+    )
+
+def _test_every_denial_has_a_positive_control_on_its_port(_ctx):
+    allowed = {port: True for _, _, port, expect in REACHABILITY if expect}
+    for pod, host, port, expect in REACHABILITY:
+        check(pod in PROBE_PODS, "%s is not a probe pod" % pod)
+        if not expect and port != 9093:
+            check(port in allowed, "%s:%d is denied with no pod shown to reach it" % (host, port))
+
+def _test_the_matrix_covers_the_policy(_ctx):
+    rows = {(pod, port): expect for pod, _, port, expect in REACHABILITY}
+    for key, want in [
+        (("probe-client", 9092), True),
+        (("probe-none", 9092), False),
+        (("probe-monitor", 9092), False),
+        (("probe-monitor", 9404), True),
+        (("probe-none", 9404), False),
+        (("probe-client", 9404), False),
+        (("probe-none", 9093), False),
+        (("probe-all", 9093), False),
+    ]:
+        check_eq("%s:%d" % key, rows.get(key), want)
+    check_eq("probe-all labels", PROBE_PODS["probe-all"], {"krabka.io/client": "true", "krabka.io/monitor": "true"})
+    check_eq("probe-none labels", PROBE_PODS["probe-none"], {})
+
+def _test_probe_pod_manifest(_ctx):
+    check_eq("pod", probe_pod("probe-all", PROBE_PODS["probe-all"]), """apiVersion: v1
+kind: Pod
+metadata:
+  name: probe-all
+  labels:
+    krabka.io/smoke-probe: "true"
+    krabka.io/client: "true"
+    krabka.io/monitor: "true"
+spec:
+  restartPolicy: Never
+  containers:
+    - name: agnhost
+      image: %s
+      args: ["pause"]
+""" % AGNHOST_IMAGE)
+
+def _test_canary_is_isolated_and_denies_all_ingress(_ctx):
+    manifests = canary_manifests()
+    check_contains("namespace", manifests, "kind: Namespace\nmetadata:\n  name: krabka-netpol-canary\n")
+    check_contains("server", manifests, "  name: canary-server\n  namespace: krabka-netpol-canary\n")
+    check_contains("listener", manifests, 'args: ["netexec", "--http-port=8080"]')
+    check_eq("one image", {line: True for line in _sole(manifests)}, {"image: " + AGNHOST_IMAGE: True})
+    check_eq("policy", canary_deny_policy(), """apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: canary-deny
+  namespace: krabka-netpol-canary
+spec:
+  podSelector:
+    matchLabels:
+      krabka.io/canary: server
+  policyTypes: [Ingress]
+""")
+
+def _test_handshake_rejection_needs_a_tls_failure(_ctx):
+    check_eq("certificate_required", handshake_rejected(1, _NO_CERTIFICATE), True)
+    check_eq("exit 0 is a success", handshake_rejected(0, _NO_CERTIFICATE), False)
+    check_eq("an unrelated failure", handshake_rejected(1, "Timed out waiting for a node assignment."), False)
+
+def _test_plaintext_must_fail(_ctx):
+    check_eq("garbled frame", plaintext_failed(1, _PLAINTEXT), True)
+    check_eq("listing succeeded", plaintext_failed(0, "kind-smoke\n"), False)
+    check_eq("silent kill", plaintext_failed(124, ""), False)
+
+def _test_authorization_denied_reads_the_error_code(_ctx):
+    check_eq("create", authorization_denied(1, _CREATE_DENIED), True)
+    check_eq("create that exited 0", authorization_denied(0, _CREATE_DENIED), False)
+    check_eq("producer exits 0", authorization_denied(0, _PRODUCE_DENIED, require_failure_exit = False), True)
+    check_eq("cluster", authorization_denied(1, "org.apache.kafka.common.errors.ClusterAuthorizationException: x"), True)
+    check_eq("producer that wrote", authorization_denied(0, "", require_failure_exit = False), False)
+
+def _test_listed_topics_skips_log_lines(_ctx):
+    output = """[2026-10-25 04:57:17,830] WARN something (org.apache.kafka)
+__krabka_audit
+kind-smoke
+"""
+    check_eq("topics", listed_topics(output), ["__krabka_audit", "kind-smoke"])
+    check_eq("empty", listed_topics(""), [])
+
+def _test_end_offset(_ctx):
+    check_eq("one record", end_offset("kind-smoke:0:1\n", "kind-smoke"), 1)
+    check_eq("other partition", end_offset("kind-smoke:1:7\n", "kind-smoke"), -1)
+    check_eq("other topic", end_offset("kind-smoke-x:0:3\n", "kind-smoke"), -1)
+    check_eq("missing", end_offset("", "kind-smoke"), -1)
+
 kind_smoke_tests = suite("kind-smoke", [
     _test_statefulset_substitution_is_narrow,
     _test_broker_extensions_bind_the_shared_and_ordinal_names,
+    _test_test_images_are_pinned_by_digest,
+    _test_bounded_exec_bounds_both_sides,
+    _test_connect_argv_names_target_and_timeout,
+    _test_connect_outcome_tells_a_drop_from_a_dead_port,
+    _test_reachability_problem_accepts_only_the_expected_outcome,
+    _test_every_denial_has_a_positive_control_on_its_port,
+    _test_the_matrix_covers_the_policy,
+    _test_probe_pod_manifest,
+    _test_canary_is_isolated_and_denies_all_ingress,
+    _test_handshake_rejection_needs_a_tls_failure,
+    _test_plaintext_must_fail,
+    _test_authorization_denied_reads_the_error_code,
+    _test_listed_topics_skips_log_lines,
+    _test_end_offset,
 ])
 
 test_kind_smoke = suite_task(kind_smoke_tests)

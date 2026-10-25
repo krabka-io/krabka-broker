@@ -555,6 +555,12 @@ jobs:
       # why a task cannot go there.
       - name: no new shell or Python script
         run: aspect check-scripts
+      # The reference Kubernetes manifests stay secure by default: mTLS on both
+      # listeners, a fail-closed authorizer, a broker-only controller port and
+      # a digest-pinned image. `kubernetes` below proves the same contract on a
+      # live cluster, but only when a change reaches its inputs.
+      - name: secure reference Kubernetes manifests
+        run: aspect check-k8s-security
 
       # Krabka tags and releases the whole workspace as one unit, so the root
       # CHANGELOG.md is the only record of what shipped. The twelve crate
@@ -1017,6 +1023,10 @@ jobs:
           upload: ${{ env.TRUSTED_RUN }}
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
+          # Pinned rather than the action default, so a bump of the action
+          # cannot move the cluster under the test.
+          version: v0.33.0
+          kubectl_version: v1.37.1
           cluster_name: krabka
           config: .github/kind.yaml
       - run: aspect kind-smoke
@@ -1376,10 +1386,13 @@ jobs:
             for side in "${sides[@]}"; do
               run_dir="benchmark-artifacts/${side}/run-${run}"
               mkdir -p "${run_dir}"
-              # Cargo's standard error names each executable it runs.
+              # Cargo's standard error names each executable it runs. Keep it
+              # plain text: `dtolnay/rust-toolchain` sets CARGO_TERM_COLOR=always,
+              # which wraps each `Running` label in ANSI escapes (#1600).
               if ! (
                 cd "${source_dirs[${side}]}"
-                CARGO_TARGET_DIR="${target_dirs[${side}]}" cargo bench "${bench_args[@]}" -- \
+                CARGO_TERM_COLOR=never CARGO_TARGET_DIR="${target_dirs[${side}]}" \
+                  cargo bench "${bench_args[@]}" -- \
                   --output-format bencher --noplot --sample-size 20 --measurement-time 2
               ) 2> "${run_dir}/cargo-stderr.log" | tee "${run_dir}/raw.txt"; then
                 cat "${run_dir}/cargo-stderr.log" >&2
