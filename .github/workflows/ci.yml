@@ -1376,10 +1376,13 @@ jobs:
             for side in "${sides[@]}"; do
               run_dir="benchmark-artifacts/${side}/run-${run}"
               mkdir -p "${run_dir}"
-              # Cargo's standard error names each executable it runs.
+              # Cargo's standard error names each executable it runs. Keep it
+              # plain text: `dtolnay/rust-toolchain` sets CARGO_TERM_COLOR=always,
+              # which wraps each `Running` label in ANSI escapes (#1600).
               if ! (
                 cd "${source_dirs[${side}]}"
-                CARGO_TARGET_DIR="${target_dirs[${side}]}" cargo bench "${bench_args[@]}" -- \
+                CARGO_TERM_COLOR=never CARGO_TARGET_DIR="${target_dirs[${side}]}" \
+                  cargo bench "${bench_args[@]}" -- \
                   --output-format bencher --noplot --sample-size 20 --measurement-time 2
               ) 2> "${run_dir}/cargo-stderr.log" | tee "${run_dir}/raw.txt"; then
                 cat "${run_dir}/cargo-stderr.log" >&2

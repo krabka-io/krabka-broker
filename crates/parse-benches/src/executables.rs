@@ -122,18 +122,41 @@ pub fn manifest_from_cargo_messages(
 /// Cargo prints `Running benches/log.rs (target/release/deps/log-0123)` to
 /// standard error before it starts each bench executable. The path is relative
 /// to the directory Cargo ran in when the target directory is below it, and
-/// absolute otherwise.
+/// absolute otherwise. With `CARGO_TERM_COLOR=always` Cargo wraps the
+/// `Running` label in ANSI colour sequences, which are removed before the
+/// line is read.
 #[must_use]
 pub fn ran_executables(cargo_log: &str, source_dir: &Path) -> Vec<PathBuf> {
     cargo_log
         .lines()
         .filter_map(|line| {
+            let line = strip_ansi_csi(line);
             let rest = line.trim().strip_prefix("Running ")?;
             let inner = rest.strip_suffix(')')?;
             let (_, path) = inner.rsplit_once(" (")?;
             Some(source_dir.join(path))
         })
         .collect()
+}
+
+/// `line` without its ANSI control sequences: `ESC [`, any parameter and
+/// intermediate bytes, and the final byte in `@` to `~`.
+fn strip_ansi_csi(line: &str) -> String {
+    let mut plain = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    plain
 }
 
 /// Check that one measurement pass ran only the manifest's executables,
