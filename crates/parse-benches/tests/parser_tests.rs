@@ -342,6 +342,42 @@ fn a_deliberately_slowed_benchmark_fails_the_verdict() {
     assert!(!verdict.benchmarks["hot/path"].passed);
 }
 
+#[yare::parameterized(
+    within_tolerance = { &[100.0, 102.0, 99.0, 101.0], &[101.0, 100.0, 103.0, 102.0], true },
+    // Nightly run 40163905311: the same binary on both sides, a 10.15% median
+    // shift, and the fastest candidate pass inside the reference range.
+    overlapping_noise = {
+        &[246_923_798.0, 263_054_819.0, 238_976_698.0, 251_816_979.0],
+        &[278_688_405.0, 270_651_108.0, 282_103_881.0, 252_084_923.0],
+        true,
+    },
+    // Every candidate pass slower than every reference pass, past tolerance.
+    separated_regression = {
+        &[246_923_798.0, 263_054_819.0, 238_976_698.0, 251_816_979.0],
+        &[278_688_405.0, 270_651_108.0, 282_103_881.0, 264_000_000.0],
+        false,
+    },
+    // Separated but within tolerance.
+    separated_within_tolerance = { &[100.0, 101.0, 100.0], &[102.0, 102.5, 102.0], true },
+    // A single fast candidate outlier overlaps, so the median shift is noise.
+    one_overlapping_pass = { &[100.0, 101.0, 100.0], &[120.0, 100.5, 121.0], true },
+)]
+fn a_regression_needs_both_a_median_shift_and_separated_passes(
+    reference: &[f64],
+    candidate: &[f64],
+    passed: bool,
+) {
+    let verdict = compare_summaries(
+        &repeated_summaries(reference, "reference"),
+        &repeated_summaries(candidate, "candidate"),
+        0.1,
+    )
+    .unwrap();
+
+    assert2::assert!(verdict.passed == passed);
+    assert2::assert!(verdict.benchmarks["hot/path"].passed == passed);
+}
+
 #[test]
 fn all_zero_samples_are_tied_below_output_resolution() {
     let reference = repeated_summaries(&[0.0, 0.0, 0.0], "reference");
