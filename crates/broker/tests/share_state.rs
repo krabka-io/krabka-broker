@@ -201,6 +201,27 @@ async fn read_summary(
     resp.results[0].partitions[0].clone()
 }
 
+/// [`read_summary`], retried while the share coordinator answers with a
+/// coordinator-not-ready code, as a Kafka client retries a retriable error.
+/// After a restart the request path can briefly lag the recovered state.
+async fn read_summary_ready(
+    client: &Client,
+    group: &str,
+    tid: uuid::Uuid,
+    partition: i32,
+) -> krabka_protocol::owned::read_share_group_state_summary_response::PartitionResult {
+    for _ in 0..40 {
+        let result = read_summary(client, group, tid, partition).await;
+        if !not_ready(result.error_code) {
+            return result;
+        }
+        // intentional: bounded retry while the restarted coordinator still
+        // takes over `__share_group_state`; see `initialize_ready`.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("share coordinator never became ready for {group}:{tid}:{partition}");
+}
+
 async fn read_state(
     client: &Client,
     group: &str,
@@ -454,10 +475,10 @@ async fn state_survives_restart() {
         // Recovered coordinator may still be materializing the led partition;
         // await until the persisted SPSO is visible, then assert the wire value.
         broker.wait_until_share_spso("g1", tid, 0, 7).await;
-        let start_offset = read_summary(&client, "g1", tid, 0).await.start_offset;
+        let summary = read_summary_ready(&client, "g1", tid, 0).await;
         assert!(
-            start_offset == 7,
-            "recovered SPSO must be 7, got {start_offset}"
+            (summary.error_code, summary.start_offset) == (0, 7),
+            "recovered SPSO must be 7, got {summary:?}"
         );
     }
 }
