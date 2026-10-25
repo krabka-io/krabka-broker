@@ -8,7 +8,9 @@ Part of [Krabka](../../README.md), a Rust implementation of Apache Kafka.
 
 `krabka-parse-benches` turns Criterion bencher output into JSON. Given three or
 more reference and candidate summaries, it also emits a regression verdict
-whose tolerance is derived from their median absolute deviation.
+whose tolerance is derived from their median absolute deviation. A benchmark
+regresses only when its median shift exceeds that tolerance and every
+candidate pass is slower than every reference pass.
 
 The same statistics judge the broker performance lane. `check-contract`
 validates a regression contract, `assemble` reads a `qualify.sh budget`
