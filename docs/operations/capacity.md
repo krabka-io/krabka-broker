@@ -151,6 +151,7 @@ Read the tables with these rules:
 | Benchmark host, Kind | AMD EPYC 4344P, 16 logical CPUs, about 61 GiB RAM, RAID-backed disk | Three combined broker/controller pods, each 2 CPU and 2 GiB. |
 | Benchmark host, OpenMessaging | ext4 on md RAID1 of two NVMe drives, Linux 7.0 | One broker, 4 CPU and 10 GiB. |
 | Cloud VM (VM-indicative) | 4 vCPU, 15 GiB, ext4 on one virtio disk | Three combined broker/controllers on cores 0 to 2, client on core 3. |
+| Cloud worker, Kind | `gcp-ubuntu-24-04-32core`: Intel Xeon at 2.20 GHz, 32 logical CPUs, about 126 GiB RAM, kernel `7.0.0-1011-gcp` | Three combined broker/controller pods, each 2 CPU, 2 GiB and a 100 GiB claim. |
 
 ### RF3 throughput and latency
 
@@ -168,6 +169,27 @@ benchmark host under Kind.
 The two experiments ran different revisions, clients and record counts. Their
 saturation numbers differ by a factor of two, so use neither as the RF3
 throughput of a later build.
+
+### RF3 regression contract on the cloud worker
+
+From the `pinned_kafka` half of
+[run 39865512647](performance-budget-results.md#results), 2026-10-23, under
+`rf3-regression-v2`. The krabka side is `main` at `fd007630`, image
+`sha256:7e680015…c323d8`, and the Kafka side is `apache/kafka:4.3.1`. Both use
+the Kafka 4.3.1 client. All rows: RF 3, `min.insync.replicas=2`, `acks=all`,
+idempotence, LZ4, a 65,536-byte batch and a 5 ms linger, on the cloud worker
+under Kind. Each number is a median of five interleaved rounds.
+
+| Workload | krabka records/s | Kafka records/s | krabka p99 | Kafka p99 | krabka CPU per record | Kafka CPU per record |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 KiB random, 12 partitions, 3,000,000 records, unlimited | 191,793 | 105,089 | 954.1 ms | 1,033.7 ms | 18.4 µs | 54.7 µs |
+| 1 KiB random, 1 partition, 1,000,000 records, unlimited | 48,535 | 43,714 | 690.4 ms | 764.0 ms | 38.5 µs | 44.1 µs |
+| 1 KiB random, 12 partitions, 20,000 records/s | 19,993 | 19,994 | 8.1 ms | 22.2 ms | 54.0 µs | 59.7 µs |
+| 1 KiB random, 12 partitions, 120 s idle, then 50,000 records/s | 49,737 | 49,808 | 149.7 ms | 114.3 ms | 132.0 µs | 146.4 µs |
+
+The cloud worker is not the benchmark host, so do not compare these rows with
+the rows above. `fd007630` is not a release or a candidate.
+[Performance budget results](performance-budget-results.md) has every cell.
 
 ### Partition count
 
@@ -234,12 +256,14 @@ that records its artifact replaces them.
 
 ### Not measured
 
-- **The RF3 regression budgets.** The contract `rf3-regression-v2` is checked
-  in, with budgets calibrated from two runs of `rf3-regression-v1`. No run of
-  `rf3-regression-v2` has published a result yet
+- **The RF3 regression budgets on a candidate.** The contract
+  `rf3-regression-v3` is checked in, with budgets calibrated from three runs.
+  No run of `rf3-regression-v3` has completed, and no budget run used a
+  candidate. The one published result is the `rf3-regression-v2`
+  `pinned_kafka` run above
   ([#1395](https://github.com/krabka-io/krabka-broker/issues/1395),
   [Performance budget results](performance-budget-results.md)).
 - **TLS, SASL, tiered and diskless throughput.** No run above used
   authentication, encryption, a remote tier or the diskless WAL.
 - **Sustained load.** The 72-hour soak has not run.
-  [#1393](https://github.com/krabka-io/krabka-broker/issues/1393) owns it.
+  [#1551](https://github.com/krabka-io/krabka-broker/issues/1551) owns it.
