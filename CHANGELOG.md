@@ -291,6 +291,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- A segment written through `O_DIRECT` keeps at most 8 MiB of spare write
+  buffers, the same bound as its write queue. It kept up to sixteen, each
+  grown to the largest append it had seen, so a broker hosting a hundred
+  partitions that took 1 MiB batches held gigabytes of spares and the kernel
+  killed it at its memory limit about a minute into an OMB
+  `max-rate-1-topic-100-partitions-1kb` run.
 - A controller that starts over a feature level it does not support now
   refuses before it writes anything, also when its recovered high watermark is
   below the record that finalized the level. Startup rebuilt the image from
