@@ -44,6 +44,54 @@ and health (9405) ports are intentionally absent from Services. Kubelet probes
 still reach the pod-local health port; Kubernetes NetworkPolicy does not block
 traffic to a pod from its node.
 
+## What CI verifies
+
+`aspect check-k8s-security` runs on every pull request. It reads these
+manifests and fails unless both listeners require client certificates, the
+authorizer denies requests that match no ACL, the Services publish only 9092,
+the NetworkPolicy restricts 9093 to brokers and 9092 and 9404 to their labels,
+and the image is pinned by digest.
+
+`aspect kind-smoke` deploys the manifests on the Kind cluster in
+[`.github/kind.yaml`](../../.github/kind.yaml) and checks the same contract on
+a live cluster. The `kubernetes` CI job runs it whenever a change reaches its
+inputs, and every nightly runs it too. Each negative check runs inside the
+cluster through `kubectl exec` under a bounded timeout, and any connection or
+operation that succeeds where it should not fails the task:
+
+1. **NetworkPolicy is enforced.** Before it deploys anything, the task starts
+   a canary server, proves a client reaches it, applies a deny-all policy, and
+   fails loudly unless the same connection then times out.
+2. **The happy path works.** The three brokers spread over three nodes, a
+   `CN=admin` client creates an RF3 topic and produces a record, and the
+   record survives a rolling restart.
+3. **Listener protocols.** A client without a certificate is refused at the
+   TLS handshake (`certificate_required`) on `krabka-bootstrap:9092`. A
+   PLAINTEXT client fails.
+4. **Authorization fails closed.** A CA-signed `CN=nobody` certificate with no
+   ACLs gets `TOPIC_AUTHORIZATION_FAILED` from `kafka-topics --create` and from
+   `kafka-console-producer`, and the topic's end offset does not move.
+   `kafka-topics --list` succeeds but shows no topics: as in Kafka, a
+   `Metadata` response leaves out the topics the caller cannot describe.
+5. **Reachability.** Pods with every combination of the opt-in labels probe
+   the brokers with `agnhost connect`. A refusal is not a pass, only a
+   policy timeout:
+   - only `krabka.io/client=true` pods reach 9092, through both
+     `krabka-bootstrap` and the per-pod names;
+   - only `krabka.io/monitor=true` pods reach 9404;
+   - no non-broker pod reaches 9093 on any broker, even one with both labels.
+
+   Every denied port except 9093 is paired with a pod that reaches it, so a
+   denial cannot pass just because the port is dead. The running quorum shows
+   that brokers reach 9093.
+
+Run it locally against a cluster made from the same config:
+
+```sh
+kind create cluster --name krabka --config .github/kind.yaml
+aspect kind-smoke
+```
+
 ## Compatibility and rollout
 
 This is a breaking security change for the old plaintext example. Existing
