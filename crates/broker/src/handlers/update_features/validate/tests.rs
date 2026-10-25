@@ -561,6 +561,34 @@ fn enabling_elr_writes_kafkas_safety_config_records() {
     }
 }
 
+/// One `UpdateFeatures` case: its name, the image it plans against, the one
+/// update it carries, and the plan or error it must produce.
+type PlanCase<'a> = (
+    &'a str,
+    krabka_metadata::MetadataImage,
+    FeatureUpdateKey,
+    Result<UpdatePlan, UpdateError>,
+);
+
+/// Plan every case's update on its own, as a validate-only request, against
+/// the local controller, and compare all of them at once.
+fn assert_planned<const N: usize>(cases: [PlanCase<'_>; N]) {
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(case, image, update, _)| {
+            (
+                *case,
+                plan_updates(&validate_only(vec![update.clone()]), image, LOCAL),
+            )
+        })
+        .collect();
+    let expected: Vec<_> = cases
+        .into_iter()
+        .map(|(case, _, _, want)| (case, want))
+        .collect();
+    assert!(actual == expected);
+}
+
 /// `krabka.version` finalizes as Kafka 4.3.1's `FeatureControlManager`
 /// finalizes a feature other than `metadata.version` and `kraft.version`,
 /// `transaction.version` for one: a level every node supports writes a
@@ -718,20 +746,7 @@ fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
             Err(invalid(kv, 1, "Can't downgrade to a newer version.")),
         ),
     ];
-    let actual: Vec<_> = cases
-        .iter()
-        .map(|(case, image, update, _)| {
-            (
-                *case,
-                plan_updates(&validate_only(vec![update.clone()]), image, LOCAL),
-            )
-        })
-        .collect();
-    let expected: Vec<_> = cases
-        .into_iter()
-        .map(|(case, _, _, want)| (case, want))
-        .collect();
-    assert!(actual == expected);
+    assert_planned(cases);
 }
 
 /// krabka-io/krabka-broker#1763: `krabka.version` level 2 turns on diskless
@@ -776,18 +791,5 @@ fn krabka_version_reservation_level_finalizes_only_when_every_broker_supports_it
             Ok(plan(vec![feature_record(kv, 1)], &[kv])),
         ),
     ];
-    let actual: Vec<_> = cases
-        .iter()
-        .map(|(case, image, update, _)| {
-            (
-                *case,
-                plan_updates(&validate_only(vec![update.clone()]), image, LOCAL),
-            )
-        })
-        .collect();
-    let expected: Vec<_> = cases
-        .into_iter()
-        .map(|(case, _, _, want)| (case, want))
-        .collect();
-    assert!(actual == expected);
+    assert_planned(cases);
 }

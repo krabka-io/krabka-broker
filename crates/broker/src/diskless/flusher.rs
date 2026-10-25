@@ -610,12 +610,15 @@ mod tests {
         image
     }
 
-    /// krabka-io/krabka-broker#1763: a writer at the reservation level
-    /// reserves its object before the upload, so a peer that lists the bytes
-    /// while the writer has not yet published the ranges keeps them past the
-    /// grace period, and still collects an unreserved orphan beside them.
-    #[tokio::test]
-    async fn a_reservation_protects_a_visible_upload_whose_ranges_are_not_published_yet() {
+    /// A flush tick whose PUT has landed in the store but not returned yet,
+    /// on an image at `krabka.version` `level`.
+    struct BlockedPut {
+        _dir: tempfile::TempDir,
+        store: Arc<VisibleBlockedPutStore>,
+        flush: tokio::task::JoinHandle<Result<Option<WalFlushRecord>, BrokerError>>,
+    }
+
+    async fn flush_until_put(level: i16, index_log: &DisklessIndexLog) -> BlockedPut {
         let dir = tempdir().unwrap();
         let partitions = Arc::new(PartitionRegistry::new());
         partitions.insert(
@@ -623,11 +626,8 @@ mod tests {
             krabka_ids::PartitionIndex(0),
             test_partition().root(dir.path()).partition(0).call(),
         );
-        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(orders_image_at_krabka_version(
-            DISKLESS_OBJECT_RESERVATION_LEVEL,
-        )));
-        let event_log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(2);
-        let index_log = DisklessIndexLog::start(event_log.clone()).await.unwrap();
+        let (_, image_rx) =
+            tokio::sync::watch::channel(Arc::new(orders_image_at_krabka_version(level)));
         let store = Arc::new(VisibleBlockedPutStore::default());
         let context = test_context(
             partitions,
@@ -636,11 +636,31 @@ mod tests {
             index_log.clone(),
             || Arc::new(AtomicBool::new(false)),
         );
-        let put_visible = store.visible.notified();
-        tokio::pin!(put_visible);
-        let flush =
-            tokio::spawn(async move { flush_tick(&context, &FlushConfig::default(), 0).await });
-        put_visible.await;
+        let flush = {
+            let put_visible = store.visible.notified();
+            tokio::pin!(put_visible);
+            let flush =
+                tokio::spawn(async move { flush_tick(&context, &FlushConfig::default(), 0).await });
+            put_visible.await;
+            flush
+        };
+        BlockedPut {
+            _dir: dir,
+            store,
+            flush,
+        }
+    }
+
+    /// krabka-io/krabka-broker#1763: a writer at the reservation level
+    /// reserves its object before the upload, so a peer that lists the bytes
+    /// while the writer has not yet published the ranges keeps them past the
+    /// grace period, and still collects an unreserved orphan beside them.
+    #[tokio::test]
+    async fn a_reservation_protects_a_visible_upload_whose_ranges_are_not_published_yet() {
+        let event_log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(2);
+        let index_log = DisklessIndexLog::start(event_log.clone()).await.unwrap();
+        let BlockedPut { _dir, store, flush } =
+            flush_until_put(DISKLESS_OBJECT_RESERVATION_LEVEL, &index_log).await;
 
         let reservations = index_log.cache().lock().await.reserved_objects();
         assert!(reservations.len() == 1);
@@ -679,30 +699,9 @@ mod tests {
     /// broker does not.
     #[tokio::test]
     async fn a_flush_below_the_reservation_level_reserves_nothing() {
-        let dir = tempdir().unwrap();
-        let partitions = Arc::new(PartitionRegistry::new());
-        partitions.insert(
-            "orders".into(),
-            krabka_ids::PartitionIndex(0),
-            test_partition().root(dir.path()).partition(0).call(),
-        );
-        let (_, image_rx) = tokio::sync::watch::channel(Arc::new(orders_image_at_krabka_version(
-            DISKLESS_OBJECT_RESERVATION_LEVEL - 1,
-        )));
         let index_log = test_index_log().await;
-        let store = Arc::new(VisibleBlockedPutStore::default());
-        let context = test_context(
-            partitions,
-            image_rx,
-            store.clone(),
-            index_log.clone(),
-            || Arc::new(AtomicBool::new(false)),
-        );
-        let put_visible = store.visible.notified();
-        tokio::pin!(put_visible);
-        let flush =
-            tokio::spawn(async move { flush_tick(&context, &FlushConfig::default(), 0).await });
-        put_visible.await;
+        let BlockedPut { _dir, store, flush } =
+            flush_until_put(DISKLESS_OBJECT_RESERVATION_LEVEL - 1, &index_log).await;
 
         assert!(index_log.cache().lock().await.reserved_objects().is_empty());
         store.finish_put.notify_one();
