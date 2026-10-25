@@ -94,7 +94,11 @@ The phases run in this order:
    build, so LLVM can find that a few functions of the `v3-pgo` build no
    longer match the profile. It warns, and it builds those functions
    without profile data.
-5. `compare` runs every selected broker, and writes `report.md`.
+5. `compare` runs every selected broker, and writes `report.md`. The driver
+   exits 0 even when one of its producer or consumer tasks fails, and such a
+   run did less work than the scenario asks for. The task runs a trial whose
+   driver output lists `errors` once more, and stops if the second run lists
+   them too. A trial with errors never goes into the report.
 
 Each variant builds into `target-<variant>` under the work directory, and the
 instrumented broker into `target-instrumented`.
