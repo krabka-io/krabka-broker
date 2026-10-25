@@ -30,7 +30,8 @@ use {
         security::{ClientSecurity, KeyStore, TlsConnectorConfig, TrustStore},
     },
     krabka_client_producer::{
-        DEFAULT_PRODUCER_MAX_IN_FLIGHT, Producer, ProducerError, ProducerRecord, RecordMetadata,
+        DEFAULT_PRODUCER_MAX_BLOCK, DEFAULT_PRODUCER_MAX_IN_FLIGHT, Producer, ProducerError,
+        ProducerRecord, RecordMetadata,
     },
     krabka_macros::RefinedNewtype,
     krabka_security::ListenerProtocol,
@@ -1086,6 +1087,15 @@ impl<'a> ProducerObservations<'a> {
         }
     }
 
+    /// Record a send that `enqueue` held past the producer's own blocking
+    /// limit. The record counts as dropped, and the first error stays.
+    fn record_enqueue_timeout(&mut self) {
+        self.output.dropped += 1;
+        if self.output.error.is_empty() {
+            self.output.error = format!("producer-{}-enqueue-timeout", self.idx);
+        }
+    }
+
     /// Record a shutdown step (`flush` or `close`) that outlived its limit.
     /// The first error a producer hit stays the one it reports.
     fn record_teardown_timeout(&mut self, step: &str) {
@@ -1241,6 +1251,7 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
     // track the cluster while keeping memory in hand.
     let max_inflight: usize = 512;
     let mut inflight: FuturesUnordered<AckFuture> = FuturesUnordered::new();
+    let enqueue_limit = enqueue_limit(request_timeout);
 
     loop {
         let state = stop.load(Ordering::Relaxed);
@@ -1285,14 +1296,21 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
             ..Default::default()
         };
         let t0 = Instant::now();
-        match producer.enqueue(rec).await {
-            Ok(delivery) => inflight.push(Box::pin(async move {
+        match within(enqueue_limit, producer.enqueue(rec)).await {
+            Some(Ok(delivery)) => inflight.push(Box::pin(async move {
                 SettledAck {
                     result: delivery.await,
                     sent_at: t0,
                 }
             })),
-            Err(error) => observations.record_ack(Err(error), t0),
+            Some(Err(error)) => observations.record_ack(Err(error), t0),
+            // `enqueue` outlived the producer's own `max_block`: the producer
+            // is stuck, and another send would only wait again. Stop sending;
+            // the bounded drain and teardown below still let the run report.
+            None => {
+                observations.record_enqueue_timeout();
+                break;
+            }
         }
     }
 
@@ -1326,7 +1344,7 @@ async fn run_producer(task: ProducerTask) -> ProducerOut {
     if !finished_within(final_drain_timeout, producer.flush()).await {
         observations.record_teardown_timeout("flush");
     }
-    if !finished_within(final_drain_timeout, producer.close()).await {
+    if !finished_within(final_drain_timeout, Box::pin(producer.close())).await {
         observations.record_teardown_timeout("close");
     }
 
@@ -1519,9 +1537,21 @@ async fn build_consumer_with_retry(
     unreachable!("exponential_backoff::Backoff yields a terminal attempt");
 }
 
+/// Await `step` for at most `limit`. `None` when the limit ran out first.
+async fn within<T>(limit: Time, step: impl Future<Output = T>) -> Option<T> {
+    tokio::time::timeout(limit.to_std(), step).await.ok()
+}
+
 /// Await `step` for at most `limit`. `false` when the limit ran out first.
 async fn finished_within(limit: Time, step: impl Future) -> bool {
-    tokio::time::timeout(limit.to_std(), step).await.is_ok()
+    within(limit, step).await.is_some()
+}
+
+/// How long the driver lets one `enqueue` take. The producer itself fails a
+/// send that waits past `max_block`, which the driver leaves at its default,
+/// so a send still pending one request timeout after that is stuck.
+fn enqueue_limit(request_timeout: Time) -> Time {
+    Time::from_std(DEFAULT_PRODUCER_MAX_BLOCK) + request_timeout
 }
 
 /// The producer's `max_in_flight_per_connection` for a scenario.
@@ -1606,6 +1636,11 @@ mod tests {
         }
     }
 
+    #[test]
+    fn an_enqueue_may_block_for_max_block_and_one_request_timeout() {
+        assert!(enqueue_limit(secs(2)) == secs(62));
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_shutdown_step_is_bounded_by_its_limit() {
         let outcomes = (
@@ -1656,12 +1691,20 @@ mod tests {
         drained.record_drain_timeout(3);
         drained.record_teardown_timeout("flush");
 
+        let mut blocked = ProducerObservations::new(4, 100, grid, shared);
+        blocked.record_enqueue_timeout();
+        blocked.record_teardown_timeout("flush");
+
         assert!(
-            (stalled.output.error.as_str(), drained.output.error.as_str())
-                == (
-                    "producer-4-flush-timeout",
-                    "producer-4-final-drain-timeout:3"
-                )
+            [
+                (stalled.output.error.as_str(), stalled.output.dropped),
+                (drained.output.error.as_str(), drained.output.dropped),
+                (blocked.output.error.as_str(), blocked.output.dropped),
+            ] == [
+                ("producer-4-flush-timeout", 0),
+                ("producer-4-final-drain-timeout:3", 3),
+                ("producer-4-enqueue-timeout", 1),
+            ]
         );
     }
 
