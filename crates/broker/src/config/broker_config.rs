@@ -88,6 +88,40 @@ krabka_macros::broker_config! {
         pub client_metrics_telemetry_max: ByteSize,
         /// Prometheus client-metrics snapshot lifetime.
         pub client_metrics_prom_snapshot_ttl: Time,
+        /// Maximum number of client-metric series that one Prometheus scrape
+        /// renders, across all clients.
+        ///
+        /// A histogram counts one series for each bucket, plus one for
+        /// `_sum` and one for `_count`. The broker drops the series that
+        /// exceed this ceiling. The value must be at least
+        /// `client_metrics_prom_max_series_per_principal` and
+        /// `client_metrics_prom_max_series_per_client`.
+        pub client_metrics_prom_max_series: usize,
+        /// Maximum number of client-metric series that the Prometheus
+        /// collector keeps for one authenticated principal.
+        ///
+        /// The principal has Kafka's `User:name` form, and every anonymous
+        /// client shares `User:ANONYMOUS`. The client sets its own
+        /// `client_id`, so this ceiling stops one principal that rotates its
+        /// `client_id` from filling `client_metrics_prom_max_series` and
+        /// starving the other principals. The value must be at least
+        /// `client_metrics_prom_max_series_per_instance` and at most
+        /// `client_metrics_prom_max_series`.
+        pub client_metrics_prom_max_series_per_principal: usize,
+        /// Maximum number of client-metric series that the Prometheus
+        /// collector keeps for one `client_id`.
+        ///
+        /// The value must be at least
+        /// `client_metrics_prom_max_series_per_instance` and at most
+        /// `client_metrics_prom_max_series`.
+        pub client_metrics_prom_max_series_per_client: usize,
+        /// Maximum number of client-metric series that the Prometheus
+        /// collector keeps for one client instance id.
+        ///
+        /// The value must be at most
+        /// `client_metrics_prom_max_series_per_client` and
+        /// `client_metrics_prom_max_series_per_principal`.
+        pub client_metrics_prom_max_series_per_instance: usize,
         /// Remote-log metadata reconciliation cadence.
         pub rlmm_reconcile_tick: Time,
         /// Initial remote-log metadata bootstrap retry delay.

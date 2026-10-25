@@ -99,7 +99,7 @@ async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() 
         finalized_transaction_version.max_version_level == 2,
         "{resp:?}"
     );
-    // The krabka-owned `krabka.version` is advertised over [0, 1] but
+    // The krabka-owned `krabka.version` is advertised over [0, 2] but
     // bootstraps at level 0, which Kafka omits from the finalized features,
     // so that a JVM node can still join. An operator finalizes it later.
     let kv = resp
@@ -107,7 +107,7 @@ async fn v3_response_advertises_supported_and_bootstrapped_finalized_features() 
         .iter()
         .find(|f| f.name == "krabka.version")
         .expect("krabka.version advertised in supported_features");
-    assert!((kv.min_version, kv.max_version) == (0, 1), "{resp:?}");
+    assert!((kv.min_version, kv.max_version) == (0, 2), "{resp:?}");
     assert!(
         resp.finalized_features
             .iter()

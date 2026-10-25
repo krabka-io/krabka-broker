@@ -77,6 +77,21 @@ pub struct RuntimeFileConfig {
     pub client_metrics_stale_push_intervals: Option<u32>,
     /// Capacity of the client-metrics OTLP forwarding queue.
     pub client_metrics_otlp_queue_capacity: Option<usize>,
+    /// Maximum number of client-metric series that one Prometheus scrape
+    /// renders, across all clients. A histogram counts one series for each
+    /// bucket, plus one for `_sum` and one for `_count`.
+    pub client_metrics_prom_max_series: Option<usize>,
+    /// Maximum number of Prometheus client-metric series for one
+    /// authenticated principal, in Kafka's `User:name` form. Every anonymous
+    /// client shares `User:ANONYMOUS`. This ceiling stops a principal that
+    /// rotates its `client_id` from filling the global ceiling.
+    pub client_metrics_prom_max_series_per_principal: Option<usize>,
+    /// Maximum number of Prometheus client-metric series for one
+    /// `client_id`.
+    pub client_metrics_prom_max_series_per_client: Option<usize>,
+    /// Maximum number of Prometheus client-metric series for one client
+    /// instance id.
+    pub client_metrics_prom_max_series_per_instance: Option<usize>,
     /// Mailbox capacity of each coordinator actor.
     pub coordinator_actor_mailbox_capacity: Option<usize>,
     /// Local replica count used in diskless WAL mode.

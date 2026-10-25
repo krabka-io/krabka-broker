@@ -128,8 +128,10 @@ mod tests {
 
     #[test]
     fn ingest_then_encode_contains_series() {
-        let sink = ClientMetricsCollector::new(Duration::from_mins(1));
-        sink.ingest(&[DataPoint {
+        let sink = ClientMetricsCollector::builder()
+            .ttl(Duration::from_mins(1))
+            .build();
+        sink.ingest("User:test", &[DataPoint {
             metric: "org.apache.kafka.consumer.fetch.size".into(),
             client_instance_id: "11111111-1111-1111-1111-111111111111".into(),
             client_id: "svc-1".into(),
@@ -155,8 +157,10 @@ mod tests {
 
     #[test]
     fn counter_and_histogram_keep_their_prometheus_types() {
-        let sink = ClientMetricsCollector::new(Duration::from_mins(1));
-        sink.ingest(&[
+        let sink = ClientMetricsCollector::builder()
+            .ttl(Duration::from_mins(1))
+            .build();
+        sink.ingest("User:test", &[
             data_point()
                 .metric("requests".into())
                 .value(PointValue::Counter(7.0))
@@ -187,8 +191,10 @@ mod tests {
 
     #[test]
     fn multiple_series_same_metric_encode_once() {
-        let sink = ClientMetricsCollector::new(std::time::Duration::from_mins(1));
-        sink.ingest(&[
+        let sink = ClientMetricsCollector::builder()
+            .ttl(Duration::from_mins(1))
+            .build();
+        sink.ingest("User:test", &[
             DataPoint {
                 metric: "org.apache.kafka.consumer.fetch.size".into(),
                 client_instance_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
@@ -225,8 +231,10 @@ mod tests {
 
     #[test]
     fn mixed_types_with_one_sanitized_name_do_not_cross_encode() {
-        let sink = ClientMetricsCollector::new(Duration::from_mins(1));
-        sink.ingest(&[
+        let sink = ClientMetricsCollector::builder()
+            .ttl(Duration::from_mins(1))
+            .build();
+        sink.ingest("User:test", &[
             DataPoint {
                 metric: "same.name".into(),
                 client_instance_id: "gauge".into(),
@@ -255,8 +263,12 @@ mod tests {
 
     #[test]
     fn shared_wrapper_delegates_encoding_and_sanitize_preserves_valid_punctuation() {
-        let sink = std::sync::Arc::new(ClientMetricsCollector::new(Duration::from_mins(1)));
-        sink.ingest(&[DataPoint {
+        let sink = std::sync::Arc::new(
+            ClientMetricsCollector::builder()
+                .ttl(Duration::from_mins(1))
+                .build(),
+        );
+        sink.ingest("User:test", &[DataPoint {
             metric: "valid_name:total-bad".into(),
             client_instance_id: "i".into(),
             client_id: "c".into(),

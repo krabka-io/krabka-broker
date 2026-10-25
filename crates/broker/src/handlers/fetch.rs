@@ -65,7 +65,7 @@ use {
     self::{
         node_endpoints::fetch_node_endpoints,
         plan::{FetchMode, PendingPlanContext, build_pending_reads},
-        read_loop::execute_pending_reads,
+        read_loop::{ReadBudget, execute_pending_reads},
         request::{FetchPreparation, SessionRefusal, prepare_fetch},
         response::{
             GroupedResponses, charge_fetch_cpu, downconvert_legacy_responses, record_fetch_metrics,
@@ -80,13 +80,17 @@ use {
         broker::Broker,
         codes::CLUSTER_AUTHORIZATION_FAILED,
         error::BrokerError,
-        fetch_session::INVALID_SESSION_ID,
-        handlers::{ApiKeyCode, RequestContext},
+        fetch_session::{FetchSessionKey, INVALID_SESSION_ID},
+        handlers::{ApiKeyCode, RequestContext, requested_topic_name},
         metrics::RequestPhases,
         network::fetch_writer::records_to_serve,
+        partition::Partition,
         quota::ActiveClock,
         wal::quorum::wire::{KIP_595_FETCH_VERSION, decode_fetch_request},
     },
+    krabka_ids::PartitionIndex,
+    krabka_metadata::MetadataImage,
+    std::sync::Arc,
 };
 
 /// This handler's own wire api key, for the `api_key` label the request-phase
@@ -234,6 +238,7 @@ pub(crate) async fn handle(
         effective_replica_id,
         is_follower_fetch,
         read_committed,
+        forgotten,
     } = preparation;
 
     if version >= KIP_595_FETCH_VERSION && decode_fetch_request(&req).is_some() {
@@ -283,6 +288,8 @@ pub(crate) async fn handle(
     let pending = handler_clock
         .run(build_pending_reads(&plan_context, &effective_topics))
         .await;
+    let forgotten_wakes =
+        forgotten_partition_wakes(broker, &image, &req, is_follower_fetch, &forgotten);
 
     // Kafka's `KafkaApis.handleFetchRequest`: consumer responses use
     // `min(request.maxBytes, config.fetchMaxBytes, quota window bytes)`.
@@ -308,10 +315,13 @@ pub(crate) async fn handle(
         .run(execute_pending_reads(
             broker,
             pending,
-            req.min_bytes,
-            response_max_bytes,
-            req.max_wait_ms,
-            ctx.sendfile_capable,
+            &forgotten_wakes,
+            ReadBudget {
+                min_bytes: req.min_bytes,
+                response_max_bytes,
+                max_wait_ms: req.max_wait_ms,
+                sendfile_capable: ctx.sendfile_capable,
+            },
             &phases,
         ))
         .await;
@@ -401,6 +411,34 @@ pub(crate) async fn handle(
         &ctx.principal.name,
     );
     Ok((resp, version))
+}
+
+/// The partitions this broker hosts among those the fetch's session forgot
+/// lately: a parked fetch answers when one of them moves, so the consumer that
+/// left the partition out while it still held its records names it again at
+/// once instead of after `max_wait_ms`. See `read_loop`.
+///
+/// Only a fetch that asked for the first available byte gets them. A consumer
+/// with a `min_bytes` floor asked to wait for that many bytes, and an early
+/// empty answer would break its batching. A follower never leaves a partition
+/// out over buffered records.
+fn forgotten_partition_wakes(
+    broker: &Broker,
+    image: &MetadataImage,
+    req: &FetchRequest,
+    is_follower_fetch: bool,
+    forgotten: &[FetchSessionKey],
+) -> Vec<Arc<Partition>> {
+    if is_follower_fetch || req.min_bytes > 1 || req.max_wait_ms <= 0 {
+        return Vec::new();
+    }
+    forgotten
+        .iter()
+        .filter_map(|key| {
+            let name = requested_topic_name(image, &key.topic_name, key.topic_id);
+            broker.partitions.get(&name, PartitionIndex(key.partition))
+        })
+        .collect()
 }
 
 /// Observe all three phase families for a Fetch that ends before it reaches

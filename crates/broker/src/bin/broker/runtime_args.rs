@@ -64,6 +64,14 @@ pub struct RuntimeArgs {
     #[overlay(refined)]
     pub client_metrics_otlp_queue_capacity: Option<PositiveCount>,
     #[overlay(refined)]
+    pub client_metrics_prom_max_series: Option<PositiveCount>,
+    #[overlay(refined)]
+    pub client_metrics_prom_max_series_per_principal: Option<PositiveCount>,
+    #[overlay(refined)]
+    pub client_metrics_prom_max_series_per_client: Option<PositiveCount>,
+    #[overlay(refined)]
+    pub client_metrics_prom_max_series_per_instance: Option<PositiveCount>,
+    #[overlay(refined)]
     pub coordinator_actor_mailbox_capacity: Option<PositiveCount>,
     #[overlay(refined)]
     pub diskless_wal_local_replica_count: Option<PositiveCount>,
@@ -351,6 +359,10 @@ mod tests {
         audit-tail-read-max KRABKA_AUDIT_TAIL_READ_MAX None ---------++--\n\
         client-metrics-stale-push-intervals KRABKA_CLIENT_METRICS_STALE_PUSH_INTERVALS None -+--++-------\n\
         client-metrics-otlp-queue-capacity KRABKA_CLIENT_METRICS_OTLP_QUEUE_CAPACITY None -+--++-------\n\
+        client-metrics-prom-max-series KRABKA_CLIENT_METRICS_PROM_MAX_SERIES None -+--++-------\n\
+        client-metrics-prom-max-series-per-principal KRABKA_CLIENT_METRICS_PROM_MAX_SERIES_PER_PRINCIPAL None -+--++-------\n\
+        client-metrics-prom-max-series-per-client KRABKA_CLIENT_METRICS_PROM_MAX_SERIES_PER_CLIENT None -+--++-------\n\
+        client-metrics-prom-max-series-per-instance KRABKA_CLIENT_METRICS_PROM_MAX_SERIES_PER_INSTANCE None -+--++-------\n\
         coordinator-actor-mailbox-capacity KRABKA_COORDINATOR_ACTOR_MAILBOX_CAPACITY None -+--++-------\n\
         diskless-wal-local-replica-count KRABKA_DISKLESS_WAL_LOCAL_REPLICA_COUNT None -+--++-------\n\
         diskless-wal-flush-interval KRABKA_DISKLESS_WAL_FLUSH_INTERVAL None -------+-----\n\

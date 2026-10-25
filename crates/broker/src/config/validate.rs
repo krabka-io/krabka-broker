@@ -38,6 +38,9 @@ impl BrokerConfig {
     /// - On `wasm32-wasip1`, a subsystem that the platform cannot run is
     ///   configured: the metrics server, the OTLP forwarding of client
     ///   metrics, or the OAUTHBEARER JWKS refresher.
+    /// - A Prometheus client-metric series ceiling exceeds the ceiling of a
+    ///   scope that contains it: instance, then `client_id` or principal, then
+    ///   the global ceiling.
     pub fn validate(&self) -> Result<(), BrokerError> {
         if u64::try_from(self.broker_id).ok() != Some(self.node_id.0) {
             return Err(BrokerError::BrokerIdNodeIdMismatch {
@@ -459,6 +462,43 @@ impl BrokerConfig {
                 "transaction maximum timeout must be below i32::MAX milliseconds".into(),
             ));
         }
+        self.validate_client_metrics_series_ceilings()
+    }
+
+    /// Checks that each Prometheus client-metric series ceiling fits inside
+    /// the ceilings of the scopes that contain it.
+    ///
+    /// One client instance belongs to one `client_id` and to one principal,
+    /// and both of those share the global ceiling.
+    fn validate_client_metrics_series_ceilings(&self) -> Result<(), BrokerError> {
+        let global = (
+            "client_metrics_prom_max_series",
+            self.client_metrics_prom_max_series,
+        );
+        let principal = (
+            "client_metrics_prom_max_series_per_principal",
+            self.client_metrics_prom_max_series_per_principal,
+        );
+        let client = (
+            "client_metrics_prom_max_series_per_client",
+            self.client_metrics_prom_max_series_per_client,
+        );
+        let instance = (
+            "client_metrics_prom_max_series_per_instance",
+            self.client_metrics_prom_max_series_per_instance,
+        );
+        for ((inner_name, inner), (outer_name, outer)) in [
+            (instance, client),
+            (instance, principal),
+            (client, global),
+            (principal, global),
+        ] {
+            if inner > outer {
+                return Err(BrokerError::InvalidRuntimeConfig(format!(
+                    "{inner_name} ({inner}) exceeds {outer_name} ({outer})"
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -829,6 +869,62 @@ mod tests {
             invalidate(&mut config);
             assert_invalid_runtime(&config, expected);
         }
+    }
+
+    /// Each client-metric series ceiling must fit inside the ceilings of the
+    /// scopes that contain it.
+    #[test]
+    fn rejects_client_metrics_series_ceilings_out_of_order() {
+        let cases: &[RuntimeInvalidator] = &[
+            RuntimeInvalidator {
+                expected: "client_metrics_prom_max_series_per_instance (1001) exceeds \
+                           client_metrics_prom_max_series_per_client (1000)",
+                invalidate: |c| c.client_metrics_prom_max_series_per_instance = 1_001,
+            },
+            RuntimeInvalidator {
+                expected: "client_metrics_prom_max_series_per_instance (500) exceeds \
+                           client_metrics_prom_max_series_per_principal (499)",
+                invalidate: |c| c.client_metrics_prom_max_series_per_principal = 499,
+            },
+            RuntimeInvalidator {
+                expected: "client_metrics_prom_max_series_per_client (10001) exceeds \
+                           client_metrics_prom_max_series (10000)",
+                invalidate: |c| c.client_metrics_prom_max_series_per_client = 10_001,
+            },
+            RuntimeInvalidator {
+                expected: "client_metrics_prom_max_series_per_principal (10001) exceeds \
+                           client_metrics_prom_max_series (10000)",
+                invalidate: |c| c.client_metrics_prom_max_series_per_principal = 10_001,
+            },
+            RuntimeInvalidator {
+                expected: "client_metrics_prom_max_series_per_principal (2500) exceeds \
+                           client_metrics_prom_max_series (2499)",
+                invalidate: |c| c.client_metrics_prom_max_series = 2_499,
+            },
+        ];
+
+        for RuntimeInvalidator {
+            expected,
+            invalidate,
+        } in cases
+        {
+            let mut config = BrokerConfig::default();
+            invalidate(&mut config);
+            assert_invalid_runtime(&config, expected);
+        }
+    }
+
+    /// Equal ceilings at every scope are valid: each check is `<=`.
+    #[test]
+    fn accepts_equal_client_metrics_series_ceilings() {
+        let config = BrokerConfig {
+            client_metrics_prom_max_series: 700,
+            client_metrics_prom_max_series_per_principal: 700,
+            client_metrics_prom_max_series_per_client: 700,
+            client_metrics_prom_max_series_per_instance: 700,
+            ..BrokerConfig::default()
+        };
+        assert!(config.validate().is_ok());
     }
 
     #[test]

@@ -35,8 +35,10 @@ impl RuntimeFileConfig {
             positive_i64: audit_tail_window_offsets;
             whole_bytes_usize: audit_tail_read_max;
             positive_u32: client_metrics_stale_push_intervals;
-            positive_usize: client_metrics_otlp_queue_capacity,
-                coordinator_actor_mailbox_capacity, diskless_wal_local_replica_count;
+            positive_usize: client_metrics_otlp_queue_capacity, client_metrics_prom_max_series,
+                client_metrics_prom_max_series_per_principal,
+                client_metrics_prom_max_series_per_client,
+                client_metrics_prom_max_series_per_instance, coordinator_actor_mailbox_capacity, diskless_wal_local_replica_count;
             positive_time: diskless_wal_flush_interval;
             whole_bytes_usize: diskless_wal_flush_max_size, diskless_wal_hot_tail_max_size;
         }

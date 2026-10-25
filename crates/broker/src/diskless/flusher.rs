@@ -12,7 +12,9 @@ use {
         partition_registry::PartitionRegistry, time_util::now_ms,
     },
     krabka_log::Offset,
-    krabka_metadata::{MetadataImage, NodeId},
+    krabka_metadata::{
+        KrabkaVersion, MetadataImage, NodeId, krabka_version::DISKLESS_OBJECT_RESERVATION_LEVEL,
+    },
     object_store::ObjectStore,
     std::sync::{
         Arc,
@@ -27,7 +29,10 @@ mod object_flush;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::{config::FlushConfig, object_flush::flush_once};
+pub(crate) use self::{
+    config::FlushConfig,
+    object_flush::{FlushTarget, flush_once},
+};
 
 pub(crate) struct FlushPartition {
     pub(crate) topic_id: Uuid,
@@ -181,11 +186,14 @@ async fn flush_tick(
         partitions.rotate_left(start);
     }
     flush_once(
-        Arc::clone(&context.object_store),
-        context.broker_id,
+        FlushTarget {
+            object_store: Arc::clone(&context.object_store),
+            broker_id: context.broker_id,
+            reserve_objects: KrabkaVersion::finalized(&image).level()
+                >= DISKLESS_OBJECT_RESERVATION_LEVEL,
+        },
         &context.metrics,
         &context.index_log,
-        context.index_log.cache(),
         &partitions,
         config,
         |partition| partition.handle.current_leader.load(Ordering::Relaxed) == context.node_id,
@@ -232,18 +240,28 @@ mod tests {
         },
         crate::{
             diskless::{
-                index_log::test_support::{PacedReplayLog, ReplayPace, three_record_flush},
+                index_log::test_support::{
+                    PacedReplayLog, ReplayPace, StallableLog, three_record_flush,
+                },
                 wal_index::WalIndexCache,
             },
             test_support::{StorageMode, single_partition_topic, topic_freeze_record},
         },
         assert2::assert,
+        futures_util::stream::BoxStream,
         krabka_metadata::{MetadataRecord, TopicRecord},
         krabka_object_store::fault::{FaultInjectingStore, FaultPolicy, OpFault, StoreOp},
         krabka_remote_storage_topic::MetadataEventLog,
         krabka_units::{ByteSize, convert::ByteSizeExt as _},
-        object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path},
-        std::time::{Duration, Instant},
+        object_store::{
+            CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+            ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+            RenameOptions, memory::InMemory, path::Path,
+        },
+        std::{
+            fmt,
+            time::{Duration, Instant},
+        },
         tempfile::tempdir,
     };
 
@@ -254,6 +272,94 @@ mod tests {
             None,
             grace,
         )
+    }
+
+    async fn sweep_twice(reclaimer: &mut Reclaimer, observed: Instant, elapsed: Duration) {
+        reclaimer.sweep_at(observed).await;
+        reclaimer.sweep_at(observed + elapsed).await;
+    }
+
+    #[derive(Debug, Default)]
+    struct VisibleBlockedPutStore {
+        inner: InMemory,
+        visible: tokio::sync::Notify,
+        finish_put: tokio::sync::Notify,
+    }
+
+    impl fmt::Display for VisibleBlockedPutStore {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("VisibleBlockedPutStore")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for VisibleBlockedPutStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            options: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            let result = self.inner.put_opts(location, payload, options).await?;
+            self.visible.notify_one();
+            self.finish_put.notified().await;
+            Ok(result)
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            options: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, options).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.inner.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.inner.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+
+        async fn rename_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: RenameOptions,
+        ) -> object_store::Result<()> {
+            self.inner.rename_opts(from, to, options).await
+        }
     }
 
     // Keep field evaluation order, including metrics and readiness allocation.
@@ -492,6 +598,207 @@ mod tests {
         assert!(cache.flushed_frontier(topic_id, 1) == Some(3));
     }
 
+    /// An image whose finalized `krabka.version` is `level`, holding `orders`.
+    fn orders_image_at_krabka_version(level: i16) -> MetadataImage {
+        let mut image = orders_image(1).image;
+        image.apply(&MetadataRecord::V1FeatureLevel(
+            krabka_metadata::FeatureLevelRecord {
+                name: krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE.into(),
+                level,
+            },
+        ));
+        image
+    }
+
+    /// A flush tick whose PUT has landed in the store but not returned yet,
+    /// on an image at `krabka.version` `level`.
+    struct BlockedPut {
+        _dir: tempfile::TempDir,
+        store: Arc<VisibleBlockedPutStore>,
+        flush: tokio::task::JoinHandle<Result<Option<WalFlushRecord>, BrokerError>>,
+    }
+
+    async fn flush_until_put(level: i16, index_log: &DisklessIndexLog) -> BlockedPut {
+        let dir = tempdir().unwrap();
+        let partitions = Arc::new(PartitionRegistry::new());
+        partitions.insert(
+            "orders".into(),
+            krabka_ids::PartitionIndex(0),
+            test_partition().root(dir.path()).partition(0).call(),
+        );
+        let (_, image_rx) =
+            tokio::sync::watch::channel(Arc::new(orders_image_at_krabka_version(level)));
+        let store = Arc::new(VisibleBlockedPutStore::default());
+        let context = test_context(
+            partitions,
+            image_rx,
+            store.clone(),
+            index_log.clone(),
+            || Arc::new(AtomicBool::new(false)),
+        );
+        let flush = {
+            let put_visible = store.visible.notified();
+            tokio::pin!(put_visible);
+            let flush =
+                tokio::spawn(async move { flush_tick(&context, &FlushConfig::default(), 0).await });
+            put_visible.await;
+            flush
+        };
+        BlockedPut {
+            _dir: dir,
+            store,
+            flush,
+        }
+    }
+
+    /// krabka-io/krabka-broker#1763: a writer at the reservation level
+    /// reserves its object before the upload, so a peer that lists the bytes
+    /// while the writer has not yet published the ranges keeps them past the
+    /// grace period, and still collects an unreserved orphan beside them.
+    #[tokio::test]
+    async fn a_reservation_protects_a_visible_upload_whose_ranges_are_not_published_yet() {
+        let event_log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(2);
+        let index_log = DisklessIndexLog::start(event_log.clone()).await.unwrap();
+        let BlockedPut { _dir, store, flush } =
+            flush_until_put(DISKLESS_OBJECT_RESERVATION_LEVEL, &index_log).await;
+
+        let reservations = index_log.cache().lock().await.reserved_objects();
+        assert!(reservations.len() == 1);
+        let object_key = format!(
+            "diskless-wal/7/{}.ckwl",
+            reservations.iter().next().unwrap()
+        );
+        assert!(store.head(&Path::from(object_key.clone())).await.is_ok());
+        let unreserved_key = format!("diskless-wal/7/{}.ckwl", Uuid::new_v4());
+        store
+            .inner
+            .put(
+                &Path::from(unreserved_key.clone()),
+                PutPayload::from_static(b"orphan"),
+            )
+            .await
+            .unwrap();
+        let peer_index = DisklessIndexLog::start(event_log).await.unwrap();
+        assert!(
+            peer_index
+                .wait_until_caught_up(Duration::from_secs(1))
+                .await
+        );
+        let peer_store: Arc<dyn ObjectStore> = store.clone();
+        let mut reclaimer = Reclaimer::new(peer_index, peer_store, None, Duration::from_mins(1));
+        let observed = Instant::now();
+        sweep_twice(&mut reclaimer, observed, Duration::from_mins(6)).await;
+
+        assert!(store.head(&Path::from(object_key)).await.is_ok());
+        assert!(store.head(&Path::from(unreserved_key)).await.is_err());
+        store.finish_put.notify_one();
+        flush.await.unwrap().unwrap();
+    }
+
+    /// Below the reservation level a flush writes no reservation, as a 1.0.0
+    /// broker does not.
+    #[tokio::test]
+    async fn a_flush_below_the_reservation_level_reserves_nothing() {
+        let index_log = test_index_log().await;
+        let BlockedPut { _dir, store, flush } =
+            flush_until_put(DISKLESS_OBJECT_RESERVATION_LEVEL - 1, &index_log).await;
+
+        assert!(index_log.cache().lock().await.reserved_objects().is_empty());
+        store.finish_put.notify_one();
+        flush.await.unwrap().unwrap();
+    }
+
+    /// krabka-io/krabka-broker#1763: two brokers consume the index
+    /// independently. One view stalls after startup while its peer flushes,
+    /// publishes and trims the records out of its local WAL. The stalled view
+    /// cannot reach a fresh fence, so the peer's live object survives past
+    /// the grace period, at either level.
+    #[tokio::test]
+    async fn a_view_stalled_after_startup_never_reclaims_a_peers_live_object() {
+        for reserve_objects in [false, true] {
+            let log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(2);
+            let stalling = StallableLog::new(log.clone());
+            let stale = DisklessIndexLog::start(stalling.clone()).await.unwrap();
+            assert!(stale.wait_until_caught_up(Duration::from_secs(1)).await);
+            stalling.stall_delivery();
+            let peer = DisklessIndexLog::start(log).await.unwrap();
+            let dir = tempdir().unwrap();
+            let handle = orders_partition(dir.path());
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let record = flush_once(
+                FlushTarget {
+                    object_store: Arc::clone(&store),
+                    broker_id: 8,
+                    reserve_objects,
+                },
+                &BrokerMetrics::new(),
+                &peer,
+                &[FlushPartition {
+                    topic_id: Uuid::from_u128(16),
+                    handle: Arc::clone(&handle),
+                    high_watermark: Offset(3),
+                }],
+                &FlushConfig {
+                    trim_safety_lag: Some(0),
+                    ..FlushConfig::default()
+                },
+                |_| true,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(
+                handle.log.lock().unwrap().log_start_offset() == Offset(3),
+                "the peer trimmed its WAL"
+            );
+            assert!(
+                !stale
+                    .cache()
+                    .lock()
+                    .await
+                    .references_object(&record.object_key)
+            );
+
+            let mut reclaimer =
+                Reclaimer::new(stale, Arc::clone(&store), None, Duration::from_mins(1))
+                    .with_freshness_timeout(Duration::from_millis(50));
+            let observed = Instant::now();
+            sweep_twice(&mut reclaimer, observed, Duration::from_mins(6)).await;
+
+            assert!(
+                store.head(&Path::from(record.object_key)).await.is_ok(),
+                "reserve_objects={reserve_objects}"
+            );
+        }
+    }
+
+    /// krabka-io/krabka-broker#1763: a Produce that never completes on an
+    /// index partition stalls fence publication. The freshness timeout bounds
+    /// the publication too, so the sweep hands control back to the flusher
+    /// loop within it, and deletes nothing.
+    #[tokio::test]
+    async fn a_stalled_fence_publication_skips_the_sweep_within_the_freshness_timeout() {
+        const ORPHAN: &str = "diskless-wal/7/orphan.ckwl";
+        let log = StallableLog::new(krabka_remote_storage_topic::InProcessMetadataEventLog::new(
+            2,
+        ));
+        let index = DisklessIndexLog::start(log.clone()).await.unwrap();
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        store
+            .put(&Path::from(ORPHAN), PutPayload::from_static(b"object"))
+            .await
+            .unwrap();
+        log.stall_fences();
+        let mut reclaimer = Reclaimer::new(index, Arc::clone(&store), None, Duration::ZERO)
+            .with_freshness_timeout(Duration::from_millis(50));
+
+        tokio::time::timeout(Duration::from_secs(5), reclaimer.sweep())
+            .await
+            .expect("the sweep returns while fence publication stalls");
+
+        assert!(store.head(&Path::from(ORPHAN)).await.is_ok());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn worker_rotates_size_limited_flushes_without_starvation() {
         let RotationFixture {
@@ -606,6 +913,75 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn replayed_reservation_protects_an_object_during_delayed_peer_publication() {
+        let topic_id = Uuid::from_u128(15);
+        let object_key = format!("diskless-wal/7/{}.ckwl", Uuid::new_v4());
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log = krabka_remote_storage_topic::InProcessMetadataEventLog::new(1);
+        let writer = DisklessIndexLog::start(log.clone()).await.unwrap();
+        writer.reserve_object(&object_key).await.unwrap();
+
+        // The writer can stop after recording the reservation and after its
+        // bytes land. A different broker replays that v1-compatible record.
+        store
+            .put(
+                &Path::from(object_key.clone()),
+                PutPayload::from_static(b"object"),
+            )
+            .await
+            .unwrap();
+        let reclaimer_index = DisklessIndexLog::start(log).await.unwrap();
+        assert!(
+            reclaimer_index
+                .wait_until_caught_up(Duration::from_secs(1))
+                .await
+        );
+        wait_for_cache(&reclaimer_index.cache(), |cache| {
+            cache.references_object(&object_key)
+        })
+        .await;
+
+        let mut reclaimer = Reclaimer::new(
+            reclaimer_index.clone(),
+            Arc::clone(&store),
+            None,
+            Duration::from_mins(1),
+        );
+        let observed = Instant::now();
+        sweep_twice(&mut reclaimer, observed, Duration::from_mins(6)).await;
+        assert!(
+            store.head(&Path::from(object_key.clone())).await.is_ok(),
+            "a peer may delay index publication longer than the grace period"
+        );
+
+        writer
+            .publish_flush(&three_record_flush(topic_id, &object_key))
+            .await
+            .unwrap();
+        wait_for_object(&reclaimer_index.cache(), topic_id, &object_key).await;
+        writer
+            .release_object_reservation(&object_key)
+            .await
+            .unwrap();
+        wait_for_cache(&reclaimer_index.cache(), |cache| {
+            !cache.reserved_objects().contains(
+                &Uuid::parse_str(
+                    object_key
+                        .rsplit('/')
+                        .next()
+                        .unwrap()
+                        .strip_suffix(".ckwl")
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+        })
+        .await;
+        reclaimer.sweep_at(observed + Duration::from_mins(7)).await;
+        assert!(store.head(&Path::from(object_key)).await.is_ok());
     }
 
     #[tokio::test]

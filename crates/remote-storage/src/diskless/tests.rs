@@ -5,7 +5,8 @@ use {
             CapturedWalRange, DisklessPartitionCapture, DisklessWalCapture, WalCaptureProjection,
         },
         index::{
-            REPLAY_FENCE_KEY, WalDeleteFloorKey, WalDeleteFloorRecord, WalFlushRecord, WalIndexKey,
+            REPLAY_FENCE_KEY, WAL_OBJECT_RESERVATION_PARTITION, WalDeleteFloorKey,
+            WalDeleteFloorRecord, WalFlushRecord, WalIndexKey, WalObjectReservationKey,
         },
     },
     assert2::check,
@@ -80,6 +81,47 @@ fn index_keys_encode_to_the_golden_bytes_and_decode_back() {
     check!(WalDeleteFloorKey::from_bytes(GOLDEN_RANGE_KEY) == None);
     check!(WalIndexKey::from_bytes(REPLAY_FENCE_KEY) == None);
     check!(WalDeleteFloorKey::from_bytes(REPLAY_FENCE_KEY) == None);
+}
+
+/// The object a reservation fixture names: a version 4 UUID, as object keys use.
+const RESERVED_OBJECT: Uuid = Uuid::from_u128(0x0011_2233_4455_4677_8899_aabb_ccdd_eeff);
+
+/// The exact key bytes of the reservation of [`RESERVED_OBJECT`]: a 1.x
+/// delete-floor key (key version 1) whose topic id is the object id with its
+/// version nibble set to 8, on partition `i32::MIN`. A change here is a
+/// change to the 1.x on-disk contract.
+const GOLDEN_RESERVATION_KEY: &[u8] =
+    include_bytes!("../../tests/fixtures/golden_reservation_key.bin");
+
+/// The exact value bytes of that reservation: a 1.x `WalDeleteFloorRecord`
+/// (version 0) for the same topic id and partition, at floor 0.
+const GOLDEN_RESERVATION_RECORD: &[u8] =
+    include_bytes!("../../tests/fixtures/golden_reservation_record.bin");
+
+/// krabka.version 2 writes object reservations in the 1.x delete-floor wire
+/// format. This build decodes the bytes as a reservation, and a 1.x reader,
+/// which knows only delete floors, decodes the same bytes as an inert floor of
+/// 0 on a partition no topic has.
+#[test]
+fn object_reservations_decode_from_the_golden_bytes_as_1x_delete_floors() {
+    let reservation = WalObjectReservationKey::new(RESERVED_OBJECT);
+    let floor_key = WalDeleteFloorKey {
+        topic_id: Uuid::from_u128(0x0011_2233_4455_8677_8899_aabb_ccdd_eeff),
+        partition: WAL_OBJECT_RESERVATION_PARTITION,
+    };
+    let floor_record = WalDeleteFloorRecord {
+        topic_id: floor_key.topic_id,
+        partition: floor_key.partition,
+        floor: 0,
+    };
+
+    check!(reservation.to_bytes().as_ref() == GOLDEN_RESERVATION_KEY);
+    check!(WalObjectReservationKey::from_bytes(GOLDEN_RESERVATION_KEY) == Some(reservation));
+    check!(WalDeleteFloorKey::from_bytes(GOLDEN_RESERVATION_KEY) == Some(floor_key));
+    check!(floor_record.to_bytes().unwrap().as_ref() == GOLDEN_RESERVATION_RECORD);
+    check!(WalDeleteFloorRecord::from_bytes(GOLDEN_RESERVATION_RECORD) == Ok(floor_record));
+    // An ordinary delete-floor key is not a reservation.
+    check!(WalObjectReservationKey::from_bytes(GOLDEN_FLOOR_KEY) == None);
 }
 
 /// `golden` with its leading two-byte version replaced by `version`.

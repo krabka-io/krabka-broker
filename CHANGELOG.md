@@ -57,6 +57,15 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   append for hundreds of milliseconds. `log_writeback_window = "0B"` leaves
   write-back to the kernel, as before. Partitions with `preallocate=true`
   write through `O_DIRECT` and are unchanged.
+- A consumer fetch parked below `fetch.min.bytes` is answered early, with no
+  records, when a partition its fetch session forgot in the last 100 ms
+  receives records. The Java consumer leaves a partition out of its next fetch
+  while it still holds that partition's records, and names it again once it
+  has drained them. Before, that fetch waited out `fetch.max.wait.ms` on the
+  idle partitions it did name while the busy partition it left out gathered
+  records, which held a single consumer behind one busy partition for up to
+  `fetch.max.wait.ms`. The new `fetch_forgotten_partition_wakes_total` counter
+  counts the early answers.
 - CPU profiling initializes the sampler and builds, encodes, and compresses
   reports on blocking workers, keeping that work off runtime workers.
 - Direct-mode reads covered by the tail cache and ordinary verbatim appends

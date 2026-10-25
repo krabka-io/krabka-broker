@@ -340,6 +340,22 @@ impl BrokerConfig {
                 self.client_metrics_otlp_queue_capacity == 0,
             ),
             (
+                "client_metrics_prom_max_series",
+                self.client_metrics_prom_max_series == 0,
+            ),
+            (
+                "client_metrics_prom_max_series_per_principal",
+                self.client_metrics_prom_max_series_per_principal == 0,
+            ),
+            (
+                "client_metrics_prom_max_series_per_client",
+                self.client_metrics_prom_max_series_per_client == 0,
+            ),
+            (
+                "client_metrics_prom_max_series_per_instance",
+                self.client_metrics_prom_max_series_per_instance == 0,
+            ),
+            (
                 "audit_event_queue_capacity",
                 self.audit_event_queue_capacity == 0,
             ),
