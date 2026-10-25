@@ -63,11 +63,17 @@ BROKER_PACKAGE = [("krabka-broker", "krabka-broker")]
 # The training set. Each entry is a shortened copy of a file in
 # `bench/scenarios/`; `compression` makes a compressed variant of it.
 # Together they cover small records, large records, consumers, a fixed rate,
-# `acks=all`, and the lz4 and zstd codecs.
+# `acks=all`, and the zstd codec.
+#
+# The large-record runs are uncompressed. With lz4 and records of 16 KiB and
+# up, the driver hangs at the end of the run against any release broker
+# (before and after the SIMD review): the broker goes idle, and the producer
+# waits for acknowledgements that never come. A debug broker is too slow to
+# hit it. Until that is fixed, an lz4 large-record run cannot finish.
 TRAINING = [
     struct(name = "small-msg-saturate", source = "small-msg-saturate", compression = None),
     struct(name = "small-msg-saturate-zstd", source = "small-msg-saturate", compression = "zstd"),
-    struct(name = "large-msg", source = "large-msg", compression = None),
+    struct(name = "large-msg-uncompressed", source = "large-msg", compression = "none"),
     struct(name = "fan-out", source = "fan-out", compression = None),
     struct(name = "fixed-rate-latency", source = "fixed-rate-latency", compression = None),
     struct(name = "mixed-acks", source = "mixed-acks", compression = None),
@@ -75,8 +81,8 @@ TRAINING = [
 
 # The evaluation set. `duration` replaces the scenario's own when it is set.
 EVALUATION = [
-    struct(name = "small-msg-saturate", source = "small-msg-saturate", duration = None),
-    struct(name = "large-msg", source = "large-msg", duration = "30s"),
+    struct(name = "small-msg-saturate", source = "small-msg-saturate", duration = None, compression = None),
+    struct(name = "large-msg-uncompressed", source = "large-msg", duration = "30s", compression = "none"),
 ]
 
 # The broker builds that `compare` can run, in the order a round rotates
@@ -286,10 +292,14 @@ def training_scenario(entry, source):
     return text
 
 def evaluation_scenario(entry, source):
-    """The evaluation copy of `entry`: the source, with its duration set."""
+    """The evaluation copy of `entry`: the source, with its duration and codec set."""
+    text = source
     if entry.duration:
-        return set_scenario_key(source, "duration", entry.duration)
-    return source
+        text = set_scenario_key(text, "duration", entry.duration)
+    if entry.compression:
+        text = set_scenario_key(text, "name", entry.name)
+        text = set_scenario_key(text, "compression", entry.compression)
+    return text
 
 def parse_seconds(value):
     """A scenario extent such as `20s`, `2m` or `500ms`, in seconds."""
@@ -463,9 +473,21 @@ def broker_command(broker_binary, log_dir, partitions, cpus = "", env = {}):
         "1",
     ], cpus), env = env)
 
+# How long one driver run may take before `timeout` stops it. The longest
+# scenario here is 70 s of load; the rest is start-up and the final drain.
+DRIVER_LIMIT_SECONDS = 600
+
+# `timeout` exits 124 when the limit stopped the command, and 137 when it
+# needed `--kill-after`'s SIGKILL.
+DRIVER_TIMED_OUT = [124, 137]
+
 def driver_command(driver_binary, scenario_path, out, cpus = ""):
-    """Run one scenario against the broker and write its `RunOutput` JSON to `out`."""
-    return command(pinned([
+    """Run one scenario against the broker and write its `RunOutput` JSON to `out`.
+
+    `timeout` bounds the run, so a driver that hangs costs one retry rather
+    than the whole experiment.
+    """
+    return command(["timeout", "--kill-after=10", str(DRIVER_LIMIT_SECONDS)] + pinned([
         driver_binary,
         "--scenario",
         scenario_path,
@@ -797,9 +819,34 @@ def _session(r, broker, driver, log_dir, logs):
 
     # A saturating run writes gigabytes, and nothing reads them afterwards.
     _remove_dir(r, log_dir)
-    if code != 0:
-        fail("%s exited with %r" % (render_command(driver), code))
-    return seconds
+    return struct(seconds = seconds, code = code)
+
+def session_verdict(code, attempt, attempts):
+    """What to do after a driver run that exited with `code`.
+
+    `"ok"` on success, `"retry"` when `timeout` stopped a hung driver and an
+    attempt is left, and `"fail"` otherwise.
+    """
+    if code == 0:
+        return "ok"
+    if code in DRIVER_TIMED_OUT and attempt < attempts:
+        return "retry"
+    return "fail"
+
+# A hung driver gets one more session: a fresh data directory and broker.
+_SESSION_ATTEMPTS = 2
+
+def _session_retrying(r, broker, driver, log_dir, logs):
+    """[`_session`], run again once when `timeout` stopped a hung driver."""
+    for attempt in range(1, _SESSION_ATTEMPTS + 1):
+        outcome = _session(r, broker, driver, log_dir, logs)
+        verdict = session_verdict(outcome.code, attempt, _SESSION_ATTEMPTS)
+        if verdict == "ok":
+            return outcome.seconds
+        if verdict == "fail":
+            fail("%s exited with %r" % (render_command(driver), outcome.code))
+        r.ctx.std.io.stderr.write("warning: the driver hung (exit %r); running the session again\n" % outcome.code)
+    fail("unreachable")
 
 def _read_scenarios(r, entries):
     sources = {}
@@ -824,7 +871,7 @@ def _phase_train(r):
         path = "%s/scenarios/train/%s.yaml" % (r.work, entry.name)
         _write(r, path, text)
         label = "train-" + entry.name
-        _session(
+        _session_retrying(
             r,
             broker_command(r.bin.instrumented, r.work + "/data/" + label, scenario_partitions(text), env = training_env(r.work, entry.name)),
             driver_command(r.bin.driver, path, "%s/train/%s.json" % (r.work, entry.name)),
@@ -872,7 +919,7 @@ def _phase_compare(r):
         text = texts[trial.scenario]
         out = "%s/compare/%s.json" % (r.work, label)
         _say(r, "round %d of %d: %s on %s" % (trial.round, r.trials, trial.scenario, trial.binary))
-        seconds = _session(
+        seconds = _session_retrying(
             r,
             broker_command(brokers[trial.binary], r.work + "/data/" + label, scenario_partitions(text), cpus = BROKER_CPUS),
             driver_command(r.bin.driver, "%s/scenarios/eval/%s.yaml" % (r.work, trial.scenario), out, cpus = DRIVER_CPUS),

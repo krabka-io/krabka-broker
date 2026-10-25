@@ -9,6 +9,7 @@ load(
     "binaries",
     "broker_command",
     "build_commands",
+    "session_verdict",
     "command",
     "cpu_seconds",
     "default_work_dir",
@@ -166,7 +167,7 @@ def _test_training_set_covers_compression_and_consumers(_ctx):
     check_eq("training", [(e.name, e.source, e.compression) for e in TRAINING], [
         ("small-msg-saturate", "small-msg-saturate", None),
         ("small-msg-saturate-zstd", "small-msg-saturate", "zstd"),
-        ("large-msg", "large-msg", None),
+        ("large-msg-uncompressed", "large-msg", "none"),
         ("fan-out", "fan-out", None),
         ("fixed-rate-latency", "fixed-rate-latency", None),
         ("mixed-acks", "mixed-acks", None),
@@ -175,7 +176,7 @@ def _test_training_set_covers_compression_and_consumers(_ctx):
 def _test_evaluation_keeps_small_and_cuts_large_to_30s(_ctx):
     small, large = EVALUATION
     check_eq("small unchanged", evaluation_scenario(small, _SMALL), _SMALL)
-    check_eq("large", evaluation_scenario(large, "name: large-msg\nwarmup: 10s\nduration: 60s\n"), "name: large-msg\nwarmup: 10s\nduration: 30s\n")
+    check_eq("large", evaluation_scenario(large, "name: large-msg\ncompression: lz4\nwarmup: 10s\nduration: 60s\n"), "name: large-msg-uncompressed\ncompression: none\nwarmup: 10s\nduration: 30s\n")
 
 def _test_scenario_values(_ctx):
     check_eq("seconds", [parse_seconds(v) for v in ["20s", "2m", "500ms", "1h"]], [20, 120, 0.5, 3600])
@@ -281,6 +282,9 @@ def _test_compare_processes_are_pinned(_ctx):
         ["taskset", "-c", "2,3", "/b/broker", "--log-dir", "/w/data/c"] + _BROKER_FLAGS + ["--num-partitions", "6", "--default-replication-factor", "1"],
     ))
     check_eq("compare driver", driver_command("/b/driver", "/w/s.yaml", "/w/o.json", cpus = "0,1"), command([
+        "timeout",
+        "--kill-after=10",
+        "600",
         "taskset",
         "-c",
         "0,1",
@@ -348,6 +352,15 @@ def _test_driver_metrics_divide_by_the_measured_window(_ctx):
         "producer_latency": {"p50": 1000000, "p99": 4250000},
     }
     check_eq("metrics", driver_metrics(run, 60), {"msgs_per_s": 50000.0, "mb_per_s": 5.0, "p99_ms": 4.25})
+
+def _test_a_hung_driver_gets_one_more_session(_ctx):
+    check_eq("verdicts", [
+        session_verdict(0, 1, 2),
+        session_verdict(124, 1, 2),
+        session_verdict(137, 1, 2),
+        session_verdict(124, 2, 2),
+        session_verdict(1, 1, 2),
+    ], ["ok", "retry", "retry", "fail", "fail"])
 
 def _test_median_and_change(_ctx):
     check_eq("odd", median([3, 1, 2]), 2)
@@ -451,6 +464,7 @@ def _test_report_gives_each_variant_a_median_and_a_change(_ctx):
 """)
 
 pgo_tests = suite("pgo", [
+    _test_a_hung_driver_gets_one_more_session,
     _test_work_dir_defaults_beside_the_root,
     _test_phase_runs_itself_and_every_later_phase,
     _test_phase_list_runs_exactly_its_phases_in_pipeline_order,
