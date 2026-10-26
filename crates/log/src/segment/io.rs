@@ -86,14 +86,22 @@ fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
     FileExt::read_at(file, buf, offset)
 }
 
+// cargo-mutants: an I/O-only wrapper around one positional-read call, and
+// compiled only for Windows, so no in-process test on the sweep's platforms can
+// observe a mutant of it.
 #[cfg(windows)]
+#[cfg_attr(test, mutants::skip)]
 fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
     std::os::windows::fs::FileExt::seek_read(file, buf, offset)
 }
 
 // `std::os::wasi::fs::FileExt` is unstable (`wasi_ext`), so the positional
 // read goes through the safe `pread` wrapper of rustix on this target.
+// cargo-mutants: an I/O-only wrapper around one positional-read call, and
+// compiled only for WASI, so no in-process test on the sweep's platforms can
+// observe a mutant of it.
 #[cfg(target_os = "wasi")]
+#[cfg_attr(test, mutants::skip)]
 fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
     pread(file, buf, offset).map_err(Into::into)
 }
