@@ -791,6 +791,19 @@ mod tests {
         assert2::assert!(log.hwm() == 1);
     }
 
+    /// An advance to the current high watermark writes nothing, so a write
+    /// that would fail cannot fail the log through a no-op advance.
+    #[test]
+    fn advance_hwm_to_the_current_value_does_not_persist() {
+        let LogInDir { mut log, dir } = open_tmp();
+        log.append(&mut batch(0, 1, b"x"), 0).unwrap();
+        log.advance_hwm(Offset(1));
+        fs::create_dir(dir.path().join(HIGH_WATERMARK_TMP_FILE)).expect("block the tmp file");
+        log.advance_hwm(Offset(1));
+        assert2::assert!(log.hwm() == 1);
+        assert2::assert!(log.failure() == None);
+    }
+
     #[test]
     fn prune_to_advances_log_start_and_is_noop_when_behind() {
         let LogInDir { mut log, dir: _dir } = seeded_log().call();

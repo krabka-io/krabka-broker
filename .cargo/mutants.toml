@@ -72,11 +72,12 @@ exclude_re = [
     # ---- crates/kraft-core ---------------------------------------------
     #
     # `LogOffsetMetadata::end_of_epoch_in`'s early return for `epoch > last_epoch`
-    # is an optimization: for any `epoch >= last_epoch` the fallthrough
-    # position/filter yields `offset = end` and `epoch = last_epoch`, the same
-    # result, so `>=` and `==` return it on the same inputs. Pinned to a line
+    # is an optimization: at `epoch == last_epoch` the fallthrough
+    # position/filter yields `offset = end` and `epoch = last_epoch` too, so
+    # `>=` returns the same result. (`==` is not equivalent: on an empty log it
+    # answers the requested epoch, and a test kills it.) Pinned to a line
     # because the function's other `>` (the position search) is killable.
-    "types\\.rs:68:.*replace > with (==|>=) in LogOffsetMetadata::end_of_epoch_in",
+    "types\\.rs:68:.*replace > with >= in LogOffsetMetadata::end_of_epoch_in",
     # ---- crates/log ----------------------------------------------------
     #
     # `max_timestamp > current` guards an assignment of that timestamp, so at
@@ -170,10 +171,7 @@ exclude_re = [
     #   `next == cursor` never occurs.
     "replace < with <= in Engine::advance_and_apply",
     "replace > with >= in Engine::advance_and_apply",
-    #
-    # In `KraftLog::advance_hwm`: at equality `next == self.hwm`, reassigning
-    # and persisting stores the identical offset value.
-    "replace > with >= in KraftLog::advance_hwm",
+
     #
     # `Vec::new()` and `vec![]` construct identical empty vectors.
     "replace PeerSender::discovery_peers.*with vec!\\[\\]",
