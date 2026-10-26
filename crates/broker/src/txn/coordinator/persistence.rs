@@ -15,6 +15,7 @@ use {
         partition::Partition,
         time_util,
         txn::{
+            bootstrap::TOPIC,
             log_record::{decode_key, decode_value, encode_key, encode_value},
             state::TxnEntry,
             version::TxnVersion,
@@ -24,19 +25,19 @@ use {
     krabka_ids::PartitionIndex,
     krabka_log::Offset,
     krabka_protocol::records::{Record, RecordBatch},
-    std::sync::Arc,
-    tokio::sync::Mutex,
+    std::{
+        ops::RangeInclusive,
+        sync::{Arc, PoisonError},
+    },
+    tokio::sync::{Mutex, MutexGuard},
 };
 
 impl TxnCoordinator {
-    pub(crate) async fn lock_state_partition_for(
-        &self,
-        tid: &str,
-    ) -> tokio::sync::MutexGuard<'_, ()> {
-        let partition = self.partition_for(tid);
-        let index = usize::try_from(partition.get())
-            .expect("transaction state partition index must be nonnegative");
-        self.state_partition_writes[index].lock().await
+    pub(crate) async fn lock_state_partition_for(&self, tid: &str) -> MutexGuard<'_, ()> {
+        self.state_partition_writes
+            .lock_for(self.partition_for(tid))
+            .lock()
+            .await
     }
 
     /// Persists `entry` to the matching `__transaction_state` partition log,
@@ -104,7 +105,7 @@ impl TxnCoordinator {
         format_txnv: TxnVersion,
     ) -> Result<TxnEntry, BrokerError> {
         let tid = entry.transactional_id.clone();
-        let p = self.partition_for(&tid);
+        let p = self.require_partition_for(&tid)?;
         let term = self.loaded_term(p).await?;
         self.validate_pid_install(&entry)?;
 
@@ -133,7 +134,7 @@ impl TxnCoordinator {
         let _pid_install = self
             .pid_install
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         // Recheck after the append: another transaction can complete its own
         // durable append while this one awaits I/O, but publication must never
         // overwrite that transaction's PID ownership.
@@ -187,7 +188,7 @@ impl TxnCoordinator {
     )]
     pub(crate) async fn tombstone(&self, entry: &TxnEntry) -> Result<(), BrokerError> {
         let tid = entry.transactional_id.as_str();
-        let p = self.partition_for(tid);
+        let p = self.require_partition_for(tid)?;
         let term = self.loaded_term(p).await?;
 
         let batch = state_batch(Bytes::from(encode_key(tid)?), None, time_util::now_ms());
@@ -232,14 +233,14 @@ pub(super) fn replay_partition(
     part: &Partition,
     partition: PartitionIndex,
     read: (krabka_units::ByteSize, bool),
-    partition_for: impl Fn(&str) -> PartitionIndex,
+    partition_for: impl Fn(&str) -> Option<PartitionIndex>,
 ) -> RecoveredTransactions {
     let mut recovered = RecoveredTransactions::default();
     if let Err(error) = replay_into(&mut recovered, part, partition, read, partition_for) {
         tracing::error!(
             %error,
             "Error loading transactions from transaction log {}-{partition}",
-            crate::txn::bootstrap::TOPIC
+            TOPIC
         );
     }
     recovered
@@ -261,7 +262,7 @@ fn replay_into(
     part: &Partition,
     p: PartitionIndex,
     (read_max, last_epoch_tag): (krabka_units::ByteSize, bool),
-    partition_for: impl Fn(&str) -> PartitionIndex,
+    partition_for: impl Fn(&str) -> Option<PartitionIndex>,
 ) -> Result<(), BrokerError> {
     let mut offset = part.log_start_offset();
     loop {
@@ -287,7 +288,7 @@ fn replay_into(
                     continue;
                 }
                 let tid = decode_key(key_bytes)?;
-                let partition_matches = partition_for(&tid) == p;
+                let partition_matches = partition_for(&tid) == Some(p);
                 let Some(value_bytes) = rec.value.as_ref() else {
                     if !partition_matches {
                         return Err(BrokerError::Txn(format!(
@@ -312,11 +313,11 @@ fn replay_into(
 
 /// The `TransactionLogKey` versions Kafka 4.3.1 reads: the key's
 /// `validVersions` is `"0"`.
-const KEY_VERSIONS: std::ops::RangeInclusive<i16> = 0..=0;
+const KEY_VERSIONS: RangeInclusive<i16> = 0..=0;
 
 /// The `TransactionLogValue` versions Kafka 4.3.1 reads: the value's
 /// `validVersions` is `"0-1"`.
-const VALUE_VERSIONS: std::ops::RangeInclusive<i16> = 0..=1;
+const VALUE_VERSIONS: RangeInclusive<i16> = 0..=1;
 
 /// Returns the leading `i16` version of `bytes` when it lies outside
 /// `known`, which Kafka's `TransactionLog.read` reports as `UnknownKeyVersion`
@@ -324,7 +325,7 @@ const VALUE_VERSIONS: std::ops::RangeInclusive<i16> = 0..=1;
 ///
 /// Bytes too short for a version return `None`, so the decoder that follows
 /// reports them.
-fn unknown_version(bytes: &[u8], known: std::ops::RangeInclusive<i16>) -> Option<i16> {
+fn unknown_version(bytes: &[u8], known: RangeInclusive<i16>) -> Option<i16> {
     bytes
         .first_chunk::<2>()
         .map(|version| i16::from_be_bytes(*version))
@@ -340,7 +341,7 @@ fn warn_unknown_version(version_type: &str, version: i16, partition: PartitionIn
         "Unknown message {version_type} with version {version} while loading transaction \
          state from {}-{partition}. Ignoring it. It could be a left over from an aborted \
          upgrade.",
-        crate::txn::bootstrap::TOPIC
+        TOPIC
     );
 }
 
@@ -519,7 +520,7 @@ mod tests {
                 &part,
                 PartitionIndex(0),
                 (krabka_units::mebibytes(1), false),
-                |tid| PartitionIndex(i32::from(tid == "misplaced")),
+                |tid| Some(PartitionIndex(i32::from(tid == "misplaced"))),
             );
             (state, pid_to_tid)
         };

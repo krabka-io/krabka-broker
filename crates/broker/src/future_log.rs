@@ -29,7 +29,8 @@ use {
     krabka_log::Log,
     krabka_units::{ByteSize, Time},
     std::{
-        path::{Path, PathBuf},
+        fs, io,
+        path::{self, Path, PathBuf},
         sync::{Arc, Mutex},
     },
     tokio::task::JoinHandle,
@@ -44,7 +45,7 @@ mod start;
 mod test_support;
 mod truncation;
 
-pub(crate) use self::{
+pub use self::{
     cleanup::{abort_moves, shutdown_moves},
     start::{resume_move, start_move},
 };
@@ -75,7 +76,7 @@ pub struct FutureLogState {
     pub cancel: CancellationToken,
     /// Retained so cancellation and broker shutdown can abort and await the
     /// replicator task.
-    pub task: std::sync::Mutex<Option<JoinHandle<()>>>,
+    pub task: Mutex<Option<JoinHandle<()>>>,
 }
 
 /// Why a [`start_move`] or [`resume_move`] call could not be honoured.
@@ -102,12 +103,12 @@ pub enum MoveError {
     /// `krabka_log::Log::open` or `mkdir` failed while staging the future log.
     /// The handler logs the inner error, then maps every storage failure to
     /// `KAFKA_STORAGE_ERROR` on the wire.
-    #[from(BrokerError, krabka_log::LogError, std::io::Error)]
+    #[from(BrokerError, krabka_log::LogError, io::Error)]
     Storage(BrokerError),
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct MovePolicy {
+pub struct MovePolicy {
     pub retry_backoff: Time,
     pub read_chunk: ByteSize,
     pub throttle: Arc<TokenBucket>,
@@ -152,7 +153,7 @@ fn configured_log_dir(all_log_dirs: &[PathBuf], requested: &Path) -> Option<Path
     all_log_dirs
         .iter()
         .find(|dir| {
-            let absolute: PathBuf = std::path::absolute(dir)
+            let absolute: PathBuf = path::absolute(dir)
                 .unwrap_or_else(|_| (*dir).clone())
                 .components()
                 .collect();
@@ -166,7 +167,7 @@ fn configured_log_dir(all_log_dirs: &[PathBuf], requested: &Path) -> Option<Path
 /// exist yet. That is correct for log-dir comparisons, because this code also
 /// compares against the configured value.
 fn canonicalize_or_self(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 #[cfg(test)]

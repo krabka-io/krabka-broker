@@ -20,6 +20,7 @@ use {
     },
     krabka_security::ListenerProtocol,
     krabka_units::Time,
+    std::{collections::BTreeMap, str::FromStr},
 };
 
 pub(super) struct ListenerSettings {
@@ -29,7 +30,7 @@ pub(super) struct ListenerSettings {
     pub(super) max_connections_per_ip: Option<usize>,
     pub(super) connections_max_idle: Option<Time>,
     pub(super) connections_max_reauth: Option<Time>,
-    pub(super) server_properties: std::collections::BTreeMap<String, String>,
+    pub(super) server_properties: BTreeMap<String, String>,
     pub(super) controller_listener_protocol: Option<ListenerProtocol>,
     pub(super) tls_config: Option<FileTlsConfig>,
 }
@@ -40,7 +41,7 @@ pub(super) struct ListenerSettings {
 /// not a positive integer refuses the configuration, as Kafka's `ConfigDef`
 /// refuses it at startup.
 fn apply_topic_creation_properties(
-    properties: &std::collections::BTreeMap<String, String>,
+    properties: &BTreeMap<String, String>,
     cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     let origins = &mut cfg.static_config_origins.topic_creation;
@@ -64,7 +65,7 @@ fn apply_topic_creation_properties(
 /// case-insensitively and refuses anything but `true` and `false` at startup,
 /// and so does this.
 fn boolean_property(
-    properties: &std::collections::BTreeMap<String, String>,
+    properties: &BTreeMap<String, String>,
     key: &str,
 ) -> Result<Option<bool>, FileConfigError> {
     let Some(value) = properties.get(key) else {
@@ -91,7 +92,7 @@ const UNSTABLE_FEATURE_VERSIONS_ENABLE: &str = "unstable.feature.versions.enable
 /// the static layer of a dynamic config, and the internal
 /// `unstable.api.versions.enable` and `unstable.feature.versions.enable`.
 fn apply_boolean_properties(
-    properties: &std::collections::BTreeMap<String, String>,
+    properties: &BTreeMap<String, String>,
     cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     if let Some(enabled) = boolean_property(properties, UNSTABLE_API_VERSIONS_ENABLE)? {
@@ -130,10 +131,7 @@ fn apply_boolean_properties(
 /// KIP-1066 `cordoned.log.dirs` under its Kafka name. A value already set by
 /// another source wins. `crate::BrokerConfig::validate` checks it against the
 /// log directories once they are all known.
-fn apply_cordoned_log_dirs(
-    properties: &std::collections::BTreeMap<String, String>,
-    cfg: &mut BrokerConfig,
-) {
+fn apply_cordoned_log_dirs(properties: &BTreeMap<String, String>, cfg: &mut BrokerConfig) {
     if cfg.cordoned_log_dirs.is_none()
         && let Some(value) = properties.get(CORDONED_LOG_DIRS)
     {
@@ -146,7 +144,7 @@ fn apply_cordoned_log_dirs(
 /// would make the segment span more record time than this. Kafka refuses a
 /// value under 1 at startup, and so does this.
 fn apply_log_roll_ms(
-    properties: &std::collections::BTreeMap<String, String>,
+    properties: &BTreeMap<String, String>,
     cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     use krabka_units::convert::TimeExt as _;
@@ -166,7 +164,7 @@ fn apply_log_roll_ms(
 /// members. Kafka reads the value without regard to case, and refuses a value
 /// outside its four policies at startup.
 fn apply_consumer_group_migration_policy(
-    properties: &std::collections::BTreeMap<String, String>,
+    properties: &BTreeMap<String, String>,
     cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     const KEY: &str = "group.consumer.migration.policy";
@@ -189,7 +187,7 @@ fn apply_consumer_group_migration_policy(
 /// when the key names that class, and refuses any other class, as Kafka
 /// refuses to start on a class it cannot load.
 fn apply_topology_description_plugin(
-    properties: &std::collections::BTreeMap<String, String>,
+    properties: &BTreeMap<String, String>,
     cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     use crate::coordinator::unified::streams::description::{
@@ -205,7 +203,7 @@ fn apply_topology_description_plugin(
 }
 
 /// A positive integer `server_properties` value.
-fn parse_positive<T: std::str::FromStr + Default + PartialOrd>(
+fn parse_positive<T: FromStr + Default + PartialOrd>(
     name: &str,
     value: &str,
 ) -> Result<T, FileConfigError> {
@@ -362,7 +360,7 @@ mod tests {
     use {
         crate::{
             api_catalog::UnstableApiVersions,
-            config::{BrokerConfig, TopicCreationOrigins},
+            config::{BrokerConfig, ListenerSpec, TopicCreationOrigins},
             coordinator::unified::{
                 config::ConsumerGroupMigrationPolicy,
                 streams::description::TopologyDescriptionPlugin,
@@ -373,6 +371,10 @@ mod tests {
             },
         },
         assert2::{assert, check},
+        std::{
+            fmt,
+            path::{Path, PathBuf},
+        },
     };
 
     fn file_outcome<T>(source: &str, read: impl FnOnce(&BrokerConfig) -> T) -> Result<T, String> {
@@ -390,7 +392,7 @@ mod tests {
         supplied: bool,
     }
 
-    fn check_config_case<T: std::fmt::Debug + PartialEq, E: AsRef<str>>(
+    fn check_config_case<T: fmt::Debug + PartialEq, E: AsRef<str>>(
         label: &str,
         result: &Result<T, String>,
         expected: &Result<T, E>,
@@ -444,7 +446,7 @@ protocol = "Plaintext"
     fn apply_to_maps_connection_caps() {
         use crate::config::BrokerConfig;
 
-        let src = r"
+        let src = "
 max_connections = 100
 max_connections_per_ip = 8
 ";
@@ -499,7 +501,7 @@ connections_max_idle = "5s"
         check!(cfg.connections_max_idle == Some(krabka_units::secs(45)));
         check!(
             cfg.connections_max_idle_overrides
-                == maplit::btreemap! {"EXTERNAL".to_string() => krabka_units::secs(5)}
+                == maplit::btreemap! {"EXTERNAL".to_owned() => krabka_units::secs(5)}
         );
         check!(cfg.connections_max_idle_for("EXTERNAL") == Some(Duration::from_secs(5)));
         check!(cfg.connections_max_idle_for("INTERNAL") == Some(Duration::from_secs(45)));
@@ -945,7 +947,7 @@ client_auth = "Required"
         let cfg = configured(src, "parse").unwrap();
         assert!(cfg.controller_listener_protocol == krabka_security::ListenerProtocol::Ssl);
         let tls = cfg.tls_config.expect("tls_config propagated");
-        assert!(tls.cert_chain_path == std::path::PathBuf::from("/c"));
+        assert!(tls.cert_chain_path == PathBuf::from("/c"));
     }
     #[test]
     fn apply_to_threads_trust_roots_and_controller_server_name() {
@@ -968,8 +970,7 @@ client_auth = "Required"
         );
         let tls = cfg.tls_config.expect("tls_config propagated");
         assert!(
-            tls.trust_roots_path.as_deref()
-                == Some(std::path::Path::new("/etc/krabka/cluster-ca/ca.crt"))
+            tls.trust_roots_path.as_deref() == Some(Path::new("/etc/krabka/cluster-ca/ca.crt"))
         );
     }
     /// The top-level `[tls_config]` carries the KIP-371 principal mapping
@@ -1011,7 +1012,7 @@ key_path = "/etc/krabka/tls/node.key"
 
         let file: FileConfig = toml::from_str("").unwrap();
         let mut cfg = BrokerConfig {
-            listeners: vec![crate::config::ListenerSpec {
+            listeners: vec![ListenerSpec {
                 name: "X".into(),
                 bind_addr: "0.0.0.0:9094".parse().unwrap(),
                 advertised: "h:9094".into(),

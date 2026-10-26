@@ -11,7 +11,7 @@ use {
     },
 };
 
-pub(crate) fn share_produce_parameters(
+pub fn share_produce_parameters(
     meta: TokenStream,
     item: TokenStream,
 ) -> Result<TokenStream, ParseError> {
@@ -19,7 +19,10 @@ pub(crate) fn share_produce_parameters(
         return Err(ParseError::new(token.span(), "expected no arguments"));
     }
     let mut tokens = item_body(item, "share_produce_parameters", TokenTree::is_keyword_fn)?.tokens;
-    let function = tokens.iter().position(TokenTree::is_keyword_fn).unwrap();
+    let function = tokens
+        .iter()
+        .position(TokenTree::is_keyword_fn)
+        .ok_or_else(|| ParseError::new(Span::call_site(), "expected a function"))?;
     let Some(TokenTree::Group(arguments)) = tokens.get_mut(function + 2) else {
         return Err(ParseError::new(
             Span::call_site(),
@@ -48,14 +51,16 @@ pub(crate) fn share_produce_parameters(
     Ok(tokens.into())
 }
 
-pub(crate) fn retained_timestamp_bounds(
+pub fn retained_timestamp_bounds(
     floor: TokenStream,
     item: TokenStream,
 ) -> Result<TokenStream, ParseError> {
     let floor = name(floor)?;
     let tokens = item_body(item, "retained_timestamp_bounds", TokenTree::is_keyword_fn)?.tokens;
     let item: TokenStream = tokens.into();
-    let view: TokenStream = "@".parse().expect("Creusot view operator");
+    let view: TokenStream = "@"
+        .parse()
+        .map_err(|_| ParseError::new(Span::call_site(), "Creusot view operator"))?;
     let requires = moxy::template! { requires };
     Ok(moxy::template! {
         #[{{ requires }}(super::time_index::sparse_timestamp_window_valid(window.0{{ view }}, window.1{{ view }}, window.2{{ view }}))]
@@ -64,7 +69,7 @@ pub(crate) fn retained_timestamp_bounds(
     })
 }
 
-pub(crate) fn topic_record(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn topic_record(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(tokens)?;
     Ok(moxy::template! {
         pub(crate) fn {{ name }}(name: &str, topic_id: ::uuid::Uuid) -> ::krabka_metadata::TopicRecord {
@@ -78,7 +83,33 @@ pub(crate) fn topic_record(tokens: TokenStream) -> Result<TokenStream, ParseErro
     })
 }
 
-pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn refused_fetch_partition(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = name(input)?;
+    Ok(moxy::template! {
+        /// Kafka's `FetchResponse.partitionResponse` row for a partition the
+        /// fetch refused with `error_code`.
+        fn {{ name }}(
+            partition_index: i32,
+            error_code: i16,
+        ) -> ::krabka_protocol::owned::fetch_response::PartitionData {
+            ::krabka_protocol::owned::fetch_response::PartitionData {
+                partition_index,
+                error_code,
+                high_watermark: -1,
+                last_stable_offset: -1,
+                log_start_offset: -1,
+                aborted_transactions: ::std::option::Option::Some(::std::vec::Vec::new()),
+                preferred_read_replica: -1,
+                records: ::std::option::Option::Some(
+                    ::krabka_protocol::records::RecordsPayload::Legacy(::bytes::Bytes::new()),
+                ),
+                ..::std::default::Default::default()
+            }
+        }
+    })
+}
+
+pub fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseError> {
     let arguments: Vec<_> = input.into_iter().collect();
     let (name, value) = match arguments.as_slice() {
         [TokenTree::Ident(name), comma, value @ ..]
@@ -147,7 +178,7 @@ pub(crate) fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseErr
     })
 }
 
-pub(crate) fn create_topic(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn create_topic(input: TokenStream) -> Result<TokenStream, ParseError> {
     named_items(input, |name| {
         moxy::template! {
             #[derive(Debug, Clone, Copy, PartialEq, Eq, ::derive_more::Display, ::derive_more::From, ::derive_more::Into)]
@@ -207,7 +238,7 @@ pub(crate) fn create_topic(input: TokenStream) -> Result<TokenStream, ParseError
     })
 }
 
-pub(crate) fn ephemeral_port(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn ephemeral_port(input: TokenStream) -> Result<TokenStream, ParseError> {
     named_items(input, |name| {
         moxy::template! {
             /// Bind and release a loopback port for a test container, so
@@ -221,7 +252,7 @@ pub(crate) fn ephemeral_port(input: TokenStream) -> Result<TokenStream, ParseErr
     })
 }
 
-pub(crate) fn consumer_fetch(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn consumer_fetch(input: TokenStream) -> Result<TokenStream, ParseError> {
     function(
         input,
         &moxy::template! { pub(crate) },
@@ -240,7 +271,7 @@ pub(crate) fn consumer_fetch(input: TokenStream) -> Result<TokenStream, ParseErr
     )
 }
 
-pub(crate) fn single_replica_partition(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn single_replica_partition(input: TokenStream) -> Result<TokenStream, ParseError> {
     function(
         input,
         &moxy::template! { pub(crate) },
@@ -257,7 +288,7 @@ pub(crate) fn single_replica_partition(input: TokenStream) -> Result<TokenStream
 }
 
 /// The version-zero Kafka control-record key and value fixture bytes.
-pub(crate) fn control_marker(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn control_marker(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(tokens)?;
     Ok(moxy::template! {
         mod {{ name }} {

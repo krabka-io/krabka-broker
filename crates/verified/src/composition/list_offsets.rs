@@ -49,7 +49,9 @@ pub(super) fn timestamp_list_offsets_finds_first_visible(
     request: (i32, i8, i64),    // replica id, isolation level, timestamp
     candidate_epoch: i32,       // host lookup for the matched record
 ) -> ListOffsetsSelectionDecision {
-    let lso = first_unstable_offset(starts, frontiers.1).expect("coherent pending starts");
+    let Some(lso) = first_unstable_offset(starts, frontiers.1) else {
+        return ListOffsetsSelectionDecision::RejectMalformed;
+    };
     let bound = match list_offsets_bound_decision(ListOffsetsBoundFacts {
         replica_id: request.0,
         isolation_level: request.1,
@@ -63,10 +65,14 @@ pub(super) fn timestamp_list_offsets_finds_first_visible(
         }
     };
     let (offset, timestamp) =
-        match indexed_timestamp_scan_finds_first(entries, offsets, timestamps, request.2) {
-            Some(index) => (frontiers.0 + i64::from(offsets[index]), timestamps[index]),
-            None => (-1, -1),
-        };
+        indexed_timestamp_scan_finds_first(entries, offsets, timestamps, request.2)
+            .and_then(|index| {
+                Some((
+                    frontiers.0 + i64::from(*offsets.get(index)?),
+                    *timestamps.get(index)?,
+                ))
+            })
+            .unwrap_or((-1, -1));
     list_offsets_selection_decision(ListOffsetsSelectionFacts {
         kind: list_offsets_kind(request.2, 11),
         candidate_offset: offset,

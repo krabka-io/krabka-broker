@@ -18,7 +18,8 @@ use {
     assert2::assert,
     bytes::Bytes,
     krabka_protocol::{primitives::uuid::Uuid as WireUuid, records::RecordBatch},
-    std::time::Duration,
+    std::time::{Duration, Instant},
+    tokio::task,
 };
 
 /// `AlterConfigs` round-trip: a request that sets `retention.ms` on a known
@@ -56,7 +57,7 @@ async fn alter_configs_round_trip() {
     // intentional poll (not an awaiter): the override lands in the local log
     // config *after* the image commits, so no image/metric signal reflects it
     // — same convergence gate the recompression / tiered-storage tests use.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     let want = Duration::from_mins(1);
     let last = loop {
         let cur = broker
@@ -65,10 +66,10 @@ async fn alter_configs_round_trip() {
         if cur == Some(want) {
             break cur;
         }
-        if std::time::Instant::now() > deadline {
+        if Instant::now() > deadline {
             break cur;
         }
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     };
     assert!(
         last == Some(want),

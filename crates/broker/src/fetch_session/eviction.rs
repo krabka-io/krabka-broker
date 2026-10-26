@@ -17,7 +17,7 @@ use {
         state::{CachedPartitionState, FetchSessionKey, SessionPartitions},
     },
     qubit_clock::MonotonicClock as _,
-    std::sync::atomic::Ordering,
+    std::sync::{PoisonError, atomic::Ordering},
 };
 
 impl FetchSessionCache {
@@ -31,8 +31,6 @@ impl FetchSessionCache {
     /// full and it can evict no eligible victim. On a refused allocation the
     /// caller emits `response.session_id = 0`, and the client falls back to
     /// sessionless full fetches without further signalling.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn try_allocate(
         &self,
         privileged: bool,
@@ -43,7 +41,7 @@ impl FetchSessionCache {
         if self.max_slots == 0 {
             return INVALID_SESSION_ID;
         }
-        let mut guard = self.inner.lock().expect("poisoned");
+        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let now = self.clock.now().elapsed_since_origin();
 
         if guard.sessions.len() >= self.max_slots {
@@ -54,11 +52,13 @@ impl FetchSessionCache {
             let Some(id) = guard.order.victim(privileged, partitions.len(), now) else {
                 return INVALID_SESSION_ID;
             };
-            let evicted = guard.sessions.remove(&id).expect("victim present");
+            let evicted = guard.sessions.remove(&id);
             guard.order.remove(id);
-            self.num_sessions.fetch_sub(1, Ordering::Relaxed);
-            self.num_partitions
-                .fetch_sub(evicted.partitions.len(), Ordering::Relaxed);
+            if let Some(evicted) = evicted {
+                self.num_sessions.fetch_sub(1, Ordering::Relaxed);
+                self.num_partitions
+                    .fetch_sub(evicted.partitions.len(), Ordering::Relaxed);
+            }
             self.evictions.fetch_add(1, Ordering::Relaxed);
         }
 
@@ -103,6 +103,7 @@ impl FetchSessionCache {
         let added_partitions = session.partitions.len();
         guard.sessions.insert(id, session);
         guard.order.insert(id, privileged, added_partitions, now);
+        drop(guard);
         self.num_sessions.fetch_add(1, Ordering::Relaxed);
         self.num_partitions
             .fetch_add(added_partitions, Ordering::Relaxed);
@@ -192,8 +193,14 @@ mod tests {
 
     /// The ids of the live sessions, ascending.
     fn live_ids(cache: &FetchSessionCache) -> Vec<FetchSessionId> {
-        let guard = cache.inner.lock().unwrap();
-        let mut ids: Vec<FetchSessionId> = guard.sessions.keys().copied().collect();
+        let mut ids: Vec<FetchSessionId> = cache
+            .inner
+            .lock()
+            .unwrap()
+            .sessions
+            .keys()
+            .copied()
+            .collect();
         ids.sort_unstable();
         ids
     }

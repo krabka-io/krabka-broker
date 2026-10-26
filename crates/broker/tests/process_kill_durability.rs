@@ -63,6 +63,7 @@
 //!
 //! Half the cycles are a bare `SIGKILL` and half tear the tail as well, so both
 //! recovery paths run several times in one execution.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -75,10 +76,13 @@ use {
     krabka_protocol::records::{CRC_COVERAGE_START, HEADER_LEN, RecordBatchHeader},
     std::{
         collections::BTreeSet,
+        env,
+        fs::{self, OpenOptions},
         path::{Path, PathBuf},
-        process::Command,
+        process::{self, Command},
     },
     support::{docker, free_port},
+    tokio::{task, time},
     zerocopy::FromBytes,
 };
 
@@ -116,7 +120,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The image tag to run.
 fn image() -> String {
-    std::env::var("KRABKA_BROKER_IMAGE").unwrap_or_else(|_| DEFAULT_IMAGE.to_owned())
+    env::var("KRABKA_BROKER_IMAGE").unwrap_or_else(|_| DEFAULT_IMAGE.to_owned())
 }
 
 /// One broker, running as a container process out of the packaging image.
@@ -138,7 +142,7 @@ impl BrokerProcess {
     /// Format a fresh log directory and boot a broker on it.
     fn start() -> Self {
         let root = tempfile::TempDir::new().expect("host data directory");
-        let name = format!("krabka-kill-{}", std::process::id());
+        let name = format!("krabka-kill-{}", process::id());
         let port = free_port();
         let node = Self { name, port, root };
 
@@ -311,7 +315,7 @@ fn walk_batches(bytes: &[u8]) -> SegmentWalk {
 /// path it builds itself.
 fn active_segment(log_dir: &Path, topic: &str) -> PathBuf {
     let prefix = format!("{topic}-");
-    let partition_dir = std::fs::read_dir(log_dir)
+    let partition_dir = fs::read_dir(log_dir)
         .expect("read the log directory")
         .filter_map(Result::ok)
         .map(|e| e.path())
@@ -327,7 +331,7 @@ fn active_segment(log_dir: &Path, topic: &str) -> PathBuf {
                 log_dir.display()
             )
         });
-    let mut segments: Vec<PathBuf> = std::fs::read_dir(&partition_dir)
+    let mut segments: Vec<PathBuf> = fs::read_dir(&partition_dir)
         .expect("read the partition directory")
         .filter_map(Result::ok)
         .map(|e| e.path())
@@ -350,7 +354,7 @@ fn active_segment(log_dir: &Path, topic: &str) -> PathBuf {
 fn tear_tail(segment: &Path) -> usize {
     use std::io::Write as _;
 
-    let bytes = std::fs::read(segment).expect("read the segment");
+    let bytes = fs::read(segment).expect("read the segment");
     let SegmentWalk { batches, tail } = walk_batches(&bytes);
     assert!(
         tail == Tail::Boundary,
@@ -370,7 +374,7 @@ fn tear_tail(segment: &Path) -> usize {
         last.end - last.start
     );
 
-    let mut file = std::fs::OpenOptions::new()
+    let mut file = OpenOptions::new()
         .append(true)
         .open(segment)
         .expect("open the segment for the tear");
@@ -386,7 +390,7 @@ fn tear_tail(segment: &Path) -> usize {
 /// documentation -- but if one ever does, that is the state under test and
 /// there is nothing left to arrange.
 fn ensure_torn(segment: &Path) {
-    let before = std::fs::read(segment).expect("read the segment");
+    let before = fs::read(segment).expect("read the segment");
     if let SegmentWalk {
         tail: Tail::Partial(n),
         ..
@@ -399,7 +403,7 @@ fn ensure_torn(segment: &Path) {
         return;
     }
     let torn_len = tear_tail(segment);
-    let after = std::fs::read(segment).expect("read the torn segment");
+    let after = fs::read(segment).expect("read the torn segment");
     let SegmentWalk { tail, .. } = walk_batches(&after);
     assert!(
         matches!(tail, Tail::Partial(_)),
@@ -462,7 +466,7 @@ async fn wait_ready(bootstrap: &str, topic: &str, key: &str) {
                 Err(e) => last = Some(format!("{e}")),
             }
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        time::sleep(Duration::from_millis(250)).await;
     }
     panic!("broker at {bootstrap} did not ack a produce within {READY_TIMEOUT:?}: {last:?}");
 }
@@ -519,7 +523,7 @@ fn torn_tail_is_a_partial_trailing_batch() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let segment = dir.path().join("00000000000000000000.log");
     let whole = batch_bytes(0, 3);
-    std::fs::write(&segment, &whole).expect("write a whole segment");
+    fs::write(&segment, &whole).expect("write a whole segment");
 
     let SegmentWalk {
         batches: before,
@@ -538,7 +542,7 @@ fn torn_tail_is_a_partial_trailing_batch() {
     );
 
     let torn_len = tear_tail(&segment);
-    let torn = std::fs::read(&segment).expect("read the torn segment");
+    let torn = fs::read(&segment).expect("read the torn segment");
     check!(torn.len() == torn_len);
     check!(
         walk_batches(&torn)
@@ -595,7 +599,7 @@ async fn create_topic(bootstrap: &str, topic: &str) {
                 Err(e) => last = format!("{e}"),
             }
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        time::sleep(Duration::from_millis(250)).await;
     }
     panic!("could not create {topic} on {bootstrap} within {READY_TIMEOUT:?}: {last}");
 }
@@ -610,7 +614,7 @@ async fn produce_through_a_kill(
     cycle: usize,
     container: String,
 ) -> Vec<String> {
-    let killer = tokio::task::spawn_blocking(move || {
+    let killer = task::spawn_blocking(move || {
         let out = Command::new("docker")
             .args(["kill", "--signal", "KILL", &container])
             .output()
@@ -635,7 +639,7 @@ async fn produce_through_a_kill(
 /// The readiness probe runs before this, so a tail recovery that had left the
 /// partial batch in place shows up as a chain that stops short of the end.
 fn check_recovered_segment(segment: &Path, cycle: usize) {
-    let bytes = std::fs::read(segment).expect("read the recovered segment");
+    let bytes = fs::read(segment).expect("read the recovered segment");
     let SegmentWalk { batches, tail } = walk_batches(&bytes);
     let shown = segment.display();
     check!(
@@ -692,6 +696,8 @@ async fn kill_cycle(broker: &BrokerProcess, topic: &str, cycle: usize, tear: boo
     acked.push(recovered_key);
 
     check_recovered_segment(&active_segment(&broker.host_log_dir(), topic), cycle);
+    // Dropped where it always was, at the end of the cycle, after the restart.
+    drop(producer);
     acked
 }
 

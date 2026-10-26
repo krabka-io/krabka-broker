@@ -7,12 +7,12 @@ use {
     },
     moxy::{
         ast::{Attributes, Parse, ParseError, Parser, Path, Token},
-        token::{Ident, Spanner, TokenStream},
+        token::{Ident, Span, Spanner, TokenStream},
     },
     proc_macro::{Delimiter, Group, TokenStream as NativeTokenStream},
 };
 
-pub(crate) fn acquisition(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn acquisition(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     let name = Ident::parse(&parser)?;
     <Token![,]>::parse(&parser)?;
@@ -69,11 +69,11 @@ fn consumption_template(input: &TokenStream) -> Result<TokenStream, ParseError> 
     })
 }
 
-pub(crate) fn consumption(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn consumption(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let template = consumption_template(&input.clone().into())?;
     let wait = native_groups(input)
         .last()
-        .expect("validated readiness expression");
+        .ok_or_else(|| ParseError::new(Span::call_site(), "expected a readiness expression"))?;
     let mut group = Group::new(Delimiter::None, wait.stream());
     group.set_span(wait.span());
     Ok(splice(

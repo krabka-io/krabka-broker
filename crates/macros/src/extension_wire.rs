@@ -4,7 +4,7 @@ use {
     crate::meta::{compact, edit_native_body, function_signature},
     moxy::{
         ast::{FnParam, FromMeta, Meta, ParseError, PatIdent, PatType, Pattern},
-        token::{LitStr, Spanner, TokenStream},
+        token::{LitStr, Span, Spanner, TokenStream},
     },
     proc_macro::{Group, TokenStream as NativeTokenStream, TokenTree as NativeTokenTree},
 };
@@ -151,7 +151,7 @@ fn adapter(meta: &TokenStream, item: &TokenStream) -> Result<Adapter, ParseError
     if names
         .iter()
         .enumerate()
-        .any(|(index, name)| names[index + 1..].contains(name))
+        .any(|(index, name)| names.iter().skip(index + 1).any(|other| other == name))
     {
         return Err(ParseError::new(
             function.span(),
@@ -171,7 +171,7 @@ fn adapter(meta: &TokenStream, item: &TokenStream) -> Result<Adapter, ParseError
     })
 }
 
-pub(crate) fn expand(
+pub fn expand(
     meta: &TokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
@@ -183,16 +183,19 @@ pub(crate) fn expand(
     let decode: NativeTokenStream = decode.into();
     let item = edit_native_body(item, |body| decode.into_iter().chain(body).collect());
     let mut original: Vec<_> = item.into_iter().collect();
-    let function = original
+    let arguments = original
         .iter()
         .position(|token| matches!(token, NativeTokenTree::Ident(name) if name.to_string() == "fn"))
-        .expect("validated extension function");
-    let NativeTokenTree::Group(arguments) = &original[function + 2] else {
-        unreachable!("validated parameters")
+        .and_then(|function| original.get_mut(function + 2));
+    let Some(NativeTokenTree::Group(arguments)) = arguments else {
+        return Err(ParseError::new(
+            Span::call_site(),
+            "expected extension function parameters",
+        ));
     };
     let mut replacement = Group::new(arguments.delimiter(), parameters.into());
     replacement.set_span(arguments.span());
-    original[function + 2] = NativeTokenTree::Group(replacement);
+    *arguments = replacement;
     let mut output: NativeTokenStream = tracing.into();
     output.extend(original);
     Ok(output)

@@ -102,11 +102,11 @@ pub fn preferred_rebalance_admission(
     #[invariant(forall<k: Int> 0 <= k && k < index@ ==> preferred_change_eligible(changes@[k]))]
     #[variant(changes@.len() - index@)]
     while index < changes.len() {
-        let change = changes[index];
-        let installs_preferred = match change.preferred_replica {
-            Some(preferred) => preferred == change.new_leader,
-            None => false,
+        let Some(&change) = changes.get(index) else {
+            return false;
         };
+        let installs_preferred =
+            matches!(change.preferred_replica, Some(preferred) if preferred == change.new_leader);
         if !installs_preferred
             || !change.leader_in_isr
             || !change.leader_alive

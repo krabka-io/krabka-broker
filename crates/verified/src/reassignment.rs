@@ -100,7 +100,7 @@ pub fn reassignment_action(
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==> !eligible_handoffs@[j])]
     #[variant(eligible_handoffs@.len() - i@)]
     while i < eligible_handoffs.len() {
-        if eligible_handoffs[i] {
+        if matches!(eligible_handoffs.get(i), Some(true)) {
             return ReassignmentAction::Handoff(i);
         }
         i += 1;

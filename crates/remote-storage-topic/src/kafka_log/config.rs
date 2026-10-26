@@ -7,12 +7,15 @@
 //! inside the `int32` millisecond and byte ranges the Kafka wire carries.
 
 use {
-    krabka_client_core::{ClientFrameMax, ConnectionDispatchQueueCapacity},
+    krabka_client_core::{
+        ClientFrameMax, ConnectionDispatchQueueCapacity, security::ClientSecurity,
+    },
     krabka_macros::RefinedNewtype,
     krabka_units::prelude::{
         ByteSize, ByteSizeExt as _, Time, TimeExt as _, mebibytes, millis, secs,
     },
-    refined_type::rule::GreaterUsize,
+    refined_type::rule::{GreaterI32, GreaterUsize},
+    std::time::Duration,
 };
 
 /// Default name of the internal metadata topic.
@@ -94,7 +97,7 @@ pub struct KafkaMetadataLogConfig {
     /// Client TLS/SASL security applied to the producer, the raw client,
     /// the admin client, and every per-partition fetch connection.
     /// `None` is plaintext loopback, and it is the default.
-    pub security: Option<krabka_client_core::security::ClientSecurity>,
+    pub security: Option<ClientSecurity>,
     /// Timeout for provisioning the internal topic.
     pub topic_create_timeout: Time,
     /// Maximum wait for each per-partition metadata fetch.
@@ -117,11 +120,11 @@ impl KafkaMetadataLogConfig {
     pub fn new(bootstrap: impl Into<String>) -> Self {
         Self {
             bootstrap: bootstrap.into(),
-            topic: METADATA_TOPIC.to_string(),
+            topic: METADATA_TOPIC.to_owned(),
             num_partitions: DEFAULT_NUM_PARTITIONS,
             replication: DEFAULT_REPLICATION,
             min_isr: Some(DEFAULT_MIN_ISR),
-            client_id: "krabka-rlmm".to_string(),
+            client_id: "krabka-rlmm".to_owned(),
             compacted: false,
             provision_topic: true,
             security: None,
@@ -144,8 +147,7 @@ impl KafkaMetadataLogConfig {
     /// `remote.log.metadata.topic.min.isr` does (`atLeast(1)`).
     pub fn validate(&self) -> Result<(), String> {
         if let Some(min_isr) = self.min_isr {
-            refined_type::rule::GreaterI32::<0>::new(min_isr)
-                .map_err(|error| format!("min_isr: {error}"))?;
+            GreaterI32::<0>::new(min_isr).map_err(|error| format!("min_isr: {error}"))?;
         }
         validate_positive_whole_millis_i32("topic_create_timeout", self.topic_create_timeout)?;
         validate_positive_whole_millis_i32("fetch_max_wait", self.fetch_max_wait)?;
@@ -164,7 +166,7 @@ fn validate_positive_whole_millis_i32(name: &str, value: Time) -> Result<(), Str
     let millis = i32::try_from(millis).map_err(|_| {
         format!("{name} must be a positive whole number of milliseconds within 1..=i32::MAX")
     })?;
-    refined_type::rule::GreaterI32::<0>::new(millis)
+    GreaterI32::<0>::new(millis)
         .map(|_| ())
         .map_err(|error| format!("{name}: {error}"))
 }
@@ -179,13 +181,13 @@ fn validate_positive_whole_bytes_i32(name: &str, value: ByteSize) -> Result<(), 
     let bytes = i32::try_from(bytes).map_err(|_| {
         format!("{name} must be a positive whole number of bytes within 1..=i32::MAX")
     })?;
-    refined_type::rule::GreaterI32::<0>::new(bytes)
+    GreaterI32::<0>::new(bytes)
         .map(|_| ())
         .map_err(|error| format!("{name}: {error}"))
 }
 
 fn validate_positive_duration(name: &str, value: Time) -> Result<(), String> {
-    let duration = std::time::Duration::try_from_secs_f64(value.secs_f64())
+    let duration = Duration::try_from_secs_f64(value.secs_f64())
         .map_err(|error| format!("{name}: {error}"))?;
     if duration.is_zero() {
         return Err(format!("{name} must be positive"));
@@ -198,6 +200,7 @@ mod tests {
     use {
         super::*,
         assert2::{assert, check},
+        std::time::Duration,
     };
 
     fn configured(configure: impl FnOnce(&mut KafkaMetadataLogConfig)) -> KafkaMetadataLogConfig {
@@ -340,7 +343,7 @@ mod tests {
         check!(cfg.topic_create_timeout.millis_i32() == 30_000);
         check!(cfg.fetch_max_wait.millis_i32() == 500);
         check!(cfg.fetch_max_bytes.bytes_i32() == 1 << 20);
-        check!(cfg.fetch_retry_backoff.to_std() == std::time::Duration::from_millis(200));
+        check!(cfg.fetch_retry_backoff.to_std() == Duration::from_millis(200));
     }
 
     #[test]

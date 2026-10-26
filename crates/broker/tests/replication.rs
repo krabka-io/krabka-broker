@@ -4,6 +4,7 @@
 //! `log_end_offset`. It exercises the full replication path: the
 //! supervisor reconcile, the follower Fetch loop, and
 //! `Partition::replicate_batch`.
+#![cfg(test)]
 
 // Test-file pragmatism: casts turn 1-based `i` into broker ids.
 // Hoisting these into named helpers would obscure the per-test narrative.
@@ -24,10 +25,16 @@ use {
     krabka_broker::{BrokerConfig, BrokerHandle},
     krabka_protocol::{
         owned::create_topics_request::{CreatableTopic, CreatableTopicConfig},
+        primitives::uuid::Uuid,
         records::{Record, RecordBatch},
+    },
+    std::{
+        net::SocketAddr,
+        time::{Duration, Instant},
     },
     support::{client::scrape_metrics as scrape, cluster_lock},
     tempfile::TempDir,
+    tokio::time,
 };
 
 mod support;
@@ -47,7 +54,7 @@ type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
 /// A created topic: where its leader listens and the id `CreateTopics` gave it.
 struct ReplicatedPartition {
     leader_addr: String,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    topic_id: Uuid,
 }
 
 async fn create_replicated_partition(
@@ -80,7 +87,7 @@ async fn three_replica_topic(topic: &str) -> (Cluster, ReplicatedPartition) {
 /// A cluster and the metrics address of its first broker.
 struct MetricsCluster {
     cluster: Cluster,
-    metrics_addr: std::net::SocketAddr,
+    metrics_addr: SocketAddr,
 }
 
 async fn metrics_cluster(topic: &str) -> MetricsCluster {
@@ -186,10 +193,10 @@ async fn recover_from_out_of_range(topic: &str, records_per_batch: i32) -> Recov
     // start, which the follower raises its own to only after the append.
     support::poll::within(
         "the follower's log start reaching the leader's",
-        std::time::Duration::from_secs(30),
+        Duration::from_secs(30),
         async {
             while follower.partition_log_start_for_test(topic, 0) != Some(25) {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                time::sleep(Duration::from_millis(20)).await;
             }
         },
     )
@@ -378,14 +385,14 @@ async fn a_follower_batches_every_partition_of_one_leader_into_one_session() {
         cluster,
         metrics_addr,
     } = metrics_cluster("batched").await;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(20);
     let mut sessions = -1_i64;
-    while std::time::Instant::now() < deadline {
+    while Instant::now() < deadline {
         sessions = scrape_gauge(metrics_addr, "krabka_broker_incremental_fetch_sessions").await;
         if sessions == 2 {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 
     assert!(
@@ -414,10 +421,10 @@ async fn a_caught_up_follower_fetches_a_few_times_a_second_whatever_it_follows()
         metrics_addr,
     } = metrics_cluster("idle-rate").await;
     // Let the followers settle into their steady state before sampling.
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    time::sleep(Duration::from_secs(2)).await;
     let before = scrape_counter(metrics_addr, "krabka_broker_api_requests_total", "Fetch").await;
-    let window = std::time::Duration::from_secs(3);
-    tokio::time::sleep(window).await;
+    let window = Duration::from_secs(3);
+    time::sleep(window).await;
     let after = scrape_counter(metrics_addr, "krabka_broker_api_requests_total", "Fetch").await;
 
     // The counter is a request count over three seconds; it does not reach
@@ -439,7 +446,7 @@ async fn a_caught_up_follower_fetches_a_few_times_a_second_whatever_it_follows()
 
 /// Reads one labelled counter out of a broker's `/metrics` body, summed over
 /// every series whose label set contains `label_value`.
-async fn scrape_counter(addr: std::net::SocketAddr, name: &str, label_value: &str) -> i64 {
+async fn scrape_counter(addr: SocketAddr, name: &str, label_value: &str) -> i64 {
     let body = scrape(addr).await;
     body.lines()
         .filter(|line| line.starts_with(name) && line.contains(label_value))
@@ -448,7 +455,7 @@ async fn scrape_counter(addr: std::net::SocketAddr, name: &str, label_value: &st
 }
 
 /// Reads one label-free gauge out of a broker's `/metrics` body.
-async fn scrape_gauge(addr: std::net::SocketAddr, name: &str) -> i64 {
+async fn scrape_gauge(addr: SocketAddr, name: &str) -> i64 {
     scrape(addr)
         .await
         .lines()
@@ -459,7 +466,7 @@ async fn scrape_gauge(addr: std::net::SocketAddr, name: &str) -> i64 {
 async fn produce_replicated(
     client: &krabka_client_core::Client,
     topic: &str,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    topic_id: Uuid,
     batch: RecordBatch,
 ) {
     let response = client

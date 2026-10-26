@@ -17,7 +17,7 @@ use {
         restore,
     },
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
-    std::{path::PathBuf, sync::Arc},
+    std::{fs, path::PathBuf, sync::Arc},
     tempfile::TempDir,
 };
 
@@ -37,7 +37,7 @@ fn signed_fixture() -> Signed {
     let signer =
         Arc::new(FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), "key".to_owned()).unwrap());
     let public_key = keys.path().join("key.pub");
-    std::fs::write(&public_key, signer.public_key()).unwrap();
+    fs::write(&public_key, signer.public_key()).unwrap();
     let heads = fixture.sign_worm(&[signer]);
     Signed {
         fixture,
@@ -79,15 +79,11 @@ async fn restore_orders(signed: &Signed) -> RestoreReport {
 async fn authenticated_object_count_covers_only_the_selected_topic() {
     let signed = signed_fixture();
     let fixture = &signed.fixture;
-    let expected = std::fs::read_dir(fixture.archive_root.path())
+    let expected = fs::read_dir(fixture.archive_root.path())
         .unwrap()
         .filter_map(Result::ok)
         .filter(|entry| entry.file_name().to_string_lossy().starts_with("orders-"))
-        .flat_map(|entry| {
-            std::fs::read_dir(entry.path())
-                .unwrap()
-                .filter_map(Result::ok)
-        })
+        .flat_map(|entry| fs::read_dir(entry.path()).unwrap().filter_map(Result::ok))
         .filter(|entry| {
             !entry
                 .file_name()
@@ -110,7 +106,7 @@ async fn an_upload_without_its_manifest_is_skipped_by_an_authenticated_restore()
 
     // Copy one archived segment of `orders` under a base offset past its end,
     // with no manifest: the bytes of an upload the loss interrupted.
-    let partition_dir = std::fs::read_dir(fixture.archive_root.path())
+    let partition_dir = fs::read_dir(fixture.archive_root.path())
         .unwrap()
         .filter_map(Result::ok)
         .map(|entry| entry.path())
@@ -120,10 +116,7 @@ async fn an_upload_without_its_manifest_is_skipped_by_an_authenticated_restore()
         })
         .unwrap();
     let mut copied = 0;
-    for entry in std::fs::read_dir(&partition_dir)
-        .unwrap()
-        .filter_map(Result::ok)
-    {
+    for entry in fs::read_dir(&partition_dir).unwrap().filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.ends_with(MANIFEST_SUFFIX) || !name.starts_with(&format!("{:020}", 0)) {
             continue;
@@ -135,8 +128,8 @@ async fn an_upload_without_its_manifest_is_skipped_by_an_authenticated_restore()
         } else {
             'A'
         };
-        let orphan = format!("{:020}-{first}{}", 99_999_999, &name[22..]);
-        std::fs::copy(entry.path(), partition_dir.join(orphan)).unwrap();
+        let orphan = format!("{:020}-{first}{}", 99_999_999, name.get(22..).unwrap());
+        fs::copy(entry.path(), partition_dir.join(orphan)).unwrap();
         copied += 1;
     }
     check!(copied > 0);
@@ -156,14 +149,11 @@ async fn an_upload_without_its_manifest_is_skipped_by_an_authenticated_restore()
         .path()
         .join(format!("orders-7-{topic_id}"));
     check!(interrupted != 7);
-    std::fs::create_dir(&lone).unwrap();
-    for entry in std::fs::read_dir(&partition_dir)
-        .unwrap()
-        .filter_map(Result::ok)
-    {
+    fs::create_dir(&lone).unwrap();
+    for entry in fs::read_dir(&partition_dir).unwrap().filter_map(Result::ok) {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with(&format!("{:020}", 99_999_999)) {
-            std::fs::copy(entry.path(), lone.join(name)).unwrap();
+            fs::copy(entry.path(), lone.join(name)).unwrap();
         }
     }
 
@@ -258,7 +248,7 @@ async fn json_report_matches_the_fixtures_exact_record_and_segment_counts() {
 
     // Also render and reparse as JSON, exercising the `--report json` path
     // itself rather than only the underlying struct it renders.
-    let json = restored.report.render(ReportFormat::Json);
+    let json = restored.report.render(ReportFormat::Json).unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
     check!(value["cluster_id"] == serde_json::json!(restored.cluster_id.to_string()));
     check!(value["partitions"][0]["topic"] == serde_json::json!("orders"));

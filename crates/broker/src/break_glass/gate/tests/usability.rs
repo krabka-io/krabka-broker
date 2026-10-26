@@ -78,7 +78,7 @@ fn the_gate_refuses_a_proposal_that_is_not_usable() {
             "an already consumed proposal",
             BreakGlassProposalRecord {
                 consumed_at_ms: NOW_MS - 1,
-                ..base.clone()
+                ..base
             },
             DenialReason::Consumed {
                 proposal_id: id,

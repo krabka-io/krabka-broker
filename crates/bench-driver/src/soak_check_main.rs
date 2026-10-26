@@ -22,7 +22,10 @@ use {
         synthetic::{clean_run, inject_missing_record},
         verdict::{judge, judge_self_check},
     },
-    std::path::{Path, PathBuf},
+    std::{
+        fs,
+        path::{Path, PathBuf},
+    },
 };
 
 #[derive(Debug, Parser)]
@@ -69,13 +72,13 @@ enum Command {
 fn load_contract(path: &Path) -> Result<Contract> { Contract::from_file(path) }
 
 fn load_evidence(path: &Path) -> Result<Evidence> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     serde_json::from_str(&text).with_context(|| format!("parse evidence {}", path.display()))
 }
 
 fn write_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
     let json = serde_json::to_string_pretty(value)?;
-    std::fs::write(path, json).with_context(|| format!("write {}", path.display()))
+    fs::write(path, json).with_context(|| format!("write {}", path.display()))
 }
 
 fn main() -> Result<()> {

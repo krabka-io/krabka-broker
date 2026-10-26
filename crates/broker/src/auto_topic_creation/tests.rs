@@ -2,7 +2,7 @@ use {
     super::*,
     crate::{
         barrier::STATE_TOPIC,
-        coordinator::bootstrap::OFFSETS_TOPIC,
+        coordinator::{bootstrap, bootstrap::OFFSETS_TOPIC},
         handlers::test_support::StartedBroker,
         share_coordinator::bootstrap::TOPIC as SHARE_TOPIC,
         test_support::{PartitionCount, ReplicationFactor, start_broker_no_audit},
@@ -18,7 +18,7 @@ use {
         },
         primitives::uuid::Uuid as ProtoUuid,
     },
-    std::path::PathBuf,
+    std::{net::IpAddr, path::PathBuf},
 };
 
 /// A topic config entry, by name and value.
@@ -248,7 +248,7 @@ async fn an_unbound_request_creates_nothing() {
     let creation = Arc::new(AutoTopicCreation::default());
     creation.request(OFFSETS_TOPIC);
     check!(creation.started() == 0);
-    check!(!creation.is_in_flight(crate::coordinator::bootstrap::OFFSETS_TOPIC));
+    check!(!creation.is_in_flight(bootstrap::OFFSETS_TOPIC));
 }
 
 /// KIP-1191: the dead-letter topic asks for the cluster's default partition
@@ -452,7 +452,7 @@ async fn a_streams_creation_skips_a_backed_off_or_in_flight_topic() {
     let creation = &broker.auto_topic_creation;
     let identity = ForwardedIdentity {
         principal_name: "alice".to_owned(),
-        client_address: std::net::IpAddr::from([127, 0, 0, 1]),
+        client_address: IpAddr::from([127, 0, 0, 1]),
         client_id: "streams-client".to_owned(),
         correlation_id: 1,
     };

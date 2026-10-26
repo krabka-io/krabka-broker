@@ -7,7 +7,10 @@
 //! thus sees exactly what the real KIP-595/996 algorithm did.
 
 use {
-    krabka_raft::scenarios::{ScenarioTrace, TraceAction},
+    krabka_raft::{
+        scenarios,
+        scenarios::{ScenarioTrace, TraceAction},
+    },
     std::fmt::Write as _,
 };
 
@@ -27,7 +30,7 @@ pub fn failure_scenarios_md() -> String {
     let mut out = String::new();
     out.push_str(INTRO);
     out.push('\n');
-    for trace in krabka_raft::scenarios::scenarios() {
+    for trace in scenarios::scenarios() {
         render_scenario(&mut out, &trace);
     }
     out

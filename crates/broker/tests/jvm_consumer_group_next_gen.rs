@@ -1,10 +1,16 @@
 //! JVM-acceptance tests for KIP-848. They drive the GA Kafka 4.0 client
 //! against an in-process Krabka broker. `group.protocol=consumer`
 //! activates the next-gen heartbeat path on the client.
+#![cfg(test)]
 
 mod support;
 
-use {assert2::assert, support::jvm_docker_run as docker_run};
+use {
+    assert2::assert,
+    std::{collections::BTreeSet, process::Command},
+    support::jvm_docker_run as docker_run,
+    tokio::{task, task::JoinHandle},
+};
 
 /// Ports for this test process, allocated once rather than fixed at 9092.
 ///
@@ -54,9 +60,9 @@ fn create_topic(name: &str, partitions: i32) {
 /// group. The caller awaits both handles, so the containers run concurrently
 /// and not back-to-back. `--add-host` mirrors `docker_run`, so the
 /// container can reach the host-process broker at `host.docker.internal`.
-fn spawn_consumer(image: &'static str, script: String) -> tokio::task::JoinHandle<String> {
-    tokio::task::spawn_blocking(move || {
-        let out = std::process::Command::new("docker")
+fn spawn_consumer(image: &'static str, script: String) -> JoinHandle<String> {
+    task::spawn_blocking(move || {
+        let out = Command::new("docker")
             .arg("run")
             .arg("--rm")
             .arg("--add-host=host.docker.internal:host-gateway")
@@ -80,8 +86,8 @@ fn spawn_consumer(image: &'static str, script: String) -> tokio::task::JoinHandl
 /// emits one `Partition:<n>` token per record line, for example
 /// `Partition:2\t<value>` when it prints no key. This function tolerates any
 /// surrounding columns and pulls the integer after each `Partition:` marker.
-fn parse_partitions(stdout: &str) -> std::collections::BTreeSet<i32> {
-    let mut set = std::collections::BTreeSet::new();
+fn parse_partitions(stdout: &str) -> BTreeSet<i32> {
+    let mut set = BTreeSet::new();
     for line in stdout.lines() {
         for token in line.split(['\t', ' ']) {
             if let Some(rest) = token.strip_prefix("Partition:")
@@ -260,7 +266,7 @@ async fn jvm_kip848_classic_and_consumer_in_one_group_migrate() {
     let StartedBroker { broker, dir: _dir } = start_host_broker().await;
     create_topic("mig", 4);
     let group = "g-migrate";
-    let all: std::collections::BTreeSet<i32> = (0..4).collect();
+    let all: BTreeSet<i32> = (0..4).collect();
 
     // Produce one deterministic batch of 8 records (2 per partition). Kafka's
     // default partitioner is murmur2(key) % numPartitions, so keyed records land

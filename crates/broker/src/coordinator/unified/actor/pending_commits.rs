@@ -24,7 +24,7 @@ use {
     },
     futures_util::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered},
     krabka_protocol::records::RecordBatch,
-    std::collections::HashMap,
+    std::{collections::HashMap, future},
     tokio::sync::oneshot,
 };
 
@@ -114,7 +114,7 @@ impl CommitWaits {
     pub(super) async fn next(&mut self) -> CommitOutcome {
         match self.waits.next().await {
             Some(outcome) => outcome,
-            None => std::future::pending().await,
+            None => future::pending().await,
         }
     }
 

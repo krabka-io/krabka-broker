@@ -18,30 +18,29 @@ pub(super) fn expected_control(
     base: i64,
     reports: &[(i64, i64)],
 ) -> SupportedControl {
-    expected_membership(old, state.0, state.1, request, node, candidate).and_then(|(plan, next)| {
-        let count = usize::from(plan.write_kraft_version) + usize::from(plan.write_voters);
-        let deltas: Vec<_> = (0..count).map(|i| i32::try_from(i).unwrap()).collect();
-        if count == 0 {
-            return Some((plan, next, deltas, None));
-        }
-        let end = i128::from(base) + i128::try_from(count).unwrap();
-        if base < 0 || end > i128::from(i64::MAX) {
-            return None;
-        }
-        let end = i64::try_from(end).unwrap();
-        let votes: Vec<_> = reports.iter().map(|r| (r.0 >= end, r.1 >= end)).collect();
-        let (old_grants, new_grants) = grant_sets(old, &next, node, &votes);
-        let counts = (old_grants.len(), new_grants.len());
-        if counts.0 <= old.len() / 2 || counts.1 <= next.len() / 2 {
-            return None;
-        }
-        let common = old
-            .iter()
-            .copied()
-            .find(|id| old_grants.contains(id) && new_grants.contains(id))
-            .unwrap();
-        Some((plan, next, deltas, Some((end, counts, common))))
-    })
+    let (plan, next) = expected_membership(old, state.0, state.1, request, node, candidate)?;
+    let count = usize::from(plan.write_kraft_version) + usize::from(plan.write_voters);
+    let deltas: Vec<_> = (0..count).map(|i| i32::try_from(i).unwrap()).collect();
+    if count == 0 {
+        return Some((plan, next, deltas, None));
+    }
+    let end = i128::from(base) + i128::try_from(count).unwrap();
+    if base < 0 || end > i128::from(i64::MAX) {
+        return None;
+    }
+    let end = i64::try_from(end).unwrap();
+    let votes: Vec<_> = reports.iter().map(|r| (r.0 >= end, r.1 >= end)).collect();
+    let (old_grants, new_grants) = grant_sets(old, &next, node, &votes);
+    let counts = (old_grants.len(), new_grants.len());
+    if counts.0 <= old.len() / 2 || counts.1 <= next.len() / 2 {
+        return None;
+    }
+    let common = old
+        .iter()
+        .copied()
+        .find(|id| old_grants.contains(id) && new_grants.contains(id))
+        .unwrap();
+    Some((plan, next, deltas, Some((end, counts, common))))
 }
 
 fn check_control(

@@ -11,7 +11,7 @@ use {
         log_dir_status::LogDirRegistry,
         partition::{
             Partition, PartitionRuntimeConfig, ReplicationTarget, WriterGate, WriterMessage,
-            empty_marker_materialization, initial_replication_target, unreported_leader_log_start,
+            empty_marker_materialization, unreported_leader_log_start,
         },
         partition_writer::{
             WriterIdentity, WriterPolicy, WriterServices, WriterSignals, WriterStorage, run_gated,
@@ -23,15 +23,20 @@ use {
             quorum::{
                 QuorumWalStore,
                 engine::WalShardEngine,
-                registry::{ShardId, WalShardRegistry},
+                registry::{ShardId, WalPlacement, WalShardRegistry},
             },
         },
     },
     krabka_ids::PartitionIndex,
-    std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicI32, AtomicU64},
+    std::{
+        collections::HashMap,
+        path::PathBuf,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicI32, AtomicU64},
+        },
     },
+    tokio::sync::{self, Notify, RwLock, mpsc},
 };
 
 /// The diskless WAL services of a partition. Every field is `None` for a
@@ -115,59 +120,66 @@ fn partition_wal(
 /// access to the `Log` mutex on the hot path, and so
 /// `DescribeLogDirs` can attribute the partition to a dir even when
 /// the path is not stable across canonicalisation.
+///
+/// # Errors
+///
+/// As [`try_spawn_partition_with_replication_target`].
 #[krabka_macros::partition_spawn_parameters]
-pub(crate) fn spawn_partition() -> Arc<Partition> {
-    #[cfg(test)]
-    let topic_id = diskless.then(uuid::Uuid::new_v4);
-    #[cfg(not(test))]
-    let topic_id = None;
-    spawn_partition_with_replication_target(
-        topic,
-        ReplicationTarget {
+pub fn spawn_partition() -> Result<Arc<Partition>, BrokerError> {
+    // A test diskless partition needs a topic id for its WAL shard.
+    let topic_id = if cfg!(test) {
+        diskless.then(uuid::Uuid::new_v4)
+    } else {
+        None
+    };
+    spawn_partition_with_replication_target()
+        .topic(topic)
+        .replication_target(ReplicationTarget {
             topic_id,
             leader_node_id: krabka_raft::NodeId(0),
             leader_epoch: krabka_metadata::LeaderEpoch(0),
-        },
-        partition_id,
-        log_dir,
-        log,
-        log_dir_status,
-        producer_state,
-        diskless,
-    )
+        })
+        .partition_id(partition_id)
+        .log_dir(log_dir)
+        .log(log)
+        .log_dir_status(log_dir_status)
+        .producer_state(producer_state)
+        .diskless(diskless)
+        .call()
 }
 
-#[allow(clippy::too_many_arguments)] // Mirrors spawn_partition plus the replication target.
+/// [`spawn_partition`] with an explicit initial replication target.
+///
+/// # Errors
+///
+/// As [`try_spawn_partition_with_replication_target`].
 #[krabka_macros::partition_spawn_parameters(target)]
-pub(crate) fn spawn_partition_with_replication_target() -> Arc<Partition> {
+#[bon::builder]
+pub fn spawn_partition_with_replication_target() -> Result<Arc<Partition>, BrokerError> {
     let broker_config = BrokerConfig::default();
-    #[cfg(test)]
-    let wal_shards = replication_target.topic_id.map(|topic_id| {
-        use crate::wal::quorum::registry::{ShardId, WalPlacement};
-
-        let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(0)));
-        registry.replace_placements(&std::collections::HashMap::from([(
-            ShardId {
-                topic_id,
-                partition: partition_id,
-            },
-            WalPlacement {
-                voters: vec![krabka_raft::NodeId(0)],
-                leader_epoch: 0,
-            },
-        )]));
-        registry
-    });
-    #[cfg(not(test))]
-    let wal_shards = None;
-    #[cfg(test)]
-    let diskless_wal_local_replica_count = if diskless {
+    let wal_shards = if cfg!(test) {
+        replication_target.topic_id.map(|topic_id| {
+            let registry = Arc::new(WalShardRegistry::new(krabka_raft::NodeId(0)));
+            registry.replace_placements(&HashMap::from([(
+                ShardId {
+                    topic_id,
+                    partition: partition_id,
+                },
+                WalPlacement {
+                    voters: vec![krabka_raft::NodeId(0)],
+                    leader_epoch: 0,
+                },
+            )]));
+            registry
+        })
+    } else {
+        None
+    };
+    let diskless_wal_local_replica_count = if cfg!(test) && diskless {
         1
     } else {
         broker_config.diskless_wal_local_replica_count
     };
-    #[cfg(not(test))]
-    let diskless_wal_local_replica_count = broker_config.diskless_wal_local_replica_count;
     try_spawn_partition_with_replication_target(
         PartitionSpawnConfig {
             topic,
@@ -189,21 +201,20 @@ pub(crate) fn spawn_partition_with_replication_target() -> Arc<Partition> {
         },
         replication_target,
     )
-    .expect("spawn partition")
 }
 
-pub(crate) struct PartitionSpawnConfig {
+pub struct PartitionSpawnConfig {
     pub topic: String,
     pub topic_id: Option<uuid::Uuid>,
     pub partition_id: PartitionIndex,
-    pub log_dir: std::path::PathBuf,
+    pub log_dir: PathBuf,
     pub log: krabka_log::Log,
     pub log_dir_status: LogDirRegistry,
     pub producer_state: Arc<ProducerState>,
     pub runtime: PartitionRuntimeConfig,
 }
 
-pub(crate) fn try_spawn_partition_with_sequencer(
+pub fn try_spawn_partition_with_sequencer(
     config: PartitionSpawnConfig,
 ) -> Result<Arc<Partition>, BrokerError> {
     let initial_target = ReplicationTarget {
@@ -214,11 +225,22 @@ pub(crate) fn try_spawn_partition_with_sequencer(
     try_spawn_partition_with_replication_target(config, initial_target)
 }
 
-pub(crate) fn try_spawn_partition_with_replication_target(
+/// Spawn a partition whose replicator starts at `initial_target`.
+///
+/// # Errors
+///
+/// Returns [`BrokerError::Startup`] when `config` and `initial_target` name
+/// different topic ids, and any error of opening the partition runtime.
+pub fn try_spawn_partition_with_replication_target(
     config: PartitionSpawnConfig,
     initial_target: ReplicationTarget,
 ) -> Result<Arc<Partition>, BrokerError> {
-    assert2::assert!((config.topic_id) == (initial_target.topic_id));
+    if config.topic_id != initial_target.topic_id {
+        return Err(BrokerError::Startup(format!(
+            "partition {}-{}: topic id {:?} differs from the replication target's {:?}",
+            config.topic, config.partition_id, config.topic_id, initial_target.topic_id
+        )));
+    }
     let PartitionSpawnConfig {
         topic,
         topic_id,
@@ -255,8 +277,8 @@ pub(crate) fn try_spawn_partition_with_replication_target(
         wal_shards,
         diskless_wal_local_replica_count,
     )?;
-    let (tx, rx) = tokio::sync::mpsc::channel::<WriterMessage>(partition_writer_queue_depth);
-    let notify = Arc::new(tokio::sync::Notify::new());
+    let (tx, rx) = mpsc::channel::<WriterMessage>(partition_writer_queue_depth);
+    let notify = Arc::new(Notify::new());
     let delivery = DeliveryHandles::new();
     // Seed the watermark mirror from the log the recovery walk just opened, so
     // a reader that takes no lock never sees the placeholder zero.
@@ -268,14 +290,11 @@ pub(crate) fn try_spawn_partition_with_replication_target(
         initial_replica_state.recompute_hw_for_wal_durable(durable_watermark);
     }
     let initial_wal_watermark = initial_replica_state.hw;
-    let replica_state = Arc::new(tokio::sync::Mutex::new(initial_replica_state));
-    let hw_advance_notify = Arc::new(tokio::sync::Notify::new());
+    let replica_state = Arc::new(sync::Mutex::new(initial_replica_state));
+    let hw_advance_notify = Arc::new(Notify::new());
     let current_leader = Arc::new(AtomicU64::new(initial_target.leader_node_id.0));
     let current_leader_epoch = Arc::new(AtomicI32::new(initial_target.leader_epoch.0));
-    let replication_target = initial_replication_target(topic_id);
-    *replication_target
-        .try_write()
-        .expect("new partition target is uncontended") = initial_target;
+    let replication_target = Arc::new(RwLock::new(initial_target));
     let log_dir = Arc::new(arc_swap::ArcSwap::from_pointee(log_dir));
     // A partition that assigns offsets through a sequencer or acknowledges
     // through a WAL keeps every append on its writer.
@@ -286,14 +305,14 @@ pub(crate) fn try_spawn_partition_with_replication_target(
             partition: partition_id,
         },
         WriterStorage {
-            log: log.clone(),
-            log_dir: log_dir.clone(),
+            log: Arc::clone(&log),
+            log_dir: Arc::clone(&log_dir),
         },
         rx,
         WriterSignals {
-            append_notify: notify.clone(),
-            replica_state: replica_state.clone(),
-            hw_advance_notify: hw_advance_notify.clone(),
+            append_notify: Arc::clone(&notify),
+            replica_state: Arc::clone(&replica_state),
+            hw_advance_notify: Arc::clone(&hw_advance_notify),
             delivery: delivery.clone(),
         },
         WriterServices {
@@ -308,8 +327,8 @@ pub(crate) fn try_spawn_partition_with_replication_target(
         },
     );
     let writer = if let Some(engine) = wal_engine {
-        let replica_state = replica_state.clone();
-        let hw_advance_notify = hw_advance_notify.clone();
+        let replica_state = Arc::clone(&replica_state);
+        let hw_advance_notify = Arc::clone(&hw_advance_notify);
         tokio::spawn(async move {
             let watermark_updates = async move {
                 let mut observed = initial_wal_watermark;

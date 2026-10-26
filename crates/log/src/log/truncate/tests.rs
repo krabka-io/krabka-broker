@@ -9,8 +9,8 @@ use {
         log::test_support::{
             ExpectedStamp, TempLog, append_samples, check_front_evicted_stamps, check_stamps,
             log_with_three_then_two_records, rolling_test_log, sample_batch,
-            sample_batch_with_epoch, stamped_rolling_log, stamped_test_log, test_batch_at,
-            test_log, tiny_segments,
+            sample_batch_with_epoch, snapshot_offsets, stamped_rolling_log, stamped_test_log,
+            test_batch_at, test_log, tiny_segments,
         },
         producer_snapshot::ProducerSnapshotEntry,
         stamp_index::{StampEntry, StampIndex},
@@ -156,7 +156,7 @@ fn truncate_to_rebuilds_producer_state_from_surviving_batches() {
                 current_txn_first_offset: None,
             }]
     );
-    assert2::assert!(crate::log::test_support::snapshot_offsets(dir.path()) == vec![Offset(2)]);
+    assert2::assert!(snapshot_offsets(dir.path()) == vec![Offset(2)]);
 }
 
 #[test]
@@ -168,7 +168,7 @@ fn truncate_to_removes_future_empty_producer_snapshots() {
 
     log.truncate_to(Offset(2)).unwrap();
 
-    assert2::assert!(crate::log::test_support::snapshot_offsets(dir.path()) == vec![Offset(2)]);
+    assert2::assert!(snapshot_offsets(dir.path()) == vec![Offset(2)]);
 }
 
 /// Kafka takes a producer-state snapshot at a roll, on `close`, after

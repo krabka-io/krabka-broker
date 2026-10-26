@@ -18,6 +18,7 @@
 //! - [`freeze_metrics`] — the KFC-9 gauges and counters under a real request.
 //! - [`placement`] — one audit partition on every broker of a combined
 //!   cluster, none of them under min ISR.
+#![cfg(test)]
 
 mod support;
 

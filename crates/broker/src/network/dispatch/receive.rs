@@ -3,7 +3,7 @@
 use {
     super::{RequestByteBudget, idle_clock::IdleClock},
     bytes::{Bytes, BytesMut},
-    std::io,
+    std::{io, mem, sync::Arc},
     tokio::{
         io::{AsyncRead, AsyncReadExt as _},
         sync::OwnedSemaphorePermit,
@@ -40,8 +40,7 @@ impl RequestByteBudget {
                 "request size exceeds the int32 frame limit",
             )
         })?;
-        self.permits
-            .clone()
+        Arc::clone(&self.permits)
             .acquire_many_owned(wanted)
             .await
             .map_err(|_| io::Error::other("request-byte budget is closed"))
@@ -104,11 +103,11 @@ async fn fill_within_idle<S: AsyncRead + Unpin>(
     buf: &mut [u8],
     clock: &mut IdleClock,
 ) -> Result<(), ReceiveError> {
-    let mut filled = 0;
-    while filled < buf.len() {
-        match read_within_idle(stream, &mut buf[filled..], clock).await? {
+    let mut rest = buf;
+    while !rest.is_empty() {
+        match read_within_idle(stream, rest, clock).await? {
             0 => return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
-            read => filled += read,
+            read => rest = mem::take(&mut rest).get_mut(read..).unwrap_or_default(),
         }
     }
     Ok(())
@@ -124,7 +123,10 @@ async fn read_size<S: AsyncRead + Unpin>(
     if read == 0 {
         return Ok(None);
     }
-    fill_within_idle(stream, &mut prefix[read..], clock).await?;
+    let rest = prefix
+        .get_mut(read..)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "oversized size prefix read"))?;
+    fill_within_idle(stream, rest, clock).await?;
     let size = usize::try_from(i32::from_be_bytes(prefix))
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "negative Kafka frame size"))?;
     if size > maximum {

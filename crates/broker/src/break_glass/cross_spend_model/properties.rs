@@ -101,7 +101,7 @@ impl Model for CrossSpendModel {
             // never held, `no_cross_spend` would pass for want of opportunity.
             Property::sometimes(
                 "one_approved_while_the_other_is_requested",
-                |model: &CrossSpendModel, state: &Universe| {
+                |model: &Self, state: &Universe| {
                     state.proposals.iter().enumerate().any(|(index, proposal)| {
                         distinct(&proposal.approvals) >= model.config.required_approvals
                             && !proposal.consumed

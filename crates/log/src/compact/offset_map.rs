@@ -11,7 +11,7 @@ use {
     krabka_ids::Offset,
     krabka_units::prelude::ByteSize,
     std::collections::HashMap,
-    tracing::instrument,
+    tracing::{field, instrument},
 };
 
 /// Build a map of `key → latest absolute offset` across the given sealed
@@ -35,7 +35,7 @@ use {
 #[instrument(
     level = "debug",
     skip_all,
-    fields(segments = segments.len(), keys = tracing::field::Empty),
+    fields(segments = segments.len(), keys = field::Empty),
     err,
 )]
 pub fn build_offset_map(
@@ -66,7 +66,9 @@ pub fn build_offset_map(
             if !should_index_key(record.key.as_deref(), false) {
                 continue;
             }
-            let key_bytes = record.key.as_ref().expect("should_index_key checked Some");
+            let Some(key_bytes) = record.key.as_ref() else {
+                continue;
+            };
             let absolute = Offset(batch.base_offset + i64::from(record.offset_delta));
             insert_newest(&mut map, key_bytes, absolute);
         }
@@ -100,11 +102,11 @@ mod tests {
                 write_sealed_batches, write_sealed_segment,
             },
             segment::Segment,
-            test_support::KeyValue,
+            test_support::{KeyValue, aborted_txn},
         },
         bytes::Bytes,
         krabka_ids::Offset,
-        krabka_protocol::records::{Attributes, RecordBatch},
+        krabka_protocol::records::{Attributes, Record, RecordBatch},
         tempfile::tempdir,
     };
 
@@ -112,7 +114,7 @@ mod tests {
         build_offset_map(&inputs(segments), aborted, None).unwrap()
     }
 
-    fn offset_map_of(records: Vec<krabka_protocol::records::Record>) -> HashMap<Bytes, Offset> {
+    fn offset_map_of(records: Vec<Record>) -> HashMap<Bytes, Offset> {
         let dir = tempdir().unwrap();
         let segment = write_sealed_segment(dir.path(), 0, records);
         offset_map_for(&[&segment], vec![])
@@ -210,7 +212,7 @@ mod tests {
             control_batch(12, 2000, 0 /* ABORT */),
         ]);
         let aborted = vec![
-            crate::test_support::aborted_txn()
+            aborted_txn()
                 .producer(2000)
                 .bounds(Offset(10)..=Offset(12))
                 .stable(13)

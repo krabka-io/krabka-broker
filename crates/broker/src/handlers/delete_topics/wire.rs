@@ -10,9 +10,13 @@ use {
         UNKNOWN_TOPIC_OR_PARTITION,
     },
     krabka_protocol::{
-        owned::delete_topics_response::{DeletableTopicResult, DeleteTopicsResponse},
+        owned::{
+            delete_topics_request::DeleteTopicsRequest,
+            delete_topics_response::{DeletableTopicResult, DeleteTopicsResponse},
+        },
         primitives::uuid::Uuid as WireUuid,
     },
+    std::collections::hash_map::RandomState,
 };
 
 /// Kafka's `Errors.TOPIC_AUTHORIZATION_FAILED.message()`.
@@ -39,7 +43,7 @@ fn default_message(error_code: i16) -> Option<String> {
         THROTTLING_QUOTA_EXCEEDED => THROTTLING_QUOTA_EXCEEDED_MESSAGE,
         _ => return None,
     };
-    Some(message.to_string())
+    Some(message.to_owned())
 }
 
 /// Builds one response row for a requested topic.
@@ -65,7 +69,7 @@ pub(super) fn delete_topic_result(
 /// topic, in request order, with the name and the id the client sent, the
 /// code, and no message.
 pub(super) fn request_error_results(
-    request: &krabka_protocol::owned::delete_topics_request::DeleteTopicsRequest,
+    request: &DeleteTopicsRequest,
     error_code: i16,
 ) -> Vec<DeletableTopicResult> {
     let row = |name, topic_id| DeletableTopicResult {
@@ -120,7 +124,7 @@ pub(super) fn invalid_topic_result(
         name,
         topic_id,
         error_code: INVALID_REQUEST,
-        error_message: Some(message.to_string()),
+        error_message: Some(message.to_owned()),
         ..Default::default()
     }
 }
@@ -144,7 +148,7 @@ pub(super) fn shuffle_rows<T>(rows: &mut [T], seed: u64) {
 /// A fresh seed for [`shuffle_rows`] from the process's hash randomness.
 pub(super) fn random_seed() -> u64 {
     use std::hash::BuildHasher;
-    std::collections::hash_map::RandomState::new().hash_one(0_u8)
+    RandomState::new().hash_one(0_u8)
 }
 
 krabka_macros::splitmix64_step!(split_mix_64);
@@ -163,7 +167,7 @@ pub(super) fn delete_topics_response(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::codes, assert2::assert};
+    use {super::*, crate::codes, assert2::assert, std::collections::HashSet};
 
     #[test]
     fn response_helpers_preserve_topic_identity_error_and_throttle_fields() {
@@ -208,7 +212,7 @@ mod tests {
                 name: Some("t".into()),
                 topic_id: id,
                 error_code: code,
-                error_message: message.map(str::to_string),
+                error_message: message.map(str::to_owned),
             })
         };
         let actual: Vec<DeletableTopicResult> = [
@@ -257,7 +261,7 @@ mod tests {
         };
         let mut sorted = shuffled(7);
         sorted.sort_unstable();
-        let orders: std::collections::HashSet<Vec<u32>> = (0..8).map(shuffled).collect();
+        let orders: HashSet<Vec<u32>> = (0..8).map(shuffled).collect();
 
         assert!(sorted == rows);
         assert!(shuffled(7) == shuffled(7));

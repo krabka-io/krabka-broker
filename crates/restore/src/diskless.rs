@@ -28,19 +28,20 @@ use {
         collections::{BTreeMap, HashMap, HashSet},
         path::Path,
     },
+    tokio::fs,
 };
 
-pub(super) async fn load(path: Option<&Path>) -> Result<Option<DisklessWalCapture>, RestoreError> {
+pub async fn load(path: Option<&Path>) -> Result<Option<DisklessWalCapture>, RestoreError> {
     let Some(path) = path else {
         return Ok(None);
     };
-    let bytes = tokio::fs::read(path).await?;
+    let bytes = fs::read(path).await?;
     DisklessWalCapture::from_slice(&bytes)
         .map(Some)
         .map_err(RestoreError::Integrity)
 }
 
-pub(super) fn add_partitions(
+pub fn add_partitions(
     inventory: &mut ArchiveInventory,
     capture: &DisklessWalCapture,
     args: &RestoreArgs,
@@ -138,7 +139,7 @@ pub(super) fn add_partitions(
 /// metadata must start the partition there. Without it the first write is
 /// assigned offset 0 and the materialized log refuses it (#1524).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DisklessNextOffset {
+pub struct DisklessNextOffset {
     pub(crate) topic: String,
     pub(crate) partition: i32,
     pub(crate) next_offset: i64,
@@ -154,7 +155,7 @@ pub(crate) struct DisklessNextOffset {
 /// [`materialize`] walks it, without writing, because a bound or an
 /// exclusion decides its end batch by batch. [`materialize`] then requires
 /// each partition to end where this said.
-pub(super) async fn next_offsets(
+pub async fn next_offsets(
     store: &ArchiveStore,
     predicates: &Predicates,
     capture: &DisklessWalCapture,
@@ -196,7 +197,7 @@ pub(super) async fn next_offsets(
     Ok(out)
 }
 
-pub(super) async fn materialize(
+pub async fn materialize(
     store: &ArchiveStore,
     args: &RestoreArgs,
     predicates: &Predicates,
@@ -265,7 +266,7 @@ pub(super) async fn materialize(
 
 /// Require every materialized partition to end at the next offset the target
 /// was formatted with, so its metadata never starts it anywhere else.
-pub(super) fn check_next_offsets(
+pub fn check_next_offsets(
     report: &DisklessRestoreReport,
     planned: &[DisklessNextOffset],
 ) -> Result<(), RestoreError> {
@@ -339,7 +340,13 @@ async fn walk_partition(
         let mut first = None;
         let mut last: Option<i64> = None;
         while cursor < end {
-            let validated = validate_one_v2_batch(&object[cursor..end])?;
+            let outside = || {
+                RestoreError::Integrity(format!(
+                    "{}: captured byte range is outside object",
+                    range.object_key
+                ))
+            };
+            let validated = validate_one_v2_batch(object.get(cursor..end).ok_or_else(outside)?)?;
             let header = validated.header;
             let batch_end = cursor.checked_add(validated.total_len).ok_or_else(|| {
                 RestoreError::Integrity("diskless WAL byte range overflow".into())
@@ -365,13 +372,13 @@ async fn walk_partition(
                     range.object_key
                 )));
             }
-            first.get_or_insert(header.base_offset.get());
+            first.get_or_insert_with(|| header.base_offset.get());
             last = Some(batch_last);
             let base = Offset(header.base_offset.get());
             if batch_last >= partition.delete_floor
                 && !predicates.batch_past_offset_bound(&partition_ref, base)
             {
-                let mut batch_cursor = &object[cursor..batch_end];
+                let mut batch_cursor = object.get(cursor..batch_end).ok_or_else(outside)?;
                 let batch = RecordBatchBorrowed::decode_borrow_with_policy(
                     &mut batch_cursor,
                     <_>::default(),
@@ -533,6 +540,7 @@ mod tests {
             report::{DisklessPartitionReport, DisklessRestoreReport},
         },
         assert2::check,
+        tokio::fs,
         uuid::Uuid,
     };
 
@@ -598,9 +606,7 @@ mod tests {
     ) {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("diskless-wal-index.json");
-        tokio::fs::write(&path, json)
-            .await
-            .expect("write the capture");
+        fs::write(&path, json).await.expect("write the capture");
 
         let error = load(Some(&path)).await.expect_err(name);
 

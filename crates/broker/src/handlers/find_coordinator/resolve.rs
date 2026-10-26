@@ -10,6 +10,7 @@ use {
     crate::{broker::Broker, codes, host_port::parse_advertised_host_port, txn::bootstrap::TOPIC},
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
     krabka_protocol::owned::find_coordinator_response::Coordinator,
+    std::collections::HashSet,
 };
 
 /// What a coordinator lookup resolves against: one metadata image, the brokers
@@ -17,7 +18,7 @@ use {
 pub(super) struct ResolveTarget<'a> {
     pub(super) image: &'a krabka_metadata::MetadataImage,
     /// From [`crate::handlers::offline_replicas::unavailable_brokers`].
-    pub(super) unavailable: &'a std::collections::HashSet<u64>,
+    pub(super) unavailable: &'a HashSet<u64>,
     /// This broker's node id.
     pub(super) local_node: krabka_metadata::NodeId,
     /// This broker's advertised `host:port` on the request's listener.
@@ -32,9 +33,9 @@ pub(super) fn resolve_transaction_keys(
     keys: Vec<String>,
 ) -> Vec<Coordinator> {
     keys.into_iter()
-        .map(|key| {
-            let partition = broker.txn_coordinator.partition_for(&key).get();
-            resolve_partition_coordinator(target, TOPIC, partition, key)
+        .map(|key| match broker.txn_coordinator.partition_for(&key) {
+            Some(partition) => resolve_partition_coordinator(target, TOPIC, partition.get(), key),
+            None => unavailable_coordinator(key),
         })
         .collect()
 }

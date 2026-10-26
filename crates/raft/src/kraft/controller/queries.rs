@@ -25,6 +25,10 @@ use {
     krabka_ids::Offset,
     krabka_protocol::records::RecordBatch,
     krabka_units::prelude::ByteSize,
+    std::{
+        collections::BTreeMap,
+        time::{Duration, UNIX_EPOCH},
+    },
 };
 
 /// Floor on an observer's metadata-fetch budget: at least the first committed
@@ -72,9 +76,9 @@ pub fn initial_quorum_snapshot(
             .as_ref()
             .map(|key| key.directory_id),
         observers: Vec::new(),
-        per_replica_fetch_offset: std::collections::BTreeMap::new(),
-        per_replica_last_fetch_ms: std::collections::BTreeMap::new(),
-        per_replica_last_caught_up_ms: std::collections::BTreeMap::new(),
+        per_replica_fetch_offset: BTreeMap::new(),
+        per_replica_last_fetch_ms: BTreeMap::new(),
+        per_replica_last_caught_up_ms: BTreeMap::new(),
         is_leader: core.role().is_leader(),
         current_state: if core.role().is_leader() {
             "leader"
@@ -100,8 +104,8 @@ impl Engine {
     /// mapped to the Unix epoch.
     fn unix_ms(&self, at: SimInstant) -> i64 {
         self.wall_clock_base
-            .checked_add(std::time::Duration::from_millis(at.0))
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .checked_add(Duration::from_millis(at.0))
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map_or(-1, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
     }
 
@@ -113,9 +117,9 @@ impl Engine {
     /// Snapshot the consensus state for `DescribeQuorum`.
     pub fn quorum_state_snapshot(&self) -> QuorumStateSnapshot {
         let qs = self.core.quorum_state();
-        let mut per_replica_fetch_offset = std::collections::BTreeMap::new();
-        let mut per_replica_last_fetch_ms = std::collections::BTreeMap::new();
-        let mut per_replica_last_caught_up_ms = std::collections::BTreeMap::new();
+        let mut per_replica_fetch_offset = BTreeMap::new();
+        let mut per_replica_last_fetch_ms = BTreeMap::new();
+        let mut per_replica_last_caught_up_ms = BTreeMap::new();
         let is_leader = self.core.role().is_leader();
         let current_state = match self.core.role() {
             Role::Leader { .. } => "leader",

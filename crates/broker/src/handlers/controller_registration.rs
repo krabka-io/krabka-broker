@@ -15,16 +15,18 @@ use {
             registration_listeners::{self, ListenerFields},
         },
     },
-    krabka_metadata::{BrokerEndpoint, ControllerRegistrationRecord, MetadataRecord, NodeId},
+    krabka_metadata::{
+        BrokerEndpoint, ControllerRegistrationRecord, MetadataRecord, NodeId, metadata_version,
+    },
     krabka_protocol::owned::{
-        controller_registration_request::ControllerRegistrationRequest,
+        controller_registration_request::{ControllerRegistrationRequest, Listener},
         controller_registration_response::ControllerRegistrationResponse,
     },
     krabka_raft::RaftError,
     std::collections::BTreeMap,
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ControllerRegistrationRequest,
     _version: ApiVersion,
@@ -42,7 +44,7 @@ pub(crate) async fn handle(
     // written now could precede a bootstrap level that does not support it.
     if image
         .finalized_metadata_version()
-        .is_none_or(|level| level < krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL)
+        .is_none_or(|level| level < metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL)
     {
         return Ok(response(
             codes::UNSUPPORTED_VERSION,
@@ -117,9 +119,7 @@ pub(crate) async fn handle(
     )
 }
 
-fn decode_listeners(
-    listeners: &[krabka_protocol::owned::controller_registration_request::Listener],
-) -> Result<Vec<BrokerEndpoint>, String> {
+fn decode_listeners(listeners: &[Listener]) -> Result<Vec<BrokerEndpoint>, String> {
     registration_listeners::decode(
         listeners,
         |listener| ListenerFields {
@@ -158,8 +158,12 @@ mod tests {
             authorizer as fixture_authorizers,
             test_support::{self as broker_fixture_support, principal},
         },
-        krabka_protocol::owned::controller_registration_request::Listener,
+        krabka_protocol::{
+            owned::{controller_registration_request, controller_registration_request::Listener},
+            primitives::uuid::Uuid,
+        },
         krabka_security::ListenerProtocol,
+        std::slice,
     };
 
     krabka_macros::wire_codec_helpers! {
@@ -175,7 +179,7 @@ mod tests {
             security_protocol: 0,
             ..Default::default()
         };
-        assert2::assert!(decode_listeners(std::slice::from_ref(&listener)).is_ok());
+        assert2::assert!(decode_listeners(slice::from_ref(&listener)).is_ok());
         assert2::assert!(decode_listeners(&[listener.clone(), listener]).is_err());
     }
 
@@ -194,7 +198,7 @@ mod tests {
         let principal = principal("controller");
         let peer: SocketAddr = "127.0.0.1:9093".parse().unwrap();
         let ctx = test_context(&principal, &peer);
-        let version = krabka_protocol::owned::controller_registration_request::MAX_VERSION;
+        let version = controller_registration_request::MAX_VERSION;
         let listener = Listener {
             name: "CONTROLLER".into(),
             host: "controller-7".into(),
@@ -204,7 +208,7 @@ mod tests {
         };
         let req = ControllerRegistrationRequest {
             controller_id: 7,
-            incarnation_id: krabka_protocol::primitives::uuid::Uuid([7; 16]),
+            incarnation_id: Uuid([7; 16]),
             zk_migration_ready: true,
             listeners: vec![listener],
             ..Default::default()

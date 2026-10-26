@@ -72,7 +72,9 @@ pub(super) async fn downgrade_fencing(
     };
     let image = metadata.snapshot();
     let now_ms = chrono_now_ms();
-    let mut classic = migration::convert_consumer_to_classic(state, fenced, &image);
+    let Some(mut classic) = migration::convert_consumer_to_classic(state, fenced, &image) else {
+        return Ok(());
+    };
     let pending = migration::downgrade_pending_records(state, &classic, now_ms);
     let group_id = group.group_id.clone();
     let batch = pending.to_batch(&group_id, now_ms)?;

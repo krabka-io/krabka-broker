@@ -109,7 +109,7 @@ fn metric(field: &Field) -> Result<Metric, ParseError> {
 }
 
 /// Expands `#[derive(RegisterMetrics)]` on `item`.
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let metrics = named_fields(&item, "RegisterMetrics")?
         .iter()
         .map(metric)

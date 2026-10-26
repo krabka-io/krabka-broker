@@ -13,7 +13,7 @@ struct SchemaArgs {
     format: String,
 }
 
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let options = item
         .parse_meta::<SchemaArgs>("unit_schema")?
         .ok_or_else(|| {

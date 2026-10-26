@@ -2,10 +2,12 @@ use {
     super::{args_from, batch, record, record_with_key, topic_id_partition, verified_segment},
     crate::{bound::Predicates, materialize::write_segment},
     krabka_ids::{Offset, ProducerId},
-    krabka_log::{Log, LogConfig},
+    krabka_log::{Log, LogConfig, name},
+    krabka_protocol::records::RecordBatch,
     krabka_verified::producer::{
         ProducerDecision, ProducerEntryFacts, RetainedSequenceRange, producer_decision,
     },
+    std::slice,
 };
 
 #[yare::parameterized(
@@ -39,19 +41,19 @@ async fn filtered_and_empty_restore_batches_preserve_retry_coordinates_after_reo
     original.producer_id = 7;
     original.producer_epoch = 2;
     original.base_sequence = sequence;
-    let segment = verified_segment(9, std::slice::from_ref(&original));
+    let segment = verified_segment(9, slice::from_ref(&original));
     let outcome = write_segment(&args, &partition, &segment, &predicates)
         .await
         .unwrap();
     assert2::assert!(outcome.end_offset == Offset(11));
     assert2::assert!(outcome.records_kept == if empty { 0 } else { 2 });
-    let dir = krabka_log::name::partition_dir(&args.target.log_dir, "orders", 0);
+    let dir = name::partition_dir(&args.target.log_dir, "orders", 0);
     let mut log = Log::open(&dir, LogConfig::default()).unwrap();
     assert2::assert!(log.log_end_offset() == Offset(12));
     let restored = log
         .read(Offset(9), LogConfig::default().segment_size)
         .unwrap();
-    let expected = krabka_protocol::records::RecordBatch {
+    let expected = RecordBatch {
         records: if empty {
             vec![]
         } else {
@@ -62,7 +64,7 @@ async fn filtered_and_empty_restore_batches_preserve_retry_coordinates_after_reo
     assert2::assert!(restored.batches == vec![expected]);
     let replayed = log.producer_state_entry(ProducerId(7)).unwrap();
     log.take_producer_snapshot().unwrap();
-    assert2::assert!(krabka_log::name::producer_snapshot_path(&dir, 12).is_file());
+    assert2::assert!(name::producer_snapshot_path(&dir, 12).is_file());
     drop(log);
     let log = Log::open(&dir, LogConfig::default()).unwrap();
     let entry = log.producer_state_entry(ProducerId(7)).unwrap();

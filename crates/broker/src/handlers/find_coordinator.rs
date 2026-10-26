@@ -75,14 +75,16 @@ fn merge_key_slots(key_slots: Vec<KeySlot>, coordinators: Vec<Coordinator>) -> V
         .into_iter()
         .map(|slot| match slot {
             KeySlot::Rejected(coordinator) => coordinator,
-            KeySlot::Resolve(_) => resolved
+            // Every admitted key has a result; a key without one has no
+            // coordinator to name.
+            KeySlot::Resolve(key) => resolved
                 .next()
-                .expect("one coordinator result per admitted key"),
+                .unwrap_or_else(|| unavailable_coordinator(key)),
         })
         .collect()
 }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: FindCoordinatorRequest,
     version: ApiVersion,
@@ -183,9 +185,11 @@ pub(crate) async fn handle(
             match req.key_type {
                 KEY_TYPE_GROUP => keys
                     .into_iter()
-                    .map(|key| {
-                        let partition = partition_for_group(&image, &key);
-                        resolve_partition_coordinator(&target, state_topic, partition, key)
+                    .map(|key| match partition_for_group(&image, &key) {
+                        Some(partition) => {
+                            resolve_partition_coordinator(&target, state_topic, partition, key)
+                        }
+                        None => unavailable_coordinator(key),
                     })
                     .collect(),
                 KEY_TYPE_TRANSACTION => resolve_transaction_keys(broker, &target, keys),
@@ -197,12 +201,14 @@ pub(crate) async fn handle(
                         let Some((group, topic_uuid, partition)) = parse_share_key(&key) else {
                             return unavailable_coordinator(key);
                         };
-                        let p = partition_for_share_key(
+                        let Some(p) = partition_for_share_key(
                             group,
                             &topic_uuid,
                             partition,
                             broker.config.share_coordinator.state_topic_num_partitions,
-                        );
+                        ) else {
+                            return unavailable_coordinator(key);
+                        };
                         resolve_partition_coordinator(&target, state_topic, p, key)
                     })
                     .collect(),

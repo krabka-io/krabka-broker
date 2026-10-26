@@ -7,6 +7,7 @@
 use {
     crate::{archive::ArchiveArgs, connection::SecurityArgs},
     clap::{Args, Parser, Subcommand},
+    std::path::PathBuf,
 };
 
 /// The capture selector that means "the newest capture in the archive".
@@ -21,7 +22,7 @@ pub struct CaptureSigningArgs {
 
     /// PKCS#8 Ed25519 private key used to sign the diskless capture.
     #[arg(long, value_name = "PATH", requires = "worm_signing_key_id")]
-    pub worm_signing_key: Option<std::path::PathBuf>,
+    pub worm_signing_key: Option<PathBuf>,
 }
 
 /// Independently pinned trust material for a signed diskless capture.
@@ -33,7 +34,7 @@ pub struct CaptureTrustArgs {
 
     /// Raw 32-byte Ed25519 public key for `--worm-key-id`.
     #[arg(long, value_name = "PATH", requires_all = ["worm_key_id", "worm_expect_head"])]
-    pub worm_public_key: Option<std::path::PathBuf>,
+    pub worm_public_key: Option<PathBuf>,
 
     /// Independently recorded head of the signed diskless capture.
     #[arg(long, value_name = "HEX", requires_all = ["worm_key_id", "worm_public_key"])]
@@ -60,7 +61,7 @@ pub enum Command {
         /// only when this is also the node's metadata log directory. Without
         /// it the capture takes group offsets only.
         #[arg(long, value_name = "DIR")]
-        log_dir: Option<std::path::PathBuf>,
+        log_dir: Option<PathBuf>,
 
         /// A broker to read committed group offsets from. Without it the
         /// capture takes the on-disk snapshots only.
@@ -142,6 +143,7 @@ mod tests {
         super::{Cli, Command},
         assert2::{assert, check},
         clap::Parser as _,
+        std::path::PathBuf,
     };
 
     #[test]
@@ -170,7 +172,7 @@ mod tests {
         else {
             unreachable!("the assertion above rejected every other command")
         };
-        check!(log_dir == Some(std::path::PathBuf::from("/var/lib/krabka")));
+        check!(log_dir == Some(PathBuf::from("/var/lib/krabka")));
         check!(bootstrap_server == Some("broker-1:9092".to_owned()));
         check!(archive.s3_bucket == Some("krabka-tier".to_owned()));
         check!(archive.prefix == Some("prod/".to_owned()));
@@ -191,9 +193,9 @@ mod tests {
             .clone()
             .render_long_help()
             .to_string();
-        let heading = help.find("\nArchive:\n").expect("an Archive heading");
-        check!(help[heading..].contains("--archive-local"), "{name}");
-        check!(help[heading..].contains("--archive-prefix"), "{name}");
+        let (_, archive) = help.split_once("\nArchive:\n").expect("an Archive heading");
+        check!(archive.contains("--archive-local"), "{name}");
+        check!(archive.contains("--archive-prefix"), "{name}");
     }
 
     #[test]

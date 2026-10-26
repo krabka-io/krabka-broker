@@ -23,29 +23,30 @@ impl Assignor for RangeAssignor {
         let mut sorted_topics: Vec<_> = topics.partitions_per_topic.iter().collect();
         sorted_topics.sort_by_key(|(id, _)| id.0);
         for (topic_id, partition_count) in sorted_topics {
-            let mut subscribers: Vec<&str> = members
+            let mut names: Vec<&str> = members
                 .iter()
                 .filter(|m| m.subscribed_topic_ids.contains(topic_id))
                 .map(|m| m.member_id.as_str())
                 .collect();
-            subscribers.sort_unstable();
-            if subscribers.is_empty() {
+            names.sort_unstable();
+            let subscribers: Vec<(i32, &str)> = (0_i32..).zip(names).collect();
+            let Some(&(last, _)) = subscribers.last() else {
                 continue;
-            }
-            let n = i32::try_from(subscribers.len()).expect("member count fits i32");
+            };
+            let n = last + 1;
             let p = *partition_count;
             let per_member = p / n;
             let remainder = p % n;
             let mut cursor = 0;
-            for (i, sub) in subscribers.iter().enumerate() {
-                let extra = i32::from(i32::try_from(i).expect("index fits i32") < remainder);
+            for &(i, sub) in &subscribers {
+                let extra = i32::from(i < remainder);
                 let take = per_member + extra;
                 if take == 0 {
                     continue;
                 }
                 let range: Vec<i32> = (cursor..cursor + take).collect();
-                out.get_mut(*sub)
-                    .expect("inserted above")
+                out.entry(sub.to_owned())
+                    .or_default()
                     .insert(*topic_id, range);
                 cursor += take;
             }

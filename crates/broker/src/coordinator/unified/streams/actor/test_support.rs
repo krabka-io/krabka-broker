@@ -17,14 +17,15 @@ use {
     krabka_protocol::owned::{
         common::streams_group_heartbeat_response::{status::Status, task_ids::TaskIds},
         streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
+        streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
-    std::sync::Arc,
+    std::{sync::Arc, time::Duration},
 };
 
 pub(super) fn undelayed() -> StreamsGroupConfig {
     StreamsGroupConfig {
-        initial_rebalance_delay: std::time::Duration::ZERO,
-        assignment_interval: std::time::Duration::ZERO,
+        initial_rebalance_delay: Duration::ZERO,
+        assignment_interval: Duration::ZERO,
         ..StreamsGroupConfig::default()
     }
 }
@@ -33,9 +34,7 @@ pub(super) fn undelayed() -> StreamsGroupConfig {
 struct EmptyMetadata;
 
 impl MetadataProvider for EmptyMetadata {
-    fn snapshot(&self) -> std::sync::Arc<ReconcileInput> {
-        std::sync::Arc::new(ReconcileInput::default())
-    }
+    fn snapshot(&self) -> Arc<ReconcileInput> { Arc::new(ReconcileInput::default()) }
 }
 
 /// A coordinator with no connected metadata source, retaining the supplied log ownership.
@@ -112,7 +111,7 @@ pub(super) fn response_tasks(partitions: Vec<i32>) -> Vec<TaskIds> {
 pub(super) struct ActiveResponseSetup<'a> {
     #[default("m1")]
     pub member_id: &'a str,
-    #[default(crate::coordinator::unified::test_support::MemberEpoch(1))]
+    #[default(MemberEpoch(1))]
     pub epoch: MemberEpoch,
     pub status: Option<Vec<Status>>,
     pub active: Option<Vec<PartitionIndex>>,
@@ -121,11 +120,10 @@ pub(super) struct ActiveResponseSetup<'a> {
 #[bon::builder]
 pub(super) fn expected_active_response(
     #[builder(default = "m1")] member_id: &'_ str,
-    #[builder(into, default = crate :: coordinator :: unified :: test_support :: MemberEpoch (1))]
-    epoch: MemberEpoch,
+    #[builder(into, default = MemberEpoch (1))] epoch: MemberEpoch,
     status: Option<Vec<Status>>,
     active: Option<Vec<PartitionIndex>>,
-) -> krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse {
+) -> StreamsGroupHeartbeatResponse {
     let setup = ActiveResponseSetup {
         member_id,
         epoch,
@@ -138,7 +136,7 @@ pub(super) fn expected_active_response(
         status,
         active,
     } = setup;
-    krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse {
+    StreamsGroupHeartbeatResponse {
         member_id: member_id.into(),
         status,
         standby_tasks: active.as_ref().map(|_| vec![]),

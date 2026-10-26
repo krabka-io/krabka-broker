@@ -43,6 +43,7 @@
 //! [`topic`] creates the diskless topic and finds its leader, [`wire`] is the
 //! produce and fetch traffic, and [`voter_dir`] reads a voter's WAL directory
 //! off the filesystem. The three cases order those pieces.
+#![cfg(test)]
 
 mod support;
 

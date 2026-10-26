@@ -8,6 +8,7 @@ use {
     crate::test_support::{broker_registration, in_sync_partition},
     assert2::assert,
     krabka_metadata::{BrokerEndpoint, MetadataRecord, TopicRecord},
+    std::fmt,
     uuid::Uuid,
 };
 
@@ -142,7 +143,7 @@ impl<E> Case<E> {
 }
 
 /// Keep the projection cases independent while sharing their image/lookup/assertion driver.
-fn check_replica_cases<E: std::fmt::Debug + PartialEq>(
+fn check_replica_cases<E: fmt::Debug + PartialEq>(
     cases: Vec<Case<E>>,
     project: impl Fn(&MetadataImage, &PartitionRecord, &HashSet<u64>, &str) -> E,
 ) {

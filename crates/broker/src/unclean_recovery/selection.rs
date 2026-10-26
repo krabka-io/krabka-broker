@@ -69,7 +69,7 @@
 
 use {
     krabka_raft::NodeId,
-    krabka_verified::consensus::RecoveryCandidate,
+    krabka_verified::{consensus, consensus::RecoveryCandidate},
     std::collections::{BTreeSet, HashSet},
 };
 
@@ -78,7 +78,7 @@ use {
 /// This type is separate from the generated wire type, so a unit test can
 /// drive the selection logic without building protocol structs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ReplicaLogInfo {
+pub struct ReplicaLogInfo {
     pub broker_id: NodeId,
     pub last_written_leader_epoch: i32,
     pub log_end_offset: i64,
@@ -88,7 +88,7 @@ pub(crate) struct ReplicaLogInfo {
 /// Picks the replica with the most complete log. It ranks by the highest
 /// `last_written_leader_epoch`, then the highest `log_end_offset`, then the
 /// lowest `broker_id` for determinism. Returns `None` for an empty input.
-pub(crate) fn select_best_replica(responses: &[ReplicaLogInfo]) -> Option<NodeId> {
+pub fn select_best_replica(responses: &[ReplicaLogInfo]) -> Option<NodeId> {
     let candidates: Vec<RecoveryCandidate> = responses
         .iter()
         .map(|r| RecoveryCandidate {
@@ -97,13 +97,14 @@ pub(crate) fn select_best_replica(responses: &[ReplicaLogInfo]) -> Option<NodeId
             broker_id: r.broker_id.0,
         })
         .collect();
-    krabka_verified::consensus::select_best_recovery_replica(&candidates)
-        .map(|index| responses[index].broker_id)
+    consensus::select_best_recovery_replica(&candidates)
+        .and_then(|index| responses.get(index))
+        .map(|response| response.broker_id)
 }
 
 /// Which rule chose the leader, and so whether the election lost anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ElectionBasis {
+pub enum ElectionBasis {
     /// The partition record still names the winner in its ISR, so it holds
     /// every committed record. This is the first disjunct of Kafka's
     /// `isValidNewLeader`, and Kafka reports the election as clean.
@@ -142,7 +143,7 @@ impl ElectionBasis {
 
 /// The leader one recovery elects, and the rule that chose it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Election {
+pub struct Election {
     pub leader: NodeId,
     pub basis: ElectionBasis,
 }
@@ -170,7 +171,7 @@ pub(crate) struct Election {
 /// no producer or consumer can reach.
 ///
 /// Returns `None` when nothing that may lead answered.
-pub(crate) fn select_leader(
+pub fn select_leader(
     responses: &[ReplicaLogInfo],
     in_sync: &[NodeId],
     eligible: &[i32],
@@ -214,7 +215,7 @@ pub(crate) fn select_leader(
 /// Returns true if any responder reports a `current_leader_epoch` strictly
 /// greater than the controller's known `leader_epoch` for the partition. A
 /// newer leader then already exists, and this recovery is stale.
-pub(crate) fn has_newer_leader(responses: &[ReplicaLogInfo], known_leader_epoch: i32) -> bool {
+pub fn has_newer_leader(responses: &[ReplicaLogInfo], known_leader_epoch: i32) -> bool {
     responses
         .iter()
         .any(|r| r.current_leader_epoch > known_leader_epoch)

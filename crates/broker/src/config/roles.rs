@@ -73,6 +73,7 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_raft::NodeId,
+        std::{net::SocketAddr, path::PathBuf},
     };
 
     #[test]
@@ -84,7 +85,7 @@ mod tests {
             "default node is a combined controller+broker with the combined role set"
         );
 
-        let t = BrokerConfig::for_tests(std::path::PathBuf::from("/tmp"));
+        let t = BrokerConfig::for_tests(PathBuf::from("/tmp"));
         assert!(t.is_controller() && t.is_broker());
     }
 
@@ -124,7 +125,7 @@ mod tests {
         let c = BrokerConfig {
             roles: vec![NodeRole::Broker],
             node_id: NodeId(1),
-            controller_quorum_voters: vec![(NodeId(1), "127.0.0.1:9093".to_string())],
+            controller_quorum_voters: vec![(NodeId(1), "127.0.0.1:9093".to_owned())],
             ..BrokerConfig::default()
         };
         assert!(matches!(
@@ -149,7 +150,7 @@ mod tests {
         }
         let listener = |name: &str, port: u16| ListenerSpec {
             name: name.to_owned(),
-            bind_addr: std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            bind_addr: SocketAddr::from(([127, 0, 0, 1], port)),
             advertised: format!("127.0.0.1:{port}"),
             protocol: krabka_security::ListenerProtocol::Plaintext,
             tls_config: None,
@@ -206,7 +207,7 @@ mod tests {
             let config = BrokerConfig {
                 roles: roles.clone(),
                 node_id: NodeId(1),
-                controller_quorum_voters: vec![(voter, "127.0.0.1:9093".to_string())],
+                controller_quorum_voters: vec![(voter, "127.0.0.1:9093".to_owned())],
                 listeners,
                 ..BrokerConfig::default()
             };

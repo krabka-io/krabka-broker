@@ -65,7 +65,7 @@ fn topics_for(entry: &TxnEntry) -> Vec<TopicData> {
 /// `TRANSACTIONAL_ID_NOT_FOUND`: the tid was never initialized here, or the
 /// KIP-98 expiry sweep tombstoned it out of `__transaction_state` and dropped
 /// it. The two are indistinguishable to a client, in Kafka and here.
-pub(crate) fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> TransactionState {
+pub fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> TransactionState {
     // Kafka reports a `Dead` transaction as not found: the id and its metadata
     // are being expired.
     let Some(entry) = entry.filter(|entry| entry.state != TxnState::Dead) else {
@@ -78,7 +78,7 @@ pub(crate) fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> Tran
     TransactionState {
         error_code: codes::NONE,
         transactional_id: entry.transactional_id.clone(),
-        transaction_state: entry.state.as_str().to_string(),
+        transaction_state: entry.state.as_str().to_owned(),
         transaction_timeout_ms: entry.txn_timeout_ms,
         transaction_start_time_ms: entry.start_ms,
         // Unwrap into the raw-`i64` wire field.
@@ -89,7 +89,7 @@ pub(crate) fn transaction_state_row(tid: &str, entry: Option<&TxnEntry>) -> Tran
     }
 }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DescribeTransactionsRequest,
     _version: ApiVersion,
@@ -185,10 +185,12 @@ mod tests {
         crate::{
             authorizer as fixture_authorizers,
             handlers::test_support::transaction_admin_tests::*,
-            test_support::{grant_topic_operation, peer, principal},
+            test_support::{allow_acl, grant_topic_operation, peer, principal},
             txn::state::TopicPartition,
         },
         assert2::assert,
+        krabka_protocol::owned::describe_transactions_response,
+        std::collections::HashSet,
     };
 
     fn entry() -> TxnEntry {
@@ -215,11 +217,11 @@ mod tests {
         // Alphabetical topics, ascending partitions.
         let expected = vec![
             krabka_macros::tagged_wire!(TopicData {
-                topic: "a".to_string(),
+                topic: "a".to_owned(),
                 partitions: vec![1],
             }),
             krabka_macros::tagged_wire!(TopicData {
-                topic: "b".to_string(),
+                topic: "b".to_owned(),
                 partitions: vec![0, 2],
             }),
         ];
@@ -239,7 +241,7 @@ mod tests {
     async fn each_row_carries_kafkas_code() {
         use krabka_log::ProducerId;
 
-        let version = krabka_protocol::owned::describe_transactions_response::MAX_VERSION;
+        let version = describe_transactions_response::MAX_VERSION;
         krabka_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker] allow_all;
@@ -253,13 +255,13 @@ mod tests {
         // Two ids this broker coordinates, and one it does not.
         let (ongoing_id, dead_id) = ("tx-ongoing", "tx-dead");
         lead_transaction_state_partitions(&broker_handle, &[
-            coordinator.partition_for(ongoing_id),
-            coordinator.partition_for(dead_id),
+            coordinator.partition_for(ongoing_id).unwrap(),
+            coordinator.partition_for(dead_id).unwrap(),
         ])
         .await;
         for (tid, state) in [(ongoing_id, TxnState::Ongoing), (dead_id, TxnState::Dead)] {
             let mut entry = TxnEntry::new_empty(
-                tid.to_string(),
+                tid.to_owned(),
                 ProducerId(if state == TxnState::Dead { 200 } else { 100 }),
                 3,
                 60_000,
@@ -292,8 +294,8 @@ mod tests {
                 String::new(),
                 empty_id.clone(),
                 foreign_id.clone(),
-                dead_id.to_string(),
-                ongoing_id.to_string(),
+                dead_id.to_owned(),
+                ongoing_id.to_owned(),
             ],
             ..Default::default()
         };
@@ -358,20 +360,23 @@ mod tests {
     async fn topics_are_filtered_by_per_topic_describe() {
         use krabka_log::ProducerId;
 
-        let version = krabka_protocol::owned::describe_transactions_response::MAX_VERSION;
+        let version = describe_transactions_response::MAX_VERSION;
         krabka_macros::broker_test_setup! {
             bind(broker_handle, _dir, broker);
             boot [start_broker(Arc::new(fixture_authorizers::SimpleAclAuthorizer::new(
-                        std::collections::HashSet::new()
+                        HashSet::new()
                     ),))];
         };
         let coordinator = &broker.txn_coordinator;
         let peer = peer();
         let tid = "tx";
 
-        lead_transaction_state_partitions(&broker_handle, &[coordinator.partition_for(tid)]).await;
+        lead_transaction_state_partitions(&broker_handle, &[coordinator
+            .partition_for(tid)
+            .unwrap()])
+        .await;
 
-        let mut entry = TxnEntry::new_empty(tid.to_string(), ProducerId(100), 3, 60_000, 0);
+        let mut entry = TxnEntry::new_empty(tid.to_owned(), ProducerId(100), 3, 60_000, 0);
         entry.state = TxnState::Ongoing;
         entry.start_ms = 7;
         entry.partitions.insert(TopicPartition {
@@ -388,11 +393,11 @@ mod tests {
             .expect("seed the transaction");
 
         let topic_a = krabka_macros::tagged_wire!(TopicData {
-            topic: "a".to_string(),
+            topic: "a".to_owned(),
             partitions: vec![0],
         });
         let topic_b = krabka_macros::tagged_wire!(TopicData {
-            topic: "b".to_string(),
+            topic: "b".to_owned(),
             partitions: vec![1],
         });
 
@@ -450,7 +455,7 @@ mod tests {
             broker
                 .controller
                 .submit_change(vec![krabka_metadata::MetadataRecord::V1AccessControlEntry(
-                    crate::test_support::allow_acl()
+                    allow_acl()
                         .resource_type(krabka_metadata::ResourceType::TransactionalId)
                         .resource_name(tid)
                         .principal(&format!("User:{user}"))
@@ -463,7 +468,7 @@ mod tests {
             let principal = principal(user);
             let context = test_context(&principal, &peer);
             let request = DescribeTransactionsRequest {
-                transactional_ids: vec![tid.to_string()],
+                transactional_ids: vec![tid.to_owned()],
                 ..Default::default()
             };
             let response = handle(&broker, request, version, &context)

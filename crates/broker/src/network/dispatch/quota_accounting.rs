@@ -10,6 +10,7 @@ use {
     },
     krabka_protocol::api_key::ApiKey,
     krabka_units::{Time, convert::TimeExt},
+    std::{iter, time::Duration},
 };
 
 /// Charge a finished request and resolve its deferred charge in one metrics call.
@@ -22,7 +23,7 @@ pub(super) fn apply_request_quota(
     broker: &Broker,
     parsed: &ParsedRequest<'_>,
     auth: &ConnectionAuth,
-    handler_time: std::time::Duration,
+    handler_time: Duration,
     deferred_charge: Option<QuotaCharge>,
 ) -> Time {
     let elapsed_micros = u64::try_from(handler_time.as_micros()).unwrap_or(u64::MAX);
@@ -62,7 +63,7 @@ fn resolve_charges(
     // Keep the API-specific charge first: it wins equal-delay metric attribution.
     let quota_charges: Vec<QuotaCharge> = deferred_charge
         .into_iter()
-        .chain(std::iter::once(request_charge))
+        .chain(iter::once(request_charge))
         .collect();
     metrics
         .record_applied_throttle(api_key, &quota_charges)

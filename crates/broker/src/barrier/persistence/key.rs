@@ -7,7 +7,7 @@ use super::{NO_EPOCH, primitives as codec};
 
 /// Which of the three record kinds a key names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RecordKind {
+pub enum RecordKind {
     /// A barrier group definition.
     Group,
     /// The frozen target set of one injection, written before the first
@@ -45,7 +45,7 @@ impl TryFrom<i16> for RecordKind {
 
 /// The key of any `__barrier_state` record.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RecordKey {
+pub struct RecordKey {
     pub(crate) kind: RecordKind,
     pub(crate) group: String,
     /// The epoch this record belongs to, or [`NO_EPOCH`] for a group record.
@@ -86,7 +86,7 @@ impl RecordKey {
 /// # Errors
 /// Returns [`codec::BrokerError::Protocol`] when the group name is longer than 32767
 /// bytes, which the `i16` length cannot carry.
-pub(crate) fn encode_key(key: &RecordKey) -> Result<Vec<u8>, codec::BrokerError> {
+pub fn encode_key(key: &RecordKey) -> Result<Vec<u8>, codec::BrokerError> {
     let mut out = Vec::with_capacity(12 + key.group.len());
     codec::put_i16(&mut out, codec::RECORD_VERSION);
     codec::put_i16(&mut out, key.kind.code());
@@ -101,7 +101,7 @@ pub(crate) fn encode_key(key: &RecordKey) -> Result<Vec<u8>, codec::BrokerError>
 /// Returns a [`codec::ProtocolError`] when the key is truncated, carries a version
 /// other than [`codec::RECORD_VERSION`], names an unknown record kind, holds a
 /// non-UTF-8 group name, or has trailing bytes.
-pub(crate) fn decode_key(bytes: &[u8]) -> Result<RecordKey, codec::ProtocolError> {
+pub fn decode_key(bytes: &[u8]) -> Result<RecordKey, codec::ProtocolError> {
     let mut cur = bytes;
     codec::expect_version(&mut cur)?;
     let kind = RecordKind::try_from(codec::get_i16(&mut cur)?)?;

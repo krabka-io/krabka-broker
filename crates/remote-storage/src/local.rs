@@ -16,7 +16,7 @@ use {
     },
     std::{
         fs::{self, File},
-        io::{Read, Seek, SeekFrom},
+        io::{ErrorKind, Read, Seek, SeekFrom},
         path::PathBuf,
     },
 };
@@ -171,7 +171,7 @@ impl RemoteStorageManager for LocalTieredStorage {
         for path in segment_suffixes().map(|suffix| self.segment_path(metadata, suffix)) {
             match fs::remove_file(path) {
                 Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => return Err(RemoteStorageError::Io(error)),
             }
         }
@@ -231,12 +231,9 @@ mod tests {
             metadata: md,
         } = local_store();
         assert!(
-            rsm.copy_log_segment_data(
-                &md,
-                &sample_data(src.path(), crate::test_support::TransactionIndex::Present)
-            )
-            .unwrap()
-            .is_none()
+            rsm.copy_log_segment_data(&md, &sample_data(src.path(), TransactionIndex::Present))
+                .unwrap()
+                .is_none()
         );
         let full = rsm.fetch_log_segment(&md, 0, None).unwrap();
         assert!(full == b"0123456789");

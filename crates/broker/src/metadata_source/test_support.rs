@@ -2,15 +2,18 @@
 //! throwaway topic record to submit, and a wait for a freshly started
 //! controller to elect itself.
 
-use {crate::test_support::single_partition_topic, krabka_metadata::MetadataRecord, uuid::Uuid};
+use {
+    crate::test_support::single_partition_topic, krabka_metadata::MetadataRecord,
+    std::time::Duration, tokio::time, uuid::Uuid,
+};
 
-pub(crate) fn topic_record(name: &str) -> MetadataRecord {
+pub fn topic_record(name: &str) -> MetadataRecord {
     MetadataRecord::V1Topic(single_partition_topic(name, Uuid::new_v4()))
 }
 
 pub(super) async fn wait_for_controller_leader(ctrl: &krabka_raft::ControllerHandle) {
     let mut leader_rx = ctrl.watch_leader();
-    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+    time::timeout(Duration::from_secs(2), async {
         while leader_rx.borrow().is_none() {
             leader_rx.changed().await.unwrap();
         }
@@ -20,7 +23,7 @@ pub(super) async fn wait_for_controller_leader(ctrl: &krabka_raft::ControllerHan
 }
 
 /// A running controller and the data directory that it needs to stay alive.
-pub(crate) struct StartedController {
+pub struct StartedController {
     /// The controller's data directory, removed when this value drops.
     pub(crate) dir: tempfile::TempDir,
     /// The controller.
@@ -28,7 +31,7 @@ pub(crate) struct StartedController {
 }
 
 /// A fresh bootstrapped single-node controller, already elected.
-pub(crate) async fn start_controller() -> StartedController {
+pub async fn start_controller() -> StartedController {
     let dir = tempfile::TempDir::new().unwrap();
     let cfg = krabka_raft::ControllerConfig {
         bootstrap_mode: krabka_raft::BootstrapMode::Bootstrap,

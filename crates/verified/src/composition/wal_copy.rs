@@ -110,25 +110,27 @@ pub(super) fn checked_wal_copy_replays_exactly(
         });
         // General replication admits compaction holes; a WAL copy requires
         // the exact contiguous prefix checked by the production raw reader.
-        if source[i].0 != cursor {
+        let source_batch = source.get(i)?;
+        let stored_batch = stored.get(i)?;
+        if source_batch.0 != cursor {
             return None;
         }
-        let (last, next) = local_append_coordinates(cursor, source[i].0, source[i].1)?;
-        let (stored_last, _) = local_append_coordinates(cursor, stored[i].0, stored[i].1)?;
+        let (last, next) = local_append_coordinates(cursor, source_batch.0, source_batch.1)?;
+        let (stored_last, _) = local_append_coordinates(cursor, stored_batch.0, stored_batch.1)?;
         if !wal_batch_equal(
-            (source[i].0, last, &source[i].2),
-            (stored[i].0, stored_last, &stored[i].2),
+            (source_batch.0, last, &source_batch.2),
+            (stored_batch.0, stored_last, &stored_batch.2),
         ) {
             return None;
         }
-        let acknowledgement = produce_durability_frontier(source[i].0, source[i].1)?;
+        let acknowledgement = produce_durability_frontier(source_batch.0, source_batch.1)?;
         let step = local_recovery_batch_step(
             byte_cursor,
             file_end,
             cursor,
-            stored[i].0,
-            stored[i].1,
-            stored[i].2.len() as u64,
+            stored_batch.0,
+            stored_batch.1,
+            stored_batch.2.len() as u64,
         )?;
         if step.next_offset != next || acknowledgement != next {
             return None;
@@ -211,8 +213,9 @@ pub(super) fn covering_copy_preserves_logical_fetch(
         && copy_batch_coordinates_valid(source@[j]))]
     #[variant(source@.len() - i@)]
     while i < source.len() {
-        let (last, _) = local_append_coordinates(source[i].0, source[i].0, source[i].1)?;
-        bases.push(source[i].0);
+        let batch = source.get(i)?;
+        let (last, _) = local_append_coordinates(batch.0, batch.0, batch.1)?;
+        bases.push(batch.0);
         lasts.push(last);
         i += 1;
     }
@@ -240,8 +243,9 @@ pub(super) fn covering_copy_preserves_logical_fetch(
         else { source@[j@ - 1].0@ + source@[j@ - 1].1@ + 1 })]
     #[variant(source@.len() - j@)]
     while j < source.len() {
-        let next = produce_durability_frontier(source[j].0, source[j].1)?;
-        if in_half_open_window(requested, source[j].0, next) {
+        let batch = source.get(j)?;
+        let next = produce_durability_frontier(batch.0, batch.1)?;
+        if in_half_open_window(requested, batch.0, next) {
             return Some((physical, bytes_end, Some(j)));
         }
         j += 1;

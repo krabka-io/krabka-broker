@@ -72,7 +72,7 @@ const NO_OFFSET: i64 = -1;
     api = "WriteBarrierMarkers",
     level = "debug"
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: WriteBarrierMarkersRequest,
     version: ApiVersion,
@@ -258,6 +258,7 @@ mod tests {
             WrittenBarrierTopic,
         },
         krabka_units::mebibytes,
+        std::path::Path,
         tempfile::tempdir,
         uuid::Uuid,
     };
@@ -305,7 +306,7 @@ mod tests {
     /// A registry with `orders-0` open, and the local broker installed as its
     /// leader at `leader_epoch`.
     async fn registry_with_leader(
-        dir: &std::path::Path,
+        dir: &Path,
         leader: NodeId,
         leader_epoch: i32,
     ) -> PartitionRegistry {

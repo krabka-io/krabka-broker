@@ -3,13 +3,20 @@
 
 use {
     crate::cli::Args,
-    krabka_broker::{BootstrapMode, BrokerConfig, file_config::FileConfig},
+    krabka_broker::{
+        BootstrapMode, BrokerConfig, config::NodeRole, file_config::FileConfig,
+        telemetry::OtlpProtocol,
+    },
     krabka_log::LogConfig,
-    std::net::SocketAddr,
+    std::{
+        error::Error,
+        fs, mem,
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+    },
 };
 
 /// Parse `--process-roles` string values into `NodeRole`s.
-pub fn parse_roles_arg(roles: &[String]) -> Result<Vec<krabka_broker::config::NodeRole>, String> {
+pub fn parse_roles_arg(roles: &[String]) -> Result<Vec<NodeRole>, String> {
     use krabka_broker::config::NodeRole;
     roles
         .iter()
@@ -29,9 +36,7 @@ pub fn parse_roles_arg(roles: &[String]) -> Result<Vec<krabka_broker::config::No
 /// `--health-listen-addr`, onto an `Option<SocketAddr>`. An empty string or
 /// `none`, in any case, disables the endpoint. Every other value must parse
 /// as a `SocketAddr`.
-pub fn parse_optional_listen_addr(
-    s: &str,
-) -> Result<Option<SocketAddr>, Box<dyn std::error::Error>> {
+pub fn parse_optional_listen_addr(s: &str) -> Result<Option<SocketAddr>, Box<dyn Error>> {
     let trimmed = s.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
         return Ok(None);
@@ -58,7 +63,7 @@ impl Args {
         let Some(path) = self.config_file.as_ref() else {
             return Ok(None);
         };
-        let contents = std::fs::read_to_string(path)
+        let contents = fs::read_to_string(path)
             .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
         let file: FileConfig = toml::from_str(&contents)
             .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
@@ -94,7 +99,7 @@ impl Args {
             let mut addr = self.listen_addr;
             addr.set_port(DEFAULT_CONTROLLER_PORT);
             if self.config_file.is_some() {
-                addr.set_ip(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+                addr.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
             }
             addr
         })
@@ -107,20 +112,20 @@ impl Args {
         node_id: u64,
         metrics_listen_addr: Option<SocketAddr>,
         client_metrics_otlp_endpoint: Option<String>,
-        client_metrics_otlp_protocol: krabka_broker::telemetry::OtlpProtocol,
+        client_metrics_otlp_protocol: OtlpProtocol,
     ) -> BrokerConfig {
         BrokerConfig {
             broker_id: self.broker_id,
             listen_addr: self.listen_addr,
             advertised_listener,
-            log_dir: std::mem::take(&mut self.log_dir),
-            extra_log_dirs: std::mem::take(&mut self.extra_log_dirs),
+            log_dir: mem::take(&mut self.log_dir),
+            extra_log_dirs: mem::take(&mut self.extra_log_dirs),
             metadata_log_dir: self.metadata_log_dir.take(),
             log_config: LogConfig::default(),
             node_id: krabka_broker::NodeId(node_id),
             controller_listen_addr,
-            controller_quorum_voters: std::mem::take(&mut self.controller_quorum_voters),
-            bootstrap_servers: std::mem::take(&mut self.controller_bootstrap_servers),
+            controller_quorum_voters: mem::take(&mut self.controller_quorum_voters),
+            bootstrap_servers: mem::take(&mut self.controller_bootstrap_servers),
             directory_id: uuid::Uuid::nil(),
             auto_join: self.controller_auto_join,
             bootstrap_mode: BootstrapMode::Bootstrap,
@@ -141,38 +146,38 @@ impl Args {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::test_support::env_guard, assert2::assert, clap::Parser as _};
+    use {
+        super::*,
+        crate::test_support::env_guard,
+        assert2::assert,
+        clap::Parser as _,
+        krabka_broker::{config::NodeRole, telemetry::OtlpProtocol},
+        std::iter,
+    };
 
     #[test]
     fn parse_roles_arg_maps_strings() {
         assert!(
-            parse_roles_arg(&["controller".to_string(), "broker".to_string()]).unwrap()
-                == vec![
-                    krabka_broker::config::NodeRole::Controller,
-                    krabka_broker::config::NodeRole::Broker
-                ]
+            parse_roles_arg(&["controller".to_owned(), "broker".to_owned()]).unwrap()
+                == vec![NodeRole::Controller, NodeRole::Broker]
         );
     }
 
     #[test]
     fn parse_roles_arg_rejects_unknown() {
-        assert!(parse_roles_arg(&["nope".to_string()]).is_err());
+        assert!(parse_roles_arg(&["nope".to_owned()]).is_err());
     }
 
     #[test]
     fn parse_roles_arg_accepts_witness_case_insensitively() {
         assert!(
             parse_roles_arg(&[
-                "BROKER".to_string(),
-                "Controller".to_string(),
-                "WiTnEsS".to_string(),
+                "BROKER".to_owned(),
+                "Controller".to_owned(),
+                "WiTnEsS".to_owned(),
             ])
             .unwrap()
-                == vec![
-                    krabka_broker::config::NodeRole::Broker,
-                    krabka_broker::config::NodeRole::Controller,
-                    krabka_broker::config::NodeRole::Witness
-                ]
+                == vec![NodeRole::Broker, NodeRole::Controller, NodeRole::Witness]
         );
     }
 
@@ -192,7 +197,7 @@ mod tests {
             7,
             None,
             None,
-            krabka_broker::telemetry::OtlpProtocol::Grpc,
+            OtlpProtocol::Grpc,
         );
 
         assert!(
@@ -251,7 +256,7 @@ mod tests {
         } in cases
         {
             let args =
-                Args::try_parse_from(std::iter::once("krabka-broker").chain(flags.iter().copied()))
+                Args::try_parse_from(iter::once("krabka-broker").chain(flags.iter().copied()))
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
             let expected: SocketAddr = expected.parse().unwrap();
             assert!(args.resolved_controller_listen_addr() == expected, "{name}");
@@ -267,7 +272,7 @@ mod tests {
             3,
             None,
             None,
-            krabka_broker::telemetry::OtlpProtocol::Grpc,
+            OtlpProtocol::Grpc,
         );
 
         assert!(config.controller_quorum_voters.is_empty());

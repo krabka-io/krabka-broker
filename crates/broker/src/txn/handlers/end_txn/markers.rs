@@ -21,11 +21,13 @@ use {
             state::{TopicPartition, TxnEntry},
         },
     },
+    futures_util::future::join_all,
     krabka_metadata::{MetadataImage, NodeId},
     krabka_security::ListenerProtocol,
     std::{
         collections::HashMap,
         sync::{Arc, atomic::Ordering},
+        time::Instant,
     },
 };
 
@@ -47,7 +49,7 @@ pub(super) enum MarkerFanOutOutcome {
 
 /// What one marker fan-out attempt achieved.
 #[derive(Debug, Default)]
-pub(crate) struct MarkerFanOut {
+pub struct MarkerFanOut {
     /// The partitions whose marker is committed, those whose leader answered
     /// `UNSUPPORTED_FOR_MESSAGE_FORMAT` or `UNSUPPORTED_VERSION`, and those
     /// that no longer exist and so need none. Kafka's
@@ -125,7 +127,7 @@ pub(super) async fn dispatch_transaction_markers(
 /// time, as Kafka's `TransactionMarkerChannelManager` sends to every broker at
 /// once. Each one waits for its markers to commit.
 #[derive(Clone, Copy)]
-pub(crate) struct MarkerDispatchContext<'a> {
+pub struct MarkerDispatchContext<'a> {
     pub(crate) node_id: NodeId,
     pub(crate) coordinator_epoch: i32,
     pub(crate) image: &'a MetadataImage,
@@ -133,12 +135,12 @@ pub(crate) struct MarkerDispatchContext<'a> {
     pub(crate) inter_broker_protocol: ListenerProtocol,
     pub(crate) inter_broker_listener_name: &'a str,
     pub(crate) inter_broker_server_name: &'a str,
-    pub(crate) group_coordinator: Option<&'a std::sync::Arc<GroupCoordinator>>,
+    pub(crate) group_coordinator: Option<&'a Arc<GroupCoordinator>>,
 }
 
-pub(crate) async fn dispatch_markers(
+pub async fn dispatch_markers(
     context: MarkerDispatchContext<'_>,
-    partitions: &std::sync::Arc<PartitionRegistry>,
+    partitions: &Arc<PartitionRegistry>,
     entry: &TxnEntry,
     marker_type: MarkerType,
 ) -> MarkerFanOut {
@@ -204,7 +206,7 @@ pub(crate) async fn dispatch_markers(
     // caller sees, so a fenced generation still cancels the whole attempt.
     let (local, remote) = tokio::join!(
         write_local_markers(node_id, context.group_coordinator, marker, local),
-        futures_util::future::join_all(by_leader.iter().map(|(leader, tps)| {
+        join_all(by_leader.iter().map(|(leader, tps)| {
             send_write_txn_markers(context, *leader, entry, marker_type, tps)
         })),
     );
@@ -222,7 +224,7 @@ pub(crate) async fn dispatch_markers(
 /// through `WriteTxnMarkers`. That handler appends every marker first and
 /// waits for all of them under one `DelayedProduce`, so one timeout bounds the
 /// whole request. A partition joins `written` only when its marker commits.
-pub(crate) async fn write_local_markers(
+pub async fn write_local_markers(
     node_id: NodeId,
     group_coordinator: Option<&Arc<GroupCoordinator>>,
     marker: MarkerAppend,
@@ -236,8 +238,8 @@ pub(crate) async fn write_local_markers(
             Err(error) => outcome.fail(error),
         }
     }
-    let deadline = std::time::Instant::now() + MARKER_COMMIT_TIMEOUT;
-    let committed = futures_util::future::join_all(
+    let deadline = Instant::now() + MARKER_COMMIT_TIMEOUT;
+    let committed = join_all(
         pending
             .into_iter()
             .map(|(tp, appended)| async move { (tp, appended.committed(deadline).await) }),
@@ -259,13 +261,10 @@ pub(crate) async fn write_local_markers(
 /// fenced partition and throws on the first unexpected one; either way the
 /// attempt does not retry.
 fn record_worse_failure(worst: &mut Option<BrokerError>, error: BrokerError) {
-    let replace = match worst {
-        None => true,
-        Some(existing) => {
-            failure_severity(classify_marker_failure(&error))
-                > failure_severity(classify_marker_failure(existing))
-        }
-    };
+    let replace = worst.as_ref().is_none_or(|existing| {
+        failure_severity(classify_marker_failure(&error))
+            > failure_severity(classify_marker_failure(existing))
+    });
     if replace {
         *worst = Some(error);
     }
@@ -313,7 +312,7 @@ mod tests {
     async fn marker_dispatch_skips_deleted_partition() {
         let image = MetadataImage::default();
         let client = plaintext_client();
-        let partitions = std::sync::Arc::new(PartitionRegistry::new());
+        let partitions = Arc::new(PartitionRegistry::new());
         let mut entry = marker_entry();
         entry.partitions.insert(tps().remove(0));
 
@@ -336,11 +335,11 @@ mod tests {
 
         let image = MetadataImage::default();
         let client = plaintext_client();
-        let partitions = std::sync::Arc::new(PartitionRegistry::new());
+        let partitions = Arc::new(PartitionRegistry::new());
         let dir = tempfile::tempdir().unwrap();
         let part = open_partition().log_dir(dir.path()).topic("t").call();
         part.install_leader_change(2, 0).await;
-        partitions.insert("t".into(), PartitionIndex(0), part.clone());
+        partitions.insert("t".into(), PartitionIndex(0), Arc::clone(&part));
         let mut entry = marker_entry();
         let target_tp = tps().remove(0);
         entry.partitions.insert(target_tp);
@@ -402,14 +401,14 @@ mod tests {
         ));
 
         let client = plaintext_client();
-        let partitions = std::sync::Arc::new(PartitionRegistry::new());
+        let partitions = Arc::new(PartitionRegistry::new());
         let dir = tempfile::tempdir().unwrap();
         let local_partition = open_partition()
             .log_dir(dir.path())
             .topic("local-topic")
             .call();
         local_partition.install_leader_change(1, 0).await;
-        partitions.insert("local-topic".into(), PIdx(0), local_partition.clone());
+        partitions.insert("local-topic".into(), PIdx(0), Arc::clone(&local_partition));
 
         let mut entry = marker_entry();
         entry.partitions.insert(TopicPartition {
@@ -487,7 +486,7 @@ mod tests {
         let mut actual = Vec::new();
         let mut expected = Vec::new();
         for (case, catches_up, written, failure) in cases {
-            let partitions = std::sync::Arc::new(PartitionRegistry::new());
+            let partitions = Arc::new(PartitionRegistry::new());
             let dir = tempfile::tempdir().expect("tempdir");
             let part = open_partition().log_dir(dir.path()).topic("t").call();
             part.install_leader_change(1, 0).await;
@@ -495,12 +494,12 @@ mod tests {
             // zero.
             part.install_isr(&[NodeId(1), NodeId(2)], &[NodeId(1), NodeId(2)], NodeId(1))
                 .await;
-            partitions.insert("t".into(), PartitionIndex(0), part.clone());
+            partitions.insert("t".into(), PartitionIndex(0), Arc::clone(&part));
             let mut entry = marker_entry();
             entry.partitions.insert(tps().remove(0));
 
             let change = {
-                let part = part.clone();
+                let part = Arc::clone(&part);
                 tokio::spawn(async move {
                     // The change lands once the marker waits to commit.
                     loop {

@@ -17,6 +17,7 @@ use {
     krabka_format::{ClusterId, DirectoryId, MetaProperties},
     std::{
         collections::HashMap,
+        fs,
         path::{Path, PathBuf},
     },
     uuid::Uuid,
@@ -139,7 +140,7 @@ fn read_or_mint(dir: &Path, used: &[DirectoryId], identity: Option<BrokerIdentit
             directory_id: Some(id),
             ..meta
         };
-        let written = std::fs::create_dir_all(dir).and_then(|()| meta.write(dir));
+        let written = fs::create_dir_all(dir).and_then(|()| meta.write(dir));
         if let Err(error) = written {
             tracing::warn!(dir = %dir.display(), %error, "cannot write meta.properties");
         }
@@ -210,9 +211,9 @@ mod tests {
             directory_id: Some(DirectoryId(id)),
         };
         meta.write(formatted.path()).unwrap();
-        let before = std::fs::read(formatted.path().join(krabka_format::META_PROPERTIES)).unwrap();
+        let before = fs::read(formatted.path().join(krabka_format::META_PROPERTIES)).unwrap();
         let unreadable = tempdir().unwrap();
-        std::fs::write(
+        fs::write(
             unreadable.path().join(krabka_format::META_PROPERTIES),
             "version=one\n",
         )
@@ -225,11 +226,9 @@ mod tests {
         let ids = LogDirIds::provision(&dirs, CLUSTER, NodeId(4));
         check!(ids.id_for(formatted.path()) == Some(id));
         check!(ids.id_for(unreadable.path()).is_some());
+        check!(fs::read(formatted.path().join(krabka_format::META_PROPERTIES)).unwrap() == before);
         check!(
-            std::fs::read(formatted.path().join(krabka_format::META_PROPERTIES)).unwrap() == before
-        );
-        check!(
-            std::fs::read(unreadable.path().join(krabka_format::META_PROPERTIES)).unwrap()
+            fs::read(unreadable.path().join(krabka_format::META_PROPERTIES)).unwrap()
                 == b"version=one\n"
         );
     }

@@ -22,8 +22,11 @@ use {
     },
     krabka_ids::Offset,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, mebibytes},
+    rustix::fs::{FallocateFlags, fallocate},
     std::{
-        fs::File,
+        fs::{self, File},
+        io::{self, ErrorKind},
+        os::unix::fs::MetadataExt,
         path::Path,
         sync::{Arc, Mutex},
     },
@@ -46,26 +49,26 @@ struct Recorder {
 }
 
 impl LogIo for Recorder {
-    fn reserve(&self, _file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+    fn reserve(&self, _file: &File, offset: u64, len: u64) -> io::Result<()> {
         self.requests
             .lock()
             .unwrap()
             .push(Request::Reserve { offset, len });
         if self.refuse {
-            return Err(std::io::ErrorKind::Unsupported.into());
+            return Err(ErrorKind::Unsupported.into());
         }
         Ok(())
     }
 
-    fn release(&self, _file: &File, len: u64) -> std::io::Result<()> {
+    fn release(&self, _file: &File, len: u64) -> io::Result<()> {
         self.requests.lock().unwrap().push(Request::Release { len });
         Ok(())
     }
 
     /// No `O_DIRECT` here: these cases are about the reservation alone, and
     /// `direct_writes` covers the writes.
-    fn open_direct(&self, _path: &Path) -> std::io::Result<DirectFile> {
-        Err(std::io::ErrorKind::Unsupported.into())
+    fn open_direct(&self, _path: &Path) -> io::Result<DirectFile> {
+        Err(ErrorKind::Unsupported.into())
     }
 }
 
@@ -79,16 +82,14 @@ fn preallocating() -> LogConfig {
     }
 }
 
-fn log_len(dir: &Path, base: i64) -> u64 {
-    std::fs::metadata(name::log_path(dir, base)).unwrap().len()
-}
+fn log_len(dir: &Path, base: i64) -> u64 { fs::metadata(name::log_path(dir, base)).unwrap().len() }
 
 /// A log opened without `preallocate` that turns it on afterwards, under
 /// `io`, as the broker opens a partition with its own config and only then
 /// applies the topic's.
 fn switched_on(allocation: SegmentAllocation, io: &Arc<Recorder>) -> TempLog {
     let TempLog { dir, mut log } = configured_test_log(LogConfig::default());
-    log.test_set_io(io.clone());
+    log.test_set_io(Arc::<Recorder>::clone(io));
     log.set_config(LogConfig {
         segment_allocation: allocation,
         ..preallocating()
@@ -209,8 +210,8 @@ fn a_truncated_segment_takes_its_reservation_again() {
 /// The kernel's side, on a real file: what a segment occupies on disk.
 #[cfg(target_os = "linux")]
 fn allocated(dir: &Path, base: i64) -> u64 {
-    let metadata = std::fs::metadata(name::log_path(dir, base)).unwrap();
-    std::os::unix::fs::MetadataExt::blocks(&metadata) * 512
+    let metadata = fs::metadata(name::log_path(dir, base)).unwrap();
+    MetadataExt::blocks(&metadata) * 512
 }
 
 /// On a real file the reservation takes the blocks without lengthening the
@@ -253,13 +254,7 @@ fn a_reopened_segment_gives_back_a_crashed_runs_reservation() {
         .write(true)
         .open(name::log_path(dir.path(), 0))
         .unwrap();
-    rustix::fs::fallocate(
-        &file,
-        rustix::fs::FallocateFlags::KEEP_SIZE,
-        0,
-        SEGMENT.bytes_u64(),
-    )
-    .unwrap();
+    fallocate(&file, FallocateFlags::KEEP_SIZE, 0, SEGMENT.bytes_u64()).unwrap();
 
     let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
     assert_log_end_offset(&log, Offset(3));

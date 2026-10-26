@@ -35,8 +35,9 @@ use {
     krabka_protocol::{
         owned::{
             produce_response::ProduceResponse,
+            share_acknowledge_request,
             share_fetch_request::{
-                AcknowledgementBatch, FetchPartition, FetchTopic, ShareFetchRequest,
+                AcknowledgementBatch, FetchPartition, FetchTopic, MAX_VERSION, ShareFetchRequest,
             },
             share_fetch_response::{PartitionData, ShareFetchResponse},
         },
@@ -44,7 +45,8 @@ use {
         records::{Record, RecordBatch, RecordsPayload},
     },
     krabka_units::{ByteSize, convert::ByteSizeExt as _, secs},
-    std::sync::Arc,
+    std::{sync::Arc, time::Duration},
+    tokio::time,
 };
 
 /// The number of batches that each topic holds.
@@ -153,6 +155,7 @@ pub(super) fn batch_size(broker: &BrokerHandle, topic: &str) -> i32 {
     let read = log
         .read_raw(Offset(0), Offset(1), ByteSize::from_bytes(0))
         .expect("read the first batch");
+    drop(log);
     i32::try_from(read.total).expect("small batch")
 }
 
@@ -196,7 +199,7 @@ async fn share_fetch(
     share_fetch_wire()
         .broker(broker)
         .request(&request)
-        .version(krabka_protocol::owned::share_fetch_request::MAX_VERSION)
+        .version(MAX_VERSION)
         .user(user)
         .call()
         .await
@@ -209,7 +212,7 @@ async fn send_share_fetch(
     share_fetch_wire()
         .broker(broker)
         .request(request)
-        .version(krabka_protocol::owned::share_fetch_request::MAX_VERSION)
+        .version(MAX_VERSION)
         .call()
         .await
 }
@@ -778,7 +781,7 @@ async fn release(
         last_offset,
     }: OffsetRun,
 ) {
-    let version = krabka_protocol::owned::share_acknowledge_request::MAX_VERSION;
+    let version = share_acknowledge_request::MAX_VERSION;
     let request = acknowledge_batches_request()
         .group(
             AcknowledgementSetup::for_topic_session(group, ShareSessionEpoch(epoch), topic_id)
@@ -855,7 +858,7 @@ async fn a_batch_acquired_over_two_passes_is_carried_once() {
     request.min_bytes = 1 << 20;
     request.max_wait_ms = 1_000;
     let (response, ()) = tokio::join!(send_share_fetch(&broker, &request), async {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
         release(&broker, "g", "other", 3, topic_id, OffsetRun::new(1, 1)).await;
     });
 

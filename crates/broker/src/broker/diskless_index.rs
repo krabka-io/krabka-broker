@@ -21,6 +21,7 @@ use {
     krabka_remote_storage_topic::MetadataEventLog,
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
     std::sync::{Arc, atomic::AtomicBool},
+    tokio::sync::{Mutex, watch},
     tokio_util::sync::CancellationToken,
 };
 
@@ -56,7 +57,7 @@ pub(super) struct DisklessFlusherStartup {
     /// bootstrap is rebuilding one.
     pub(super) index_log_slot: Arc<arc_swap::ArcSwapOption<DisklessIndexLog>>,
     pub(super) partitions: Arc<PartitionRegistry>,
-    pub(super) image_rx: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
+    pub(super) image_rx: watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
     pub(super) object_store: Arc<dyn object_store::ObjectStore>,
     pub(super) node_id: krabka_metadata::NodeId,
     pub(super) broker_id: i32,
@@ -66,7 +67,7 @@ pub(super) struct DisklessFlusherStartup {
 }
 
 pub(super) async fn bootstrap_diskless_index_log(
-    cache: Arc<tokio::sync::Mutex<WalIndexCache>>,
+    cache: Arc<Mutex<WalIndexCache>>,
     config: KafkaSwapKickoff,
     flusher: DisklessFlusherStartup,
     shutdown: CancellationToken,
@@ -105,7 +106,7 @@ fn index_log_config(
 
 async fn bootstrap_from_source(
     source: &dyn IndexLogSource,
-    cache: Arc<tokio::sync::Mutex<WalIndexCache>>,
+    cache: Arc<Mutex<WalIndexCache>>,
     config: &KafkaSwapKickoff,
     flusher: &DisklessFlusherStartup,
     shutdown: &CancellationToken,
@@ -127,7 +128,7 @@ async fn bootstrap_from_source(
         match index_log {
             Ok(index_log) => {
                 tracing::info!(
-                    topic = crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
+                    topic = DISKLESS_WAL_INDEX_TOPIC,
                     "diskless WAL index projection started; flusher waits for its replay"
                 );
                 flusher
@@ -160,14 +161,14 @@ async fn bootstrap_from_source(
                     FlusherExit::ShutDown => return,
                     FlusherExit::ReplayStalled => {
                         tracing::warn!(
-                            topic = crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
+                            topic = DISKLESS_WAL_INDEX_TOPIC,
                             backoff_ms = backoff.as_millis(),
                             "diskless WAL index replay stalled; rebuilding the index log"
                         );
                     }
                     FlusherExit::ProjectionUnavailable => {
                         tracing::error!(
-                            topic = crate::diskless::index_log::DISKLESS_WAL_INDEX_TOPIC,
+                            topic = DISKLESS_WAL_INDEX_TOPIC,
                             backoff_ms = backoff.as_millis(),
                             "diskless WAL index projection became unavailable; rebuilding it"
                         );
@@ -193,30 +194,41 @@ mod tests {
             broker::rlmm::test_kickoff as kickoff_with_config,
             config::KafkaRlmmConfig,
             diskless::{
-                flusher::FlushConfig, index_log::test_support::ReplayPace,
-                wal_index::WalFlushRecord,
+                flusher::FlushConfig,
+                index_log::test_support::ReplayPace,
+                wal_index::{WalFlushRecord, WalIndexEntry},
             },
             metrics::BrokerMetrics,
         },
         assert2::assert,
+        object_store::memory::InMemory,
+        std::{
+            sync::{atomic, atomic::AtomicUsize},
+            time::Duration,
+        },
         tempfile::tempdir,
+        tokio::{
+            net::TcpListener,
+            sync::{Mutex, watch},
+            time,
+        },
     };
 
     fn test_startup(ready: Arc<AtomicBool>) -> DisklessFlusherStartup {
-        let (_image_tx, image_rx) = tokio::sync::watch::channel(Arc::new(
-            krabka_metadata::MetadataImage::new(uuid::Uuid::from_u128(1)),
-        ));
+        let (_image_tx, image_rx) = watch::channel(Arc::new(krabka_metadata::MetadataImage::new(
+            uuid::Uuid::from_u128(1),
+        )));
         DisklessFlusherStartup {
             index_log_slot: Arc::new(arc_swap::ArcSwapOption::empty()),
             partitions: Arc::new(PartitionRegistry::new()),
             image_rx,
-            object_store: Arc::new(object_store::memory::InMemory::new()),
+            object_store: Arc::new(InMemory::new()),
             node_id: krabka_raft::NodeId(7),
             broker_id: 1,
             metrics: BrokerMetrics::new(),
             flush_config: FlushConfig {
-                interval: std::time::Duration::from_millis(1),
-                index_projection_timeout: std::time::Duration::from_millis(50),
+                interval: Duration::from_millis(1),
+                index_projection_timeout: Duration::from_millis(50),
                 ..FlushConfig::default()
             },
             ready,
@@ -227,9 +239,9 @@ mod tests {
         KafkaSwapKickoff {
             cfg: KafkaRlmmConfig::default(),
             broker_id: 1,
-            bootstrap_backoff_initial: std::time::Duration::from_millis(1),
-            bootstrap_backoff_max: std::time::Duration::from_millis(5),
-            reconcile_tick: std::time::Duration::from_secs(1),
+            bootstrap_backoff_initial: Duration::from_millis(1),
+            bootstrap_backoff_max: Duration::from_millis(5),
+            reconcile_tick: Duration::from_secs(1),
         }
     }
 
@@ -258,15 +270,13 @@ mod tests {
     /// counts the attempts.
     struct StallThenHealthySource {
         inner: Arc<dyn MetadataEventLog>,
-        attempts: Arc<std::sync::atomic::AtomicUsize>,
+        attempts: Arc<AtomicUsize>,
     }
 
     #[async_trait::async_trait]
     impl IndexLogSource for StallThenHealthySource {
         async fn open(&self) -> Result<Arc<dyn MetadataEventLog>, BrokerError> {
-            let attempt = self
-                .attempts
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let attempt = self.attempts.fetch_add(1, atomic::Ordering::SeqCst);
             if attempt == 0 {
                 return Ok(PacedReplayLog::new(
                     Arc::clone(&self.inner),
@@ -289,7 +299,7 @@ mod tests {
         seed.publish_flush(&WalFlushRecord {
             object_key: "diskless-wal/1/seed.ckwl".into(),
             format_version: WalFlushRecord::FORMAT_VERSION,
-            entries: vec![crate::diskless::wal_index::WalIndexEntry {
+            entries: vec![WalIndexEntry {
                 topic_id: uuid::Uuid::from_u128(11),
                 partition: 0,
                 first_offset: 0,
@@ -302,7 +312,7 @@ mod tests {
         .await
         .unwrap();
 
-        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let attempts = Arc::new(AtomicUsize::new(0));
         let source = StallThenHealthySource {
             inner: event_log,
             attempts: Arc::clone(&attempts),
@@ -313,7 +323,7 @@ mod tests {
         let startup = test_startup(Arc::clone(&ready));
         let bootstrap = bootstrap_from_source(
             &source,
-            Arc::new(tokio::sync::Mutex::new(WalIndexCache::default())),
+            Arc::new(Mutex::new(WalIndexCache::default())),
             &kickoff,
             &startup,
             &shutdown,
@@ -322,13 +332,13 @@ mod tests {
 
         // The stalled attempt must not end the bootstrap: it reopens the log,
         // and only the second, healthy replay lets the flusher start.
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        time::timeout(Duration::from_secs(5), async {
             loop {
                 tokio::select! {
                     () = &mut bootstrap => panic!("bootstrap gave up instead of rebuilding"),
-                    () = tokio::time::sleep(std::time::Duration::from_millis(5)) => {}
+                    () = time::sleep(Duration::from_millis(5)) => {}
                 }
-                if ready.load(std::sync::atomic::Ordering::Acquire) {
+                if ready.load(atomic::Ordering::Acquire) {
                     break;
                 }
             }
@@ -336,16 +346,16 @@ mod tests {
         .await
         .expect("a stalled replay is retried on a fresh log");
 
-        assert!(attempts.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+        assert!(attempts.load(atomic::Ordering::SeqCst) >= 2);
         shutdown.cancel();
-        tokio::time::timeout(std::time::Duration::from_secs(1), bootstrap)
+        time::timeout(Duration::from_secs(1), bootstrap)
             .await
             .expect("cancelled diskless index bootstrap returns promptly");
     }
 
     #[tokio::test]
     async fn diskless_index_bootstrap_retries_until_cancelled() {
-        let dummy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dummy = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let bootstrap_addr = dummy.local_addr().unwrap().to_string();
         drop(dummy);
 
@@ -363,7 +373,7 @@ mod tests {
         };
         let shutdown = CancellationToken::new();
         let bootstrap = bootstrap_diskless_index_log(
-            Arc::new(tokio::sync::Mutex::new(WalIndexCache::default())),
+            Arc::new(Mutex::new(WalIndexCache::default())),
             kickoff,
             flusher,
             shutdown.clone(),
@@ -371,12 +381,12 @@ mod tests {
         tokio::pin!(bootstrap);
 
         assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(20), &mut bootstrap)
+            time::timeout(Duration::from_millis(20), &mut bootstrap)
                 .await
                 .is_err()
         );
         shutdown.cancel();
-        tokio::time::timeout(std::time::Duration::from_secs(1), bootstrap)
+        time::timeout(Duration::from_secs(1), bootstrap)
             .await
             .expect("cancelled diskless index bootstrap returns promptly");
     }

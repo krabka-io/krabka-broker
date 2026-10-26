@@ -1,4 +1,7 @@
-use {super::*, crate::list_offsets::ListOffsetsSelectionDecision, assert2::assert};
+use {
+    super::*, crate::list_offsets::ListOffsetsSelectionDecision, assert2::assert,
+    proptest::collection,
+};
 
 fn check_window(window: SparseTimestampWindow<'_>, base: i64, floor: i64, target: i64) {
     let (offsets, times, rows) = window;
@@ -60,7 +63,7 @@ fn check_tiers(
 proptest! {
     #[test]
     fn constructed_rows_and_retained_candidates_match_independent_oracles(
-        records in proptest::collection::btree_map(any::<u32>(), any::<i64>(), 0..24),
+        records in collection::btree_map(any::<u32>(), any::<i64>(), 0..24),
         target in any::<i64>(), floor in 0i64..=i64::MAX,
         base in 0i64..=i64::MAX - i64::from(u32::MAX),
         step in 1usize..8, span in 0usize..8,
@@ -71,8 +74,8 @@ proptest! {
 
     #[test]
     fn constructed_tiers_match_the_complete_retained_visible_union(
-        remote in proptest::collection::btree_map(0u32..1000, any::<i64>(), 0..24),
-        local in proptest::collection::btree_map(0u32..1000, any::<i64>(), 0..24),
+        remote in collection::btree_map(0u32..1000, any::<i64>(), 0..24),
+        local in collection::btree_map(0u32..1000, any::<i64>(), 0..24),
         bases in (0i64..100, 0i64..100), target in 0i64..=i64::MAX,
         floor in 0i64..1200, bound in 0i64..1200, epoch in -1i32..=i32::MAX,
         step in 1usize..8, span in 0usize..8,

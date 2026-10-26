@@ -29,7 +29,7 @@ use {
 /// proposal lives in the metadata log at all: the approval and the transition
 /// it authorizes commit together, so a crash between them cannot spend one
 /// approval twice.
-pub(crate) struct GatedBatch {
+pub struct GatedBatch {
     /// The gated transition every queued event records.
     action: BreakGlassAction,
     /// The `Applied` reason of the event that durably admits a transition
@@ -115,16 +115,16 @@ impl GatedBatch {
     /// the committed reason when `failure` is `None`, and a refusal carrying
     /// the submit error otherwise.
     fn outcome<'a>(&self, failure: Option<&'a str>) -> AppendOutcome<'a> {
-        match failure {
-            None => AppendOutcome {
+        failure.map_or(
+            AppendOutcome {
                 phase: PrivilegedPhase::Applied,
                 reason: self.committed_reason,
             },
-            Some(error) => AppendOutcome {
+            |error| AppendOutcome {
                 phase: PrivilegedPhase::Refused,
                 reason: error,
             },
-        }
+        )
     }
 
     /// Audit every transition this append carried.

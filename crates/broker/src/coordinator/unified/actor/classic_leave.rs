@@ -180,13 +180,13 @@ fn resolve_consumer_classic_leave(
                     None => (None, codes::UNKNOWN_MEMBER_ID),
                 };
                 if let Some(resolved) = resolved
-                    && seen.insert(resolved.to_string())
+                    && seen.insert(resolved.to_owned())
                 {
-                    removed.push(resolved.to_string());
+                    removed.push(resolved.to_owned());
                 }
                 MemberResponse {
-                    member_id: member_id.to_string(),
-                    group_instance_id: instance_id.map(str::to_string),
+                    member_id: member_id.to_owned(),
+                    group_instance_id: instance_id.map(str::to_owned),
                     error_code,
                     ..Default::default()
                 }

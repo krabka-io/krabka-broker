@@ -107,7 +107,7 @@ mod wire;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::{
+pub use self::{
     resources::{effective_topic_configs, static_settings},
     wire::{
         RESOURCE_TYPE_BROKER, RESOURCE_TYPE_BROKER_LOGGER, RESOURCE_TYPE_CLIENT_METRICS,
@@ -123,15 +123,16 @@ use {
         },
     },
     crate::{broker::Broker, handlers::RequestContext},
+    std::sync::Arc,
 };
 
-pub(crate) fn handle(
+pub fn handle(
     broker: &Broker,
     req: &DescribeConfigsRequest,
     _version: i16,
     ctx: &RequestContext<'_>,
 ) -> DescribeConfigsResponse {
-    let controller = broker.controller.clone();
+    let controller = Arc::clone(&broker.controller);
 
     if let Some(results) = authz::unexpected_resource_type_results(&req.resources) {
         return DescribeConfigsResponse {

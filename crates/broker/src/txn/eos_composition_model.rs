@@ -57,9 +57,13 @@ use {
     crate::{
         handlers::fetch::{FetchWatermarks, compute_visibility_window},
         model_check::{assert_pinned_count, run_bfs},
+        txn::handlers::end_txn::{
+            completion_producer_identity, prepare_completion_identities_with_fresh,
+        },
     },
     krabka_log::{Offset, ProducerId},
     stateright::{Checker, Model, Property},
+    std::iter,
 };
 
 const TARGET_STATE_COUNT: usize = 20_000_000;
@@ -154,7 +158,7 @@ fn tstate(id: i8) -> TxnState { TxnState::from_kafka_status(id).expect("valid Tx
 fn rebuild(p: usize, pr: Prod) -> TxnEntry {
     // Per-producer pid = PID0 + index; wrap into `ProducerId` at the seam.
     let mut e = TxnEntry::new_empty(
-        "tid".to_string(),
+        "tid".to_owned(),
         ProducerId(PID0 + model_offset(p)),
         pr.epoch,
         60_000,
@@ -201,11 +205,12 @@ fn lso(log: &[Batch]) -> Offset {
             seen.push(key);
             // First occurrence of this (producer, generation) — its base offset.
             if txn_outcome(log, b.producer, b.generation).is_none() {
-                min_open = Some(min_open.map_or(model_offset(off), |m| m.min(model_offset(off))));
+                min_open =
+                    Some(min_open.map_or_else(|| model_offset(off), |m| m.min(model_offset(off))));
             }
         }
     }
-    Offset(min_open.unwrap_or(model_offset(log.len())))
+    Offset(min_open.unwrap_or_else(|| model_offset(log.len())))
 }
 
 /// The exclusive offset a `read_committed` consumer may see.
@@ -325,14 +330,14 @@ impl Model for EosModel {
                 let Ok((prepare, complete)) = decide_phase1_transition(&mut entry, commit) else {
                     return None; // illegal transition
                 };
-                crate::txn::handlers::end_txn::prepare_completion_identities_with_fresh(
+                prepare_completion_identities_with_fresh(
                     &mut entry,
                     TxnVersion::Verified,
                     None,
                 )
                 .expect("model epochs never reach the rotation boundary");
                 let completion =
-                    crate::txn::handlers::end_txn::completion_producer_identity(&entry);
+                    completion_producer_identity(&entry);
                 match decide_end_txn_completion(
                     &entry,
                     ProducerId(PID0 + i64::from(p)),
@@ -379,13 +384,13 @@ impl Model for EosModel {
     fn init_states(&self) -> Vec<Self::State> {
         vec![EosState {
             log: vec![],
-            prod: (0..self.producers)
-                .map(|_| Prod {
-                    state: TxnState::Empty.to_kafka_status(),
-                    epoch: 0,
-                    generation: 0,
-                })
-                .collect(),
+            prod: iter::repeat_with(|| Prod {
+                state: TxnState::Empty.to_kafka_status(),
+                epoch: 0,
+                generation: 0,
+            })
+            .take(usize::from(self.producers))
+            .collect(),
             hw: Offset(0),
             violations: Violations::default(),
         }]

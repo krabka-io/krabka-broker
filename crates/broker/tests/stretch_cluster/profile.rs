@@ -16,9 +16,9 @@ use {
 
 pub fn stretch_profile() -> StretchProfile {
     StretchProfile {
-        sites: SITES.iter().map(|site| (*site).to_string()).collect(),
-        witness_site: SITE_C.to_string(),
-        preferred_leader_site: SITE_A.to_string(),
+        sites: SITES.iter().map(|site| (*site).to_owned()).collect(),
+        witness_site: SITE_C.to_owned(),
+        preferred_leader_site: SITE_A.to_owned(),
     }
 }
 
@@ -31,7 +31,7 @@ pub fn stretch_profile() -> StretchProfile {
 /// site.
 pub fn apply_stretch_config(index: usize, cfg: &mut BrokerConfig) {
     *cfg = cfg.clone().with_internal_topics_for(3);
-    cfg.rack = Some(SITES[index].to_string());
+    cfg.rack = Some(SITES[index].to_owned());
     cfg.stretch = Some(stretch_profile());
     cfg.default_min_insync_replicas = 2;
     cfg.default_replication_factor = 3;

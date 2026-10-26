@@ -93,12 +93,12 @@ fn template() -> TokenStream {
 }
 
 /// Recurse only through generated scaffolding; inserted caller groups are opaque.
-pub(crate) struct SpliceValue {
+pub struct SpliceValue {
     pub(crate) name: String,
     pub(crate) group: Group,
 }
 
-pub(crate) fn splice(
+pub fn splice(
     scaffold: NativeTokenStream,
     values: &[SpliceValue],
     locals: &[&str],
@@ -106,16 +106,16 @@ pub(crate) fn splice(
     scaffold
         .into_iter()
         .map(|token| match token {
-            TokenTree::Ident(ref name)
-                if values.iter().any(|value| value.name == name.to_string()) =>
-            {
-                TokenTree::Group(
-                    values
-                        .iter()
-                        .find(|value| value.name == name.to_string())
-                        .unwrap()
-                        .group
-                        .clone(),
+            TokenTree::Ident(mut name) => {
+                let text = name.to_string();
+                values.iter().find(|value| value.name == text).map_or_else(
+                    || {
+                        if locals.contains(&text.as_str()) {
+                            name.set_span(proc_macro::Span::mixed_site());
+                        }
+                        TokenTree::Ident(name)
+                    },
+                    |value| TokenTree::Group(value.group.clone()),
                 )
             }
             TokenTree::Group(group) => {
@@ -124,16 +124,12 @@ pub(crate) fn splice(
                 replacement.set_span(group.span());
                 TokenTree::Group(replacement)
             }
-            TokenTree::Ident(mut name) if locals.contains(&name.to_string().as_str()) => {
-                name.set_span(proc_macro::Span::mixed_site());
-                TokenTree::Ident(name)
-            }
             token => token,
         })
         .collect()
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     validate(&input.clone().into())?;
     let groups = input.into_iter().filter_map(|token| match token {
         TokenTree::Group(group) => Some(group),

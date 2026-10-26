@@ -44,7 +44,7 @@ pub(super) fn give_back(
 /// The inclusive range of offsets that an acknowledgement covers once the SPSO
 /// has cut it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AckBounds {
+pub struct AckBounds {
     pub(crate) first: Offset,
     pub(crate) last: Offset,
 }
@@ -193,9 +193,11 @@ impl AcquisitionState {
 
     /// Splits the batch at index `i` so that `split` becomes the first offset
     /// of a new trailing batch. It does nothing when `split` is at a
-    /// boundary.
+    /// boundary, or when there is no batch at `i`.
     pub(super) fn split_at(&mut self, i: usize, split: Offset) {
-        let b = &self.batches[i];
+        let Some(b) = self.batches.get_mut(i) else {
+            return;
+        };
         if split <= b.first_offset || split > b.last_offset {
             return;
         }
@@ -207,7 +209,7 @@ impl AcquisitionState {
             acquired_by: b.acquired_by.clone(),
             lock_deadline: b.lock_deadline,
         };
-        self.batches[i].last_offset = split - 1;
+        b.last_offset = split - 1;
         self.batches.insert(i + 1, tail);
     }
 

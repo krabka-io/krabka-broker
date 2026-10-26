@@ -20,6 +20,7 @@ use {
         },
     },
     assert2::{assert, check},
+    krabka_protocol::owned::share_fetch_response::PartitionData,
 };
 
 /// Acquire 3 records, Accept them all, and observe the SPSO advance. The test
@@ -182,7 +183,7 @@ async fn reject_archives() {
 
 struct AcquiredPair {
     fixture: ConsumptionFixture,
-    row: krabka_protocol::owned::share_fetch_response::PartitionData,
+    row: PartitionData,
 }
 
 async fn acquired_pair() -> AcquiredPair {
@@ -195,7 +196,7 @@ async fn acquire_both(
     client: &krabka_client_core::Client,
     member: &str,
     tid: uuid::Uuid,
-) -> krabka_protocol::owned::share_fetch_response::PartitionData {
+) -> PartitionData {
     let row = fetch_until_acquired(client, ShareSessionSetup::opening(member, tid)).await;
     assert!(acquired_count(&row) == 2, "acquire both offsets");
     row

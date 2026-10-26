@@ -114,7 +114,7 @@ use {
 ///
 /// It borrows the image the batch was computed against, so the "before" side
 /// of every rule is the partition as the controller saw it.
-pub(crate) struct ElrPublisher<'a> {
+pub struct ElrPublisher<'a> {
     image: &'a MetadataImage,
     /// Kafka's `uncleanShutdownReplicas`: ids the batch may not derive back
     /// into an eligible set, whatever the ISR it is leaving says.
@@ -303,7 +303,7 @@ fn changed_record(
         return None;
     }
     Some(MetadataRecord::V1PartitionElr(PartitionElrRecord {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         partition,
         eligible_leader_replicas: metadata_node_ids(&after.eligible_leader_replicas),
         last_known_elr: metadata_node_ids(&after.last_known_elr),
@@ -382,9 +382,10 @@ fn coalesce_partition_state(image: &MetadataImage, changes: &mut Vec<MetadataRec
                     });
             }
             MetadataRecord::V1PartitionUpdate(update) => {
-                update.eligible_leader_replicas =
-                    state.eligible.or(update.eligible_leader_replicas.take());
-                update.last_known_elr = state.last_known.or(update.last_known_elr.take());
+                update.eligible_leader_replicas = state
+                    .eligible
+                    .or_else(|| update.eligible_leader_replicas.take());
+                update.last_known_elr = state.last_known.or_else(|| update.last_known_elr.take());
                 update.recovery_state = state.recovery.or(update.recovery_state);
             }
             _ => unreachable!(),
@@ -479,7 +480,7 @@ impl<'a> Batch<'a> {
 /// drives it directly: it is the one seam where the model can run the real
 /// rule over a partition whose per-replica logs and committed prefix it also
 /// holds.
-pub(crate) fn next_partition_elr(
+pub fn next_partition_elr(
     image: &MetadataImage,
     previous: Option<&PartitionRecord>,
     next: &PartitionRecord,
@@ -497,7 +498,7 @@ pub(crate) fn next_partition_elr(
 /// ELR that names that leader is published: the same value Kafka writes the
 /// first time a partition becomes leaderless, and the one it keeps while the
 /// partition stays that way.
-pub(crate) fn leaderless_partition_elr(
+pub fn leaderless_partition_elr(
     image: &MetadataImage,
     previous: &PartitionRecord,
     isr: &[krabka_metadata::NodeId],

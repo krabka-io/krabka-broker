@@ -29,6 +29,7 @@
 //! raises `RecordTooLargeException`. So [`wire::batch_of_wire_len`] builds a
 //! batch of an exact encoded length rather than an approximate one, and the
 //! cases sit on `cap` and `cap + 1` rather than somewhere either side.
+#![cfg(test)]
 
 mod support;
 

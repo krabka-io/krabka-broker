@@ -34,15 +34,15 @@ use {
         snapshot::SnapshotReader,
     },
     krabka_ids::Offset,
-    krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord},
+    krabka_metadata::{MetadataImage, MetadataRecord, VotersRecord, voters::VoterSet},
     krabka_units::{
         fmt::Human as _,
         prelude::{ByteSize, Time},
     },
-    std::{collections::BTreeMap, path::PathBuf, sync::Arc},
+    std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc, time::SystemTime},
     tokio::{
         sync::{mpsc, watch},
-        time::Instant,
+        time::{Duration, Instant},
     },
     uuid::Uuid,
 };
@@ -69,13 +69,12 @@ impl KraftController {
     /// drop). `data_dir` is where the engine writes the quorum-state file and
     /// checkpoints.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if constructing a fresh controller unexpectedly requires
-    /// downgrade-checkpoint recovery. Fresh controllers have no recovered
-    /// downgrade boundary, so this indicates an internal invariant violation.
-    #[must_use]
-    pub fn spawn(config: KraftConfig, log: KraftLog, data_dir: PathBuf) -> Self {
+    /// Returns an error if starting the engine fails. A fresh controller has
+    /// no recovered downgrade boundary, so it needs no downgrade-checkpoint
+    /// recovery.
+    pub fn spawn(config: KraftConfig, log: KraftLog, data_dir: PathBuf) -> Result<Self, RaftError> {
         let cluster_id = config.cluster_id;
         let image = MetadataImage::new(cluster_id);
         Self::spawn_with_image(config, log, data_dir, RecoveredMetadata {
@@ -86,7 +85,6 @@ impl KraftController {
             downgrade_snapshot_pending: None,
             features_epoch: -1,
         })
-        .expect("fresh controller cannot have a pending downgrade checkpoint")
     }
 
     /// Spawn the engine starting from an already-recovered [`MetadataImage`]
@@ -108,7 +106,6 @@ impl KraftController {
         } = recovered;
         let KraftConfig {
             me,
-            cluster_id: _,
             directory_id,
             mut initial_state,
             timeouts,
@@ -124,6 +121,7 @@ impl KraftController {
             metadata_log,
             activation,
             event_queue_recorder,
+            ..
         } = config;
 
         // Every record in a cleanly reopened log is committed. Recover the
@@ -228,8 +226,7 @@ impl KraftController {
             last_snapshot_at_ms: 0,
             bytes_since_snapshot: 0,
             snapshot_job: None,
-            #[cfg(test)]
-            snapshot_write_delay: tokio::time::Duration::ZERO,
+            snapshot_write_delay: Duration::ZERO,
             downgrade_snapshot_pending,
             #[cfg(test)]
             downgrade_snapshot_failures_remaining: 0,
@@ -239,7 +236,7 @@ impl KraftController {
             directory_id,
             observers: BTreeMap::new(),
             fetch_purgatory: Vec::new(),
-            wall_clock_base: std::time::SystemTime::now(),
+            wall_clock_base: SystemTime::now(),
             leader_reported_hwm: initial_hwm,
             pending_reconfig: None,
             activation,
@@ -302,7 +299,7 @@ impl KraftController {
         me: NodeId,
         cluster_id: Uuid,
         directory_id: Uuid,
-        bootstrap_voters: krabka_metadata::voters::VoterSet,
+        bootstrap_voters: VoterSet,
         timeouts: QuorumTimeouts,
         heartbeat_interval: Option<Time>,
         controller_fetch_miss_limit: ControllerFetchMissLimit,
@@ -318,7 +315,7 @@ impl KraftController {
         event_queue_recorder: Arc<dyn EventQueueRecorder>,
         validate_image: impl Fn(&MetadataImage) -> Result<(), RaftError>,
     ) -> Result<Self, RaftError> {
-        std::fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
+        fs::create_dir_all(&data_dir).map_err(krabka_log::LogError::Io)?;
         let log = KraftLog::open(&data_dir, &metadata_log)?;
 
         // Recover the image from the checkpoint plus only the durable committed

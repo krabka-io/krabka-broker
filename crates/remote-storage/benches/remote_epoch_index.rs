@@ -20,17 +20,20 @@
 //! one transition holds the manager's mutex, which `transition` measures.
 
 use {
-    assert2::assert,
-    criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main},
+    criterion::{
+        BatchSize, BenchmarkGroup, BenchmarkId, Criterion, black_box, measurement::WallTime,
+    },
     krabka_ids::LeaderEpoch,
     krabka_remote_storage::{
         InmemoryRemoteLogMetadataManager, PartitionDump, RemoteLogMetadataManager,
         RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
         RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState, RlmmCacheDump, TopicIdPartition,
     },
-    std::collections::BTreeMap,
+    std::{cell::RefCell, collections::BTreeMap},
     uuid::Uuid,
 };
+
+krabka_macros::bench_failures!();
 
 /// Offsets per segment.
 const SEGMENT_SPAN: i64 = 100;
@@ -40,10 +43,10 @@ const SEGMENTS_PER_EPOCH: u64 = 16;
 fn partition() -> TopicIdPartition { TopicIdPartition::new(Uuid::from_u128(1), "bench", 0) }
 
 /// The `index`th segment of the log, in `CopySegmentStarted`.
-fn segment(index: u64) -> RemoteLogSegmentMetadata {
-    let start = i64::try_from(index).expect("index fits i64") * SEGMENT_SPAN;
-    let epoch = LeaderEpoch(i32::try_from(index / SEGMENTS_PER_EPOCH).expect("epoch fits i32"));
-    RemoteLogSegmentMetadata::new(
+fn segment(index: u64) -> BenchResult<RemoteLogSegmentMetadata> {
+    let start = i64::try_from(index)? * SEGMENT_SPAN;
+    let epoch = LeaderEpoch(i32::try_from(index / SEGMENTS_PER_EPOCH)?);
+    Ok(RemoteLogSegmentMetadata::new(
         RemoteLogSegmentId::new(partition(), Uuid::from_u128(u128::from(index) + 1_000)),
         start,
         start + SEGMENT_SPAN - 1,
@@ -55,8 +58,7 @@ fn segment(index: u64) -> RemoteLogSegmentMetadata {
             RemoteLogSegmentState::CopySegmentStarted,
             BTreeMap::from([(epoch, start)]),
         ),
-    )
-    .expect("valid segment")
+    )?)
 }
 
 fn transition(index: u64, state: RemoteLogSegmentState) -> RemoteLogSegmentMetadataUpdate {
@@ -72,93 +74,91 @@ fn transition(index: u64, state: RemoteLogSegmentState) -> RemoteLogSegmentMetad
     }
 }
 
-fn add_finished(manager: &InmemoryRemoteLogMetadataManager, index: u64) {
-    manager
-        .add_remote_log_segment_metadata(segment(index))
-        .expect("add");
-    manager
-        .update_remote_log_segment_metadata(transition(
-            index,
-            RemoteLogSegmentState::CopySegmentFinished,
-        ))
-        .expect("finish");
+fn add_finished(manager: &InmemoryRemoteLogMetadataManager, index: u64) -> BenchResult {
+    manager.add_remote_log_segment_metadata(segment(index)?)?;
+    manager.update_remote_log_segment_metadata(transition(
+        index,
+        RemoteLogSegmentState::CopySegmentFinished,
+    ))?;
+    Ok(())
 }
 
 /// A snapshot dump of a partition that retains `retained` finished segments.
-fn retained_dump(retained: u64) -> RlmmCacheDump {
+fn retained_dump(retained: u64) -> BenchResult<RlmmCacheDump> {
     let segments = (0..retained)
         .map(|index| {
-            segment(index)
-                .with_update(&transition(
-                    index,
-                    RemoteLogSegmentState::CopySegmentFinished,
-                ))
-                .expect("finish")
+            Ok(segment(index)?.with_update(&transition(
+                index,
+                RemoteLogSegmentState::CopySegmentFinished,
+            ))?)
         })
-        .collect();
-    RlmmCacheDump {
+        .collect::<BenchResult<_>>()?;
+    Ok(RlmmCacheDump {
         partitions: vec![PartitionDump {
             topic_id_partition: partition(),
             segments,
             delete_state: None,
         }],
-    }
+    })
 }
 
 /// A manager whose partition retains `retained` finished segments, restored
 /// from a snapshot so that building it costs one index build.
-fn retained_manager(retained: u64) -> InmemoryRemoteLogMetadataManager {
+fn retained_manager(retained: u64) -> BenchResult<InmemoryRemoteLogMetadataManager> {
     let manager = InmemoryRemoteLogMetadataManager::new();
-    manager.import(retained_dump(retained));
-    manager
+    manager.import(retained_dump(retained)?);
+    Ok(manager)
 }
 
 /// Adds segment `index` past the retained tail, finishes it, hides it and
 /// removes it, leaving the partition as it found it.
-fn lifecycle(manager: &InmemoryRemoteLogMetadataManager, index: u64) {
-    add_finished(manager, index);
+fn lifecycle(manager: &InmemoryRemoteLogMetadataManager, index: u64) -> BenchResult {
+    add_finished(manager, index)?;
     for state in [
         RemoteLogSegmentState::DeleteSegmentStarted,
         RemoteLogSegmentState::DeleteSegmentFinished,
     ] {
-        manager
-            .update_remote_log_segment_metadata(transition(index, state))
-            .expect("delete transition");
+        manager.update_remote_log_segment_metadata(transition(index, state))?;
     }
+    Ok(())
 }
 
 /// A lookup inside the middle retained segment.
-fn lookup(manager: &InmemoryRemoteLogMetadataManager, retained: u64) {
+fn lookup(manager: &InmemoryRemoteLogMetadataManager, retained: u64) -> BenchResult {
     let middle = retained / 2;
-    let epoch = LeaderEpoch(i32::try_from(middle / SEGMENTS_PER_EPOCH).expect("epoch fits i32"));
-    let offset = i64::try_from(middle).expect("index fits i64") * SEGMENT_SPAN + 7;
+    let epoch = LeaderEpoch(i32::try_from(middle / SEGMENTS_PER_EPOCH)?);
+    let offset = i64::try_from(middle)? * SEGMENT_SPAN + 7;
     let found = manager
-        .remote_log_segment_metadata(&partition(), epoch, offset)
-        .expect("lookup");
-    assert!(found.is_some(), "the middle segment is readable");
+        .remote_log_segment_metadata(&partition(), epoch, offset)?
+        .ok_or("the middle segment is not readable")?;
     black_box(found);
+    Ok(())
 }
 
 const RETAINED: [u64; 3] = [1_000, 10_000, 100_000];
 
-fn transition_cost(c: &mut Criterion) {
-    let mut group = c.benchmark_group("remote_epoch_index/transition");
+fn transition_cost(c: &mut Criterion) { run(c, "remote_epoch_index/transition", transitions); }
+
+fn transitions(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let mut failed = FirstError::default();
     group.sample_size(10);
     for retained in RETAINED {
-        let manager = retained_manager(retained);
+        let manager = retained_manager(retained)?;
         let mut next = retained;
         group.bench_function(BenchmarkId::from_parameter(retained), |b| {
             b.iter(|| {
-                lifecycle(&manager, next);
+                failed.record(lifecycle(&manager, next));
                 next += 1;
             });
         });
     }
-    group.finish();
+    failed.into_result()
 }
 
-fn replay_cost(c: &mut Criterion) {
-    let mut group = c.benchmark_group("remote_epoch_index/replay");
+fn replay_cost(c: &mut Criterion) { run(c, "remote_epoch_index/replay", replays); }
+
+fn replays(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let failed = RefCell::new(FirstError::default());
     group.sample_size(10);
     for retained in [1_000, 10_000] {
         group.bench_function(BenchmarkId::from_parameter(retained), |b| {
@@ -166,7 +166,7 @@ fn replay_cost(c: &mut Criterion) {
                 InmemoryRemoteLogMetadataManager::new,
                 |manager| {
                     for index in 0..retained {
-                        add_finished(&manager, index);
+                        failed.borrow_mut().record(add_finished(&manager, index));
                     }
                     manager
                 },
@@ -174,14 +174,15 @@ fn replay_cost(c: &mut Criterion) {
             );
         });
     }
-    group.finish();
+    failed.into_inner().into_result()
 }
 
-fn restore_cost(c: &mut Criterion) {
-    let mut group = c.benchmark_group("remote_epoch_index/restore");
+fn restore_cost(c: &mut Criterion) { run(c, "remote_epoch_index/restore", restores); }
+
+fn restores(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
     group.sample_size(10);
     for retained in RETAINED {
-        let dump = retained_dump(retained);
+        let dump = retained_dump(retained)?;
         group.bench_function(BenchmarkId::from_parameter(retained), |b| {
             b.iter_batched(
                 || (InmemoryRemoteLogMetadataManager::new(), dump.clone()),
@@ -193,25 +194,26 @@ fn restore_cost(c: &mut Criterion) {
             );
         });
     }
-    group.finish();
+    Ok(())
 }
 
-fn lookup_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group("remote_epoch_index/lookup_idle");
+fn lookup_latency(c: &mut Criterion) { run(c, "remote_epoch_index/lookup_idle", lookups); }
+
+fn lookups(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
+    let mut failed = FirstError::default();
     for retained in RETAINED {
-        let manager = retained_manager(retained);
+        let manager = retained_manager(retained)?;
         group.bench_function(BenchmarkId::from_parameter(retained), |b| {
-            b.iter(|| lookup(&manager, retained));
+            b.iter(|| failed.record(lookup(&manager, retained)));
         });
     }
-    group.finish();
+    failed.into_result()
 }
 
-criterion_group!(
-    benches,
+krabka_macros::bench_main!(
     transition_cost,
     replay_cost,
     restore_cost,
-    lookup_latency
+    lookup_latency,
+    report_failures
 );
-criterion_main!(benches);

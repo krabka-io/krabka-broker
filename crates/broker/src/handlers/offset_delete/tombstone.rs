@@ -78,7 +78,7 @@ mod tests {
             .expect("the actor is running");
         done.await.expect("the actor stopped");
 
-        let got = delete_held_offsets(&handle, vec![("t".to_string(), 0)]).await;
+        let got = delete_held_offsets(&handle, vec![("t".to_owned(), 0)]).await;
 
         check!(got == Err(codes::COORDINATOR_NOT_AVAILABLE));
         check!(log.batches().await.is_empty());

@@ -11,7 +11,7 @@ use {
     },
     bytes::Bytes,
     krabka_protocol::records::{Record, RecordBatch},
-    std::sync::Arc,
+    std::{fs, path::PathBuf, sync::Arc},
     tempfile::TempDir,
 };
 
@@ -42,7 +42,7 @@ pub(super) async fn expired_partition(
     setup: CommittedPartitionSetup<'_>,
 ) -> Arc<Partition> {
     let part_dir = partition_dir(root.path(), setup.topic, setup.partition.0);
-    std::fs::create_dir_all(&part_dir).expect("create partition dir");
+    fs::create_dir_all(&part_dir).expect("create partition dir");
     let cfg = krabka_log::LogConfig {
         segment_size: krabka_units::bytes(64),
         retention: Some(krabka_units::millis(1)),
@@ -67,7 +67,7 @@ pub(super) async fn expired_partition(
 /// The base offsets of the segment files currently on disk for `topic`.
 pub(super) fn segment_files(root: &TempDir, topic: &str) -> Vec<String> {
     let part_dir = partition_dir(root.path(), topic, 0);
-    let mut names: Vec<String> = std::fs::read_dir(&part_dir)
+    let mut names: Vec<String> = fs::read_dir(&part_dir)
         .expect("read partition dir")
         .map(|entry| entry.expect("partition dir entry").path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "log"))
@@ -101,7 +101,7 @@ pub(super) fn log_size(partition: &Partition) -> u64 {
 ///
 /// Returns the paths it blocked so a test can unblock them and watch the sweep
 /// recover.
-pub(super) fn block_segment_deletion(root: &TempDir, topic: &str) -> Vec<std::path::PathBuf> {
+pub(super) fn block_segment_deletion(root: &TempDir, topic: &str) -> Vec<PathBuf> {
     block_log_artifact_paths(
         root.path(),
         topic,

@@ -33,7 +33,7 @@ use {
 /// is a cluster operation; it is not, and must not become, an instruction to
 /// erase a compliance archive. The archived segments and their manifests
 /// outlive the topic, and the verifier reads them without any broker.
-pub(crate) async fn cascade_remote_partition_delete(
+pub async fn cascade_remote_partition_delete(
     tp: TopicIdPartition,
     broker_id: i32,
     archive: ArchiveMode,
@@ -157,7 +157,7 @@ pub(super) async fn delete_one_segment(
     match archive {
         ArchiveMode::Mutable => {
             // RSM delete (blocking).
-            let rsm_del = rsm.clone();
+            let rsm_del = Arc::clone(rsm);
             let md_del = md.clone();
             let delete_result =
                 spawn_blocking(move || rsm_del.delete_log_segment_data(&md_del)).await;
@@ -233,7 +233,7 @@ pub(super) async fn delete_one_segment(
 ///
 /// Returns the first listing or mark failure, such as a manager that is not
 /// ready yet. Segments marked before the failure stay marked.
-pub(crate) async fn mark_segments_below(
+pub async fn mark_segments_below(
     tp: &TopicIdPartition,
     floor: Offset,
     broker_id: i32,
@@ -280,7 +280,7 @@ mod tests {
         assert2::{assert, check},
         fixtures::{copy_all_exports, copy_exports, local_backends},
         krabka_remote_storage::{InmemoryRemoteLogMetadataManager, LocalTieredStorage},
-        std::ops::RangeInclusive,
+        std::{fs, ops::RangeInclusive},
         test_support::{ArchivedSegment, archived_segments, seed_segment},
     };
 
@@ -413,15 +413,15 @@ mod tests {
         let rsm: Arc<dyn RemoteStorageManager> =
             Arc::new(LocalTieredStorage::new(remote_dir.path()));
         let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
-        let rlmm: Arc<dyn RemoteLogMetadataManager> = rlmm_impl.clone();
+        let rlmm = Arc::clone(&rlmm_impl) as Arc<dyn RemoteLogMetadataManager>;
         copy_all_exports(&tier(ArchiveMode::Mutable, &rsm, &rlmm), &exports).await;
 
         cascade_remote_partition_delete(
             tp(),
             1,
             ArchiveMode::Mutable,
-            rsm.clone(),
-            rlmm.clone(),
+            Arc::clone(&rsm),
+            Arc::clone(&rlmm),
             disabled_index_cache(),
         )
         .await;
@@ -432,7 +432,7 @@ mod tests {
         // Kafka LocalTieredStorage layout:
         // <remote_dir>/<topic>-<partition>-<topic_id_base64>/.
         let part_dir = remote_dir.path().join("orders-0-AAAAAAAAAAAAAAAAAAAAAQ");
-        let entries: Vec<_> = std::fs::read_dir(&part_dir).unwrap().collect();
+        let entries: Vec<_> = fs::read_dir(&part_dir).unwrap().collect();
         assert!(entries.is_empty(), "stray remote files: {entries:?}");
         let state = dumped_delete_state(&rlmm_impl);
         assert!(state == Some(RemotePartitionDeleteState::DeletePartitionFinished));
@@ -449,7 +449,7 @@ mod tests {
             1,
             ArchiveMode::Mutable,
             rsm,
-            rlmm.clone(),
+            Arc::clone(&rlmm),
             disabled_index_cache(),
         )
         .await;
@@ -460,9 +460,9 @@ mod tests {
     #[tokio::test]
     async fn cascade_partition_delete_retains_archive_objects_but_finishes_the_lifecycle() {
         let archive = Arc::new(FakeWormArchive::new());
-        let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
+        let rsm = Arc::clone(&archive) as Arc<dyn RemoteStorageManager>;
         let rlmm_impl = Arc::new(InmemoryRemoteLogMetadataManager::new());
-        let rlmm: Arc<dyn RemoteLogMetadataManager> = rlmm_impl.clone();
+        let rlmm = Arc::clone(&rlmm_impl) as Arc<dyn RemoteLogMetadataManager>;
         let copied = copy_exports(
             &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
             fixtures::two_exports(),
@@ -475,8 +475,8 @@ mod tests {
             tp(),
             1,
             ArchiveMode::WriteOnce,
-            rsm.clone(),
-            rlmm.clone(),
+            Arc::clone(&rsm),
+            Arc::clone(&rlmm),
             disabled_index_cache(),
         )
         .await;

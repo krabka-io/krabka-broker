@@ -8,17 +8,17 @@
 //! preserve, and the `BrokerConfig` that restarts a broker on an existing log
 //! directory.
 
+pub use crate::support::{
+    client::create_topic,
+    streams::{boot_electable as boot, connect_member_client as connect, finalize_streams_version},
+    topic_id_for,
+};
 use {
     crate::{
         ERR_NONE,
         support::{
-            client::{connect as connect_client, create_topic as create_support_topic},
             heartbeat_config,
             offsets::{offset_commit_partition, offset_commit_topic},
-            streams::{
-                ElectionReadiness, boot as boot_streams,
-                finalize_streams_version as finalize_streams_version_request,
-            },
         },
     },
     assert2::assert,
@@ -28,34 +28,13 @@ use {
         owned::offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
         primitives::uuid::Uuid as WireUuid,
     },
-    std::sync::Arc,
+    std::path::PathBuf,
 };
-
-pub(crate) async fn boot() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
-    boot_streams(ElectionReadiness::BrokerElectable).await
-}
-
-pub(crate) async fn connect(bootstrap: &str) -> Arc<Client> {
-    connect_client(bootstrap, "c1").await
-}
-
-pub(crate) async fn create_topic(client: &Client, topic: &str, partitions: i32) {
-    create_support_topic(client, topic, partitions).await;
-}
-
-/// Finalizes `streams.version` at level 1, so that the heartbeat and describe
-/// handlers stop returning `UNSUPPORTED_VERSION`. `upgrade_type: 1` is
-/// UPGRADE.
-pub(crate) async fn finalize_streams_version(client: &Client) {
-    finalize_streams_version_request(client).await;
-}
-
-pub(crate) use crate::support::topic_id_for;
 
 /// Commits an offset as the streams member `member_id` at `member_epoch`, as
 /// a Streams client does. Kafka's `StreamsGroup.validateOffsetCommit` refuses
 /// a commit with no member on a group that has members.
-pub(crate) async fn commit_offset_as_member(
+pub async fn commit_offset_as_member(
     client: &Client,
     group_id: &str,
     (member_id, member_epoch): (&str, i32),
@@ -85,7 +64,7 @@ pub(crate) async fn commit_offset_as_member(
     );
 }
 
-pub(crate) fn rejoin_config(log_dir: std::path::PathBuf) -> BrokerConfig {
+pub fn rejoin_config(log_dir: PathBuf) -> BrokerConfig {
     let mut cfg = heartbeat_config(log_dir);
     cfg.bootstrap_mode = BootstrapMode::Rejoin;
     cfg

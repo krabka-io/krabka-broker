@@ -43,7 +43,7 @@ use {
     gate = cluster_alter_denied,
     refusals = Refusals::<AddRaftVoterResponse>::leader_only("add-raft-voter denied"),
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     version: ApiVersion,
     req_bytes: &[u8],
@@ -124,7 +124,7 @@ async fn probe_candidate(
         .iter()
         .find(|listener| listener.name.eq_ignore_ascii_case("CONTROLLER"))
         .or_else(|| req.listeners.first())
-        .expect("validated non-empty listeners");
+        .ok_or_else(|| unavailable("the request names no listener".to_owned()))?;
     let server_name = broker
         .config
         .controller_server_name

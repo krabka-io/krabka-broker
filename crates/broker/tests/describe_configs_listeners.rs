@@ -6,6 +6,7 @@
 //! `kafka-configs --bootstrap-controller` is the one way to it. A broker-only
 //! node opens only its data-plane listener, which `--bootstrap-server` dials. A
 //! combined node opens both, and both answer the same.
+#![cfg(test)]
 
 mod support;
 
@@ -23,8 +24,9 @@ use {
             },
         },
     },
-    std::net::SocketAddr,
+    std::{iter, net::SocketAddr},
     tempfile::TempDir,
+    tokio::net::TcpListener,
 };
 
 /// Kafka's `ConfigResource.Type.BROKER`.
@@ -61,10 +63,10 @@ struct Node {
 // broker-only node joins the quorum of `controller`.
 async fn start_node(node: NodeId, roles: &[NodeRole], controller: Option<&BrokerHandle>) -> Node {
     let dir = TempDir::new().expect("tempdir");
-    let data_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let data_listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the data-plane listener");
-    let controller_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let controller_listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the controller listener");
     let data_addr = data_listener.local_addr().expect("data-plane address");
@@ -194,7 +196,7 @@ fn named(
         read_only: matches!(setup.mutability, ConfigMutability::ReadOnly),
         config_source: STATIC_BROKER_CONFIG,
         is_sensitive: false,
-        synonyms: std::iter::once(synonym(setup.name, setup.value, STATIC_BROKER_CONFIG))
+        synonyms: iter::once(synonym(setup.name, setup.value, STATIC_BROKER_CONFIG))
             .chain(
                 setup
                     .builtin_default

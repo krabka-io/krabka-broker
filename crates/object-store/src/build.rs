@@ -1,16 +1,23 @@
 //! Construction of an `object_store::ObjectStore` handle from a config.
 
-#[cfg(not(target_family = "wasm"))]
-use crate::config::{GcsConfig, S3Config};
 #[cfg(target_family = "wasm")]
 use crate::unavailable::unavailable;
-#[cfg(not(target_family = "wasm"))]
-use object_store::{ClientOptions, RetryConfig};
 use {
     super::{error::ObjectStoreError, object_store_api as object_store},
     crate::config::ObjectStoreConfig,
-    object_store::ObjectStore,
+    object_store::{ObjectStore, memory::InMemory},
     std::sync::Arc,
+};
+#[cfg(not(target_family = "wasm"))]
+use {
+    crate::config::{GcsConfig, S3Config},
+    object_store::{
+        ClientOptions, RetryConfig,
+        aws::{AmazonS3, AmazonS3Builder, Checksum, S3ConditionalPut},
+        gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder},
+        local::LocalFileSystem,
+    },
+    std::time::Duration,
 };
 
 /// The retry budget `cfg` asks for.
@@ -19,7 +26,7 @@ use {
 /// attempts a request gets and how long the whole sequence may take, not the
 /// shape of the sleeps between them.
 #[cfg(not(target_family = "wasm"))]
-fn retry_config(max_retries: usize, retry_timeout: std::time::Duration) -> RetryConfig {
+fn retry_config(max_retries: usize, retry_timeout: Duration) -> RetryConfig {
     RetryConfig {
         backoff: object_store::BackoffConfig::default(),
         max_retries,
@@ -36,8 +43,8 @@ fn retry_config(max_retries: usize, retry_timeout: std::time::Duration) -> Retry
 fn client_options(
     base: ClientOptions,
     allow_http: bool,
-    request_timeout: std::time::Duration,
-    connect_timeout: std::time::Duration,
+    request_timeout: Duration,
+    connect_timeout: Duration,
 ) -> ClientOptions {
     base.with_allow_http(allow_http)
         .with_timeout(request_timeout)
@@ -65,7 +72,7 @@ pub fn build_object_store(
         ObjectStoreConfig::Gcs(gcs) => Ok(Arc::new(build_gcs_store(gcs)?)),
         #[cfg(not(target_family = "wasm"))]
         ObjectStoreConfig::Local { root } => {
-            let store = object_store::local::LocalFileSystem::new_with_prefix(root)
+            let store = LocalFileSystem::new_with_prefix(root)
                 .map_err(|e| ObjectStoreError::InvalidConfig(format!("local: {e}")))?;
             Ok(Arc::new(store))
         }
@@ -75,16 +82,14 @@ pub fn build_object_store(
         ObjectStoreConfig::Gcs(_) => Err(unavailable("GCS")),
         #[cfg(target_family = "wasm")]
         ObjectStoreConfig::Local { .. } => Err(unavailable("local filesystem")),
-        ObjectStoreConfig::InMemory => Ok(Arc::new(object_store::memory::InMemory::new())),
+        ObjectStoreConfig::InMemory => Ok(Arc::new(InMemory::new())),
     }
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn build_s3_store(
-    cfg: &S3Config,
-) -> Result<object_store::aws::AmazonS3, ObjectStoreError> {
+pub fn build_s3_store(cfg: &S3Config) -> Result<AmazonS3, ObjectStoreError> {
     let mut builder = krabka_macros::connection_policy!(
-        object_store::aws::AmazonS3Builder::new()
+        AmazonS3Builder::new()
             .with_bucket_name(&cfg.bucket)
             .with_region(&cfg.region)
             .with_allow_http(cfg.allow_http),
@@ -97,10 +102,10 @@ pub(crate) fn build_s3_store(
         builder = builder.with_access_key_id(k).with_secret_access_key(s);
     }
     if cfg.conditional_put {
-        builder = builder.with_conditional_put(object_store::aws::S3ConditionalPut::ETagMatch);
+        builder = builder.with_conditional_put(S3ConditionalPut::ETagMatch);
     }
     if cfg.checksum_sha256 {
-        builder = builder.with_checksum_algorithm(object_store::aws::Checksum::SHA256);
+        builder = builder.with_checksum_algorithm(Checksum::SHA256);
     }
     builder
         .build()
@@ -113,11 +118,8 @@ fn build_s3(cfg: &S3Config) -> Result<Arc<dyn ObjectStore>, ObjectStoreError> {
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn build_gcs_store(
-    cfg: &GcsConfig,
-) -> Result<object_store::gcp::GoogleCloudStorage, ObjectStoreError> {
-    let mut builder =
-        object_store::gcp::GoogleCloudStorageBuilder::new().with_bucket_name(&cfg.bucket);
+pub fn build_gcs_store(cfg: &GcsConfig) -> Result<GoogleCloudStorage, ObjectStoreError> {
+    let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(&cfg.bucket);
     if let Some(path) = &cfg.service_account_path {
         builder = builder.with_service_account_path(path);
     }
@@ -146,7 +148,12 @@ mod tests {
             test_support::{HttpListener, http_listener, round_trip, s3_config},
         },
         assert2::{assert, check},
-        object_store::ObjectStoreExt as _,
+        object_store::{ObjectStoreExt as _, path::Path},
+        std::{
+            future,
+            sync::atomic::{AtomicUsize, Ordering},
+            time::{Duration, Instant},
+        },
     };
 
     #[test]
@@ -157,7 +164,7 @@ mod tests {
     #[tokio::test]
     async fn inmemory_round_trips() {
         let store = build_object_store(&ObjectStoreConfig::InMemory).unwrap();
-        let path = object_store::path::Path::from("t/x");
+        let path = Path::from("t/x");
         let got = round_trip(&*store, &path, b"hi").await;
         assert!(&got[..] == b"hi");
     }
@@ -242,30 +249,32 @@ mod tests {
         // Hold the accepted sockets open for the length of the test: dropping
         // them would answer the request with a reset, which is not a stall.
         let server = tokio::spawn(async move {
-            let mut held = Vec::new();
             loop {
                 let Ok((socket, _)) = listener.accept().await else {
                     return;
                 };
-                held.push(socket);
+                tokio::spawn(async move {
+                    let _held = socket;
+                    future::pending::<()>().await;
+                });
             }
         });
 
         let store = build_object_store(&ObjectStoreConfig::S3(S3Config {
             max_retries: 0,
-            request_timeout: std::time::Duration::from_millis(200),
+            request_timeout: Duration::from_millis(200),
             ..s3_config("b", endpoint)
         }))
         .unwrap();
 
-        let started = std::time::Instant::now();
-        let result = store.get(&object_store::path::Path::from("stalled")).await;
+        let started = Instant::now();
+        let result = store.get(&Path::from("stalled")).await;
         let elapsed = started.elapsed();
         server.abort();
 
         assert!(result.is_err());
         check!(
-            elapsed < std::time::Duration::from_secs(5),
+            elapsed < Duration::from_secs(5),
             "a 200ms request timeout let a stalled store block for {elapsed:?}"
         );
     }
@@ -278,7 +287,7 @@ mod tests {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         let HttpListener { listener, endpoint } = http_listener().await;
-        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let attempts = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&attempts);
         let server = tokio::spawn(async move {
             loop {
@@ -296,7 +305,7 @@ mod tests {
                 if request.is_empty() {
                     continue;
                 }
-                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                counter.fetch_add(1, Ordering::SeqCst);
                 let body = "<Error><Code>SlowDown</Code><Message>Please reduce your \
                             request rate.</Message></Error>";
                 let response = format!(
@@ -311,18 +320,16 @@ mod tests {
 
         let store = build_object_store(&ObjectStoreConfig::S3(S3Config {
             max_retries: 2,
-            retry_timeout: std::time::Duration::from_secs(30),
-            request_timeout: std::time::Duration::from_secs(5),
+            retry_timeout: Duration::from_secs(30),
+            request_timeout: Duration::from_secs(5),
             ..s3_config("b", endpoint)
         }))
         .unwrap();
 
-        let result = store
-            .get(&object_store::path::Path::from("throttled"))
-            .await;
+        let result = store.get(&Path::from("throttled")).await;
         server.abort();
 
         assert!(result.is_err());
-        check!(attempts.load(std::sync::atomic::Ordering::SeqCst) == 3);
+        check!(attempts.load(Ordering::SeqCst) == 3);
     }
 }

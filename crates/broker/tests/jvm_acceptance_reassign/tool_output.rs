@@ -22,7 +22,7 @@ use {serde_json::json, std::collections::BTreeMap};
 
 /// A partition, in the `topic-index` spelling the tools print.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct TopicPartition {
+pub struct TopicPartition {
     pub(crate) topic: String,
     pub(crate) partition: i32,
 }
@@ -51,7 +51,7 @@ impl TopicPartition {
 
 /// What `kafka-leader-election` said about one partition.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum ElectionOutcome {
+pub enum ElectionOutcome {
     /// The tool moved the leadership.
     Elected,
     /// `ELECTION_NOT_NEEDED` (84): the partition was already led by the
@@ -64,7 +64,7 @@ pub(crate) enum ElectionOutcome {
 }
 
 /// Reduce a whole `kafka-leader-election` run to one outcome per partition.
-pub(crate) fn parse_election(text: &str) -> BTreeMap<TopicPartition, ElectionOutcome> {
+pub fn parse_election(text: &str) -> BTreeMap<TopicPartition, ElectionOutcome> {
     let mut outcomes = BTreeMap::new();
     for line in text.lines() {
         let line = line.trim();
@@ -106,7 +106,7 @@ pub(crate) fn parse_election(text: &str) -> BTreeMap<TopicPartition, ElectionOut
 /// plan, which is the shape this suite drives, so the marker stops before the
 /// plural `s` and the ` for: ` that follows either spelling is what the list
 /// is taken after.
-pub(crate) fn parse_cancelled(text: &str) -> Vec<TopicPartition> {
+pub fn parse_cancelled(text: &str) -> Vec<TopicPartition> {
     let mut cancelled: Vec<TopicPartition> = text
         .lines()
         .filter_map(|line| {
@@ -125,7 +125,7 @@ pub(crate) fn parse_cancelled(text: &str) -> Vec<TopicPartition> {
 
 /// One partition's replica list, as `--generate` proposes it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Assignment {
+pub struct Assignment {
     pub(crate) partition: TopicPartition,
     pub(crate) replicas: Vec<i32>,
 }
@@ -138,7 +138,7 @@ pub(crate) struct Assignment {
 /// documents themselves are parsed as JSON rather than compared as text,
 /// because neither tool promises key order and `--generate` is free to emit
 /// the partitions in any order at all.
-pub(crate) fn parse_generate(stdout: &str) -> Option<(Vec<Assignment>, Vec<Assignment>)> {
+pub fn parse_generate(stdout: &str) -> Option<(Vec<Assignment>, Vec<Assignment>)> {
     let current = json_after(stdout, "Current partition replica assignment")?;
     let proposed = json_after(stdout, "Proposed partition reassignment configuration")?;
     Some((parse_assignments(&current)?, parse_assignments(&proposed)?))
@@ -156,7 +156,7 @@ fn json_after(stdout: &str, label: &str) -> Option<String> {
 }
 
 /// Read a reassignment document into a sorted assignment list.
-pub(crate) fn parse_assignments(document: &str) -> Option<Vec<Assignment>> {
+pub fn parse_assignments(document: &str) -> Option<Vec<Assignment>> {
     let value: serde_json::Value = serde_json::from_str(document).ok()?;
     let mut assignments: Vec<Assignment> = value
         .get("partitions")?
@@ -182,7 +182,7 @@ pub(crate) fn parse_assignments(document: &str) -> Option<Vec<Assignment>> {
 }
 
 /// The `--path-to-json-file` document `kafka-leader-election` reads.
-pub(crate) fn election_json(partitions: &[TopicPartition]) -> String {
+pub fn election_json(partitions: &[TopicPartition]) -> String {
     json!({
         "partitions": partitions
             .iter()
@@ -193,7 +193,7 @@ pub(crate) fn election_json(partitions: &[TopicPartition]) -> String {
 }
 
 /// The `--topics-to-move-json-file` document `--generate` reads.
-pub(crate) fn topics_to_move_json(topics: &[&str]) -> String {
+pub fn topics_to_move_json(topics: &[&str]) -> String {
     json!({
         "topics": topics.iter().map(|topic| json!({"topic": topic})).collect::<Vec<_>>(),
         "version": 1,
@@ -203,7 +203,7 @@ pub(crate) fn topics_to_move_json(topics: &[&str]) -> String {
 
 /// The `--reassignment-json-file` document `--execute`, `--verify` and
 /// `--cancel` read.
-pub(crate) fn reassignment_json(assignments: &[Assignment]) -> String {
+pub fn reassignment_json(assignments: &[Assignment]) -> String {
     json!({
         "version": 1,
         "partitions": assignments
@@ -220,18 +220,17 @@ pub(crate) fn reassignment_json(assignments: &[Assignment]) -> String {
 
 /// Everything after `marker` on a line that has it.
 fn after<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
-    line.find(marker).map(|at| &line[at + marker.len()..])
+    line.split_once(marker).map(|(_, rest)| rest)
 }
 
 /// The fully-qualified Kafka exception class named in `text`.
 fn exception_class(text: &str) -> Option<String> {
     const PREFIX: &str = "org.apache.kafka.common.errors.";
-    let at = text.find(PREFIX)?;
-    let rest = &text[at..];
-    let end = rest[PREFIX.len()..]
-        .find(|c: char| !c.is_ascii_alphanumeric())
-        .map_or(rest.len(), |offset| PREFIX.len() + offset);
-    Some(rest[..end].to_owned())
+    let (_, after) = text.split_once(PREFIX)?;
+    let name = after
+        .split_once(|c: char| !c.is_ascii_alphanumeric())
+        .map_or(after, |(name, _)| name);
+    Some(format!("{PREFIX}{name}"))
 }
 
 #[cfg(test)]

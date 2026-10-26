@@ -136,7 +136,7 @@ pub struct FileRemoteStorageGcsConfig {
 /// is deliberate: it holds a *path* to a signing key and the key's public id,
 /// neither of which is credential material, and an operator debugging a chain
 /// needs to see which key signed it. Do not "fix" this into a redacting impl.
-#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct FileWormConfig {
     /// Path to the `PKCS#8` Ed25519 key that signs each segment manifest.
@@ -171,6 +171,7 @@ mod tests {
             file_config::{FileConfig, FileConfigError, test_support::configured_unwrap_parse},
         },
         assert2::{assert, check},
+        std::{path::PathBuf, time::Duration},
     };
 
     fn configured_s3(source: &str) -> krabka_remote_storage::S3Config {
@@ -184,12 +185,12 @@ mod tests {
     #[test]
     fn s3_config_debug_redacts_credentials() {
         let cfg = FileRemoteStorageS3Config {
-            bucket: "logs".to_string(),
-            region: "us-east-1".to_string(),
+            bucket: "logs".to_owned(),
+            region: "us-east-1".to_owned(),
             prefix: None,
             endpoint: None,
-            access_key_id: Some("AKIAEXAMPLEKEYID".to_string()),
-            secret_access_key: Some("super-secret-key-value".to_string()),
+            access_key_id: Some("AKIAEXAMPLEKEYID".to_owned()),
+            secret_access_key: Some("super-secret-key-value".to_owned()),
             allow_http: false,
             multipart_threshold: None,
             multipart_chunk_size: None,
@@ -345,10 +346,8 @@ write_only = true
         check!(
             cfg.remote_storage_worm
                 == Some(krabka_remote_storage::WormConfig {
-                    signing_key_path: Some(std::path::PathBuf::from(
-                        "/etc/krabka/worm-signing.pk8"
-                    )),
-                    signing_key_id: Some("worm-2026-q3".to_string()),
+                    signing_key_path: Some(PathBuf::from("/etc/krabka/worm-signing.pk8")),
+                    signing_key_id: Some("worm-2026-q3".to_owned()),
                     write_only: true,
                 })
         );
@@ -456,7 +455,7 @@ request_timeout = "10s"
         match cfg.remote_storage_backend {
             Some(RemoteStorageBackend::S3(s3)) => {
                 check!(s3.max_retries == 3);
-                check!(s3.request_timeout == std::time::Duration::from_secs(10));
+                check!(s3.request_timeout == Duration::from_secs(10));
                 check!(s3.retry_timeout == defaults.retry_timeout);
                 check!(s3.connect_timeout == defaults.connect_timeout);
             }
@@ -477,8 +476,8 @@ connect_timeout = "2s"
         let defaults = krabka_remote_storage::GcsConfig::default();
         match cfg.remote_storage_backend {
             Some(RemoteStorageBackend::Gcs(gcs)) => {
-                check!(gcs.retry_timeout == std::time::Duration::from_secs(45));
-                check!(gcs.connect_timeout == std::time::Duration::from_secs(2));
+                check!(gcs.retry_timeout == Duration::from_secs(45));
+                check!(gcs.connect_timeout == Duration::from_secs(2));
                 check!(gcs.max_retries == defaults.max_retries);
                 check!(gcs.request_timeout == defaults.request_timeout);
             }

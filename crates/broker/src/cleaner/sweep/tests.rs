@@ -18,7 +18,7 @@ use {
     assert2::{assert, check},
     krabka_ids::PartitionIndex,
     krabka_metadata::{MetadataRecord, PatternType},
-    std::sync::atomic::Ordering,
+    std::{fs, io::Error, iter, path::PathBuf, sync::atomic::Ordering},
     tempfile::TempDir,
 };
 
@@ -50,7 +50,7 @@ async fn hosted_compact_partition() -> HostedCompactPartition {
 /// A sweep that compaction could not finish: the paths that block it, and the
 /// metrics and uncleanable set it left behind.
 struct BlockedSweep {
-    blocked: Vec<std::path::PathBuf>,
+    blocked: Vec<PathBuf>,
     metrics: BrokerMetrics,
     uncleanable: UncleanablePartitions,
 }
@@ -440,7 +440,7 @@ async fn tick_all_accounts_a_failed_compaction_and_takes_the_log_dir_offline() {
     // The same partition, once the disk takes the write again: the sweep
     // compacts it, drops the uncleanable mark, and counts itself.
     for swap in blocked {
-        std::fs::remove_dir(&swap).expect("unblock the swap path");
+        fs::remove_dir(&swap).expect("unblock the swap path");
     }
     tick_all(&registry, None, &metrics, &mut uncleanable).await;
 
@@ -480,12 +480,12 @@ async fn tick_all_leaves_a_partition_uncleanable_for_a_record_above_the_decompre
     // append after it seals its segment.
     let mut state = 12_345_u32;
     let mut noise = |len: usize| -> Vec<u8> {
-        (0..len)
-            .map(|_| {
-                state = state.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-                u8::try_from((state >> 16) & 0xff).expect("a byte")
-            })
-            .collect()
+        iter::repeat_with(|| {
+            state = state.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            u8::try_from((state >> 16) & 0xff).expect("a byte")
+        })
+        .take(len)
+        .collect()
     };
     for (codec, value_len) in [(CompressionType::Gzip, 1_000), (CompressionType::None, 10)] {
         let mut batch = RecordBatch {
@@ -618,7 +618,7 @@ fn failure_reason_separates_a_disk_from_a_dead_writer() {
     let cases = [
         (
             "an io error from the log layer is the disk",
-            BrokerError::Log(krabka_log::LogError::Io(std::io::Error::other("EIO"))),
+            BrokerError::Log(krabka_log::LogError::Io(Error::other("EIO"))),
             CleanerFailureReason::Io,
         ),
         (

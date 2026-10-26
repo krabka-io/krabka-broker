@@ -43,6 +43,7 @@
 //! the in-container admin tools that create the groups, `groups_fixture` writes
 //! the JSON, and `groups_capture` holds the host-side call, its assertions, and
 //! the test.
+#![cfg(test)]
 
 mod support;
 

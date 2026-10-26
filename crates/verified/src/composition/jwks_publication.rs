@@ -46,7 +46,7 @@ pub(super) fn publication_trace(initial: u64, fetches: &[bool]) -> (u64, u64) {
         || forall<j: Int> 0 <= j && j < i@ ==> !fetches@[j]))]
     #[variant(fetches@.len() - i@)]
     while i < fetches.len() {
-        if fetches[i]
+        if matches!(fetches.get(i), Some(true))
             && let Some((_, committed)) = jwks_publication_generations(generation)
         {
             generation = committed;

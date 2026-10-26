@@ -18,11 +18,17 @@ use {
     krabka_raft::{NodeId, OutboundDialer, kraft::snapshot_fetch::MetadataSnapshotFetchMax},
     krabka_units::{ByteSize, Time},
     qubit_clock::Timer,
-    std::sync::{
-        Arc,
-        atomic::{AtomicI64, AtomicU64, Ordering},
+    std::{
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicI64, AtomicU64, Ordering},
+        },
     },
-    tokio::{sync::watch, task::JoinHandle},
+    tokio::{
+        sync::{Mutex, watch},
+        task::JoinHandle,
+    },
     tokio_util::sync::CancellationToken,
 };
 
@@ -70,7 +76,7 @@ pub struct ObserverConfig {
     /// the metadata log directory. The observer keeps its KIP-630 checkpoints
     /// in a subdirectory of their own under it, apart from a controller's at
     /// its top level. The `store` module says why.
-    pub data_dir: std::path::PathBuf,
+    pub data_dir: PathBuf,
     /// Records applied between the checkpoints the observer writes for itself.
     /// `0` disables them, leaving only the snapshots fetched from a controller
     /// on disk.
@@ -114,7 +120,7 @@ pub struct MetadataObserver {
     /// one: an invalid `KRaft` control record, on which Kafka halts every role.
     fatal: watch::Sender<Option<String>>,
     shutdown: CancellationToken,
-    task: tokio::sync::Mutex<Option<JoinHandle<()>>>,
+    task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl MetadataObserver {
@@ -139,7 +145,7 @@ impl MetadataObserver {
             pending_processing_max_us: AtomicU64::new(0),
             fatal: watch::channel(None).0,
             shutdown,
-            task: tokio::sync::Mutex::new(None),
+            task: Mutex::new(None),
         })
     }
 
@@ -149,7 +155,7 @@ impl MetadataObserver {
     pub fn start(config: ObserverConfig) -> Arc<Self> {
         let shutdown = CancellationToken::new();
         let observer = Self::new(config.cluster_id, shutdown.clone());
-        let task = tokio::spawn(run_loop(config, observer.clone(), shutdown));
+        let task = tokio::spawn(run_loop(config, Arc::clone(&observer), shutdown));
         if let Ok(mut guard) = observer.task.try_lock() {
             *guard = Some(task);
         }
@@ -227,7 +233,8 @@ impl MetadataObserver {
     /// Stops the fetch loop and drains the task.
     pub async fn cancel(&self) {
         self.shutdown.cancel();
-        if let Some(h) = self.task.lock().await.take() {
+        let task = self.task.lock().await.take();
+        if let Some(h) = task {
             let _ = h.await;
         }
     }
@@ -240,13 +247,14 @@ impl MetadataObserver {
 mod tests {
     use {
         super::{test_support::observer_config, *},
-        crate::test_support::RecordingDialer,
+        crate::test_support::{RecordingDialer, single_partition_topic},
         assert2::assert,
         krabka_metadata::MetadataRecord,
         krabka_raft::{BootstrapMode, Controller, ControllerConfig},
         krabka_units::millis,
-        std::time::Duration,
+        std::{sync, sync::Mutex, time::Duration},
         tempfile::TempDir,
+        tokio::{time, time::Instant},
         uuid::Uuid,
     };
 
@@ -287,34 +295,35 @@ mod tests {
             leader_rx.changed().await.unwrap();
         }
         let ctrl_addr = ctrl.controller_bound_addr();
-        ctrl.submit_change(vec![MetadataRecord::V1Topic(
-            crate::test_support::single_partition_topic("observed", Uuid::new_v4()),
-        )])
+        ctrl.submit_change(vec![MetadataRecord::V1Topic(single_partition_topic(
+            "observed",
+            Uuid::new_v4(),
+        ))])
         .await
         .expect("submit");
-        let client_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let client_ids = Arc::new(Mutex::new(Vec::new()));
 
         let observer_dir = TempDir::new().unwrap();
         let observer = MetadataObserver::start(ObserverConfig {
             voters: vec![(krabka_raft::NodeId(1), ctrl_addr.to_string())],
             dialer: Arc::new(RecordingDialer {
-                client_ids: client_ids.clone(),
+                client_ids: sync::Arc::clone(&client_ids),
             }),
             poll_interval: millis(50),
             ..observer_config(Uuid::nil(), observer_dir.path().to_path_buf())
         });
 
         let mut img_rx = observer.watch_image();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if img_rx.borrow().topic("observed").is_some() {
                 break;
             }
             assert!(
-                tokio::time::Instant::now() <= deadline,
+                Instant::now() <= deadline,
                 "observer did not replicate topic within 5s"
             );
-            let _ = tokio::time::timeout(Duration::from_millis(200), img_rx.changed()).await;
+            let _ = time::timeout(Duration::from_millis(200), img_rx.changed()).await;
         }
 
         assert!(observer.current_image().topic("observed").is_some());

@@ -201,12 +201,8 @@ mod tests {
         let records = replace_follower_throttle_with_leader(&mut image);
 
         let expected = vec![
-            record(
-                SERVING,
-                crate::throttle::LEADER_THROTTLED_RATE_KEY,
-                Some("2048"),
-            ),
-            record(SERVING, crate::throttle::FOLLOWER_THROTTLED_RATE_KEY, None),
+            record(SERVING, LEADER_THROTTLED_RATE_KEY, Some("2048")),
+            record(SERVING, FOLLOWER_THROTTLED_RATE_KEY, None),
         ];
         assert!(records == expected);
     }
@@ -377,12 +373,8 @@ mod tests {
         assert!(
             records
                 == vec![
-                    record(
-                        SERVING,
-                        crate::throttle::LEADER_THROTTLED_RATE_KEY,
-                        Some("2048")
-                    ),
-                    record(SERVING, crate::throttle::FOLLOWER_THROTTLED_RATE_KEY, None),
+                    record(SERVING, LEADER_THROTTLED_RATE_KEY, Some("2048")),
+                    record(SERVING, FOLLOWER_THROTTLED_RATE_KEY, None),
                 ]
         );
     }

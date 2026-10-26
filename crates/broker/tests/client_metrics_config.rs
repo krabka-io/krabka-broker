@@ -1,6 +1,4 @@
-// rustc 1.95 clippy::pedantic ICEs on this file (an upstream bug in
-// clippy's body-analysis pass). Disable pedantic locally; the rest of
-// the workspace still enforces the full pedantic gate.
+#![cfg(test)]
 
 //! Broker-side integration test for KIP-714 `CLIENT_METRICS` config round-trip.
 //!
@@ -120,7 +118,7 @@ async fn client_metrics_config_alter_describe_list_round_trip() {
     let describe_req = DescribeConfigsRequest {
         resources: vec![DescribeConfigsResource {
             resource_type: RESOURCE_TYPE_CLIENT_METRICS,
-            resource_name: "sub-a".to_string(),
+            resource_name: "sub-a".to_owned(),
             configuration_keys: None, // all keys
             ..Default::default()
         }],

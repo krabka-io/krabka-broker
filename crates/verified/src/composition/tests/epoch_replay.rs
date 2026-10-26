@@ -5,7 +5,7 @@ use {
     },
     crate::broker::FetchVisibility,
     assert2::assert,
-    proptest::prelude::*,
+    proptest::{collection, prelude::*},
     std::{
         collections::BTreeMap,
         ops::Bound::{Excluded, Unbounded},
@@ -135,10 +135,10 @@ fn check_replay(
 proptest! {
     #[test]
     fn epoch_replay_matches_arbitrary_history_and_window_oracles(
-        rows in proptest::collection::vec((any::<i32>(), any::<i64>()), 0..12),
+        rows in collection::vec((any::<i32>(), any::<i64>()), 0..12),
         requested in any::<i32>(), base in any::<i64>(),
         fields in any::<[i64; 5]>(), local in any::<i64>(),
-        snapshots in proptest::collection::vec(any::<i64>(), 0..16),
+        snapshots in collection::vec(any::<i64>(), 0..16),
     ) {
         let w = FetchWatermarks { log_start: fields[0], log_end: fields[1], hw: fields[2], lso: fields[3], deliverable: fields[4] };
         check_replay(&rows, requested, base, w, &snapshots, local);
@@ -146,10 +146,10 @@ proptest! {
 
     #[test]
     fn ordered_epochs_drive_selection_against_the_resolved_cut(
-        epochs in proptest::collection::btree_set(0i32..40, 0..12),
+        epochs in collection::btree_set(0i32..40, 0..12),
         requested in -3i32..44, floor in 0i64..70, local in 0i64..75,
         gates in any::<[i64; 3]>(),
-        snapshots in proptest::collection::vec(-2i64..110, 0..24),
+        snapshots in collection::vec(-2i64..110, 0..24),
     ) {
         let rows: Vec<_> = epochs.into_iter().enumerate().map(|(i, epoch)| (epoch, i64::try_from(i).expect("epoch set has at most twelve entries") * 5 + 10)).collect();
         let w = FetchWatermarks { log_start: floor, log_end: 100, hw: gates[0], lso: gates[1], deliverable: gates[2] };

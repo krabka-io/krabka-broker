@@ -14,6 +14,7 @@ use {
     },
     krabka_security::SaslMechanism,
     krabka_verified::authz::reauthentication_begins,
+    std::mem,
 };
 
 /// What the dispatcher does with a `SaslHandshake`: the response to send, and
@@ -56,7 +57,7 @@ pub fn handle_handshake(
     enabled: &[SaslMechanism],
     clock: &mut ReauthClock<'_>,
 ) -> HandshakeOutcome {
-    let enabled_names: Vec<String> = enabled.iter().map(|m| m.wire_name().to_string()).collect();
+    let enabled_names: Vec<String> = enabled.iter().map(|m| m.wire_name().to_owned()).collect();
     let requested = SaslMechanism::from_wire(&req.mechanism).filter(|m| enabled.contains(m));
     let answer = |error_code, mechanisms, close_after| HandshakeOutcome {
         response: SaslHandshakeResponse {
@@ -89,7 +90,7 @@ pub fn handle_handshake(
                         mechanism,
                         expires_at_ms,
                         authenticated_via_token,
-                    } = std::mem::replace(auth, ConnectionAuth::Anonymous)
+                    } = mem::replace(auth, ConnectionAuth::Anonymous)
                     else {
                         unreachable!("matched Authenticated above");
                     };
@@ -371,7 +372,7 @@ mod tests {
             let mut auth = start();
             let mut last_start_ms = last_start;
             let req = SaslHandshakeRequest {
-                mechanism: mechanism.to_string(),
+                mechanism: mechanism.to_owned(),
                 ..Default::default()
             };
             let outcome = handle_handshake(&req, &mut auth, &enabled, &mut ReauthClock {
@@ -379,7 +380,7 @@ mod tests {
                 last_start_ms: &mut last_start_ms,
             });
             let mechanisms = if lists_mechanisms {
-                vec!["OAUTHBEARER".to_string(), "SCRAM-SHA-512".to_string()]
+                vec!["OAUTHBEARER".to_owned(), "SCRAM-SHA-512".to_owned()]
             } else {
                 Vec::new()
             };

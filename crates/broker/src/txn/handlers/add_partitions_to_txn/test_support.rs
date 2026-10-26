@@ -21,7 +21,7 @@ use {
             add_partitions_to_txn_topic_result::AddPartitionsToTxnTopicResult,
         },
     },
-    std::collections::HashSet,
+    std::{collections::HashSet, sync::Arc},
 };
 
 /// One partition row of a response, in a static test table.
@@ -131,7 +131,7 @@ pub(in crate::txn::handlers) struct CoordinatorBroker {
 /// `__transaction_state-0`, and this returns once that partition is loaded,
 /// so [`seed_transaction`] and the handler both see a coordinator.
 pub(in crate::txn::handlers) async fn start_coordinator(
-    authorizer: std::sync::Arc<dyn Authorizer>,
+    authorizer: Arc<dyn Authorizer>,
 ) -> CoordinatorBroker {
     let StartedBroker {
         broker: handle,
@@ -141,7 +141,7 @@ pub(in crate::txn::handlers) async fn start_coordinator(
     })
     .await;
     let broker = handle.broker_arc_for_test();
-    handle.wait_until_controller_leader().await;
+    handle.wait_until_controller_leader().await.unwrap();
     handle.wait_until_brokers_registered(1).await;
     handle.wait_until_transaction_coordinator_ready().await;
     seed_topic(&broker, "a", 1).await;

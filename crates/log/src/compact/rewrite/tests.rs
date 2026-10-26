@@ -483,7 +483,7 @@ fn retain_empty_follows_kafkas_cleaner_rules() {
         ),
         (
             "a marker of another epoch does not",
-            vec![marker.clone(), kept(1)],
+            vec![marker, kept(1)],
             Some(last(None, 8)),
             vec![1],
         ),

@@ -17,14 +17,16 @@ use {
         reconfig::{AddVoter, ReconfigOutcome, VoterChange},
     },
     assert2::{assert, check},
+    krabka_metadata::voters::VoterEndpoint,
+    krabka_protocol::{owned::voters_record, primitives::uuid::Uuid},
 };
 
-fn wire_voter(id: i32, directory_byte: u8) -> krabka_protocol::owned::voters_record::Voter {
+fn wire_voter(id: i32, directory_byte: u8) -> voters_record::Voter {
     use krabka_protocol::owned::voters_record::{Endpoint, KRaftVersionFeature, Voter};
 
     Voter {
         voter_id: id,
-        voter_directory_id: krabka_protocol::primitives::uuid::Uuid([directory_byte; 16]),
+        voter_directory_id: Uuid([directory_byte; 16]),
         endpoints: vec![Endpoint {
             name: "CONTROLLER".into(),
             host: "controller.example".into(),
@@ -40,10 +42,8 @@ fn wire_voter(id: i32, directory_byte: u8) -> krabka_protocol::owned::voters_rec
     }
 }
 
-fn wire_voter_record(
-    voters: Vec<krabka_protocol::owned::voters_record::Voter>,
-) -> krabka_protocol::owned::voters_record::VotersRecord {
-    krabka_protocol::owned::voters_record::VotersRecord {
+fn wire_voter_record(voters: Vec<voters_record::Voter>) -> voters_record::VotersRecord {
+    voters_record::VotersRecord {
         version: 0,
         voters,
         ..Default::default()
@@ -538,7 +538,7 @@ fn test_voter(id: NodeId, directory_id: uuid::Uuid) -> krabka_metadata::Voter {
     krabka_metadata::Voter {
         id,
         directory_id,
-        endpoints: vec![krabka_metadata::voters::VoterEndpoint {
+        endpoints: vec![VoterEndpoint {
             name: "CONTROLLER".into(),
             host: "127.0.0.1".into(),
             port: 9_093,

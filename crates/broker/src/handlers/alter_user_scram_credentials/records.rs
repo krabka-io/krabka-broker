@@ -37,8 +37,9 @@ pub(super) fn upsertion_record(
         salt: upsertion.salt.to_vec(),
         stored_key,
         server_key,
-        iterations: u32::try_from(upsertion.iterations)
-            .expect("validated SCRAM iterations fit u32"),
+        // Validation admits only a count between Kafka's minimum and maximum,
+        // both positive, so the magnitude is the count itself.
+        iterations: upsertion.iterations.unsigned_abs(),
     })
 }
 

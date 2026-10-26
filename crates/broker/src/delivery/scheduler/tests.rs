@@ -18,7 +18,8 @@ use {
     krabka_metadata::NodeId,
     krabka_units::{millis, secs},
     qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer, WallClock},
-    std::{sync::Arc, time::Duration},
+    std::{iter, sync::Arc, time::Duration},
+    tokio::task::JoinHandle,
     tokio_util::sync::CancellationToken,
 };
 
@@ -61,7 +62,7 @@ fn the_heap_drops_partitions_that_are_no_longer_live() {
     heap.set(key("kept"), 100);
     heap.set(key("gone"), 50);
 
-    let live: HashSet<PartitionKey> = std::iter::once(key("kept")).collect();
+    let live: HashSet<PartitionKey> = iter::once(key("kept")).collect();
     heap.retain(&live);
 
     check!(heap.earliest() == Some(100));
@@ -166,22 +167,22 @@ impl Harness {
         partition
     }
 
-    fn spawn(&self) -> tokio::task::JoinHandle<()> { self.spawn_on(self.timeline.new_timer()) }
+    fn spawn(&self) -> JoinHandle<()> { self.spawn_on(self.timeline.new_timer()) }
 
-    async fn spawn_and_wait_parked(&self) -> tokio::task::JoinHandle<()> {
+    async fn spawn_and_wait_parked(&self) -> JoinHandle<()> {
         let task = self.spawn();
         check!(wait_parked(&self.timeline, 1).await);
         task
     }
 
-    async fn stop(&self, task: tokio::task::JoinHandle<()>) {
+    async fn stop(&self, task: JoinHandle<()>) {
         self.shutdown.cancel();
         task.await.expect("the scheduler task exits");
     }
 
     /// Spawns the scheduler on `timer` rather than on the harness timeline, so
     /// that a test can hand the loop a ticker that gives out.
-    fn spawn_on(&self, timer: Arc<dyn Timer>) -> tokio::task::JoinHandle<()> {
+    fn spawn_on(&self, timer: Arc<dyn Timer>) -> JoinHandle<()> {
         tokio::spawn(run(
             Arc::clone(&self.registry),
             NodeId(THIS_BROKER),
@@ -410,11 +411,7 @@ async fn a_sweep_with_no_metrics_of_its_own_still_advances_the_watermark() {
     check!(heap.earliest().is_none());
 }
 
-async fn check_dead_start(
-    harness: &Harness,
-    timer: &BrokenTimer,
-    task: tokio::task::JoinHandle<()>,
-) {
+async fn check_dead_start(harness: &Harness, timer: &BrokenTimer, task: JoinHandle<()>) {
     task.await.expect("the scheduler task exits");
     check!(harness.metrics.wakeups() == 0);
     check!(timer.registrations() == 1);
@@ -436,17 +433,14 @@ async fn the_scheduler_stops_when_its_first_deadline_fails(
     failure: TimerFailure,
     setup: Option<ScheduleSetup>,
 ) {
-    let harness = match setup {
-        Some(setup) => {
-            let HarnessWithPartition {
-                dir: _dir,
-                harness,
-                partition: _partition,
-            } = Harness::with_partition(setup);
-            harness
-        }
-        None => Harness::new(),
-    };
+    let harness = setup.map_or_else(Harness::new, |setup| {
+        let HarnessWithPartition {
+            dir: _dir,
+            harness,
+            partition: _partition,
+        } = Harness::with_partition(setup);
+        harness
+    });
     let timer = BrokenTimer::dead(failure);
     let task = harness.spawn_on(timer.injectable());
     check_dead_start(&harness, &timer, task).await;

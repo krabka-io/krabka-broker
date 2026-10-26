@@ -10,9 +10,11 @@ use {
     crate::{
         action::Action,
         event::Event,
+        role::Role,
         types::{Epoch, LogOffsetMetadata, LogView, NodeId, QuorumState, SimInstant},
     },
     krabka_units::prelude::secs,
+    std::{cell::Cell, iter},
 };
 
 /// The end of `epoch` in a fake log of `end` records that all carry
@@ -50,13 +52,13 @@ impl LogView for FakeLog {
 /// is, a low `epoch_start_offset`, and whose log grows before followers
 /// fetch.
 pub struct CellLog {
-    pub end: std::cell::Cell<i64>,
+    pub end: Cell<i64>,
     pub last_epoch: Epoch,
 }
 impl CellLog {
     pub fn new(end: i64, last_epoch: Epoch) -> Self {
         Self {
-            end: std::cell::Cell::new(end),
+            end: Cell::new(end),
             last_epoch,
         }
     }
@@ -90,7 +92,7 @@ impl RunsLog {
         Self {
             epochs: runs
                 .iter()
-                .flat_map(|&EpochRun { epoch, count }| std::iter::repeat_n(epoch, count))
+                .flat_map(|&EpochRun { epoch, count }| iter::repeat_n(epoch, count))
                 .collect(),
         }
     }
@@ -163,10 +165,7 @@ pub fn win_election(
 
 /// Both an election timeout and an accepted end-epoch request start pre-voting.
 pub fn check_prevote_started(machine: &QuorumStateMachine, actions: &[Action]) {
-    assert2::assert!(matches!(
-        machine.role(),
-        crate::role::Role::Prospective { .. }
-    ));
+    assert2::assert!(matches!(machine.role(), Role::Prospective { .. }));
     assert2::assert!(
         actions
             .iter()

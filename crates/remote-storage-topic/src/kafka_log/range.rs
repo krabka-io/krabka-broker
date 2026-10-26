@@ -19,6 +19,7 @@ use {
     },
     krabka_client_core::{ClientError, FetchPartitionResult, FetchedRecord},
     std::time::Duration,
+    tokio::time,
     tracing::warn,
 };
 
@@ -182,7 +183,7 @@ pub(super) async fn visit_range_pages<F: RangeFetcher>(
                     error = %failure.error,
                     "range read: looking the leader up again"
                 );
-                tokio::time::sleep(topic.retry_backoff).await;
+                time::sleep(topic.retry_backoff).await;
                 continue;
             }
             Err(failure) => return Err(failure.error),
@@ -235,7 +236,7 @@ mod tests {
         assert2::{assert, check},
         bytes::Bytes,
         krabka_units::prelude::secs,
-        std::{collections::VecDeque, sync::Mutex},
+        std::{collections::VecDeque, future, io::ErrorKind, mem, ops::Range, sync::Mutex},
     };
 
     const TOPIC: RangeTopic<'static> = RangeTopic {
@@ -277,11 +278,11 @@ mod tests {
         unknown_server = { ClientError::Server { error_code: -1 }, true },
         disconnected = { ClientError::Disconnected, true },
         timeout = { ClientError::Timeout(secs(30)), true },
-        connection_reset = { ClientError::Io(std::io::ErrorKind::ConnectionReset.into()), true },
+        connection_reset = { ClientError::Io(ErrorKind::ConnectionReset.into()), true },
         connection_refused = {
             ClientError::Connect {
                 addr: "127.0.0.1:9092".parse().unwrap(),
-                source: std::io::ErrorKind::ConnectionRefused.into(),
+                source: ErrorKind::ConnectionRefused.into(),
             },
             true,
         },
@@ -359,7 +360,7 @@ mod tests {
             }
         }
 
-        fn calls(&self) -> Vec<Call> { std::mem::take(&mut *self.calls.lock().unwrap()) }
+        fn calls(&self) -> Vec<Call> { mem::take(&mut *self.calls.lock().unwrap()) }
     }
 
     impl RangeFetcher for ScriptedFetcher {
@@ -367,7 +368,7 @@ mod tests {
 
         fn leader(&self, _partition: i32) -> impl Future<Output = Result<i32, RangeReadFailure>> {
             self.calls.lock().unwrap().push(Call::Leader);
-            std::future::ready(self.leaders.lock().unwrap().pop_front().unwrap())
+            future::ready(self.leaders.lock().unwrap().pop_front().unwrap())
         }
 
         fn fetch(
@@ -380,11 +381,11 @@ mod tests {
                 leader: *leader,
                 offset,
             });
-            std::future::ready(self.pages.lock().unwrap().pop_front().unwrap())
+            future::ready(self.pages.lock().unwrap().pop_front().unwrap())
         }
     }
 
-    fn page(offsets: std::ops::Range<i64>) -> FetchPartitionResult {
+    fn page(offsets: Range<i64>) -> FetchPartitionResult {
         FetchPartitionResult {
             next_offset: Some(offsets.end),
             records: offsets.map(|offset| fetched(offset, Some(b"v"))).collect(),

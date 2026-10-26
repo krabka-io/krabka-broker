@@ -1,7 +1,7 @@
 use {
     super::{constructed_wal_placement_is_installable, wal_placement_survives_one_rack_loss},
     assert2::assert,
-    proptest::prelude::*,
+    proptest::{collection, prelude::*},
     std::collections::HashSet,
 };
 
@@ -45,7 +45,7 @@ fn check_placement(candidates: &[(u64, u64)], local: u64, requested: usize, fail
         let quorum = admitted && survivors.len() > requested / 2;
         assert!(
             wal_placement_survives_one_rack_loss(candidates, local, requested, failed)
-                == (selected.clone(), survivors.clone(), admitted, quorum)
+                == (selected, survivors.clone(), admitted, quorum)
         );
         assert!(survivors.iter().copied().collect::<HashSet<_>>().len() == survivors.len());
         assert!(!admitted || quorum);
@@ -55,7 +55,7 @@ fn check_placement(candidates: &[(u64, u64)], local: u64, requested: usize, fail
 proptest! {
     #[test]
     fn exported_placement_and_survivors_match_independent_sets(
-        candidates in proptest::collection::vec((0u64..8, 0u64..8), 0..32),
+        candidates in collection::vec((0u64..8, 0u64..8), 0..32),
         local in 0u64..8,
         requested in 0usize..10,
         failed_rack in 0u64..8,

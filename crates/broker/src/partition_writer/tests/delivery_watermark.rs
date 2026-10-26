@@ -3,10 +3,12 @@
 
 use {
     super::*,
-    crate::partition_writer::test_support::sample_batch,
+    crate::{delivery::test_support::wait_until, partition_writer::test_support::sample_batch},
     assert2::check,
     krabka_log::{LogConfig, Offset},
+    std::time::Duration,
     tempfile::tempdir,
+    tokio::time,
 };
 
 #[tokio::test]
@@ -32,8 +34,8 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
     delivery.adopt(&waker);
 
     let (tx, rx) = mpsc::channel(1);
-    let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions {
-        topic: "scheduled".to_string(),
+    let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
+        topic: "scheduled".to_owned(),
         delivery: delivery.clone(),
         ..Default::default()
     });
@@ -51,7 +53,7 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
     ack_rx.await.expect("ack").expect("append ok");
 
     // The pending batch holds the watermark where it was.
-    tokio::time::timeout(std::time::Duration::from_secs(1), woken)
+    time::timeout(Duration::from_secs(1), woken)
         .await
         .expect("the produce did not re-arm the delivery scheduler");
     check!(delivery.watermark() == Offset(2));
@@ -59,7 +61,7 @@ async fn a_produce_to_a_scheduled_topic_refreshes_the_mirror_and_rearms_the_sche
 
     // Past the activation instant, the writer's own refresh releases it.
     timeline
-        .advance(std::time::Duration::from_millis(
+        .advance(Duration::from_millis(
             u64::try_from(200 + BOUND_MS).expect("positive"),
         ))
         .expect("manual time moves forward");
@@ -77,8 +79,8 @@ async fn a_produce_to_an_immediate_topic_keeps_the_mirror_at_the_log_end() {
     let log = open_default_log(dir.path());
     let delivery = DeliveryHandles::new();
     let (tx, rx) = mpsc::channel(1);
-    let writer = spawn_writer(dir.path(), log.clone(), rx, WriterOptions {
-        topic: "immediate".to_string(),
+    let writer = spawn_writer(dir.path(), Arc::clone(&log), rx, WriterOptions {
+        topic: "immediate".to_owned(),
         delivery: delivery.clone(),
         ..Default::default()
     });
@@ -86,7 +88,7 @@ async fn a_produce_to_an_immediate_topic_keeps_the_mirror_at_the_log_end() {
     let ack_rx = queue_batch(&tx, sample_batch().count(3).call()).await;
     ack_rx.await.expect("ack").expect("append ok");
 
-    check!(crate::delivery::test_support::wait_until(|| delivery.watermark() == Offset(3)).await);
+    check!(wait_until(|| delivery.watermark() == Offset(3)).await);
 
     drop(tx);
     writer.await.expect("writer join");

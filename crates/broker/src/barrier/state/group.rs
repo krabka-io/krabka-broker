@@ -21,7 +21,7 @@ use {
 /// The type is [`PartialEq`] but not [`Eq`], because [`Time`] is backed by a
 /// float.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GroupSpec {
+pub struct GroupSpec {
     /// The topics the group cuts across.
     pub(crate) topics: Vec<String>,
     /// How often the coordinator injects without a trigger request. `None`
@@ -33,7 +33,7 @@ pub(crate) struct GroupSpec {
 
 /// The injection-start record of an epoch that carries no cut record yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PendingInjection {
+pub struct PendingInjection {
     pub(crate) epoch: i64,
     pub(crate) start: InjectionStartValue,
 }
@@ -43,7 +43,7 @@ pub(crate) struct PendingInjection {
 /// The type is [`PartialEq`] but not [`Eq`], because [`GroupValue`] carries a
 /// [`Time`].
 #[derive(Debug, Clone, PartialEq, krabka_macros::FieldDefaults)]
-pub(crate) struct GroupEntry {
+pub struct GroupEntry {
     /// The last definition that a group record carried.
     #[default(GroupValue {
         topics: Vec::new(),
@@ -102,7 +102,7 @@ impl GroupEntry {
 }
 
 /// The next epoch of a group.
-pub(crate) fn next_epoch(last_epoch: i64) -> Option<i64> { next_i64(last_epoch) }
+pub fn next_epoch(last_epoch: i64) -> Option<i64> { next_i64(last_epoch) }
 
 #[cfg(test)]
 mod tests {

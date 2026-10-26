@@ -1,5 +1,4 @@
-// Rust 1.95 annotate-snippets ICE on `clippy::pedantic` in test files
-// (same upstream bug as `tests/mtls.rs` etc).
+#![cfg(test)]
 
 //! KIP-511: `ApiVersions` v3+ client-information validation and the
 //! `client_software_versions_total` Prometheus counter.
@@ -68,7 +67,7 @@ async fn send_api_versions(
     software_name: &str,
     software_version: &str,
 ) -> io::Result<ApiVersionsResponse> {
-    let req = api_versions_request_for(software_name.to_string(), software_version.to_string());
+    let req = api_versions_request_for(software_name.to_owned(), software_version.to_owned());
     let mut body = BytesMut::new();
     req.encode(&mut body, version)
         .map_err(|e| io::Error::other(format!("ApiVersions encode: {e}")))?;

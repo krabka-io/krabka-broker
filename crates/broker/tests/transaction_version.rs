@@ -40,6 +40,7 @@
 //! case 4 in `txnver_restart_recovery`, case 5 in `txnver_prepare_recovery`,
 //! and case 6 in `txnver_sequence_epoch_bump`; `txnver_harness` carries the
 //! broker boot, topic creation, and feature-downgrade fixtures they share.
+#![cfg(test)]
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling

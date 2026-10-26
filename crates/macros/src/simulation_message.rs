@@ -8,7 +8,7 @@ use {
     },
 };
 
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let fields = named_fields(&item, "PartitionMessage")?;
     let endpoint = |name| {
         fields.iter().find(|field| {

@@ -29,8 +29,10 @@ pub fn test_lock() -> &'static Mutex<()> {
 
 pub async fn scrape(addr: SocketAddr) -> String {
     let response = http_get(addr, "/metrics", false).await;
-    let body = response.find("\r\n\r\n").map_or(0, |at| at + 4);
-    response[body..].to_owned()
+    response
+        .split_once("\r\n\r\n")
+        .map_or(response.as_str(), |(_, body)| body)
+        .to_owned()
 }
 
 pub async fn create_topic(client: &Client, partitions: i32, replication_factor: i16) {

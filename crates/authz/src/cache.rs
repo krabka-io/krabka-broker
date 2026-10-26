@@ -9,7 +9,7 @@
 use {
     crate::{AclEntries, AclSource},
     krabka_metadata::{AclEntry, PatternType, ResourceType},
-    std::collections::HashMap,
+    std::{collections::HashMap, iter},
 };
 
 /// The resource name of Kafka's `WILDCARD_RESOURCE`, a LITERAL pattern that
@@ -113,7 +113,7 @@ impl AclSource for AclCache {
         // The wildcard bucket is skipped when `name` is itself "*", whose
         // LITERAL lookup already yields it.
         let Some(index) = self.by_type.get(&rt) else {
-            return Box::new(std::iter::empty());
+            return Box::new(iter::empty());
         };
         let wildcard = (name != WILDCARD_RESOURCE)
             .then(|| index.literal(WILDCARD_RESOURCE))
@@ -145,7 +145,12 @@ mod tests {
     use {
         super::*,
         crate::{AuthorizationResult, test_support::acl as entry},
-        krabka_metadata::{AclOperation, MetadataImage, MetadataRecord, ResourceType},
+        krabka_metadata::{
+            AclOperation, MetadataImage, MetadataRecord, ResourceType,
+            metadata_version::CIDR_ACL_MIN_LEVEL,
+        },
+        proptest::{collection, strategy::Strategy},
+        std::collections::HashSet,
         uuid::Uuid,
     };
 
@@ -197,7 +202,7 @@ mod tests {
             image.apply(&MetadataRecord::V1AccessControlEntry(e.clone()));
         }
         // ... and into an AclCache (gateway side).
-        let cache = AclCache::new(entries.clone());
+        let cache = AclCache::new(entries);
 
         // Probes covering every matching code path.
         let probes = [
@@ -229,12 +234,12 @@ mod tests {
     #[yare::parameterized(
         unfinalized_version = { None, Some(false), AuthorizationResult::Deny },
         below_range_level = {
-            Some(krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL - 1),
+            Some(CIDR_ACL_MIN_LEVEL - 1),
             Some(false),
             AuthorizationResult::Deny,
         },
         minimum_range_level = {
-            Some(krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL),
+            Some(CIDR_ACL_MIN_LEVEL),
             Some(true),
             AuthorizationResult::Allow,
         },
@@ -268,7 +273,7 @@ mod tests {
             resource_name: "foo",
             operation: AclOperation::Read,
         };
-        let auth = SimpleAclAuthorizer::new(std::collections::HashSet::new());
+        let auth = SimpleAclAuthorizer::new(HashSet::new());
         let mut image = MetadataImage::new(Uuid::nil());
         if let Some(level) = level {
             image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
@@ -279,7 +284,7 @@ mod tests {
         image.apply(&MetadataRecord::V1AccessControlEntry(range_allow.clone()));
         let cache = match cache_support {
             Some(supported) => {
-                AclCache::new(vec![range_allow.clone()]).with_cidr_hosts_supported(supported)
+                AclCache::new(vec![range_allow]).with_cidr_hosts_supported(supported)
             }
             None => AclCache::new(vec![range_allow]),
         };
@@ -309,7 +314,7 @@ mod tests {
         v
     }
 
-    fn arb_entry() -> impl proptest::strategy::Strategy<Value = AclEntry> {
+    fn arb_entry() -> impl Strategy<Value = AclEntry> {
         use proptest::prelude::*;
         (
             prop_oneof![Just(ResourceType::Topic), Just(ResourceType::Group)],
@@ -329,8 +334,8 @@ mod tests {
         /// empty name and the wildcard name.
         #[test]
         fn index_matches_a_full_scan(
-            entries in proptest::collection::vec(arb_entry(), 0..24),
-            probes in proptest::collection::vec("(\\*|[aé-]{0,6})", 1..8),
+            entries in collection::vec(arb_entry(), 0..24),
+            probes in collection::vec("(\\*|[aé-]{0,6})", 1..8),
         ) {
             let cache = AclCache::new(entries.clone());
             for name in &probes {

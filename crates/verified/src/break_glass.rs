@@ -71,9 +71,13 @@ pub fn break_glass_admission(facts: BreakGlassProposalFacts) -> BreakGlassAdmiss
         BreakGlassAdmission::Expired
     } else if facts.held_approvals < facts.required_approvals {
         BreakGlassAdmission::NotEnoughApprovals
-    } else if let (BreakGlassSignaturePolicy::Required, BreakGlassApprovalSigning::NotAllSigned) =
-        (facts.signature_policy, facts.signing)
-    {
+    } else if matches!(
+        (facts.signature_policy, facts.signing),
+        (
+            BreakGlassSignaturePolicy::Required,
+            BreakGlassApprovalSigning::NotAllSigned
+        )
+    ) {
         BreakGlassAdmission::Unsigned
     } else {
         BreakGlassAdmission::Usable
@@ -124,11 +128,17 @@ pub fn select_break_glass_candidate(candidates: &[(i64, u64, u64)]) -> Option<us
     })]
     #[variant(candidates@.len() - cursor@)]
     while cursor < candidates.len() {
-        let candidate = candidates[cursor];
-        best = match best {
+        let Some(&candidate) = candidates.get(cursor) else {
+            break;
+        };
+        let Some(b) = best else {
+            best = Some(cursor);
+            cursor += 1;
+            continue;
+        };
+        best = match candidates.get(b) {
             None => Some(cursor),
-            Some(b) => {
-                let current = candidates[b];
+            Some(&current) => {
                 if candidate.0 < current.0
                     || (candidate.0 == current.0 && candidate.1 < current.1)
                     || (candidate.0 == current.0

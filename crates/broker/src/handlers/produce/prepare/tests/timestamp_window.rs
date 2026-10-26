@@ -27,7 +27,7 @@ use {
     bytes::Bytes,
     krabka_compression::{CompressionType, RecordDecompressionPolicy},
     krabka_metadata::{MetadataRecord, TopicConfigRecord},
-    krabka_protocol::records::{Record, RecordBatch},
+    krabka_protocol::records::{Attributes, Record, RecordBatch},
     std::{collections::BTreeMap, sync::Arc},
 };
 
@@ -46,7 +46,7 @@ fn policy(overrides: &[ConfigOverride<'_>]) -> TimestampPolicy {
     let mut img = image_with_topic("t", &[1]);
     let mut map = BTreeMap::new();
     for ConfigOverride { key, value } in overrides {
-        map.insert((*key).to_string(), (*value).to_string());
+        map.insert((*key).to_owned(), (*value).to_owned());
     }
     img.apply(&MetadataRecord::V1TopicConfig(TopicConfigRecord {
         topic: "t".into(),
@@ -59,7 +59,7 @@ fn policy(overrides: &[ConfigOverride<'_>]) -> TimestampPolicy {
 /// the way the v2 format stores them: one `base_timestamp` plus a delta each.
 fn batch(first_ms: i64, second_ms: i64, compression: CompressionType) -> RecordBatch {
     RecordBatch {
-        attributes: krabka_protocol::records::Attributes::default().with_compression(compression),
+        attributes: Attributes::default().with_compression(compression),
         last_offset_delta: 1,
         base_timestamp: first_ms,
         max_timestamp: first_ms.max(second_ms),

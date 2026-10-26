@@ -280,10 +280,11 @@ pub fn truncate_epochs(epochs: &mut Vec<Epoch>, offset: i64) {
     epochs.truncate(usize::try_from(offset.max(0)).unwrap_or(usize::MAX));
 }
 
-/// Extend a follower log from the leader without overwriting its matching prefix.
-#[allow(clippy::ptr_arg)] // The follower must grow when the leader has a longer suffix.
-pub fn replicate_epochs(epochs: &mut Vec<Epoch>, leader_epochs: &[Epoch]) {
-    if epochs.len() < leader_epochs.len() {
-        epochs.extend_from_slice(&leader_epochs[epochs.len()..]);
-    }
+/// Return the leader suffix a follower log of `follower_len` records lacks.
+///
+/// The follower appends it to grow without overwriting its matching prefix. A
+/// follower at or beyond the leader's length gets an empty suffix.
+#[must_use]
+pub fn epochs_to_replicate(follower_len: usize, leader_epochs: &[Epoch]) -> &[Epoch] {
+    leader_epochs.get(follower_len..).unwrap_or_default()
 }

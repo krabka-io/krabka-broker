@@ -25,7 +25,11 @@ use {
     bytes::Bytes,
     krabka_broker::NodeId,
     krabka_log::{Log, LogConfig, Offset},
-    std::path::{Path, PathBuf},
+    std::{
+        fs,
+        io::ErrorKind,
+        path::{Path, PathBuf},
+    },
     uuid::Uuid,
 };
 
@@ -39,7 +43,7 @@ const CHECKPOINT_VERSION: &str = "0";
 
 /// The offset range one voter reports as fsynced: `[start, end)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DurableRange {
+pub struct DurableRange {
     pub(crate) start: i64,
     pub(crate) end: i64,
 }
@@ -48,7 +52,7 @@ pub(crate) struct DurableRange {
 ///
 /// `TOPIC` is `[A-Za-z0-9_-]`-only, so it survives the shard directory's
 /// sanitization unchanged and this path can be built literally.
-pub(crate) fn voter_dir(log_dir: &Path, topic_id: Uuid, partition: i32, node: NodeId) -> PathBuf {
+pub fn voter_dir(log_dir: &Path, topic_id: Uuid, partition: i32, node: NodeId) -> PathBuf {
     log_dir
         .join("__diskless_wal_quorum")
         .join(format!("{TOPIC}-{topic_id}-{partition}"))
@@ -57,8 +61,8 @@ pub(crate) fn voter_dir(log_dir: &Path, topic_id: Uuid, partition: i32, node: No
 
 /// The durable range `node` has checkpointed, or `None` before it has written
 /// its first checkpoint (or if it is not a voter for this shard at all).
-pub(crate) fn durable_range(dir: &Path) -> Option<DurableRange> {
-    let raw = std::fs::read_to_string(dir.join(DURABLE_OFFSET_FILE)).ok()?;
+pub fn durable_range(dir: &Path) -> Option<DurableRange> {
+    let raw = fs::read_to_string(dir.join(DURABLE_OFFSET_FILE)).ok()?;
     let offsets = checkpoint_offsets(&raw)?;
     match offsets.as_slice() {
         [start, end] => Some(DurableRange {
@@ -89,7 +93,7 @@ fn checkpoint_offsets(raw: &str) -> Option<Vec<i64>> {
 ///
 /// Call it only once the voter is quiescent for that range -- the failover
 /// case waits on the checkpoint first -- because the copy is not atomic.
-pub(crate) fn durable_bytes(dir: &Path, range: DurableRange) -> Bytes {
+pub fn durable_bytes(dir: &Path, range: DurableRange) -> Bytes {
     let copy = tempfile::tempdir().expect("voter log copy dir");
     let root = copy.path().join("voter");
     copy_dir(dir, &root);
@@ -112,17 +116,17 @@ pub(crate) fn durable_bytes(dir: &Path, range: DurableRange) -> Bytes {
 /// cannot hide data the caller asked for, because `durable_bytes` reads the
 /// copy back and a missing range fails there.
 fn copy_dir(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).expect("create the voter log copy");
-    for entry in std::fs::read_dir(from).expect("read the voter log dir") {
+    fs::create_dir_all(to).expect("create the voter log copy");
+    for entry in fs::read_dir(from).expect("read the voter log dir") {
         let entry = entry.expect("voter log dir entry");
         let target = to.join(entry.file_name());
         if entry.path().is_dir() {
             copy_dir(&entry.path(), &target);
             continue;
         }
-        match std::fs::copy(entry.path(), &target) {
+        match fs::copy(entry.path(), &target) {
             Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => panic!("copy a voter log file: {error}"),
         }
     }

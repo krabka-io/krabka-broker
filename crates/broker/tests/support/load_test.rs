@@ -2,7 +2,7 @@
 
 #![allow(unused_imports)] // Each suite uses a different subset of this prelude.
 
-pub(crate) use {
+pub use {
     krabka_client_consumer::{AutoOffsetReset, Consumer},
     krabka_client_core::Client,
     krabka_client_producer::{Acks, Producer, ProducerRecord},

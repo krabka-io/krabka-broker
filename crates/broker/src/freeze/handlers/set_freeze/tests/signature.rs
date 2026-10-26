@@ -61,7 +61,7 @@ fn check_signature_outcome(
         SignatureExpectation::Refused(code) => Err(code),
     };
     check!(
-        outcome.map_err(|refusal| crate::test_support::KafkaErrorCode(refusal.code)) == expected,
+        outcome.map_err(|refusal| KafkaErrorCode(refusal.code)) == expected,
         "{label}"
     );
 }
@@ -249,8 +249,8 @@ fn a_signed_freeze_verifies_and_a_tampered_one_answers_one_code() {
             "a key_id no trust set carries",
             TopicFreezeRecord {
                 key_id: "carol-yubi".to_owned(),
-                signature: signature.clone(),
-                ..good.clone()
+                signature,
+                ..good
             },
             SignatureExpectation::Refused(KafkaErrorCode(codes::OPERATOR_SIGNATURE_INVALID)),
         ),

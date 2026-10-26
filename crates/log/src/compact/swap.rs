@@ -18,7 +18,7 @@ use {
         },
     },
     krabka_ids::Offset,
-    std::{fs::OpenOptions, path::Path},
+    std::{fs::OpenOptions, iter, path::Path},
     tracing::instrument,
 };
 
@@ -81,12 +81,12 @@ pub fn atomic_swap(
 /// and a compacted partition gains one snapshot file per roll until it is
 /// reopened.
 #[must_use]
-pub(crate) fn replaces_producer_snapshot(consumed: Offset, new_base: Offset) -> bool {
+pub fn replaces_producer_snapshot(consumed: Offset, new_base: Offset) -> bool {
     consumed != new_base
 }
 
 /// The swap protocol with caller-owned reclamation of replaced files.
-pub(crate) fn atomic_swap_retiring(
+pub fn atomic_swap_retiring(
     io: &dyn LogIo,
     dir: &Path,
     consumed_base_offsets: &[Offset],
@@ -102,8 +102,7 @@ pub(crate) fn atomic_swap_retiring(
 
     // Step 1: fsync the survivor files. Open with write access so
     // `FlushFileBuffers` (Windows) / `fsync` (Linux) succeeds.
-    for path in [Some(&rewrite.log_swap)]
-        .into_iter()
+    for path in iter::once(Some(&rewrite.log_swap))
         .chain(sidecars.map(|(path, _)| path))
         .flatten()
     {

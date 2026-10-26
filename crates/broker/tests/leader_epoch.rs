@@ -2,6 +2,7 @@
 //! .leader-epoch-checkpoint byte format.
 //!
 //! Windows-gated like the other multi-broker tests.
+#![cfg(test)]
 
 use support::cluster_lock;
 

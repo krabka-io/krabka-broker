@@ -32,8 +32,11 @@ use {
     },
     dashmap::DashMap,
     krabka_metadata::NodeId,
-    std::sync::{Arc, OnceLock, Weak},
-    tokio::sync::Mutex,
+    std::{
+        fmt::{Debug, Formatter, Result},
+        sync::{Arc, OnceLock, Weak},
+    },
+    tokio::sync::{Mutex, Semaphore},
 };
 
 mod cells;
@@ -68,7 +71,7 @@ pub(crate) struct SharePartitionLeaderManager {
     /// The writes to the dead-letter queue that may run at once, across every
     /// partition this broker leads: the writes that wait for a permit hold
     /// their records in `Archiving`, and hold the SPSO with them.
-    dead_letter_writes: tokio::sync::Semaphore,
+    dead_letter_writes: Semaphore,
     /// This manager, for the tasks that finish a dead-letter write after the
     /// request that began it has answered.
     me: Weak<Self>,
@@ -76,8 +79,8 @@ pub(crate) struct SharePartitionLeaderManager {
     diskless_read: OnceLock<Arc<DisklessReadHandle>>,
 }
 
-impl std::fmt::Debug for SharePartitionLeaderManager {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for SharePartitionLeaderManager {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.debug_struct("SharePartitionLeaderManager")
             .field("node_id", &self.node_id)
             .field("live_partitions", &self.leaders.len())
@@ -104,10 +107,8 @@ impl SharePartitionLeaderManager {
             sessions: ShareSessionCache::new(session_max),
             leaders: DashMap::new(),
             dlq,
-            dead_letter_writes: tokio::sync::Semaphore::new(
-                dead_letter::MAX_CONCURRENT_DEAD_LETTER_WRITES,
-            ),
-            me: me.clone(),
+            dead_letter_writes: Semaphore::new(dead_letter::MAX_CONCURRENT_DEAD_LETTER_WRITES),
+            me: Weak::clone(me),
             remote_reader: OnceLock::new(),
             diskless_read: OnceLock::new(),
         })

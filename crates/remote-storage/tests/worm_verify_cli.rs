@@ -4,6 +4,7 @@
 //! the real binary against it with `--local-dir`, and checks both the exit code
 //! and that the message names the cause. An exit code alone would not catch a
 //! verifier that fails for the wrong reason.
+#![cfg(test)]
 
 use {
     assert2::check,
@@ -16,6 +17,7 @@ use {
     },
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
     std::{
+        fs,
         path::{Path, PathBuf},
         process::Command,
         sync::Arc,
@@ -104,10 +106,10 @@ impl Fixture {
         let root = TempDir::new().unwrap();
         let keys = TempDir::new().unwrap();
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
-        let signer = FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), KEY_ID.to_string())
+        let signer = FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), KEY_ID.to_owned())
             .expect("ring mints a valid PKCS#8 Ed25519 key");
         let public_key = keys.path().join("worm.pub");
-        std::fs::write(&public_key, signer.public_key()).unwrap();
+        fs::write(&public_key, signer.public_key()).unwrap();
         let archiver = if matches!(setup.signing, ManifestSigning::Signed) {
             WormArchiver::new(Some(Arc::new(signer)))
         } else {
@@ -115,14 +117,14 @@ impl Fixture {
         };
         let rotated_pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
         let rotated_signer =
-            FileEd25519Signer::from_pkcs8_bytes(rotated_pkcs8.as_ref(), ROTATED_KEY_ID.to_string())
+            FileEd25519Signer::from_pkcs8_bytes(rotated_pkcs8.as_ref(), ROTATED_KEY_ID.to_owned())
                 .expect("ring mints a valid PKCS#8 Ed25519 key");
         let rotated_public_key = keys.path().join("worm-rotated.pub");
-        std::fs::write(&rotated_public_key, rotated_signer.public_key()).unwrap();
+        fs::write(&rotated_public_key, rotated_signer.public_key()).unwrap();
         let rotated_archiver = WormArchiver::new(Some(Arc::new(rotated_signer)));
 
         let partition_dir = format!("{TOPIC}-{PARTITION}-{}", uuid_b64(Uuid::from_u128(1)));
-        std::fs::create_dir_all(root.path().join(&partition_dir)).unwrap();
+        fs::create_dir_all(root.path().join(&partition_dir)).unwrap();
 
         let epoch = EpochId(Uuid::from_u128(0x77));
         let mut prev_head = ChainHead::GENESIS;
@@ -149,7 +151,8 @@ impl Fixture {
                     seq: ManifestSeq(u64::try_from(index).unwrap()),
                     prev_head,
                 })
-                .to_custom_metadata(),
+                .to_custom_metadata()
+                .unwrap(),
             );
             // The rotation lands part-way through: the chain is unbroken, so
             // only the trusted-key set separates a clean run from an
@@ -159,7 +162,7 @@ impl Fixture {
             } else {
                 archiver.seal(&stamped, entries).unwrap()
             };
-            std::fs::write(
+            fs::write(
                 root.path().join(format!("{stem}{MANIFEST_SUFFIX}")),
                 &sealed.bytes,
             )
@@ -183,7 +186,7 @@ impl Fixture {
 
     fn add_orphan(&self) -> String {
         let stray = format!("{}/stray.bin", self.partition_dir);
-        std::fs::write(self.root().join(&stray), b"nothing names me").unwrap();
+        fs::write(self.root().join(&stray), b"nothing names me").unwrap();
         stray
     }
 
@@ -193,19 +196,20 @@ impl Fixture {
     /// new epoch at genesis, rather than a silent restart of the old chain.
     fn restart_chain(&self) {
         let index = SEGMENTS - 1;
-        let signer = FileEd25519Signer::from_pkcs8_bytes(&self.pkcs8, KEY_ID.to_string()).unwrap();
+        let signer = FileEd25519Signer::from_pkcs8_bytes(&self.pkcs8, KEY_ID.to_owned()).unwrap();
         let stamped = metadata(index).with_custom_metadata(
             WormChainRecord::request(ChainStamp {
                 epoch_id: EpochId(Uuid::from_u128(0x88)),
                 seq: ManifestSeq(0),
                 prev_head: ChainHead::GENESIS,
             })
-            .to_custom_metadata(),
+            .to_custom_metadata()
+            .unwrap(),
         );
         let sealed = WormArchiver::new(Some(Arc::new(signer)))
             .seal(&stamped, self.entries[index].clone())
             .unwrap();
-        std::fs::write(self.root().join(&self.manifest_keys[index]), &sealed.bytes).unwrap();
+        fs::write(self.root().join(&self.manifest_keys[index]), &sealed.bytes).unwrap();
     }
 
     fn root(&self) -> &Path { self.root.path() }
@@ -213,12 +217,12 @@ impl Fixture {
     /// The arguments every test shares: the archive and the trusted key.
     fn base_args(&self) -> Vec<String> {
         vec![
-            "verify".to_string(),
-            "--local-dir".to_string(),
+            "verify".to_owned(),
+            "--local-dir".to_owned(),
             self.root().display().to_string(),
-            "--key-id".to_string(),
-            KEY_ID.to_string(),
-            "--public-key".to_string(),
+            "--key-id".to_owned(),
+            KEY_ID.to_owned(),
+            "--public-key".to_owned(),
             self.public_key.display().to_string(),
         ]
     }
@@ -226,9 +230,9 @@ impl Fixture {
     /// The second `--key-id` / `--public-key` pair of a rotated archive.
     fn rotated_key_args(&self) -> Vec<String> {
         vec![
-            "--key-id".to_string(),
-            ROTATED_KEY_ID.to_string(),
-            "--public-key".to_string(),
+            "--key-id".to_owned(),
+            ROTATED_KEY_ID.to_owned(),
+            "--public-key".to_owned(),
             self.rotated_public_key.display().to_string(),
         ]
     }
@@ -237,10 +241,10 @@ impl Fixture {
 /// Writes one archived object and returns the manifest entry for it.
 fn write_object(root: &Path, key: &str, suffix: &str) -> ObjectEntry {
     let body = format!("body of {key}").into_bytes();
-    std::fs::write(root.join(key), &body).unwrap();
+    fs::write(root.join(key), &body).unwrap();
     ObjectEntry {
-        suffix: suffix.to_string(),
-        key: key.to_string(),
+        suffix: suffix.to_owned(),
+        key: key.to_owned(),
         size_bytes: u64::try_from(body.len()).unwrap(),
         sha256: Sha256Digest::of(&body),
         e_tag: None,
@@ -279,9 +283,9 @@ fn check_exit_code(result: &Run, expected: i32) {
 
 fn edit_segment(fixture: &Fixture, edit: impl FnOnce(&mut Vec<u8>)) {
     let victim = fixture.root().join(&fixture.log_keys[1]);
-    let mut body = std::fs::read(&victim).unwrap();
+    let mut body = fs::read(&victim).unwrap();
     edit(&mut body);
-    std::fs::write(victim, body).unwrap();
+    fs::write(victim, body).unwrap();
 }
 
 #[derive(Clone, Copy)]
@@ -319,7 +323,7 @@ fn a_clean_archive_verifies_and_prints_its_tip() {
 fn the_printed_tip_satisfies_expect_head_on_the_next_run() {
     let fixture = Fixture::build().call();
     let mut args = fixture.base_args();
-    args.push("--expect-head".to_string());
+    args.push("--expect-head".to_owned());
     args.push(fixture.tip.to_string());
 
     let result = run(&args);
@@ -352,7 +356,7 @@ fn body_tampering_respects_the_deep_verification_boundary(tampering: BodyTamperi
         check_exit_code(&shallow, 0);
 
         let mut args = fixture.base_args();
-        args.push("--deep".to_string());
+        args.push("--deep".to_owned());
         let deep = run(&args);
 
         check_exit_code(&deep, 1);
@@ -392,7 +396,7 @@ fn a_tip_that_differs_from_expect_head_is_a_head_mismatch() {
     let fixture = Fixture::build().call();
     let mut args = fixture.base_args();
     let expected = ChainHead([0x5a; 32]);
-    args.push("--expect-head".to_string());
+    args.push("--expect-head".to_owned());
     args.push(expected.to_string());
 
     let result = run(&args);
@@ -442,7 +446,7 @@ fn strict_orphans_grades_an_orphan_as_a_failure() {
     fixture.add_orphan();
 
     let mut args = fixture.base_args();
-    args.push("--strict-orphans".to_string());
+    args.push("--strict-orphans".to_owned());
     let result = run(&args);
 
     check_exit_code(&result, 1);
@@ -464,7 +468,7 @@ fn orphan_reporting_preserves_restart_verdict_precedence(strict: bool) {
     fixture.restart_chain();
     let mut args = fixture.base_args();
     if strict {
-        args.push("--strict-orphans".to_string());
+        args.push("--strict-orphans".to_owned());
     }
 
     let result = run(&args);
@@ -493,7 +497,7 @@ fn an_empty_archive_verifies() {
     let root = TempDir::new().unwrap();
     let local_dir = root.path().to_str().unwrap().to_owned();
 
-    let result = run(&["verify".to_string(), "--local-dir".to_string(), local_dir]);
+    let result = run(&["verify".to_owned(), "--local-dir".to_owned(), local_dir]);
 
     check_exit_code(&result, 0);
     check!(result.stdout.contains("OK: empty archive"));
@@ -501,7 +505,7 @@ fn an_empty_archive_verifies() {
 
 #[test]
 fn naming_neither_a_bucket_nor_a_directory_is_a_usage_error() {
-    let result = run(&["verify".to_string()]);
+    let result = run(&["verify".to_owned()]);
 
     check_exit_code(&result, 2);
     check!(result.stderr.contains("--bucket"));
@@ -531,7 +535,7 @@ fn allow_epoch_restarts_accepts_a_restarted_chain() {
     let fixture = Fixture::build().call();
     fixture.restart_chain();
     let mut args = fixture.base_args();
-    args.push("--allow-epoch-restarts".to_string());
+    args.push("--allow-epoch-restarts".to_owned());
 
     let result = run(&args);
 
@@ -544,10 +548,10 @@ fn an_emptied_archive_still_fails_against_an_expected_head() {
     let root = TempDir::new().unwrap();
 
     let result = run(&[
-        "verify".to_string(),
-        "--local-dir".to_string(),
+        "verify".to_owned(),
+        "--local-dir".to_owned(),
         root.path().display().to_string(),
-        "--expect-head".to_string(),
+        "--expect-head".to_owned(),
         ChainHead([0x5a; 32]).to_string(),
     ]);
 
@@ -582,8 +586,8 @@ fn both_key_pairs_verify_an_archive_that_spans_a_rotation() {
 fn an_unpaired_key_flag_is_rejected_rather_than_dropped() {
     let fixture = Fixture::rotated();
     let mut args = fixture.base_args();
-    args.push("--key-id".to_string());
-    args.push(ROTATED_KEY_ID.to_string());
+    args.push("--key-id".to_owned());
+    args.push(ROTATED_KEY_ID.to_owned());
 
     let result = run(&args);
 

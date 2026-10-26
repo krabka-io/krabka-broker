@@ -23,10 +23,12 @@ use {
     krabka_broker::{BrokerHandle, NodeId},
     krabka_client_core::Client,
     krabka_protocol::{
-        owned::list_offsets_request::ListOffsetsRequest, primitives::uuid::Uuid,
-        records::RecordBatch,
+        owned::list_offsets_request::ListOffsetsRequest,
+        primitives::uuid::Uuid,
+        records::{RecordBatch, RecordsPayload},
     },
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 /// Ceiling on how long a poll waits for a record to become visible.
@@ -120,7 +122,7 @@ pub async fn fetch_values(
     served
         .records
         .as_ref()
-        .and_then(krabka_protocol::records::RecordsPayload::as_v2)
+        .and_then(RecordsPayload::as_v2)
         .map_or_default(|batches| {
             batches
                 .iter()
@@ -188,6 +190,6 @@ pub async fn wait_until_visible(
             Instant::now() < deadline,
             "{topic} never served {want:?}; the last read was {seen:?}"
         );
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
     }
 }

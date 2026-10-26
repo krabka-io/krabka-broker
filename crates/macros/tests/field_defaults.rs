@@ -1,4 +1,5 @@
 //! What `#[derive(FieldDefaults)]` fills each field with.
+#![cfg(test)]
 
 use {
     assert2::assert,

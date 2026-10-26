@@ -16,7 +16,10 @@ use {
     },
     crate::{api_catalog::UnstableApiVersions, config::BrokerConfig, file_config::FileConfig},
     assert2::{assert, check},
-    krabka_protocol::owned::describe_configs_response::DescribeConfigsSynonym,
+    krabka_protocol::owned::{
+        describe_configs_response, describe_configs_response::DescribeConfigsSynonym,
+    },
+    std::{iter, path::PathBuf},
 };
 
 const BOTH: EntryOptions = EntryOptions {
@@ -258,7 +261,7 @@ fn topic_creation_defaults_report_their_provenance() {
                 named
                     .map(|value| expected_synonym(key, value, CONFIG_SOURCE_STATIC_BROKER))
                     .into_iter()
-                    .chain(std::iter::once(default_synonym(key)))
+                    .chain(iter::once(default_synonym(key)))
                     .collect(),
             )
             .call()
@@ -449,7 +452,7 @@ fn static_settings_name_the_metadata_log_dir_and_the_metadata_log_keys() {
     for (label, metadata_log_dir, source, expected) in cases {
         let file: FileConfig = toml::from_str(source).expect("parse runtime config");
         let mut config = BrokerConfig {
-            metadata_log_dir: metadata_log_dir.map(std::path::PathBuf::from),
+            metadata_log_dir: metadata_log_dir.map(PathBuf::from),
             ..BrokerConfig::default()
         };
         file.apply_to(&mut config).expect("apply runtime config");
@@ -501,8 +504,7 @@ fn expected_entry(
 }
 
 /// The cleanup interval remains at Kafka's default when only expiration is supplied.
-fn expected_default_cleanup_interval()
--> krabka_protocol::owned::describe_configs_response::DescribeConfigsResourceResult {
+fn expected_default_cleanup_interval() -> describe_configs_response::DescribeConfigsResourceResult {
     expected_entry()
         .key(config_keys::TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS)
         .value("3600000")

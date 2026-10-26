@@ -182,7 +182,7 @@ fn legacy_fetch_all(
         .map(|(name, mut partitions)| {
             partitions.sort_by_key(|p| p.partition_index);
             OffsetFetchResponseTopic {
-                name: name.to_string(),
+                name: name.to_owned(),
                 partitions,
                 ..Default::default()
             }
@@ -197,7 +197,7 @@ fn committed_row(
     offsets: &GroupOffsets,
     require_stable: bool,
 ) -> OffsetFetchResponsePartition {
-    let key = (topic.to_string(), partition_index);
+    let key = (topic.to_owned(), partition_index);
     if require_stable && offsets.pending_txn.contains(&key) {
         return unstable::legacy_row(partition_index);
     }

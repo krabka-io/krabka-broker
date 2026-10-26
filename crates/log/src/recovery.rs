@@ -16,8 +16,8 @@ use {
         name,
         retention::{DELETED_SUFFIX, remove_optional_counted},
     },
-    std::{collections::HashSet, path::Path},
-    tracing::instrument,
+    std::{collections::HashSet, fs, path::Path},
+    tracing::{field, instrument},
 };
 
 pub mod swap;
@@ -45,13 +45,13 @@ const SIDECAR_EXTENSIONS: [&str; 4] = ["index", "timeindex", "txnindex", "stampi
 #[instrument(
     level = "info",
     skip_all,
-    fields(dir = %dir.display(), reclaimed = tracing::field::Empty),
+    fields(dir = %dir.display(), reclaimed = field::Empty),
     err,
 )]
 pub fn deleted_orphan_recover(io: &dyn LogIo, dir: &Path) -> Result<(), LogError> {
     let mut log_bases: HashSet<i64> = HashSet::new();
     let mut names: Vec<String> = Vec::new();
-    for entry in std::fs::read_dir(dir)? {
+    for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let file_name = entry.file_name();
         let Some(name) = file_name.to_str() else {
@@ -121,9 +121,15 @@ fn canonical_base(value: &str, ext: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::io::FileIo, assert2::check, tempfile::tempdir};
+    use {
+        super::*,
+        crate::io::FileIo,
+        assert2::check,
+        std::{fs::File, path::Path},
+        tempfile::tempdir,
+    };
 
-    fn touch(path: &std::path::Path) { std::fs::File::create(path).unwrap(); }
+    fn touch(path: &Path) { File::create(path).unwrap(); }
 
     /// The sweep reclaims both shapes an interrupted deletion leaves: a
     /// `.deleted` tombstone, and a sidecar whose `.log` is already gone.
@@ -199,7 +205,7 @@ mod tests {
         let dir = tempdir().unwrap();
 
         check!(matches!(
-            deleted_orphan_recover(&crate::io::FileIo, &dir.path().join("missing")),
+            deleted_orphan_recover(&FileIo, &dir.path().join("missing")),
             Err(LogError::Io(_))
         ));
     }

@@ -1,17 +1,17 @@
 //! ACL fixtures whose commit/application settling behavior matches quota suites.
 
 use {
-    krabka_broker::BrokerHandle,
+    krabka_broker::{BrokerHandle, authorizer::SimpleAclAuthorizer},
     krabka_metadata::{
         AclEntry, AclOperation, MetadataRecord, PatternType, PermissionType, ResourceType,
     },
+    std::{sync::Arc, time::Duration},
+    tokio::time,
 };
 
 /// Install the simple authorizer using exactly the broker's current super-user set.
 pub fn use_simple_acl_authorizer(config: &mut krabka_broker::BrokerConfig) {
-    config.authorizer = std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-        config.super_users.clone(),
-    ));
+    config.authorizer = Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -71,7 +71,7 @@ pub async fn seed_topic_acl(
         .await
         .expect("seed topic ACL");
     // Preserve the fixtures' commit/application settle before their RPC retry checks.
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    time::sleep(Duration::from_millis(50)).await;
 }
 
 /// A literal Allow ACL on one topic and principal, without committing or waiting.

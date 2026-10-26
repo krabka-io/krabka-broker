@@ -8,11 +8,12 @@
 use {
     super::pending::PendingPartition,
     crate::broker::Broker,
-    std::{sync::Arc, time::Duration},
-    tokio::sync::Notify,
+    futures_util::future,
+    std::{future::Future, pin::Pin, sync::Arc, time::Duration},
+    tokio::{sync::Notify, time::timeout},
 };
 
-type WaitFut = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+type WaitFut = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// Parks on the append and HW-advance notifies of the partitions that this
 /// broker can lead, under a single timeout. It mirrors the wait construction
@@ -38,16 +39,15 @@ pub(super) fn arm_waits(broker: &Broker, pending: &[PendingPartition]) -> Vec<Wa
         .filter(|partition| partition.leadable)
         .filter(|partition| partition.fetchable)
         .filter_map(|partition| {
-            partition.topic_name.as_deref().and_then(|name| {
-                broker
-                    .partitions
-                    .get(name, krabka_ids::PartitionIndex(partition.partition_index))
-            })
+            let name = partition.topic_name.as_deref()?;
+            broker
+                .partitions
+                .get(name, krabka_ids::PartitionIndex(partition.partition_index))
         })
         .flat_map(|partition| {
             [
-                partition.append_notify.clone(),
-                partition.hw_advance_notify.clone(),
+                Arc::clone(&partition.append_notify),
+                Arc::clone(&partition.hw_advance_notify),
             ]
         })
         .collect();
@@ -74,7 +74,7 @@ async fn wait_for_notifications(waits: Vec<WaitFut>, max_wait: Duration) -> Long
     if waits.is_empty() {
         return LongPollOutcome::NoPartitions;
     }
-    match tokio::time::timeout(max_wait, futures_util::future::select_all(waits)).await {
+    match timeout(max_wait, future::select_all(waits)).await {
         Ok(_) => LongPollOutcome::Notified,
         Err(_) => LongPollOutcome::TimedOut,
     }

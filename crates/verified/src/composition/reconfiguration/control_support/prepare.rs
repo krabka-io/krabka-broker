@@ -30,7 +30,7 @@ use super::*;
                     ==> base@ + deltas@[j]@ < end@,
     },
 })]
-pub(crate) fn reconfiguration_control_prefix_support(
+pub fn reconfiguration_control_prefix_support(
     old: &[u64],
     state: ReconfigurationState,
     request: VoterChangeRequest,
@@ -61,7 +61,8 @@ pub(crate) fn reconfiguration_control_prefix_support(
         votes@[j].0 == (reports@[j].0@ >= end@) && votes@[j].1 == (reports@[j].1@ >= end@))]
     #[variant(reports@.len() - i@)]
     while i < reports.len() {
-        votes.push((reports[i].0 >= end, reports[i].1 >= end));
+        let &(old_report, new_report) = reports.get(i)?;
+        votes.push((old_report >= end, new_report >= end));
         i += 1;
     }
     let (plan, next, counts, quorums, common) =

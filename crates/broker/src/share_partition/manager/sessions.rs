@@ -14,7 +14,7 @@ use {
             ResponseRow, ShareFetchSessionRequest, ShareFetchSessionUpdate, SharePartitionKey,
         },
     },
-    std::collections::HashSet,
+    std::{collections::HashSet, sync::Arc},
 };
 
 impl SharePartitionLeaderManager {
@@ -69,8 +69,8 @@ impl SharePartitionLeaderManager {
         for &(topic_id, partition) in partitions {
             let cell = self
                 .leaders
-                .get(&(group.to_string(), topic_id, partition))
-                .map(|entry| entry.value().clone());
+                .get(&(group.to_owned(), topic_id, partition))
+                .map(|entry| Arc::clone(entry.value()));
             let Some(cell) = cell else {
                 continue;
             };
@@ -81,6 +81,7 @@ impl SharePartitionLeaderManager {
             let _ = self
                 .persist_if_dirty(group, topic_id, partition, Some(&cell), &mut state)
                 .await;
+            drop(state);
         }
     }
 
@@ -98,16 +99,19 @@ impl SharePartitionLeaderManager {
 #[cfg(test)]
 mod tests {
     use {
-        crate::share_partition::{
-            manager::test_support::{
-                LOCK, SessionCapacity, manager, manager_with_unlimited_fallback,
+        crate::{
+            codes,
+            share_partition::{
+                manager::test_support::{
+                    LOCK, SessionCapacity, manager, manager_with_unlimited_fallback,
+                },
+                session::{FetchPartitions, ShareFetchSessionRequest},
+                state::AcquisitionState,
             },
-            session::{FetchPartitions, ShareFetchSessionRequest},
-            state::AcquisitionState,
         },
         assert2::assert,
         krabka_log::Offset,
-        std::collections::HashSet,
+        std::{collections::HashSet, time::Instant},
     };
 
     #[test]
@@ -143,7 +147,7 @@ mod tests {
                         forgotten: &partitions,
                     })
                     .build()
-            ) == Err(crate::codes::SHARE_SESSION_LIMIT_REACHED)
+            ) == Err(codes::SHARE_SESSION_LIMIT_REACHED)
         );
     }
 
@@ -159,10 +163,11 @@ mod tests {
                 "m1",
                 1,
                 krabka_log::Offset(i64::MAX),
-                std::time::Instant::now(),
+                Instant::now(),
                 LOCK,
                 5,
             );
+            drop(state);
             assert!(acquired.len() == 1);
         }
         mgr.update_fetch_session(
@@ -185,10 +190,11 @@ mod tests {
             "m2",
             1,
             krabka_log::Offset(i64::MAX),
-            std::time::Instant::now(),
+            Instant::now(),
             LOCK,
             5,
         );
+        drop(state);
         assert!(redelivered.len() == 1);
         assert!(redelivered[0].delivery_count == 2);
     }

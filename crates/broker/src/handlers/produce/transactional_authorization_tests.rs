@@ -30,6 +30,7 @@ use {
     krabka_protocol::owned::{
         create_topics_request::{self},
         init_producer_id_request::InitProducerIdRequest,
+        init_producer_id_response,
     },
 };
 
@@ -73,7 +74,7 @@ async fn boot() -> StartedBroker {
         broker: handle,
         dir,
     } = start_transaction_grant_broker().await;
-    handle.wait_until_controller_leader().await;
+    handle.wait_until_controller_leader().await.unwrap();
     handle.wait_until_brokers_registered(1).await;
     let broker = handle.broker_arc_for_test();
     // A client's first `FindCoordinator(TRANSACTION)` creates
@@ -121,13 +122,13 @@ async fn open_transaction(broker: &Broker) -> TransactionalBatchSetup {
     };
 
     let init_request = InitProducerIdRequest {
-        transactional_id: Some(TXN_ID.to_string()),
+        transactional_id: Some(TXN_ID.to_owned()),
         transaction_timeout_ms: 60_000,
         producer_id: -1,
         producer_epoch: -1,
         ..Default::default()
     };
-    let version = krabka_protocol::owned::init_producer_id_response::MAX_VERSION;
+    let version = init_producer_id_response::MAX_VERSION;
     let init = init_producer_id_handle(broker, init_request, version, &ctx)
         .await
         .expect("InitProducerId");
@@ -174,7 +175,7 @@ fn produce_request(
             name: if id_only {
                 String::new()
             } else {
-                TOPIC.to_string()
+                TOPIC.to_owned()
             },
             topic_id: if id_only { topic_id } else { WireUuid::ZERO },
             partition_data: vec![PartitionProduceData {
@@ -360,7 +361,7 @@ async fn transactional_id_write_gates_exactly_on_the_batch_not_the_request_field
         };
         let expected = ProduceResponse {
             responses: vec![TopicProduceResponse {
-                name: TOPIC.to_string(),
+                name: TOPIC.to_owned(),
                 topic_id: WireUuid::ZERO,
                 partition_responses: vec![expected_row],
                 ..Default::default()

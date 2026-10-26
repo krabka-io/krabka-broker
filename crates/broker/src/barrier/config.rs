@@ -11,7 +11,7 @@ use krabka_units::{ByteSize, Time, mebibytes, millis, minutes, secs};
 /// The struct is [`PartialEq`] but not [`Eq`], because [`Time`] and
 /// [`ByteSize`] are backed by a float.
 #[derive(Debug, Clone, PartialEq, krabka_macros::FieldDefaults)]
-pub(crate) struct BarrierConfig {
+pub struct BarrierConfig {
     /// Partition count of `__barrier_state`. It fixes the group-to-partition
     /// map, so a change moves every group.
     #[default(50)]

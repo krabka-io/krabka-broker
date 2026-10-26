@@ -37,7 +37,7 @@ use {
     api = "ListBarrierCuts",
     level = "info"
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ListBarrierCutsRequest,
     version: ApiVersion,

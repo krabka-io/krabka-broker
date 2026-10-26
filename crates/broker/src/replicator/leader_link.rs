@@ -23,7 +23,11 @@ use {
         tagged_fields::read_tagged_fields,
     },
     krabka_units::{Time, convert::TimeExt},
-    tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    std::io,
+    tokio::{
+        io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+        time,
+    },
 };
 
 /// Kafka's `UNSUPPORTED_VERSION` error code.
@@ -156,7 +160,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> LeaderLink<S> {
             body,
         )?;
         let timeout = self.settings.request_timeout;
-        tokio::time::timeout(timeout.to_std(), self.round_trip(&frame, correlation))
+        time::timeout(timeout.to_std(), self.round_trip(&frame, correlation))
             .await
             .map_err(|_| ClientError::Timeout(timeout))?
     }
@@ -234,7 +238,10 @@ fn request_frame(
     body(&mut frame)?;
     let length = i32::try_from(frame.len() - 4)
         .map_err(|_| ClientError::InvalidArgument("request frame exceeds i32::MAX".into()))?;
-    frame[..4].copy_from_slice(&length.to_be_bytes());
+    frame
+        .get_mut(..4)
+        .ok_or_else(|| ClientError::InvalidArgument("request frame has no length prefix".into()))?
+        .copy_from_slice(&length.to_be_bytes());
     Ok(frame)
 }
 
@@ -260,8 +267,8 @@ fn decode_api_versions(body: &[u8], version: i16) -> Result<ApiVersionsResponse,
     }
 }
 
-fn disconnected_at_eof(error: std::io::Error) -> ClientError {
-    if error.kind() == std::io::ErrorKind::UnexpectedEof {
+fn disconnected_at_eof(error: io::Error) -> ClientError {
+    if error.kind() == io::ErrorKind::UnexpectedEof {
         ClientError::Disconnected
     } else {
         ClientError::Io(error)
@@ -269,10 +276,7 @@ fn disconnected_at_eof(error: std::io::Error) -> ClientError {
 }
 
 fn invalid(message: String) -> ClientError {
-    ClientError::Io(std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
-        message,
-    ))
+    ClientError::Io(io::Error::new(io::ErrorKind::InvalidData, message))
 }
 
 #[cfg(test)]

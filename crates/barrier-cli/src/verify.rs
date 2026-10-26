@@ -23,8 +23,10 @@ use {
             fetch_request::{FetchPartition, FetchRequest, FetchTopic},
             metadata_request::{MetadataRequest, MetadataRequestTopic},
         },
-        records::RecordBatch,
+        primitives::uuid::Uuid,
+        records::{RecordBatch, RecordsPayload},
     },
+    std::collections::BTreeMap,
 };
 
 /// One offset that does not hold the marker the cut claims.
@@ -61,7 +63,7 @@ pub struct VerifyOutcome {
 /// log disagrees with is a [`Mismatch`] in the outcome rather than an error:
 /// the point of the command is to report every one of them, not to stop at the
 /// first.
-pub(crate) async fn verify(
+pub async fn verify(
     client: &krabka_client_core::Client,
     group: &str,
     epoch: i64,
@@ -144,9 +146,9 @@ async fn fetch_cut(
 
 /// The id of one topic, and the current leader of each of its partitions.
 struct ResolvedTopic {
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    topic_id: Uuid,
     /// The leader's broker id, by partition.
-    leaders: std::collections::BTreeMap<i32, i32>,
+    leaders: BTreeMap<i32, i32>,
 }
 
 /// Look up one topic's [`ResolvedTopic`].
@@ -193,7 +195,7 @@ async fn fetch_batch_at(
     client: &krabka_client_core::Client,
     leader: i32,
     topic: &str,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    topic_id: Uuid,
     partition: i32,
     offset: i64,
 ) -> Result<Option<RecordBatch>, String> {
@@ -239,7 +241,7 @@ async fn fetch_batch_at(
     Ok(part
         .records
         .as_ref()
-        .and_then(krabka_protocol::records::RecordsPayload::as_v2)
+        .and_then(RecordsPayload::as_v2)
         .and_then(|batches| {
             batches
                 .iter()
@@ -294,12 +296,13 @@ mod tests {
         super::*,
         assert2::check,
         bytes::Bytes,
+        krabka_broker::testing,
         krabka_protocol::records::{Attributes, Record, RecordBatch},
     };
 
     /// A barrier marker fixture made with the broker's production encoder.
     fn marker_batch(group: &str, epoch: i64, offset: i64) -> RecordBatch {
-        krabka_broker::testing::barrier_marker_batch(group, epoch, 1_724_500_000_000, offset)
+        testing::barrier_marker_batch(group, epoch, 1_724_500_000_000, offset)
             .expect("valid marker fixture")
     }
 

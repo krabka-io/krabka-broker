@@ -132,7 +132,7 @@ async fn a_deleted_group_and_its_offsets_stay_deleted_after_replay() {
         }
 
         let offsets_log = Arc::new(InMemoryOffsetsLog::default());
-        let before = coordinator(offsets_log.clone());
+        let before = coordinator(Arc::clone(&offsets_log));
         finalize(&before, replay_records(&log, &before).unwrap()).await;
         check!(before.delete_group("g").await == Ok(()), "{}", row.name);
 

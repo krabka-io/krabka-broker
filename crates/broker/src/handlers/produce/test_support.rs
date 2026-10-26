@@ -20,7 +20,7 @@ use {
     bytes::{Bytes, BytesMut},
     krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord},
     krabka_protocol::records::{Attributes, Record, RecordBatch, RecordsPayload},
-    std::{collections::BTreeMap, sync::Arc},
+    std::{collections::BTreeMap, path::Path, sync::Arc},
 };
 
 /// The default services of a standalone produce pipeline, shared by tests
@@ -44,7 +44,7 @@ pub(super) struct PipelinePartitionSetup<'a> {
 impl PipelineFixture {
     pub(super) async fn register_partition(
         &self,
-        root: &std::path::Path,
+        root: &Path,
         topic: &str,
         image: &MetadataImage,
     ) -> Arc<Partition> {
@@ -59,7 +59,7 @@ impl PipelineFixture {
 
     pub(super) async fn partition(
         &self,
-        root: &std::path::Path,
+        root: &Path,
         topic: &str,
         image: &MetadataImage,
     ) -> Arc<Partition> {
@@ -72,7 +72,7 @@ impl PipelineFixture {
 
     pub(super) async fn partition_with_config(
         &self,
-        root: &std::path::Path,
+        root: &Path,
         image: &MetadataImage,
         setup: PipelinePartitionSetup<'_>,
     ) -> Arc<Partition> {
@@ -163,7 +163,7 @@ pub(super) fn pipeline_input(
     }
 }
 
-pub(crate) fn image_with_topic(topic: &str, isr: &[u64]) -> MetadataImage {
+pub fn image_with_topic(topic: &str, isr: &[u64]) -> MetadataImage {
     topic_partition_image(topic, i16::try_from(isr.len().max(1)).unwrap(), || {
         replicated_partition()
             .topic(topic)

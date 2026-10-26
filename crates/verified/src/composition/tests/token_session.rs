@@ -4,6 +4,7 @@ use {
         authz::{sasl_session_expiry, session_expired_for_request},
         delegation_token::{TokenApi, TokenApiAdmission},
     },
+    proptest::option,
 };
 
 fn session_oracle(now: i64, credential: Option<i64>, cap: Option<i64>) -> (Option<i64>, i64) {
@@ -18,12 +19,8 @@ fn session_oracle(now: i64, credential: Option<i64>, cap: Option<i64>) -> (Optio
 }
 
 fn check_trace(times: [i64; 3], periods: [i64; 4], api: i16, token_api: TokenApi) {
-    let actual = created_token_session_bounds_requests(
-        (times[0], times[1], times[2]),
-        (periods[0], periods[1], periods[2], periods[3]),
-        api,
-        token_api,
-    );
+    let actual =
+        created_token_session_bounds_requests(times.into(), periods.into(), api, token_api);
     let expected = if periods[1] <= 0 || periods[2] <= 0 {
         None
     } else {
@@ -129,9 +126,9 @@ fn token_session_deadline_and_round_boundaries() {
 proptest! {
     #[test]
     fn session_kernel_matches_wide_integer_oracle(
-        now in any::<i64>(), credential in proptest::option::of(any::<i64>()),
-        cap in proptest::option::of(any::<i64>()), api in any::<i16>(),
-        last in proptest::option::of(any::<i64>()),
+        now in any::<i64>(), credential in option::of(any::<i64>()),
+        cap in option::of(any::<i64>()), api in any::<i16>(),
+        last in option::of(any::<i64>()),
     ) {
         prop_assert_eq!(sasl_session_expiry(now, credential, cap), session_oracle(now, credential, cap));
         prop_assert_eq!(session_expired_for_request(credential, api, now, last),

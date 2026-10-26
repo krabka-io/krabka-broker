@@ -77,7 +77,9 @@ krabka_macros::index_floor_lookup! {
     <=; upper_time_cursor;
 }
 
-/// A safe sparse starting offset for a forward scan seeking `timestamp >= target`.
+/// A safe sparse starting offset for a forward scan seeking
+/// `timestamp >= target`.
+///
 /// Entries carry running maxima. Starting at an equal maximum could skip its
 /// first occurrence, so only a strictly smaller maximum may advance the scan.
 #[cfg_attr(creusot, requires(time_keys_nondecreasing(entries@)))]
@@ -91,10 +93,10 @@ krabka_macros::index_floor_lookup! {
     ==> result@ == 0)]
 #[must_use]
 pub fn time_index_scan_start(entries: &[TimeEntry], target_timestamp: i64) -> u32 {
-    match target_timestamp.checked_sub(1) {
-        Some(before) => time_index_lookup(entries, before),
-        None => 0,
-    }
+    let Some(before) = target_timestamp.checked_sub(1) else {
+        return 0;
+    };
+    time_index_lookup(entries, before)
 }
 
 /// The byte position of the first entry at or after `target`.
@@ -112,26 +114,24 @@ pub fn time_index_scan_start(entries: &[TimeEntry], target_timestamp: i64) -> u3
 #[must_use]
 pub fn offset_index_position_at_or_after(entries: &[OffsetEntry], target: u32) -> Option<u32> {
     let lo = lower_offset_cursor(entries, target);
-    if lo == entries.len() {
-        None
-    } else {
-        Some(entries[lo].coordinate)
-    }
+    let entry = entries.get(lo)?;
+    Some(entry.coordinate)
 }
 
 #[cfg(test)]
 mod tests {
 
-    use {super::*, proptest::prelude::*};
+    use {
+        super::*,
+        proptest::{collection, prelude::*},
+        std::collections::BTreeSet,
+    };
 
-    fn offset_lookup_cases() -> impl Strategy<Value = (std::collections::BTreeSet<u32>, u32)> {
-        (
-            proptest::collection::btree_set(0u32..10_000, 0..64),
-            0u32..10_000,
-        )
+    fn offset_lookup_cases() -> impl Strategy<Value = (BTreeSet<u32>, u32)> {
+        (collection::btree_set(0u32..10_000, 0..64), 0u32..10_000)
     }
 
-    fn offset_entries(rels: &std::collections::BTreeSet<u32>) -> Vec<OffsetEntry> {
+    fn offset_entries(rels: &BTreeSet<u32>) -> Vec<OffsetEntry> {
         rels.iter()
             .enumerate()
             .map(|(i, rel)| {
@@ -164,7 +164,7 @@ mod tests {
 
         #[test]
         fn time_lookup_matches_linear_oracle(
-            timestamps in proptest::collection::vec(-10_000i64..10_000, 0..64),
+            timestamps in collection::vec(-10_000i64..10_000, 0..64),
             target in -10_000i64..10_000,
         ) {
             let mut timestamps = timestamps;

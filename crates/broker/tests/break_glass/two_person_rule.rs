@@ -16,8 +16,12 @@ use {
     },
     assert2::{assert, check},
     krabka_broker::codes,
-    krabka_protocol::krabka::break_glass::{
-        ApproveBreakGlassResponse, BreakGlassApproval as WireApproval, DescribedBreakGlassProposal,
+    krabka_protocol::{
+        krabka::break_glass::{
+            ApproveBreakGlassResponse, BreakGlassApproval as WireApproval,
+            DescribedBreakGlassProposal,
+        },
+        primitives::uuid::Uuid,
     },
 };
 
@@ -107,7 +111,7 @@ struct ProposedDelete {
     cluster: Cluster,
     alice: krabka_client_core::Client,
     bob: krabka_client_core::Client,
-    id: krabka_protocol::primitives::uuid::Uuid,
+    id: Uuid,
 }
 
 async fn proposed_delete_fixture() -> ProposedDelete {

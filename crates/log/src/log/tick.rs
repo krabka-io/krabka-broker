@@ -19,9 +19,11 @@ use {
     krabka_verified::retention::{LocalRetentionSegment, local_retention_prefix},
     std::{
         collections::HashSet,
+        iter,
+        sync::PoisonError,
         time::{Instant, SystemTime},
     },
-    tracing::instrument,
+    tracing::{field, instrument},
 };
 
 impl Log {
@@ -43,19 +45,22 @@ impl Log {
     #[instrument(
         level = "debug",
         skip_all,
-        fields(evicted = tracing::field::Empty),
+        fields(evicted = field::Empty),
         err,
     )]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn tick(&mut self, now: SystemTime, high_watermark: Offset) -> Result<(), LogError> {
         self.rollover_flusher.check()?;
-        self.flush_if_due(std::time::Instant::now())?;
+        self.flush_if_due(Instant::now())?;
         self.reap_deleted_files(now)?;
         // Tiered topics' segment lifecycle is owned by the RemoteLogManager.
-        if self.config.read().unwrap().remote_storage_enable {
+        if self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remote_storage_enable
+        {
             return Ok(());
         }
         // Refresh the visibility watermark before retention reads it, so a
@@ -67,7 +72,7 @@ impl Log {
             .watermark;
 
         let now_ms = retention::now_ms(now);
-        let cfg_guard = self.config.read().unwrap();
+        let cfg_guard = self.config.read().unwrap_or_else(PoisonError::into_inner);
         // Kafka's `UnifiedLog.deleteOldSegments`: time and size retention run
         // only when `cleanup.policy` holds `delete`. A compact-only log keeps
         // every key however old it is, and loses a segment only when the whole
@@ -107,7 +112,7 @@ impl Log {
             .iter()
             .skip(1)
             .map(|segment| Some(segment.base_offset()))
-            .chain(std::iter::once(None));
+            .chain(iter::once(None));
         // On an immediate topic the floor is the log end, so no segment is
         // blocked. On a scheduled topic the first waiting segment stops the
         // prefix; later segments are never skipped around it.
@@ -204,6 +209,7 @@ mod tests {
         },
         assert2::check,
         krabka_units::prelude::{ByteSize, kibibytes, millis, secs},
+        std::time::{Duration, UNIX_EPOCH},
         tempfile::tempdir,
     };
 
@@ -261,7 +267,7 @@ mod tests {
             expected: Vec<Offset>,
         }
 
-        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(100);
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
         let all = vec![Offset(0), Offset(1), Offset(2)];
         let cases = [
             Case {
@@ -295,7 +301,7 @@ mod tests {
                 cleanup_policy: CleanupPolicy::Compact,
                 retention_size: Some(ByteSize::ZERO),
                 log_start: Offset(0),
-                expected: all.clone(),
+                expected: all,
             },
             Case {
                 cleanup_policy: CleanupPolicy::CompactAndDelete,
@@ -401,12 +407,12 @@ mod tests {
     /// it stays while the file is young and goes once the file is older than
     /// `retention.ms`.
     #[yare::parameterized(
-        young_file = { "a young file stays", std::time::Duration::ZERO, false },
-        old_file = { "an old file goes", std::time::Duration::from_hours(2), true },
+        young_file = { "a young file stays", Duration::ZERO, false },
+        old_file = { "an old file goes", Duration::from_hours(2), true },
     )]
     fn a_segment_without_record_timestamps_is_aged_by_its_file(
         case_name: &str,
-        age: std::time::Duration,
+        age: Duration,
         deleted: bool,
     ) {
         let dir = tempdir().unwrap();
@@ -464,7 +470,7 @@ mod tests {
         }
 
         log.tick(
-            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(60),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(60),
             high_watermark,
         )
         .unwrap();
@@ -487,11 +493,8 @@ mod tests {
             log.append(&mut batch).unwrap();
         }
 
-        log.tick(
-            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1),
-            log.log_end_offset(),
-        )
-        .unwrap();
+        log.tick(UNIX_EPOCH + Duration::from_secs(1), log.log_end_offset())
+            .unwrap();
 
         check!(log.stamp_for_offset(Offset(0)) == None);
         check!(log.stamp_for_offset(Offset(1)) == None);

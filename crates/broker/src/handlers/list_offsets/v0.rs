@@ -20,6 +20,7 @@ use {
         fixed::{get_i32, get_i64, put_i16, put_i32, put_i64},
         string_bytes::{get_string_owned, put_string},
     },
+    std::{iter, sync::PoisonError},
 };
 
 const LATEST_TIMESTAMP: i64 = -1;
@@ -117,7 +118,7 @@ async fn resolve_partition(
     };
 
     let (local_end, local_start, deleted_below, config, offsets) = {
-        let log = partition.log.lock().expect("log mutex poisoned");
+        let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
         (
             log.log_end_offset().0,
             log.local_log_start_offset().0,
@@ -163,7 +164,7 @@ async fn resolve_partition(
         }
     }
     if offsets.iter().any(|offset| offset.0 > upper) {
-        offsets = std::iter::once(krabka_ids::Offset(upper))
+        offsets = iter::once(krabka_ids::Offset(upper))
             .chain(offsets.into_iter().skip_while(|offset| offset.0 > upper))
             .collect();
     }
@@ -285,7 +286,7 @@ mod tests {
             string_bytes::{get_string_owned, put_string},
         },
         krabka_units::prelude::bytes,
-        std::{sync::Arc, time::Duration},
+        std::{iter, sync::Arc, time::Duration},
     };
 
     struct ConnectedBroker {
@@ -319,16 +320,14 @@ mod tests {
             directory: _dir,
             client,
         } = connected_broker().await;
-        create_topic(&client, TOPIC, vec![
-            krabka_protocol::owned::create_topics_request::CreatableTopicConfig {
-                name: "internal.segment.bytes".into(),
-                value: Some("1".into()),
-                ..Default::default()
-            },
-        ])
+        create_topic(&client, TOPIC, vec![CreatableTopicConfig {
+            name: "internal.segment.bytes".into(),
+            value: Some("1".into()),
+            ..Default::default()
+        }])
         .await;
         broker_handle.wait_until_partition_present(TOPIC, 0).await;
-        tokio::time::timeout(Duration::from_secs(5), async {
+        timeout(Duration::from_secs(5), async {
             loop {
                 if broker_handle
                     .partition_log_config_for_test(TOPIC, 0)
@@ -336,7 +335,7 @@ mod tests {
                 {
                     break;
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
@@ -361,8 +360,8 @@ mod tests {
         assert!(get_i32(&mut response).unwrap() == 0);
         assert!(get_i16(&mut response).unwrap() == codes::NONE);
         let count = get_array_len(&mut response, false).unwrap();
-        let offsets: Vec<i64> = (0..count)
-            .map(|_| get_i64(&mut response).unwrap())
+        let offsets: Vec<i64> = iter::repeat_with(|| get_i64(&mut response).unwrap())
+            .take(count)
             .collect();
         assert!(offsets == vec![4, 3, 2], "{offsets:?}");
         assert!(response.is_empty());
@@ -375,13 +374,18 @@ mod tests {
     /// a denied topic's row always lands last, regardless of where it sat in
     /// the v0 request.
     use crate::handlers::list_offsets::test_support::DenyNamed;
+    use {
+        krabka_protocol::owned::create_topics_request::CreatableTopicConfig,
+        std::collections::HashSet,
+        tokio::{task, time::timeout},
+    };
 
     #[tokio::test]
     async fn denied_topic_row_is_appended_last_regardless_of_request_order() {
         krabka_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker, admin, socket);
                     boot [start_broker_with_authorizer_no_audit(Arc::new(DenyNamed(
-                                std::collections::HashSet::from(["denied"]),
+                                HashSet::from(["denied"]),
                             )))];
 
         user ["admin"];

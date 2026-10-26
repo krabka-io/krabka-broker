@@ -71,7 +71,9 @@ pub(super) fn token_description_preserves_authentication_and_acl_isolation(
         && !rows@[j].allow && token_description_permission_matches(rows@[j])))]
     #[variant(rows@.len() - i@)]
     while i < rows.len() {
-        let row = rows[i];
+        let Some(&row) = rows.get(i) else {
+            break;
+        };
         if acl_resource_match(row.pattern, row.resource) {
             has_resource_acls = true;
             if acl_identity_match(row.principal.0, row.principal.1)

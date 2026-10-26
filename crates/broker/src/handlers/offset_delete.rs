@@ -76,9 +76,10 @@ use {
         },
         handlers::ErrorCodeResponse as _,
     },
+    std::collections::HashMap,
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: OffsetDeleteRequest,
     _version: ApiVersion,
@@ -134,7 +135,7 @@ pub(crate) async fn handle(
         req.topics.iter().map(|t| t.name.as_str()),
     );
 
-    let topic_partition_counts: std::collections::HashMap<&str, i32> = req
+    let topic_partition_counts: HashMap<&str, i32> = req
         .topics
         .iter()
         .filter_map(|t| {

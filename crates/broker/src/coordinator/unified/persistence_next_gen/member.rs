@@ -50,10 +50,11 @@ use {
 const TAG_CLASSIC_MEMBER_METADATA: u32 = 0;
 
 /// Classic-protocol sub-state for a member hosted inside an upgraded consumer
-/// group (KIP-848 migration). It mirrors Kafka's
-/// `ConsumerGroupMemberMetadataValue.ClassicMemberMetadata`. It lets a
-/// downgrade restore the classic member losslessly after a coordinator
-/// failover.
+/// group (KIP-848 migration).
+///
+/// It mirrors Kafka's `ConsumerGroupMemberMetadataValue.ClassicMemberMetadata`.
+/// It lets a downgrade restore the classic member losslessly after a
+/// coordinator failover.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassicMemberMetadata {
     pub session_timeout_ms: i32,
@@ -285,7 +286,7 @@ mod tests {
         let decoded = MemberMetadataValue::decode(&v.encode()).unwrap();
         assert!(decoded == v);
 
-        let mut plain = v.clone();
+        let mut plain = v;
         plain.classic = None;
         assert!(MemberMetadataValue::decode(&plain.encode()).unwrap() == plain);
     }

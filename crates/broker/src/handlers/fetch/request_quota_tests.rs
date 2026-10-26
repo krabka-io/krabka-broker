@@ -17,6 +17,7 @@ use {
     },
     assert2::assert,
     krabka_units::secs,
+    std::sync::Arc,
 };
 
 /// How long the fetch waits for `MinBytes` on an empty partition.
@@ -29,7 +30,7 @@ const STARVED_REQUEST_PERCENTAGE: f64 = 0.0001;
 /// of its rate.
 async fn start() -> HandlerStartedBroker {
     start_broker_with(|config| {
-        config.authorizer = std::sync::Arc::new(AllowAllAuthorizer);
+        config.authorizer = Arc::new(AllowAllAuthorizer);
         config.quota_window = secs(1);
         config.quota_throttle_max = secs(1);
     })

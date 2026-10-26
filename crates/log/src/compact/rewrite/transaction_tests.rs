@@ -22,7 +22,7 @@ use {
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::RecordBatch,
     krabka_units::prelude::millis,
-    std::{collections::HashMap, fs},
+    std::{collections::HashMap, fs, path::Path, slice},
 };
 
 /// The base offset and delete horizon of one output batch.
@@ -42,7 +42,7 @@ fn aborted_entry(producer_id: i64, start: i64, marker: i64) -> AbortedTxn {
 }
 
 fn rewrite_at(
-    dir: &std::path::Path,
+    dir: &Path,
     segment_refs: &[&Segment],
     txn: &mut CleanedTransactionMetadata,
     now_ms: i64,
@@ -143,8 +143,8 @@ fn an_aborted_transaction_spanning_two_groups_keeps_its_marker_and_index_entry()
         })
         .call();
     let abort_marker = control_batch(1, 2000, 0 /* ABORT */);
-    let seg_a = write_sealed_batches(dir.path(), std::slice::from_ref(&aborted));
-    let seg_b = write_sealed_batches(dir.path(), std::slice::from_ref(&abort_marker));
+    let seg_a = write_sealed_batches(dir.path(), slice::from_ref(&aborted));
+    let seg_b = write_sealed_batches(dir.path(), slice::from_ref(&abort_marker));
     let entry = aborted_entry(2000, 0, 1);
 
     let mut txn = CleanedTransactionMetadata::default();

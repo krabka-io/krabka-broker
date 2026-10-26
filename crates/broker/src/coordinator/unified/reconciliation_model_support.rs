@@ -18,6 +18,7 @@ use {
     },
     std::{
         collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+        sync::Arc,
         time::{Duration, Instant},
     },
 };
@@ -53,12 +54,12 @@ pub const TOPIC_NAME: &str = "t";
 pub struct ModelMetadata(ReconcileInput);
 
 impl MetadataProvider for ModelMetadata {
-    fn snapshot(&self) -> std::sync::Arc<ReconcileInput> { std::sync::Arc::new(self.0.clone()) }
+    fn snapshot(&self) -> Arc<ReconcileInput> { Arc::new(self.0.clone()) }
 }
 
 pub fn metadata(partitions: i32) -> ModelMetadata {
     ModelMetadata(ReconcileInput {
-        topic_id_by_name: [(TOPIC_NAME.to_string(), TOPIC)].into(),
+        topic_id_by_name: [(TOPIC_NAME.to_owned(), TOPIC)].into(),
         partitions_per_topic: [(TOPIC, partitions)].into(),
         ..Default::default()
     })

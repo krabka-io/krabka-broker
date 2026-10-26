@@ -14,7 +14,9 @@
 //! path lives in its own submodule.
 
 use {
-    std::{borrow::Cow, collections::HashMap, sync::Arc, time::Instant},
+    crate::time_util::sleep_until_opt,
+    krabka_protocol::primitives::uuid::Uuid,
+    std::{borrow::Cow, collections::HashMap, fmt::Debug, sync::Arc, time::Instant},
     tokio::{
         sync::{mpsc, oneshot},
         task::JoinHandle,
@@ -114,10 +116,11 @@ const FALLBACK_HEARTBEAT_INTERVAL_MS: i32 = 5_000;
 /// which loop lost its ticker.
 const TICK_TASK: &str = "consumer group actor";
 
-/// Which protocol an actor's `Group` speaks. This value is fixed at spawn. The
-/// handle exposes it so that the coordinator can route or reject
-/// cross-protocol RPCs, and filter admin views, without a message to the
-/// actor.
+/// Which protocol an actor's `Group` speaks.
+///
+/// This value is fixed at spawn. The handle exposes it so that the coordinator
+/// can route or reject cross-protocol RPCs, and filter admin views, without a
+/// message to the actor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupKindTag {
     Classic,
@@ -166,7 +169,7 @@ impl GroupActorHandle {
     }
 }
 
-pub trait MetadataProvider: Send + Sync + std::fmt::Debug {
+pub trait MetadataProvider: Send + Sync + Debug {
     fn snapshot(&self) -> Arc<ReconcileInput>;
 
     /// The name of the topic with `topic_id`, or `None` when no such topic
@@ -176,7 +179,7 @@ pub trait MetadataProvider: Send + Sync + std::fmt::Debug {
     /// and assignment, so the broker's provider answers from the image
     /// directly. This default searches the shared [`snapshot`](Self::snapshot),
     /// which only the static providers of the tests use.
-    fn topic_name(&self, topic_id: &krabka_protocol::primitives::uuid::Uuid) -> Option<String> {
+    fn topic_name(&self, topic_id: &Uuid) -> Option<String> {
         self.snapshot()
             .topic_id_by_name
             .iter()
@@ -325,18 +328,16 @@ async fn run_actor(
                     let services = ActorServices { config: &effective, ..services };
                     let keep_running =
                         handle_actor_tick(&mut group, &mut parked, services).await;
-                    match time_util::arm(&*config.timer, config.session_expiry_tick, TICK_TASK) {
-                        Some(next) => {
+                    time_util::arm(&*config.timer, config.session_expiry_tick, TICK_TASK)
+                        .is_some_and(|next| {
                             tick = next;
                             keep_running
-                        }
-                        None => false,
-                    }
+                        })
                 } else {
                     false
                 }
             }
-            () = crate::time_util::sleep_until_opt(rebalance_deadline) => {
+            () = sleep_until_opt(rebalance_deadline) => {
                 // KIP-848: a member's rebalance timeout fired. Run the sweep
                 // now instead of at the next session tick, so the partitions it
                 // did not revoke reach their new owner on time.
@@ -344,13 +345,13 @@ async fn run_actor(
                 let services = ActorServices { config: &effective, ..services };
                 handle_actor_tick(&mut group, &mut parked, services).await
             }
-            () = crate::time_util::sleep_until_opt(classic_sync_deadline(&group)) => {
+            () = sleep_until_opt(classic_sync_deadline(&group)) => {
                 // Kafka's pending-sync timer: a member never sent SyncGroup.
                 let effective = effective_config(&config, &coordinator, &group.group_id);
                 let services = ActorServices { config: &effective, ..services };
                 handle_classic_sync_expiry(&mut group, &mut parked, services).await
             }
-            () = crate::time_util::sleep_until_opt(deadline) => {
+            () = sleep_until_opt(deadline) => {
                 // Classic rebalance deadline fired: extend Kafka's initial
                 // delay, or complete with whoever is here.
                 if let Some(state) = group.as_classic_mut()
@@ -420,13 +421,15 @@ fn effective_config<'a>(
 
 /// The classic rebalance-completion deadline, if a rebalance is open.
 fn classic_deadline(group: &CoordinatorGroup) -> Option<Instant> {
-    group.as_classic().and_then(|s| s.rebalance_deadline)
+    let s = group.as_classic()?;
+    s.rebalance_deadline
 }
 
 /// The classic pending-sync deadline, if a generation still awaits members'
 /// `SyncGroup`.
 fn classic_sync_deadline(group: &CoordinatorGroup) -> Option<Instant> {
-    group.as_classic().and_then(|s| s.sync_deadline)
+    let s = group.as_classic()?;
+    s.sync_deadline
 }
 
 // `reconciler_model` drives the real heartbeat step, so these are re-exported

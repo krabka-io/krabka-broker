@@ -35,7 +35,11 @@ use {
         end_txn_request::{self, EndTxnRequest},
         end_txn_response::EndTxnResponse,
     },
-    std::sync::Arc,
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::time::sleep,
 };
 
 const TID: &str = "tid-client-version";
@@ -151,14 +155,14 @@ async fn a_client_that_speaks_an_older_protocol_keeps_its_epoch_on_a_transaction
     let broker = handle.broker_arc_for_test();
     seed_transaction(&broker, TID, PRODUCER_ID).await;
     // The commit writes its marker to `a-0`, which has to be local by then.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while broker
         .partitions
         .get("a", krabka_ids::PartitionIndex(0))
         .is_none()
     {
-        check!(std::time::Instant::now() < deadline, "a-0 becomes local");
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        check!(Instant::now() < deadline, "a-0 becomes local");
+        sleep(Duration::from_millis(25)).await;
     }
     // `seed_transaction` opens the transaction at producer epoch 2.
     let epoch = 2;

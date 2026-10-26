@@ -1,5 +1,6 @@
-//! The epoch and target assignment steps of Kafka's consumer group
-//! heartbeat: the subscription metadata update that bumps the group epoch,
+//! The epoch and target assignment steps of Kafka's consumer group heartbeat.
+//!
+//! The steps are the subscription metadata update that bumps the group epoch,
 //! the epoch bump of a fence, and the target assignment that a group whose
 //! epoch is ahead of its target computes.
 
@@ -41,17 +42,15 @@ impl ReconcileInput {
             .copied()
             .unwrap_or(0)
             .max(0);
-        let racks: Vec<Vec<&str>> = (0..partitions)
-            .map(|partition| {
-                self.partition_racks
-                    .get(&TopicIdPartition {
-                        topic_id: *topic_id,
-                        partition,
-                    })
-                    .map_or_default(|racks| racks.iter().map(String::as_str).collect())
-            })
-            .collect();
-        Some(topic_hash::topic_hash(topic_id.0, name, racks.into_iter()))
+        let racks = (0..partitions).map(|partition| {
+            self.partition_racks
+                .get(&TopicIdPartition {
+                    topic_id: *topic_id,
+                    partition,
+                })
+                .map_or_default(|racks| racks.iter().map(String::as_str).collect())
+        });
+        Some(topic_hash::topic_hash(topic_id.0, name, racks))
     }
 
     /// Kafka's `ModernGroup.computeMetadataHash`: the group hash over the
@@ -343,7 +342,7 @@ mod tests {
         } = input("t", 4);
         g.bump_epoch();
         let first = compute_target(&mut g, &inp, &UniformAssignor);
-        check!(first == vec!["m1".to_string()]);
+        check!(first == vec!["m1".to_owned()]);
         check!(g.target.epoch == 2);
         check!(g.target.per_member["m1"][&t] == vec![0, 1, 2, 3]);
 
@@ -352,7 +351,7 @@ mod tests {
         g.add_or_update_member(fresh_member("m2", "unknown"));
         g.bump_epoch();
         let second = compute_target(&mut g, &inp, &UniformAssignor);
-        check!(second == vec!["m2".to_string()]);
+        check!(second == vec!["m2".to_owned()]);
         check!(g.target.per_member["m2"].is_empty());
         check!(g.target.epoch == 3);
     }
@@ -381,7 +380,7 @@ mod tests {
         let mut partitions_per_topic = HashMap::new();
         for (i, topic) in topics.iter().enumerate() {
             let id = Uuid([u8::try_from(i + 1).unwrap_or(255); 16]);
-            topic_id_by_name.insert(topic.name.to_string(), id);
+            topic_id_by_name.insert(topic.name.to_owned(), id);
             partitions_per_topic.insert(id, topic.partitions);
         }
         ReconcileInput {
@@ -393,7 +392,7 @@ mod tests {
 
     fn member_with_regex(id: &str, names: &[&str], regex: Option<&str>) -> MemberState {
         let mut member = fresh_member(id, "unused");
-        member.subscribed_topic_names = names.iter().map(|name| (*name).to_string()).collect();
+        member.subscribed_topic_names = names.iter().map(|name| (*name).to_owned()).collect();
         member.subscribed_topic_regex = regex.map(String::from);
         member
     }
@@ -566,7 +565,7 @@ mod tests {
         ReconcileInput {
             topic_id_by_name: topics
                 .iter()
-                .map(|topic| (topic.name.to_string(), Uuid([topic.id; 16])))
+                .map(|topic| (topic.name.to_owned(), Uuid([topic.id; 16])))
                 .collect(),
             partitions_per_topic: topics
                 .iter()

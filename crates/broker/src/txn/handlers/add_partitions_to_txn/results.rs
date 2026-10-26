@@ -65,15 +65,13 @@ pub(super) fn dedup_topics(topics: &[AddPartitionsToTxnTopic]) -> Vec<AddPartiti
     }
     order
         .into_iter()
-        .map(|name| {
-            let TopicPartitions { partitions, .. } = partitions_by_topic
-                .remove(&name)
-                .expect("every ordered name was inserted into the map above");
-            AddPartitionsToTxnTopic {
+        .filter_map(|name| {
+            let TopicPartitions { partitions, .. } = partitions_by_topic.remove(&name)?;
+            Some(AddPartitionsToTxnTopic {
                 name,
                 partitions,
                 ..Default::default()
-            }
+            })
         })
         .collect()
 }
@@ -219,9 +217,9 @@ mod tests {
             partition: PartitionIndex(1),
         });
         let topics = vec![topic("alpha", &[1, 2]), topic("denied", &[3])];
-        let denied = maplit::hashset! {"denied".to_string()};
+        let denied = maplit::hashset! {"denied".to_owned()};
 
-        let frozen = maplit::hashset! {"frozen".to_string()};
+        let frozen = maplit::hashset! {"frozen".to_owned()};
         let topics = [topics, vec![topic("frozen", &[4])]].concat();
 
         let rows = verify_partitions(
@@ -261,8 +259,8 @@ mod tests {
             topic("denied", &[5]),
             topic("frozen", &[6]),
         ];
-        let denied = maplit::hashset! {"denied".to_string()};
-        let frozen = maplit::hashset! {"frozen".to_string()};
+        let denied = maplit::hashset! {"denied".to_owned()};
+        let frozen = maplit::hashset! {"frozen".to_owned()};
 
         let rows = per_topic_with_refusals(&topics, &denied, &frozen, codes::NOT_COORDINATOR);
 

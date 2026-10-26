@@ -13,8 +13,8 @@ pub fn normalize_prefix(prefix: Option<&str>) -> Option<String> {
 /// Build the absolute object key for a path relative to an archive root.
 #[must_use]
 pub fn prefixed_key(prefix: Option<&str>, relative: &str) -> Path {
-    match prefix {
-        Some(prefix) => Path::from(format!("{prefix}/{relative}")),
-        None => Path::from(relative),
-    }
+    prefix.map_or_else(
+        || Path::from(relative),
+        |prefix| Path::from(format!("{prefix}/{relative}")),
+    )
 }

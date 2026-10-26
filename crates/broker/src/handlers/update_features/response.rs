@@ -29,7 +29,7 @@ const FEATURE_ERROR_PREFIX: &str =
 pub(super) fn top_level_error(code: i16, msg: &str) -> UpdateFeaturesResponse {
     UpdateFeaturesResponse {
         error_code: code,
-        error_message: Some(msg.to_string()),
+        error_message: Some(msg.to_owned()),
         ..Default::default()
     }
 }
@@ -53,7 +53,7 @@ pub(super) fn success(request: &UpdateFeaturesRequest, version: i16) -> UpdateFe
             .map(|update| UpdatableFeatureResult {
                 feature: update.feature.clone(),
                 error_code: codes::NONE,
-                error_message: Some(NONE_MESSAGE.to_string()),
+                error_message: Some(NONE_MESSAGE.to_owned()),
                 ..Default::default()
             })
             .collect()

@@ -16,8 +16,11 @@ use {
     krabka_ids::Offset,
     krabka_protocol::records::{HEADER_LEN, RecordBatch},
     krabka_units::prelude::{ByteSize, ByteSizeExt, bytes},
-    tracing::instrument,
+    std::sync::PoisonError,
+    tracing::{field, instrument},
 };
+#[krabka_macros::sendfile_cfg]
+use {krabka_protocol::records::FileRegion, std::cell::Cell};
 
 /// A `usize` byte length as a quantity.
 ///
@@ -167,7 +170,7 @@ pub struct RawReadDesc {
     /// offset when no bytes were returned.
     pub start_offset: Offset,
     /// One file-backed region per contributing segment, in wire order.
-    pub regions: Vec<krabka_protocol::records::FileRegion>,
+    pub regions: Vec<FileRegion>,
     /// Total byte length across all regions.
     pub total: usize,
 }
@@ -206,8 +209,9 @@ impl Log {
     /// The segments a read from `offset` walks, in offset order: the sealed
     /// ones from [`Self::first_sealed_from`] on, then the active one.
     fn segments_from(&self, offset: Offset) -> impl Iterator<Item = &Segment> {
-        self.segments[self.first_sealed_from(offset)..]
+        self.segments
             .iter()
+            .skip(self.first_sealed_from(offset))
             .chain(self.active.as_ref())
     }
 
@@ -226,20 +230,22 @@ impl Log {
     #[instrument(
     level = "debug",
     skip(self),
-    fields(regions = tracing::field::Empty, total = tracing::field::Empty),
+    fields(regions = field::Empty, total = field::Empty),
     err,
 )]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if the log's config lock is poisoned.
     pub fn read_raw_desc(
         &self,
         fetch_offset: Offset,
         limit_offset: Offset,
         max_size: ByteSize,
     ) -> Result<RawReadDesc, LogError> {
-        let read_ahead_max = self.config.read().unwrap().read_ahead_max;
+        let read_ahead_max = self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .read_ahead_max;
         self.check_locally_readable(fetch_offset)?;
         if fetch_offset >= limit_offset {
             return Ok(RawReadDesc::empty(fetch_offset));
@@ -250,7 +256,7 @@ impl Log {
         // starts in that segment, gets nothing and falls back to the
         // byte-copy path, which reads the run in one large read. Passing over
         // it would send a later segment's runs and skip its offsets.
-        let stopped = std::cell::Cell::new(false);
+        let stopped = Cell::new(false);
 
         let RawChunks {
             cursor,
@@ -323,13 +329,11 @@ impl Log {
     #[instrument(
         level = "debug",
         skip(self),
-        fields(batches = tracing::field::Empty),
+        fields(batches = field::Empty),
         err,
     )]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn read(&self, offset: Offset, max_size: ByteSize) -> Result<ReadOutput, LogError> {
         let log_end = self.log_end_offset();
         self.check_locally_readable(offset)?;
@@ -340,7 +344,11 @@ impl Log {
             });
         }
 
-        let read_buffer_cap = self.config.read().unwrap().read_buffer_cap;
+        let read_buffer_cap = self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .read_buffer_cap;
         let mut batches: Vec<RecordBatch> = Vec::new();
         let mut current_offset = offset;
         let mut remaining = max_size;
@@ -408,13 +416,11 @@ impl Log {
     #[instrument(
         level = "debug",
         skip(self),
-        fields(total = tracing::field::Empty),
+        fields(total = field::Empty),
         err,
     )]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn read_raw(
         &self,
         fetch_offset: Offset,
@@ -422,7 +428,7 @@ impl Log {
         max_size: ByteSize,
     ) -> Result<RawRead, LogError> {
         let (read_buffer_cap, read_ahead_max) = {
-            let config = self.config.read().unwrap();
+            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
             (config.read_buffer_cap, config.read_ahead_max)
         };
         self.check_locally_readable(fetch_offset)?;
@@ -455,8 +461,8 @@ impl Log {
         )?;
 
         let bytes = match chunks.len() {
-            0 => Bytes::new(),
-            1 => chunks.pop().expect("len==1"),
+            // No chunk is empty bytes, and one chunk is itself.
+            0 | 1 => chunks.pop().unwrap_or_default(),
             _ => {
                 let total: usize = chunks.iter().map(Bytes::len).sum();
                 let mut b = BytesMut::with_capacity(total);

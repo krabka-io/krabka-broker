@@ -101,7 +101,8 @@ pub(super) fn installed_wal_quorum_bounds_fetch(
         ==> ends@[j]@ == reported@[j]@.min(w.log_end@))]
     #[variant(voters@.len() - i@)]
     while i < voters.len() {
-        ends.push(reported[i].min(w.log_end));
+        let &report = reported.get(i)?;
+        ends.push(report.min(w.log_end));
         i += 1;
     }
     #[cfg(creusot)]
@@ -129,8 +130,9 @@ pub(super) fn installed_wal_quorum_bounds_fetch(
         ==> supporters@[j].0 != supporters@[k].0)]
     #[variant(voters@.len() - i@)]
     while i < voters.len() {
-        if ends[i] >= limit {
-            supporters.push((voters[i], ends[i]));
+        let (&end, &voter) = (ends.get(i)?, voters.get(i)?);
+        if end >= limit {
+            supporters.push((voter, end));
         }
         i += 1;
     }

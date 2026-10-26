@@ -58,7 +58,7 @@ use {
 /// The layout is the one this module documents. The verifier rebuilds the same
 /// bytes from the stored record, so the broker never trusts a byte string that
 /// a caller supplied.
-pub(crate) fn approval_signing_bytes(proposal: &BreakGlassProposalRecord) -> Vec<u8> {
+pub fn approval_signing_bytes(proposal: &BreakGlassProposalRecord) -> Vec<u8> {
     let target = proposal.target.as_bytes();
     let proposer = proposal.proposer.as_bytes();
     let mut out = Vec::with_capacity(
@@ -80,7 +80,7 @@ pub(crate) fn approval_signing_bytes(proposal: &BreakGlassProposalRecord) -> Vec
 mod tests {
     use {
         super::*,
-        crate::break_glass::ALL_ACTIONS,
+        crate::break_glass::{ALL_ACTIONS, action_name},
         assert2::check,
         krabka_metadata::{BreakGlassAction, BreakGlassApproval},
         uuid::Uuid,
@@ -146,7 +146,7 @@ mod tests {
             check!(
                 approval_signing_bytes(&proposal) == expected_bytes(&proposal, wire),
                 "{}",
-                crate::break_glass::action_name(action)
+                action_name(action)
             );
         }
     }

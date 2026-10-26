@@ -80,6 +80,7 @@ async fn create_topic(broker: &BrokerHandle, name: &str) -> WireUuid {
 /// A request for partition 0 of `topic_id`, in the share session of `member`.
 /// With `acknowledge`, the row carries one acknowledgement batch.
 use crate::handlers::test_support::ShareSessionEpoch;
+use krabka_protocol::owned::share_fetch_request::MAX_VERSION;
 
 #[derive(Clone, Copy, Default)]
 enum AcknowledgementPresence {
@@ -215,7 +216,7 @@ async fn drive(broker: &BrokerHandle, known: WireUuid, cases: &[Case]) -> Driven
 /// topic that exists.
 fn cases(known: i16) -> Vec<Case> {
     let mut cases = Vec::new();
-    for version in [1, krabka_protocol::owned::share_fetch_request::MAX_VERSION] {
+    for version in [1, MAX_VERSION] {
         cases.extend([
             Case {
                 version,
@@ -284,7 +285,7 @@ async fn unresolved_id_answers_before_topic_authorization() {
 /// the acknowledge error.
 #[tokio::test]
 async fn a_piggybacked_acknowledgement_on_an_unresolved_id_answers_unknown_topic_id() {
-    let version = krabka_protocol::owned::share_fetch_request::MAX_VERSION;
+    let version = MAX_VERSION;
     let StartedBroker { broker, dir: _dir } = start(Arc::new(AllowAllAuthorizer)).await;
 
     let mut actual = Vec::new();

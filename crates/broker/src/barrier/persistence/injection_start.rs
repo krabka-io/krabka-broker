@@ -9,14 +9,14 @@ use super::primitives as codec;
 
 /// One topic in a frozen target set, and how many partitions it had.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TopicTarget {
+pub struct TopicTarget {
     pub(crate) topic: String,
     pub(crate) partition_count: i32,
 }
 
 /// The frozen target set of one injection.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InjectionStartValue {
+pub struct InjectionStartValue {
     /// Fences a coordinator that lost and regained leadership.
     pub(crate) coordinator_epoch: i32,
     pub(crate) triggered_at: i64,
@@ -28,9 +28,7 @@ pub(crate) struct InjectionStartValue {
 /// # Errors
 /// Returns [`codec::BrokerError::Protocol`] when a topic name is longer than 32767
 /// bytes, which the `i16` length cannot carry.
-pub(crate) fn encode_injection_start(
-    value: &InjectionStartValue,
-) -> Result<Vec<u8>, codec::BrokerError> {
+pub fn encode_injection_start(value: &InjectionStartValue) -> Result<Vec<u8>, codec::BrokerError> {
     let mut out = Vec::new();
     codec::put_i16(&mut out, codec::RECORD_VERSION);
     codec::put_i32(&mut out, value.coordinator_epoch);
@@ -49,9 +47,7 @@ pub(crate) fn encode_injection_start(
 /// Returns a [`codec::ProtocolError`] when the value is truncated, carries a version
 /// other than [`codec::RECORD_VERSION`], holds a negative array length, holds a
 /// non-UTF-8 topic name, or has trailing bytes.
-pub(crate) fn decode_injection_start(
-    bytes: &[u8],
-) -> Result<InjectionStartValue, codec::ProtocolError> {
+pub fn decode_injection_start(bytes: &[u8]) -> Result<InjectionStartValue, codec::ProtocolError> {
     let mut cur = bytes;
     codec::expect_version(&mut cur)?;
     let coordinator_epoch = codec::get_i32(&mut cur)?;

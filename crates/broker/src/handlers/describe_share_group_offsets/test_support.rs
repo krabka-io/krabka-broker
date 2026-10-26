@@ -5,8 +5,10 @@
 //! under this handler, so they live in one file instead of once per module.
 
 use {
-    crate::broker::Broker,
+    crate::{broker::Broker, handlers::test_support},
     krabka_metadata::{MetadataImage, MetadataRecord, TopicRecord},
+    std::time::Duration,
+    tokio::time,
 };
 
 pub(super) fn image_with_topic(name: &str, topic_id: uuid::Uuid) -> MetadataImage {
@@ -38,7 +40,7 @@ pub(super) async fn register_topic(broker: &Broker, name: &str, topic_id: uuid::
                 partitions: 1,
                 replication_factor: 1,
             }),
-            MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
+            MetadataRecord::V1Partition(test_support::single_replica_partition(
                 name,
                 krabka_ids::PartitionIndex(0),
                 leader,
@@ -46,13 +48,13 @@ pub(super) async fn register_topic(broker: &Broker, name: &str, topic_id: uuid::
         ])
         .await
         .expect("register topic");
-    let materialized = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let materialized = time::timeout(Duration::from_secs(30), async {
         while broker
             .partitions
             .get(name, krabka_ids::PartitionIndex(0))
             .is_none()
         {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await;

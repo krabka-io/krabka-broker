@@ -1,5 +1,4 @@
-// rustc 1.95 clippy ICEs on this file in the same places as elect_leaders.rs:
-// `clippy::pedantic` lints — annotate-snippets upstream bug.
+#![cfg(test)]
 
 //! Log compaction end-to-end broker integration test.
 //!

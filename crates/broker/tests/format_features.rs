@@ -6,11 +6,13 @@
 //! uses the formatted voter set and *skips* the in-process self-bootstrap that
 //! would otherwise re-seed every feature at the latest release. That proves the
 //! `--feature` overrides survive boot and nothing overwrites them.
+#![cfg(test)]
 
 use {
     crate::support::{client::connect_owned, discovery::api_versions_request_for},
     assert2::{assert, check},
     krabka_broker::{Broker, BrokerConfig},
+    std::path::Path,
 };
 
 mod support;
@@ -25,24 +27,24 @@ mod support;
 /// need a Cargo working tree to build from, which a Bazel test sandbox does not
 /// have. `krabka-format`'s own `format_smoke` suite runs the real binary.
 async fn run_krabka_format_with_features(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     node_id: u64,
     controller_listener: &str,
     features: &[&str],
 ) {
     let mut argv = vec![
-        "krabka-format".to_string(),
-        "--log-dir".to_string(),
-        log_dir.to_str().unwrap().to_string(),
-        "--standalone".to_string(),
-        "--node-id".to_string(),
+        "krabka-format".to_owned(),
+        "--log-dir".to_owned(),
+        log_dir.to_str().unwrap().to_owned(),
+        "--standalone".to_owned(),
+        "--node-id".to_owned(),
         node_id.to_string(),
-        "--controller-listener".to_string(),
-        controller_listener.to_string(),
+        "--controller-listener".to_owned(),
+        controller_listener.to_owned(),
     ];
     for f in features {
-        argv.push("--feature".to_string());
-        argv.push((*f).to_string());
+        argv.push("--feature".to_owned());
+        argv.push((*f).to_owned());
     }
     let code = krabka_format::run_from_args(argv).await;
     assert!(code == 0, "krabka-format exited {code}");

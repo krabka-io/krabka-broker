@@ -27,12 +27,12 @@ mod txn_metadata;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::decision::{
-    BatchMeta, RecordMeta, RetainDecision, TxnDataState, retain_decision, should_index_key,
-};
 #[cfg(test)]
-pub(crate) use self::decision::{data_retention_metadata, marker_retention_metadata};
+pub use self::decision::{data_retention_metadata, marker_retention_metadata};
 pub use self::{
+    decision::{
+        BatchMeta, RecordMeta, RetainDecision, TxnDataState, retain_decision, should_index_key,
+    },
     offset_map::build_offset_map,
     rewrite::{
         CleaningRound, ProducerLastRecord, RewriteOutput, RewriteRetention, rewrite_segments,
@@ -50,4 +50,4 @@ mod compact_model;
 #[cfg(test)]
 mod retention_fuzz;
 
-pub(crate) use swap::{atomic_swap_retiring, replaces_producer_snapshot};
+pub use swap::{atomic_swap_retiring, replaces_producer_snapshot};

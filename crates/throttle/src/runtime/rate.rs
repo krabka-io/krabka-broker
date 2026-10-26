@@ -119,7 +119,10 @@ impl TokenBucket {
             last_refill_nanos: now.max(state.last_refill_nanos),
             micro_refill_fraction,
         };
+        // The fast-path rate is published under the lock too, so two
+        // concurrent resets cannot leave it holding the older rate.
         self.micro_rate_per_sec.store(micro_rate_per_sec, Relaxed);
+        drop(state);
     }
 
     /// The configured rate in whole raw tokens per second, rounded down. `0`

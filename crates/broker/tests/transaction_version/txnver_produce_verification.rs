@@ -156,7 +156,7 @@ async fn log_end(client: &Client, topic: &str) -> i64 {
 async fn until_ready<F, Fut, T>(send: F, code: impl Fn(&T) -> i16) -> T
 where
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = T>,
+    Fut: Future<Output = T>,
 {
     retry_coordinator(
         send,
@@ -224,12 +224,14 @@ async fn add_partition(client: &Client, producer: Producer, topic: &str) {
 
 async fn set_up(client: &Client, case: &Case) -> Producer {
     create_topic(client, case.name, TopicPartitionCount(1)).await;
-    let mut producer = init(client, case.name).await;
-    if case.probe.epoch_offset.0 < 0 {
+    let first = init(client, case.name).await;
+    let producer = if case.probe.epoch_offset.0 < 0 {
         // A second InitProducerId bumps the epoch, so a batch can carry an
         // epoch below the producer's one.
-        producer = init(client, case.name).await;
-    }
+        init(client, case.name).await
+    } else {
+        first
+    };
     if matches!(case.setup, Setup::Added | Setup::Open | Setup::Committed) {
         add_partition(client, producer, case.name).await;
     }

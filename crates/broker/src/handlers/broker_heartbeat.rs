@@ -33,7 +33,7 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::failover::failover_offline_dirs;
+pub use self::failover::failover_offline_dirs;
 use {
     self::{
         response::success_response,
@@ -58,16 +58,18 @@ use {
         metadata_source::MetadataSource,
         metrics::BrokerMetrics,
     },
+    krabka_metadata::metadata_version,
+    std::{collections::HashSet, sync::Arc},
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: BrokerHeartbeatRequest,
     _version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<BrokerHeartbeatResponse, BrokerError> {
-    let liveness = broker.liveness.clone();
-    let controller = broker.controller.clone();
+    let liveness = Arc::clone(&broker.liveness);
+    let controller = Arc::clone(&broker.controller);
     let metrics = broker.metrics.clone();
     let recovery = broker.unclean_recovery.clone();
 
@@ -125,7 +127,7 @@ pub(crate) async fn handle(
     if !req.offline_log_dirs.is_empty()
         && let Ok(reporting_broker) = u64::try_from(req.broker_id)
     {
-        let offline: std::collections::HashSet<uuid::Uuid> = req
+        let offline: HashSet<uuid::Uuid> = req
             .offline_log_dirs
             .iter()
             .map(|u| uuid::Uuid::from_bytes(u.0))
@@ -177,7 +179,7 @@ pub(crate) async fn handle(
 /// A failed submit is logged and dropped: the broker reports the same set on
 /// its next heartbeat, and the next one retries.
 async fn record_cordoned_dirs(
-    controller: &std::sync::Arc<dyn MetadataSource>,
+    controller: &Arc<dyn MetadataSource>,
     broker: NodeId,
     req: &BrokerHeartbeatRequest,
 ) {
@@ -197,9 +199,9 @@ fn cordoned_dirs_change(
     broker: NodeId,
     req: &BrokerHeartbeatRequest,
 ) -> Option<krabka_metadata::MetadataRecord> {
-    let supported = image.finalized_metadata_version().is_some_and(|level| {
-        level >= krabka_metadata::metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL
-    });
+    let supported = image
+        .finalized_metadata_version()
+        .is_some_and(|level| level >= metadata_version::CORDONED_LOG_DIRS_MIN_LEVEL);
     if !supported {
         return None;
     }
@@ -233,8 +235,8 @@ fn cordoned_dirs_change(
 /// here either, so nothing elects it again, but a leadership that came back to
 /// it before it entered is written away again on the next heartbeat.
 async fn advance_broker_state(
-    controller: &std::sync::Arc<dyn MetadataSource>,
-    liveness: &std::sync::Arc<ControllerLivenessState>,
+    controller: &Arc<dyn MetadataSource>,
+    liveness: &Arc<ControllerLivenessState>,
     metrics: &BrokerMetrics,
     broker: NodeId,
     req: &BrokerHeartbeatRequest,

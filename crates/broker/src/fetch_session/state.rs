@@ -7,7 +7,9 @@
 //! broker last sent, which is the comparison KIP-227 needs to decide whether a
 //! partition belongs in the next response.
 
-use {indexmap::IndexMap, krabka_protocol::primitives::uuid::Uuid as WireUuid};
+use {
+    indexmap::IndexMap, krabka_protocol::primitives::uuid::Uuid as WireUuid, std::time::Duration,
+};
 
 /// The partitions of one fetch session, in the order an incremental fetch
 /// reads them.
@@ -22,9 +24,11 @@ use {indexmap::IndexMap, krabka_protocol::primitives::uuid::Uuid as WireUuid};
 /// response of the session.
 pub type SessionPartitions = IndexMap<FetchSessionKey, CachedPartitionState>;
 
-/// (`topic_name`, `topic_id`, partition). The cache keeps both the name and
-/// the id, because Fetch v 12 and below sends only the name and v 13 and above
-/// sends only the id. The cache must resolve the key for either version.
+/// (`topic_name`, `topic_id`, partition).
+///
+/// The cache keeps both the name and the id, because Fetch v 12 and below sends
+/// only the name and v 13 and above sends only the id. The cache must resolve
+/// the key for either version.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FetchSessionKey {
     pub topic_name: String,
@@ -32,12 +36,13 @@ pub struct FetchSessionKey {
     pub partition: i32,
 }
 
-/// Per-partition cached state. The first block (`fetch_offset` and the fields
-/// after it) records what the client wants on the next read. The `last_*`
-/// block records what the broker sent in the previous response. The broker
-/// compares the two blocks to decide whether the next response includes this
-/// partition, because KIP-227 omits a partition when nothing has changed since
-/// the previous response.
+/// Per-partition cached state.
+///
+/// The first block (`fetch_offset` and the fields after it) records what the
+/// client wants on the next read. The `last_*` block records what the broker
+/// sent in the previous response. The broker compares the two blocks to decide
+/// whether the next response includes this partition, because KIP-227 omits a
+/// partition when nothing has changed since the previous response.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CachedPartitionState {
     pub fetch_offset: i64,
@@ -68,7 +73,7 @@ pub struct ForgottenPartition {
     pub key: FetchSessionKey,
     /// `MonotonicClock::elapsed_since_origin` of the cache when the client
     /// forgot the partition.
-    pub forgotten_at: std::time::Duration,
+    pub forgotten_at: Duration,
 }
 
 /// What an incremental response sent for one cached partition.

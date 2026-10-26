@@ -38,7 +38,7 @@ use {
     },
     bytes::{Buf as _, BufMut as _, Bytes, BytesMut},
     krabka_protocol::{
-        Decode as _, Encode as _, ProtocolError, UnknownTaggedFields,
+        Decode as _, Encode as _, ProtocolError, UnknownTaggedFields, api_key,
         owned::{
             add_raft_voter_request, allocate_producer_ids_request, alter_client_quotas_request,
             alter_configs_request, alter_partition_reassignments_request,
@@ -57,6 +57,7 @@ use {
         primitives::string_bytes::put_nullable_string,
         tagged_fields::read_tagged_fields,
     },
+    std::net::IpAddr,
 };
 
 /// A failure serving one `Envelope`, and the `EnvelopeResponse.error_code`
@@ -65,7 +66,7 @@ use {
 /// Every variant mirrors one throw site in `kafka.server.EnvelopeUtils`, so
 /// the code a JVM forwarder sees is the code its own controller would send.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EnvelopeError {
+pub enum EnvelopeError {
     /// The outer principal lacks `ClusterAction` on the cluster resource.
     /// `ApiKeys.ENVELOPE.clusterAction` is true, so this is the gate Kafka
     /// applies before it looks at the payload at all.
@@ -118,9 +119,7 @@ krabka_macros::forwardable_requests! {
 }
 
 /// Whether Kafka wraps `api_key` in an `Envelope` when a broker forwards it.
-pub(crate) fn is_forwardable(api_key: ApiKeyCode) -> bool {
-    FORWARDABLE_API_KEYS.contains(&api_key)
-}
+pub fn is_forwardable(api_key: ApiKeyCode) -> bool { FORWARDABLE_API_KEYS.contains(&api_key) }
 
 /// Whether `api_key` is an api key `RequestHeader.parse` accepts on a listener
 /// running with `unstable`: one the release has (`ApiKeys.forId`) with a valid
@@ -133,9 +132,7 @@ pub(crate) fn is_forwardable(api_key: ApiKeyCode) -> bool {
 fn is_known_api_key(api_key: ApiKeyCode, unstable: UnstableApiVersions) -> bool {
     match unstable {
         UnstableApiVersions::Disabled => krabka_raft::kafka_4_3_1_api(api_key).is_some(),
-        UnstableApiVersions::Enabled => {
-            krabka_protocol::api_key::ApiKey::from_i16(api_key).is_some()
-        }
+        UnstableApiVersions::Enabled => api_key::ApiKey::from_i16(api_key).is_some(),
     }
 }
 
@@ -147,14 +144,14 @@ fn is_known_api_key(api_key: ApiKeyCode, unstable: UnstableApiVersions) -> bool 
 /// hop's own authentication method to build the session identity the handler
 /// runs under.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ForwardedPrincipal {
+pub struct ForwardedPrincipal {
     pub(crate) name: String,
     pub(crate) token_authenticated: bool,
 }
 
 /// One embedded request, lifted out of an `EnvelopeRequest.request_data`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ForwardedRequest {
+pub struct ForwardedRequest {
     pub(crate) api_key: ApiKeyCode,
     pub(crate) api_version: ApiVersion,
     pub(crate) correlation_id: CorrelationId,
@@ -180,14 +177,12 @@ pub(crate) struct ForwardedRequest {
 /// `0..=0`, or do not decode as a `DefaultPrincipalData` body. Kafka's
 /// `deserialize` throws `SerializationException` in each of those cases and
 /// `EnvelopeUtils` rewraps it as `PrincipalDeserializationException`.
-pub(crate) fn deserialize_principal(
-    bytes: Option<&[u8]>,
-) -> Result<ForwardedPrincipal, EnvelopeError> {
+pub fn deserialize_principal(bytes: Option<&[u8]>) -> Result<ForwardedPrincipal, EnvelopeError> {
     let mut cur = bytes.ok_or(EnvelopeError::PrincipalDeserializationFailure)?;
-    let Some((prefix, rest)) = cur.split_at_checked(2) else {
+    let Some((prefix, rest)) = cur.split_first_chunk::<2>() else {
         return Err(EnvelopeError::PrincipalDeserializationFailure);
     };
-    let version = i16::from_be_bytes([prefix[0], prefix[1]]);
+    let version = i16::from_be_bytes(*prefix);
     cur = rest;
     if !(default_principal_data::MIN_VERSION..=default_principal_data::MAX_VERSION)
         .contains(&version)
@@ -222,14 +217,12 @@ pub(crate) fn deserialize_principal(
 /// [`EnvelopeError::InvalidRequest`] for any other length. Kafka's
 /// `getByAddress` throws `UnknownHostException` there and `EnvelopeUtils`
 /// rewraps it as `InvalidRequestException`.
-pub(crate) fn deserialize_client_host_address(
-    bytes: &[u8],
-) -> Result<std::net::IpAddr, EnvelopeError> {
+pub fn deserialize_client_host_address(bytes: &[u8]) -> Result<IpAddr, EnvelopeError> {
     if let Ok(octets) = <[u8; 4]>::try_from(bytes) {
-        return Ok(std::net::IpAddr::from(octets));
+        return Ok(IpAddr::from(octets));
     }
     if let Ok(octets) = <[u8; 16]>::try_from(bytes) {
-        return Ok(std::net::IpAddr::from(octets).to_canonical());
+        return Ok(IpAddr::from(octets).to_canonical());
     }
     Err(EnvelopeError::InvalidRequest)
 }
@@ -245,7 +238,7 @@ pub(crate) fn deserialize_client_host_address(
 ///
 /// # Errors
 /// Returns an error if the generated codec rejects the principal body.
-pub(crate) fn serialize_principal(principal: &ForwardedPrincipal) -> Result<Bytes, ProtocolError> {
+pub fn serialize_principal(principal: &ForwardedPrincipal) -> Result<Bytes, ProtocolError> {
     let data = DefaultPrincipalData {
         type_: "User".to_owned(),
         name: principal.name.clone(),
@@ -266,10 +259,10 @@ pub(crate) fn serialize_principal(principal: &ForwardedPrincipal) -> Result<Byte
 /// An IPv4-mapped `::ffff:a.b.c.d` goes out as its four IPv4 octets. A JVM
 /// socket reports such a peer as the `Inet4Address` it names, so a JVM
 /// forwarder sends the same four octets for the same client.
-pub(crate) fn serialize_client_host_address(ip: std::net::IpAddr) -> Bytes {
+pub fn serialize_client_host_address(ip: IpAddr) -> Bytes {
     match ip.to_canonical() {
-        std::net::IpAddr::V4(v4) => Bytes::copy_from_slice(&v4.octets()),
-        std::net::IpAddr::V6(v6) => Bytes::copy_from_slice(&v6.octets()),
+        IpAddr::V4(v4) => Bytes::copy_from_slice(&v4.octets()),
+        IpAddr::V6(v6) => Bytes::copy_from_slice(&v6.octets()),
     }
 }
 
@@ -281,7 +274,7 @@ pub(crate) fn serialize_client_host_address(ip: std::net::IpAddr) -> Bytes {
 /// The header is `api_key`, `api_version`, `correlation_id` and a nullable
 /// `client_id`. It is v2, with a trailing empty tagged-fields byte, exactly
 /// when the embedded body is flexible.
-pub(crate) fn wrap_request(forwarded: &ForwardedRequest) -> Bytes {
+pub fn wrap_request(forwarded: &ForwardedRequest) -> Bytes {
     let client_id_len = forwarded.client_id.as_ref().map_or(0, String::len);
     let mut out = BytesMut::with_capacity(10 + client_id_len + 1 + forwarded.body.len());
     out.put_i16(forwarded.api_key);
@@ -301,10 +294,10 @@ pub(crate) fn wrap_request(forwarded: &ForwardedRequest) -> Bytes {
 ///
 /// # Errors
 /// Returns an error if the generated codec rejects the principal body.
-pub(crate) fn envelope_request(
+pub fn envelope_request(
     request_data: Bytes,
     principal: &ForwardedPrincipal,
-    client: std::net::IpAddr,
+    client: IpAddr,
 ) -> Result<EnvelopeRequest, ProtocolError> {
     Ok(EnvelopeRequest {
         request_data,
@@ -326,7 +319,7 @@ pub(crate) fn envelope_request(
 /// # Errors
 /// Returns an error if the data is too short to hold the header, or if its
 /// tagged-fields section does not parse.
-pub(crate) fn unwrap_response(
+pub fn unwrap_response(
     api_key: ApiKeyCode,
     body_flexible: bool,
     response_data: &Bytes,
@@ -349,7 +342,7 @@ pub(crate) fn unwrap_response(
 /// # Errors
 /// [`EnvelopeError::InvalidRequest`] when the body is not a well-formed
 /// `EnvelopeRequest`, which is how Kafka reports a malformed envelope.
-pub(crate) fn decode_request(body: &[u8], version: i16) -> Result<EnvelopeRequest, EnvelopeError> {
+pub fn decode_request(body: &[u8], version: i16) -> Result<EnvelopeRequest, EnvelopeError> {
     let mut cur = body;
     EnvelopeRequest::decode(&mut cur, version).map_err(|_| EnvelopeError::InvalidRequest)
 }
@@ -372,7 +365,7 @@ pub(crate) fn decode_request(body: &[u8], version: i16) -> Result<EnvelopeReques
 /// into `UnsupportedVersionException`, so the forwarder can tell this from a
 /// malformed envelope. [`EnvelopeError::InvalidRequest`] when the embedded api
 /// key is a known one that Kafka does not forward.
-pub(crate) fn unwrap_request<F>(
+pub fn unwrap_request<F>(
     request_data: &Bytes,
     flexible_for: F,
     unstable: UnstableApiVersions,
@@ -410,7 +403,7 @@ where
 /// listener. The correlation id is the client's own, because it rode inside
 /// the forwarded header, so the bytes this returns are byte-identical to what
 /// the client would have received had it reached the controller itself.
-pub(crate) fn wrap_response(forwarded: &ForwardedRequest, body: &[u8]) -> Bytes {
+pub fn wrap_response(forwarded: &ForwardedRequest, body: &[u8]) -> Bytes {
     let header_v1 = response_header_v1(forwarded.api_key, forwarded.body_flexible);
     let mut out = BytesMut::with_capacity(4 + usize::from(header_v1) + body.len());
     out.put_i32(forwarded.correlation_id);
@@ -425,7 +418,7 @@ pub(crate) fn wrap_response(forwarded: &ForwardedRequest, body: &[u8]) -> Bytes 
 ///
 /// # Errors
 /// Returns an error if the generated codec rejects the response.
-pub(crate) fn encode_success(
+pub fn encode_success(
     response_data: Bytes,
     version: i16,
 ) -> Result<Bytes, krabka_protocol::ProtocolError> {
@@ -446,7 +439,7 @@ pub(crate) fn encode_success(
 ///
 /// # Errors
 /// Returns an error if the generated codec rejects the response.
-pub(crate) fn encode_failure(
+pub fn encode_failure(
     error: EnvelopeError,
     version: i16,
 ) -> Result<Bytes, krabka_protocol::ProtocolError> {
@@ -475,6 +468,12 @@ mod tests {
         super::*,
         crate::api_catalog::UnstableApiVersions,
         assert2::{assert, check},
+        krabka_protocol::owned::{
+            alter_configs_request::AlterConfigsRequest, create_topics_request::CreateTopicsRequest,
+            incremental_alter_configs_request::IncrementalAlterConfigsRequest,
+            unregister_controller_request::UnregisterControllerRequest,
+        },
+        std::{collections::BTreeSet, net::Ipv6Addr},
     };
 
     /// `DefaultKafkaPrincipalBuilder.serialize(new KafkaPrincipal("User",
@@ -608,7 +607,7 @@ mod tests {
         struct Case<'a> {
             label: &'static str,
             bytes: &'a [u8],
-            want: Result<std::net::IpAddr, EnvelopeError>,
+            want: Result<IpAddr, EnvelopeError>,
         }
 
         let mapped_v4 = {
@@ -622,7 +621,7 @@ mod tests {
             Case {
                 label: "four octets are an IPv4 address",
                 bytes: &[10, 1, 2, 3],
-                want: { Ok(std::net::IpAddr::from([10, 1, 2, 3])) },
+                want: { Ok(IpAddr::from([10, 1, 2, 3])) },
             },
             Case {
                 label: "sixteen octets are an IPv6 address",
@@ -632,7 +631,7 @@ mod tests {
             Case {
                 label: "an IPv4-mapped IPv6 address folds to its IPv4 form",
                 bytes: &mapped_v4,
-                want: Ok(std::net::IpAddr::from([10, 1, 2, 3])),
+                want: Ok(IpAddr::from([10, 1, 2, 3])),
             },
             Case {
                 label: "an empty address",
@@ -695,28 +694,28 @@ mod tests {
     fn a_client_host_address_round_trips_as_inet_address_get_address_writes_it() {
         struct Case {
             label: &'static str,
-            ip: std::net::IpAddr,
+            ip: IpAddr,
             octets: &'static [u8],
-            decoded: std::net::IpAddr,
+            decoded: IpAddr,
         }
         let cases: [Case; 3] = [
             Case {
                 label: "an IPv4 address is four octets",
-                ip: std::net::IpAddr::from([10, 1, 2, 3]),
+                ip: IpAddr::from([10, 1, 2, 3]),
                 octets: &[10, 1, 2, 3],
-                decoded: std::net::IpAddr::from([10, 1, 2, 3]),
+                decoded: IpAddr::from([10, 1, 2, 3]),
             },
             Case {
                 label: "an IPv6 address is sixteen octets",
-                ip: std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+                ip: IpAddr::V6(Ipv6Addr::LOCALHOST),
                 octets: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-                decoded: std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+                decoded: IpAddr::V6(Ipv6Addr::LOCALHOST),
             },
             Case {
                 label: "an IPv4-mapped IPv6 address is the four IPv4 octets",
                 ip: "::ffff:10.1.2.3".parse().expect("literal IPv6 address"),
                 octets: &[10, 1, 2, 3],
-                decoded: std::net::IpAddr::from([10, 1, 2, 3]),
+                decoded: IpAddr::from([10, 1, 2, 3]),
             },
         ];
 
@@ -743,10 +742,8 @@ mod tests {
     /// frame the receive-side tests use.
     #[test]
     fn a_wrapped_request_unwraps_to_the_same_request() {
-        let create_topics =
-            body_of::<krabka_protocol::owned::create_topics_request::CreateTopicsRequest>(7);
-        let alter_configs =
-            body_of::<krabka_protocol::owned::alter_configs_request::AlterConfigsRequest>(0);
+        let create_topics = body_of::<CreateTopicsRequest>(7);
+        let alter_configs = body_of::<AlterConfigsRequest>(0);
         let cases = [
             (
                 "flexible CreateTopics with a client id",
@@ -910,7 +907,7 @@ mod tests {
             .maybe_client_id(Some("c"))
             .body(b"topics")
             .call();
-        let client = std::net::IpAddr::from([127, 0, 0, 1]);
+        let client = IpAddr::from([127, 0, 0, 1]);
 
         assert!(let Ok(request) = envelope_request(
             request_data.clone(),
@@ -934,12 +931,11 @@ mod tests {
     /// it, and so is `UpdateFeatures`, which `kafka-features.sh` drives.
     #[test]
     fn the_forwardable_set_is_the_one_kafka_publishes() {
-        let want: std::collections::BTreeSet<i16> = maplit::btreeset! {
+        let want: BTreeSet<i16> = maplit::btreeset! {
             19, 20, 30, 31, 33, 37, 38, 39, 40, 43, 44, 45, 46, 49, 51, 55, 57, 64, 67, 80, 81,
             94,
         };
-        let declared: std::collections::BTreeSet<i16> =
-            FORWARDABLE_API_KEYS.iter().copied().collect();
+        let declared: BTreeSet<i16> = FORWARDABLE_API_KEYS.iter().copied().collect();
 
         check!(declared == want);
         // Envelope itself is not forwardable, so an envelope cannot nest.
@@ -1035,11 +1031,8 @@ mod tests {
     /// byte is consumed rather than left at the head of the body.
     #[test]
     fn an_embedded_request_is_split_into_its_header_and_body() {
-        let incremental = body_of::<
-            krabka_protocol::owned::incremental_alter_configs_request::IncrementalAlterConfigsRequest,
-        >(1);
-        let alter_configs =
-            body_of::<krabka_protocol::owned::alter_configs_request::AlterConfigsRequest>(0);
+        let incremental = body_of::<IncrementalAlterConfigsRequest>(1);
+        let alter_configs = body_of::<AlterConfigsRequest>(0);
         let cases = [
             (
                 "flexible IncrementalAlterConfigs",
@@ -1132,11 +1125,8 @@ mod tests {
             }
         }
 
-        let create_topics =
-            body_of::<krabka_protocol::owned::create_topics_request::CreateTopicsRequest>(7);
-        let unregister_controller = body_of::<
-            krabka_protocol::owned::unregister_controller_request::UnregisterControllerRequest,
-        >(0);
+        let create_topics = body_of::<CreateTopicsRequest>(7);
+        let unregister_controller = body_of::<UnregisterControllerRequest>(0);
         let truncated = &create_topics[..create_topics.len() - 1];
         let cases: [Case; 14] = [
             Case {

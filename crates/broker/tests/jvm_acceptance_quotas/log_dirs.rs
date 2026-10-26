@@ -9,6 +9,7 @@ use {
         broker0_advertised, docker_run_kafka_tool, nc_check_connectivity, start_host_broker_jbod,
     },
     assert2::check,
+    std::fs,
 };
 
 /// KIP-113: `kafka-log-dirs --describe` against a two-directory
@@ -54,9 +55,8 @@ async fn jvm_kafka_log_dirs_describe_reports_jbod_spread() {
     // The broker reports canonical absolute host paths; canonicalize the
     // expected dirs so the substring match is robust to /tmp symlinks.
     let primary_path =
-        std::fs::canonicalize(primary.path()).unwrap_or_else(|_| primary.path().to_path_buf());
-    let extra_path =
-        std::fs::canonicalize(extra.path()).unwrap_or_else(|_| extra.path().to_path_buf());
+        fs::canonicalize(primary.path()).unwrap_or_else(|_| primary.path().to_path_buf());
+    let extra_path = fs::canonicalize(extra.path()).unwrap_or_else(|_| extra.path().to_path_buf());
 
     check!(
         stdout.contains(&primary_path.display().to_string()),

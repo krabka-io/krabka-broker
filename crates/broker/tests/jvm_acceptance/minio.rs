@@ -24,19 +24,18 @@ krabka_macros::minio_fixture!(minio_process);
 // MinIO discontinued distribution of its own images, quay.io included;
 // `//bazel/images:minio`/`:minio_mc` now build both from a Wolfi apko lock and
 // load them under these tags rather than pull them from quay.io.
-pub(crate) const MINIO_IMAGE: &str = "docker.io/krabka-io/minio:RELEASE.2025-09-07T16-13-09Z";
+pub const MINIO_IMAGE: &str = "docker.io/krabka-io/minio:RELEASE.2025-09-07T16-13-09Z";
 
-pub(crate) const MINIO_CLIENT_IMAGE: &str =
-    "docker.io/krabka-io/minio-mc:RELEASE.2025-08-13T08-35-41Z";
+pub const MINIO_CLIENT_IMAGE: &str = "docker.io/krabka-io/minio-mc:RELEASE.2025-08-13T08-35-41Z";
 
-pub(crate) const MINIO_ACCESS_KEY: &str = "minioadmin";
+pub const MINIO_ACCESS_KEY: &str = "minioadmin";
 
-pub(crate) const MINIO_SECRET_KEY: &str = "minioadmin";
+pub const MINIO_SECRET_KEY: &str = "minioadmin";
 
-pub(crate) const MINIO_BUCKET: &str = "krabka-tiered";
+pub const MINIO_BUCKET: &str = "krabka-tiered";
 
 /// Owns a `docker run -d` `MinIO` container and tears it down on drop.
-pub(crate) struct MinioContainer {
+pub struct MinioContainer {
     name: String,
 }
 
@@ -61,9 +60,9 @@ impl MinioContainer {
 
 /// Poll the published host port until `MinIO`'s HTTP listener answers. This
 /// avoids a race with the first health check of the fast-starting image.
-pub(crate) fn wait_for_minio_ready() { minio_process::wait(minio_port()); }
+pub fn wait_for_minio_ready() { minio_process::wait(minio_port()); }
 
-pub(crate) fn minio_make_bucket(bucket: &str) {
+pub fn minio_make_bucket(bucket: &str) {
     // `mc mb -p` is idempotent and creates parent prefixes; the inner
     // loop retries the `alias set` so a slow MinIO startup doesn't fail
     // the test on the first probe.
@@ -89,7 +88,7 @@ pub(crate) fn minio_make_bucket(bucket: &str) {
 /// `1d` is the shortest retention the suite can use and still prove the point.
 /// The bucket lives inside a container the test removes on drop, so nothing
 /// outlives the run.
-pub(crate) fn minio_make_locked_bucket(bucket: &str) {
+pub fn minio_make_locked_bucket(bucket: &str) {
     // Same `alias set` retry as `minio_make_bucket`, so a slow MinIO startup
     // doesn't fail the test on the first probe.
     let minio_port = minio_port();
@@ -110,7 +109,7 @@ pub(crate) fn minio_make_locked_bucket(bucket: &str) {
 }
 
 /// `mc ls --recursive local/<bucket>` for assertion-side bucket inspection.
-pub(crate) fn minio_list_objects(bucket: &str) -> String {
+pub fn minio_list_objects(bucket: &str) -> String {
     let minio_port = minio_port();
     let script = format!(
         "mc alias set local http://host.docker.internal:{minio_port} {MINIO_ACCESS_KEY} {MINIO_SECRET_KEY} >/dev/null && \

@@ -27,9 +27,12 @@ use {
         BrokerEndpoint, BrokerRegistrationRecord, LeaderEpoch, MetadataRecord, NodeId,
         PartitionRecord, TopicRecord,
     },
-    krabka_protocol::owned::{
-        metadata_request::{MetadataRequest, MetadataRequestTopic},
-        metadata_response::{MetadataResponse, MetadataResponseBroker},
+    krabka_protocol::{
+        api_key::ApiKey,
+        owned::{
+            metadata_request::{MetadataRequest, MetadataRequestTopic},
+            metadata_response::{MetadataResponse, MetadataResponseBroker},
+        },
     },
 };
 
@@ -166,14 +169,7 @@ async fn metadata(
     let broker = handle.broker_arc_for_test();
     let (user, address) = (principal("describer"), peer());
     let ctx = RequestContext::new(&user, &address, "metadata-client", "conn", false, listener);
-    dispatch_wire(
-        &broker,
-        krabka_protocol::api_key::ApiKey::Metadata as i16,
-        version,
-        request,
-        &ctx,
-    )
-    .await
+    dispatch_wire(&broker, ApiKey::Metadata as i16, version, request, &ctx).await
 }
 
 fn topic_request() -> MetadataRequest {

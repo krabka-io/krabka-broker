@@ -11,7 +11,10 @@ use {
     },
     bytes::Bytes,
     krabka_protocol::owned::join_group_request::{JoinGroupRequest, JoinGroupRequestProtocol},
-    std::time::{Duration, Instant},
+    std::{
+        mem,
+        time::{Duration, Instant},
+    },
 };
 
 pub(in crate::coordinator::unified::classic_ops) mod prelude {
@@ -52,7 +55,7 @@ pub(super) fn handle_join(
                 state.add_pending_member(req.member_id.clone(), ctx.now + Duration::from_mins(1));
             }
             Some(instance_id) if state.current_member_id_for_instance(&instance_id).is_none() => {
-                let wanted = std::mem::take(&mut req.member_id);
+                let wanted = mem::take(&mut req.member_id);
                 let outcome = super::join::handle_join(state, &mut req, &ctx);
                 let awaiting = state.joined_this_round.contains(&req.member_id);
                 state.replace_static_member(&instance_id, &req.member_id, &wanted);

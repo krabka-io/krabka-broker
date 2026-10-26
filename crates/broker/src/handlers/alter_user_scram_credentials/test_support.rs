@@ -13,9 +13,9 @@ use {
         response::{err_result, ok_result},
         validation::{validate_deletion, validate_upsertion},
     },
-    crate::{authorizer::Authorizer, broker::Broker, test_support::start_broker_with},
+    crate::{authorizer::Authorizer, broker::Broker, features, test_support::start_broker_with},
     bytes::Bytes,
-    krabka_metadata::MetadataRecord,
+    krabka_metadata::{MetadataRecord, metadata_version},
     krabka_protocol::owned::{
         alter_user_scram_credentials_request::{ScramCredentialDeletion, ScramCredentialUpsertion},
         alter_user_scram_credentials_response::AlterUserScramCredentialsResult,
@@ -96,8 +96,8 @@ pub(super) async fn low_metadata_version(broker: &Broker) {
         .controller
         .submit_change(vec![MetadataRecord::V1FeatureLevel(
             krabka_metadata::FeatureLevelRecord {
-                name: crate::features::METADATA_VERSION.to_string(),
-                level: krabka_metadata::metadata_version::SCRAM_MIN_LEVEL - 1,
+                name: features::METADATA_VERSION.to_owned(),
+                level: metadata_version::SCRAM_MIN_LEVEL - 1,
             },
         )])
         .await

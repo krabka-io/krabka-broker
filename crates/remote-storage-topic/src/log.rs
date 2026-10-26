@@ -192,7 +192,11 @@ pub trait MetadataEventLog: Send + Sync {
     /// Append-only implementations retain offset zero. Compacted transports
     /// override this so a replay does not wait forever on deleted offsets.
     async fn low_water_marks(&self) -> Result<Vec<i64>, MetadataLogError> {
-        Ok((0..self.partition_count()).map(|_| 0).collect())
+        // A negative count yields no partitions, as an empty range would.
+        Ok(vec![
+            0;
+            usize::try_from(self.partition_count()).unwrap_or(0)
+        ])
     }
 
     /// One past the highest written offset for each partition,

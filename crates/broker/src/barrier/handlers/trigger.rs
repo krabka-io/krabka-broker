@@ -50,7 +50,7 @@ use {
     api = "TriggerBarrier",
     level = "info"
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: TriggerBarrierRequest,
     version: ApiVersion,

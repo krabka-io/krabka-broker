@@ -12,13 +12,11 @@ use {
         collections::HashMap,
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// An absent heartbeat field keeps the stored value; allocate only when it changes.
-pub(crate) fn update_present<T: Clone + PartialEq>(
-    stored: &mut Option<T>,
-    incoming: Option<&T>,
-) -> bool {
+pub fn update_present<T: Clone + PartialEq>(stored: &mut Option<T>, incoming: Option<&T>) -> bool {
     if let Some(incoming) = incoming
         && stored.as_ref() != Some(incoming)
     {
@@ -32,16 +30,16 @@ pub(crate) fn update_present<T: Clone + PartialEq>(
     }
 }
 
-pub(crate) fn first_join_member_id(request_member_id: &str) -> String {
+pub fn first_join_member_id(request_member_id: &str) -> String {
     if request_member_id.is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
-        request_member_id.to_string()
+        request_member_id.to_owned()
     }
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct ClientIdentity<'a> {
+pub struct ClientIdentity<'a> {
     pub id: &'a str,
     pub host: &'a str,
 }
@@ -52,7 +50,7 @@ impl ClientIdentity<'_> {
         let mut changed = false;
         for (stored, incoming) in [(client_id, self.id), (client_host, self.host)] {
             if stored.as_str() != incoming {
-                *stored = incoming.to_string();
+                incoming.clone_into(stored);
                 changed = true;
             }
         }
@@ -60,7 +58,7 @@ impl ClientIdentity<'_> {
     }
 }
 
-pub(crate) fn expired_member_ids<'a>(
+pub fn expired_member_ids<'a>(
     members: impl IntoIterator<Item = (&'a str, Instant)>,
     now: Instant,
     session_timeout: Duration,
@@ -68,7 +66,7 @@ pub(crate) fn expired_member_ids<'a>(
     members
         .into_iter()
         .filter(|(_, last_seen)| now.duration_since(*last_seen) > session_timeout)
-        .map(|(id, _)| id.to_string())
+        .map(|(id, _)| id.to_owned())
         .collect()
 }
 
@@ -82,10 +80,10 @@ pub(crate) fn expired_member_ids<'a>(
 /// steps included, as in Kafka. A test on a paused runtime moves it with
 /// `tokio::time::advance` or `sleep`.
 #[must_use]
-pub(crate) fn wall_clock_ms() -> i64 {
+pub fn wall_clock_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let std_now = Instant::now();
-    let tokio_now = tokio::time::Instant::now().into_std();
+    let tokio_now = time::Instant::now().into_std();
     let system = SystemTime::now();
     let wall = system
         .checked_add(tokio_now.saturating_duration_since(std_now))
@@ -107,7 +105,7 @@ pub(crate) fn wall_clock_ms() -> i64 {
 /// hatch for a wall clock that stepped back. Otherwise it waits until the
 /// interval has elapsed since the last one.
 #[must_use]
-pub(crate) fn can_compute_next_target_assignment(
+pub fn can_compute_next_target_assignment(
     assignment_timestamp_ms: i64,
     interval: Duration,
     now_ms: i64,
@@ -134,7 +132,7 @@ type Assignment = HashMap<Uuid, Vec<i32>>;
 /// writes a target assignment record.
 ///
 /// [`same_assignment`]: crate::coordinator::unified::consumer_state::same_assignment
-pub(crate) fn new_target_assignment<'a>(
+pub fn new_target_assignment<'a>(
     member_ids: impl ExactSizeIterator<Item = &'a String>,
     mut per_member: HashMap<String, Assignment>,
     held: &HashMap<String, Assignment>,
@@ -223,6 +221,6 @@ mod helper_tests {
             session_timeout,
         );
 
-        assert!(expired == vec!["expired".to_string()]);
+        assert!(expired == vec!["expired".to_owned()]);
     }
 }

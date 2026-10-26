@@ -11,6 +11,7 @@ use {
     bytes::{Bytes, BytesMut},
     krabka_protocol::{
         owned::fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
+        primitives::uuid::Uuid,
         records::{Record, RecordBatch, RecordsPayload},
     },
 };
@@ -126,14 +127,14 @@ fn response_with_partitions(version: i16, partitions: Vec<PartitionData>) -> Fet
         session_id: 7,
         responses: vec![FetchableTopicResponse {
             topic: if version <= 12 {
-                "t".to_string()
+                "t".to_owned()
             } else {
                 String::new()
             },
             topic_id: if version >= 13 {
-                krabka_protocol::primitives::uuid::Uuid([5u8; 16])
+                Uuid([5u8; 16])
             } else {
-                krabka_protocol::primitives::uuid::Uuid([0u8; 16])
+                Uuid([0u8; 16])
             },
             partitions,
             ..FetchableTopicResponse::default()

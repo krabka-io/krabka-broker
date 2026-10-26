@@ -71,7 +71,7 @@ use {
 /// The `node.id` a broker resource reports beside its dynamic overrides. The
 /// broker reads it from its own static configuration, never from the metadata
 /// image, so it is the one broker key with no stored form.
-pub(crate) const NODE_ID: &str = "node.id";
+pub const NODE_ID: &str = "node.id";
 
 /// `DescribeConfigsResponse.ConfigType`, the byte the JVM `AdminClient` reads
 /// out of `ConfigEntry.type()`.
@@ -91,7 +91,7 @@ pub(crate) const NODE_ID: &str = "node.id";
 /// `label` is the name the generated reference page prints in its type column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, krabka_macros::EnumStr)]
 #[enum_str(case = "lowercase", as_str = label)]
-pub(crate) enum ConfigType {
+pub enum ConfigType {
     Boolean,
     String,
     Int,
@@ -124,7 +124,7 @@ impl ConfigType {
 /// `unclean.leader.election.enable` is both a topic key and a cluster-default
 /// broker key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum ConfigScope {
+pub enum ConfigScope {
     Topic,
     Broker,
     ClientMetrics,
@@ -145,7 +145,7 @@ pub(crate) enum ConfigScope {
 /// `Invalid value 2147483648 for configuration segment.bytes: Not a number of
 /// type INT`, so krabka refuses it too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ValueCheck {
+pub enum ValueCheck {
     /// `true` or `false`, exactly.
     Bool,
     /// One of a closed list, in the order the refusal names them.
@@ -172,7 +172,7 @@ pub(crate) enum ValueCheck {
 
 /// One config key, as every surface that reports it needs to know it.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ConfigKey {
+pub struct ConfigKey {
     pub(crate) name: &'static str,
     pub(crate) scope: ConfigScope,
     /// The type the JVM `AdminClient` parses the value with.
@@ -252,10 +252,10 @@ impl ConfigKey {
 
     /// The type column of the generated reference page.
     pub(crate) fn value_type(&self) -> String {
-        match self.type_note {
-            Some(note) => format!("{} ({note})", self.config_type.label()),
-            None => self.config_type.label().to_owned(),
-        }
+        self.type_note.map_or_else(
+            || self.config_type.label().to_owned(),
+            |note| format!("{} ({note})", self.config_type.label()),
+        )
     }
 }
 
@@ -325,7 +325,7 @@ const SCHEMA_VALIDATION_MODE_VALUES: &[&str] =
     &[SCHEMA_VALIDATION_MODE_ID, SCHEMA_VALIDATION_MODE_FULL];
 
 /// Every config key the broker validates, documents, or reports.
-pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
+pub const CONFIG_KEYS: &[ConfigKey] = &[
     // ── Topic scope ─────────────────────────────────────────────
     ConfigKey {
         type_note: Some("ms"),
@@ -1217,14 +1217,14 @@ pub(crate) const CONFIG_KEYS: &[ConfigKey] = &[
 ];
 
 /// The row for one key, or `None` when the scope reports no such key.
-pub(crate) fn lookup(scope: ConfigScope, name: &str) -> Option<&'static ConfigKey> {
+pub fn lookup(scope: ConfigScope, name: &str) -> Option<&'static ConfigKey> {
     CONFIG_KEYS
         .iter()
         .find(|entry| entry.scope == scope && entry.name == name)
 }
 
 /// Every row in one scope, in the table's own order.
-pub(crate) fn keys_in(scope: ConfigScope) -> impl Iterator<Item = &'static ConfigKey> {
+pub fn keys_in(scope: ConfigScope) -> impl Iterator<Item = &'static ConfigKey> {
     CONFIG_KEYS.iter().filter(move |entry| entry.scope == scope)
 }
 

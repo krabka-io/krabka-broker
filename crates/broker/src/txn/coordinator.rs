@@ -6,10 +6,12 @@
 //! It loads a partition when this broker becomes its leader, and it unloads
 //! the partition when this broker stops leading it (see `leadership`).
 
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use {
     self::verification_client::VerificationClient,
     crate::{
-        codes::{INVALID_PRODUCER_ID_MAPPING, UNKNOWN_SERVER_ERROR},
+        codes::{COORDINATOR_NOT_AVAILABLE, INVALID_PRODUCER_ID_MAPPING, UNKNOWN_SERVER_ERROR},
         coordinator::GroupCoordinator,
         error::BrokerError,
         metadata_source::MetadataSource,
@@ -26,6 +28,7 @@ use {
     krabka_units::ByteSize,
     std::{
         collections::BTreeSet,
+        iter,
         sync::{Arc, Mutex as StdMutex, atomic::AtomicU64},
     },
     tokio::sync::{Mutex, Notify, RwLock},
@@ -36,16 +39,16 @@ mod commit;
 /// KIP-98 transactional-id expiry: the decision core and the sweep over the
 /// tids this broker coordinates. [`crate::txn::id_expiration`] ticks it.
 /// Completion of transactions whose `Prepare*` record is durable.
-pub(crate) mod completion;
-pub(crate) mod expiry;
+pub mod completion;
+pub mod expiry;
 #[cfg(any(test, feature = "test-helpers"))]
-pub(crate) mod fanout_gate;
-pub(crate) mod leadership;
+pub mod fanout_gate;
+pub mod leadership;
 mod load;
 mod markers;
 mod persistence;
 mod pid_index;
-pub(crate) mod produce_verification;
+pub mod produce_verification;
 mod reaper;
 mod registration;
 mod verification_client;
@@ -55,7 +58,7 @@ mod test_support;
 
 /// Per-broker transaction coordinator. `Broker::start` constructs it and
 /// shares it with the transaction wire handlers through an `Arc`.
-pub(crate) struct TxnCoordinator {
+pub struct TxnCoordinator {
     pub(crate) node_id: krabka_metadata::NodeId,
     pub(crate) partitions: Arc<PartitionRegistry>,
     pub(crate) producer_ids: Arc<ProducerIdManager>,
@@ -66,7 +69,7 @@ pub(crate) struct TxnCoordinator {
     /// Serializes durable state writes by `__transaction_state` partition.
     /// The reaper holds the matching lock across its post-marker recheck and
     /// completion append so no staged writer can slip between them.
-    state_partition_writes: Vec<Mutex<()>>,
+    state_partition_writes: StatePartitionWrites,
     /// The newest known leadership of each `__transaction_state` partition.
     /// [`leadership::apply_image`] orders updates by leader epoch.
     leader_partitions: RwLock<leadership::StatePartitionLeaders>,
@@ -105,6 +108,34 @@ pub(crate) struct TxnCoordinator {
     pub(crate) marker_fanout_gate: fanout_gate::MarkerFanoutGate,
 }
 
+/// One write lock for each `__transaction_state` partition.
+#[derive(Debug)]
+struct StatePartitionWrites {
+    per_partition: Vec<Mutex<()>>,
+    /// The lock of a partition index outside `0..num_partitions`, and of an
+    /// id with no partition, which `partition_for_tid` yields only for a
+    /// non-positive partition count.
+    out_of_range: Mutex<()>,
+}
+
+impl StatePartitionWrites {
+    fn new(num_partitions: i32) -> Self {
+        let count = usize::try_from(num_partitions).unwrap_or(0);
+        Self {
+            per_partition: iter::repeat_with(|| Mutex::new(())).take(count).collect(),
+            out_of_range: Mutex::new(()),
+        }
+    }
+
+    /// The write lock of `partition`.
+    fn lock_for(&self, partition: Option<PartitionIndex>) -> &Mutex<()> {
+        partition
+            .and_then(|partition| usize::try_from(partition.get()).ok())
+            .and_then(|index| self.per_partition.get(index))
+            .unwrap_or(&self.out_of_range)
+    }
+}
+
 struct MarkerTransport {
     verification_client: VerificationClient,
     controller: Arc<dyn MetadataSource>,
@@ -122,8 +153,6 @@ impl TxnCoordinator {
         num_partitions: i32,
         recovery_read_max: ByteSize,
     ) -> Self {
-        let state_partition_count = usize::try_from(num_partitions)
-            .expect("transaction state partition count must be nonnegative");
         Self {
             node_id,
             partitions,
@@ -131,7 +160,7 @@ impl TxnCoordinator {
             num_partitions,
             recovery_read_max,
             state: DashMap::new(),
-            state_partition_writes: (0..state_partition_count).map(|_| Mutex::new(())).collect(),
+            state_partition_writes: StatePartitionWrites::new(num_partitions),
             leader_partitions: RwLock::new(leadership::StatePartitionLeaders::new()),
             pid_to_tid: DashMap::new(),
             pid_install: StdMutex::new(()),
@@ -200,23 +229,33 @@ impl TxnCoordinator {
                 topic_id: uuid::Uuid::nil(),
                 leader_epoch: krabka_metadata::LeaderEpoch(0),
                 term: Some(leadership::LeaderTerm {
-                    generation: self
-                        .next_generation
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    generation: self.next_generation.fetch_add(1, Ordering::Relaxed),
                     status: leadership::LoadStatus::Loaded,
                 }),
             },
         );
     }
 
-    /// Returns the `__transaction_state` partition index responsible for `tid`.
-    pub(crate) fn partition_for(&self, tid: &str) -> PartitionIndex {
-        PartitionIndex(partition_for_tid(tid, self.num_partitions))
+    /// Returns the `__transaction_state` partition index responsible for `tid`,
+    /// or `None` when the configured partition count is not positive.
+    pub(crate) fn partition_for(&self, tid: &str) -> Option<PartitionIndex> {
+        partition_for_tid(tid, self.num_partitions).map(PartitionIndex)
+    }
+
+    /// [`Self::partition_for`], or an error naming `tid` when the configured
+    /// partition count is not positive.
+    pub(crate) fn require_partition_for(&self, tid: &str) -> Result<PartitionIndex, BrokerError> {
+        self.partition_for(tid).ok_or_else(|| {
+            BrokerError::Txn(format!(
+                "no __transaction_state partition for {tid}: partition count {} is not positive",
+                self.num_partitions
+            ))
+        })
     }
 
     /// Returns `true` if this broker is the transaction coordinator for `tid`
     /// and its `__transaction_state` partition is loaded.
-    pub(crate) async fn is_coordinator_for(&self, tid: &str) -> bool {
+    pub(crate) async fn is_transaction_coordinator_for(&self, tid: &str) -> bool {
         self.coordinator_error(tid).await.is_none()
     }
 
@@ -227,7 +266,10 @@ impl TxnCoordinator {
     /// and `NOT_COORDINATOR` when this broker does not lead the partition or
     /// its load failed.
     pub(crate) async fn coordinator_error(&self, tid: &str) -> Option<i16> {
-        leadership::coordinator_error(self.load_status(self.partition_for(tid)).await)
+        let Some(partition) = self.partition_for(tid) else {
+            return Some(COORDINATOR_NOT_AVAILABLE);
+        };
+        leadership::coordinator_error(self.load_status(partition).await)
     }
 
     /// The error code for a failed append about `tid`.
@@ -271,7 +313,7 @@ impl TxnCoordinator {
     /// Returns the locked `TxnEntry` for `tid`, or `None` if `tid` is
     /// unknown.
     pub(crate) fn get(&self, tid: &str) -> Option<Arc<Mutex<TxnEntry>>> {
-        self.state.get(tid).map(|e| e.value().clone())
+        self.state.get(tid).map(|e| Arc::clone(e.value()))
     }
 
     /// Returns `true` if `handle` is still the entry registered for `tid`.
@@ -316,6 +358,7 @@ mod tests {
     use {
         super::*,
         crate::{
+            codes,
             test_support::PartitionCount,
             txn::coordinator::test_support::{test_coordinator, test_coordinator_with_partitions},
         },
@@ -329,9 +372,9 @@ mod tests {
         // constant `PartitionIndex(0)` (the Default) is caught: none of these
         // hash to 0.
         let coordinator = test_coordinator();
-        check!(coordinator.partition_for("my-tid") == PartitionIndex(20));
-        check!(coordinator.partition_for("producer-1") == PartitionIndex(30));
-        check!(coordinator.partition_for("tx-orders-prod") == PartitionIndex(16));
+        check!(coordinator.partition_for("my-tid") == Some(PartitionIndex(20)));
+        check!(coordinator.partition_for("producer-1") == Some(PartitionIndex(30)));
+        check!(coordinator.partition_for("tx-orders-prod") == Some(PartitionIndex(16)));
     }
 
     /// Regression: a leadership change can unload the coordinator partition
@@ -344,23 +387,18 @@ mod tests {
         let tid = "tid-missing";
         let unloaded = coordinator.missing_entry_error(tid).await;
         coordinator
-            .lead_state_partition_for_test(coordinator.partition_for(tid))
+            .lead_state_partition_for_test(coordinator.partition_for(tid).unwrap())
             .await;
         let loaded = coordinator.missing_entry_error(tid).await;
-        check!(
-            (unloaded, loaded)
-                == (
-                    crate::codes::NOT_COORDINATOR,
-                    crate::codes::INVALID_PRODUCER_ID_MAPPING
-                )
-        );
+        check!((unloaded, loaded) == (codes::NOT_COORDINATOR, INVALID_PRODUCER_ID_MAPPING));
     }
 
     #[test]
     fn nondefault_partition_count_changes_coordinator_routing() {
         let coordinator = test_coordinator_with_partitions(PartitionCount(7));
         check!(
-            coordinator.partition_for("my-tid") == PartitionIndex(partition_for_tid("my-tid", 7))
+            coordinator.partition_for("my-tid")
+                == partition_for_tid("my-tid", 7).map(PartitionIndex)
         );
     }
 }

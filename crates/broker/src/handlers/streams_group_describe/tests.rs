@@ -26,12 +26,16 @@ use {
             authorized_operations::authorized_operations_bits,
             group_heartbeat_test_support::streams_request_with_topology,
         },
-        test_support::{DenyAll, peer, principal, request_context, start_broker_with},
+        test_support::{DenyAll, allow_acl, peer, principal, request_context, start_broker_with},
     },
     assert2::{assert, check},
     krabka_metadata::{AclOperation, MetadataRecord, ResourceType},
     krabka_protocol::UnknownTaggedFields,
     std::{collections::HashSet, sync::Arc, time::Duration},
+    tokio::{
+        sync::oneshot,
+        time::{sleep, timeout},
+    },
 };
 
 /// Commit one literal `Allow` ACL for `User:<user>` on `(resource_type,
@@ -48,7 +52,7 @@ async fn grant(
         .broker_arc_for_test()
         .controller
         .submit_change(vec![MetadataRecord::V1AccessControlEntry(
-            crate::test_support::allow_acl()
+            allow_acl()
                 .resource_type(resource_type)
                 .resource_name(resource_name)
                 .principal(&format!("User:{user}"))
@@ -108,16 +112,16 @@ async fn closed_streams_actor_returns_load_in_progress_row() {
     finalize_streams_version(&broker).await;
 
     let actor = broker.group_coordinator.get_or_create_streams("stopped");
-    let (tx, rx) = tokio::sync::oneshot::channel();
+    let (tx, rx) = oneshot::channel();
     actor
         .tx
         .send(StreamsGroupActorMessage::Shutdown(tx))
         .await
         .expect("send shutdown");
     rx.await.expect("actor shutdown");
-    tokio::time::timeout(Duration::from_secs(5), async {
+    timeout(Duration::from_secs(5), async {
         while !actor.tx.is_closed() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -285,7 +289,7 @@ async fn topology_topic_denied_for_describe_hides_only_that_group() {
             .as_ref()
             .and_then(|t| t.subtopologies.as_ref())
             .map(|s| s[0].source_topics.clone())
-            == Some(vec!["public".to_string()])
+            == Some(vec!["public".to_owned()])
     );
     broker_handle.shutdown().await;
 }
@@ -298,7 +302,7 @@ async fn include_authorized_operations_fills_the_bitfield_only_on_opt_in() {
     let authorizer = Arc::new(AllowAllAuthorizer);
     krabka_macros::broker_test_setup! {
         bind(broker_handle, _dir, broker);
-        boot [start_broker_with_authorizer(authorizer.clone() as _)];
+        boot [start_broker_with_authorizer(Arc::<AllowAllAuthorizer>::clone(&authorizer))];
     };
     finalize_streams_version(&broker).await;
     seed_streams_group_topology(&broker, "g1", topology_with_source_topic("t")).await;

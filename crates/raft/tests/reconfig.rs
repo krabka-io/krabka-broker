@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use {
     krabka_metadata::Voter,
     krabka_raft::{

@@ -48,9 +48,9 @@ async fn witness_is_a_visible_isr_member_that_serves_no_reads() {
     check!(
         racks
             == maplit::btreemap! {
-            1 => Some(SITE_A.to_string()),
-            2 => Some(SITE_B.to_string()),
-            WITNESS_ID => Some(SITE_C.to_string())},
+            1 => Some(SITE_A.to_owned()),
+            2 => Some(SITE_B.to_owned()),
+            WITNESS_ID => Some(SITE_C.to_owned())},
         "every broker, the witness included, is in Metadata.brokers[] with its rack"
     );
 

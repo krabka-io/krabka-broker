@@ -18,7 +18,12 @@ use {
         TopicConfigRecord, TopicRecord,
     },
     krabka_raft::NodeId,
-    std::{collections::BTreeMap, sync::Arc},
+    std::{
+        collections::{BTreeMap, HashSet},
+        sync::Arc,
+        time::Duration,
+    },
+    tokio::sync::mpsc,
     uuid::Uuid,
 };
 
@@ -211,12 +216,10 @@ pub fn expected_partition(
 
 /// The witness set for a plain, non-stretch cluster. Every pre-witness
 /// behaviour must be unchanged against it.
-pub fn no_witnesses() -> std::collections::HashSet<NodeId> { std::collections::HashSet::new() }
+pub fn no_witnesses() -> HashSet<NodeId> { HashSet::new() }
 
 /// Mark `ids` as data-bearing witnesses.
-pub fn witnesses(ids: &[u64]) -> std::collections::HashSet<NodeId> {
-    ids.iter().copied().map(NodeId).collect()
-}
+pub fn witnesses(ids: &[u64]) -> HashSet<NodeId> { ids.iter().copied().map(NodeId).collect() }
 
 /// Register `ids` as brokers and publish `broker.witness=true` for each
 /// one, which is the path the real broker takes at registration. Use this
@@ -235,9 +238,7 @@ pub fn mark_witnesses_in_image(img: &mut MetadataImage, ids: &[u64]) {
 /// The alive-broker set the operator elections take, spelled as the ids that
 /// are up. Equivalent to [`liveness_with_alive`] followed by `alive_snapshot`,
 /// without the registry the selectors no longer read.
-pub fn alive_set(alive: &[u64]) -> std::collections::HashSet<u64> {
-    alive.iter().copied().collect()
-}
+pub fn alive_set(alive: &[u64]) -> HashSet<u64> { alive.iter().copied().collect() }
 
 pub async fn liveness_with_alive(alive: &[u64]) -> Arc<ControllerLivenessState> {
     let l = ControllerLivenessState::new(krabka_units::secs(10));
@@ -275,7 +276,7 @@ pub fn stalled_fake_source(
 }
 
 pub fn recovery_handle_for_tests() -> UncleanRecoveryHandle {
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let (tx, _rx) = mpsc::channel(1);
     UncleanRecoveryHandle::for_tests(tx)
 }
 
@@ -342,7 +343,7 @@ pub fn partition_batches(batches: &[Vec<MetadataRecord>]) -> Vec<Vec<MetadataRec
 }
 
 /// One broker's fencing change, as a liveness tick published it.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct FencingUpdate {
     pub node_id: u64,
     pub change: krabka_metadata::FencingChange,
@@ -403,11 +404,11 @@ pub fn one_partition_change(changes: &[MetadataRecord]) -> &PartitionRecord {
 /// that flips `dead` to `Dead` runs here, so the caller sees no edge.
 pub async fn liveness_with_dead(dead: &[u64], alive: &[u64]) -> Arc<ControllerLivenessState> {
     let clock = TestClock::new();
-    let l = ControllerLivenessState::with_test_clock(std::time::Duration::from_millis(10), &clock);
+    let l = ControllerLivenessState::with_test_clock(Duration::from_millis(10), &clock);
     for &n in dead {
         l.record_heartbeat(n).await;
     }
-    clock.advance(std::time::Duration::from_millis(11));
+    clock.advance(Duration::from_millis(11));
     for &n in alive {
         l.record_heartbeat(n).await;
     }

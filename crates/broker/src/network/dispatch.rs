@@ -14,12 +14,19 @@
 //!   v0.
 
 use {
+    crate::telemetry::REQUEST_TARGET,
     bytes::Bytes,
     futures_util::SinkExt,
-    krabka_protocol::{Decode as _, api_key::ApiKey},
+    krabka_protocol::{
+        Decode as _, api_key::ApiKey, owned::api_versions_request::ApiVersionsRequest,
+    },
     krabka_units::{Time, convert::TimeExt},
-    std::{net::SocketAddr, sync::Arc},
-    tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _},
+    std::{net::SocketAddr, sync::Arc, time},
+    tokio::{
+        io::{AsyncRead, AsyncWrite, AsyncWriteExt as _},
+        sync::Semaphore,
+        time::Instant,
+    },
     tokio_util::codec::Framed,
     tracing::Instrument as _,
 };
@@ -36,7 +43,7 @@ mod response;
 /// `benches/perf_deferrals.rs`.
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod response_framing;
-pub(crate) mod sasl;
+pub mod sasl;
 mod session;
 #[cfg(test)]
 mod test_support;
@@ -49,8 +56,8 @@ mod write_idle;
 /// permits than the semaphore was built with -- it waits, and no response can
 /// ever free enough room, so the wait never ends. The comparison against
 /// `total` is what turns that into a refusal.
-pub(crate) struct RequestByteBudget {
-    permits: Arc<tokio::sync::Semaphore>,
+pub struct RequestByteBudget {
+    permits: Arc<Semaphore>,
     total: usize,
 }
 
@@ -60,9 +67,9 @@ impl RequestByteBudget {
     /// than rejected: at that size the knob is off in every sense that
     /// matters.
     pub(crate) fn of(budget: usize) -> Self {
-        let total = budget.min(tokio::sync::Semaphore::MAX_PERMITS);
+        let total = budget.min(Semaphore::MAX_PERMITS);
         Self {
-            permits: Arc::new(tokio::sync::Semaphore::new(total)),
+            permits: Arc::new(Semaphore::new(total)),
             total,
         }
     }
@@ -259,8 +266,8 @@ where
 /// Turns a KIP-219 throttle window into the deadline the connection stays
 /// muted until, measured from now — that is, from the moment the response
 /// finished being written.
-fn mute_deadline(window: Time) -> Option<tokio::time::Instant> {
-    (window > <Time as TimeExt>::ZERO).then(|| tokio::time::Instant::now() + window.to_std())
+fn mute_deadline(window: Time) -> Option<Instant> {
+    (window > <Time as TimeExt>::ZERO).then(|| Instant::now() + window.to_std())
 }
 
 /// `ApiVersions` wire `api_key`. It has its own name because it is the one API
@@ -277,10 +284,8 @@ fn capture_client_software(parsed: &ParsedRequest<'_>, name: &mut String, versio
         return;
     }
     let mut body = parsed.body;
-    if let Ok(request) = krabka_protocol::owned::api_versions_request::ApiVersionsRequest::decode(
-        &mut body,
-        parsed.api_version,
-    ) && is_valid_client_info(&request.client_software_name)
+    if let Ok(request) = ApiVersionsRequest::decode(&mut body, parsed.api_version)
+        && is_valid_client_info(&request.client_software_name)
         && is_valid_client_info(&request.client_software_version)
     {
         name.clone_from(&request.client_software_name);
@@ -317,7 +322,7 @@ fn parse_connection_request<'a>(
     };
     assert2::assert!((parsed.api_key) == (peeked_api_key));
     let span = if tracing::enabled!(
-        target: crate::telemetry::REQUEST_TARGET,
+        target: REQUEST_TARGET,
         tracing::Level::DEBUG
     ) {
         request_span(
@@ -335,12 +340,12 @@ fn parse_connection_request<'a>(
 
 /// The instant a request began and the guard that counts it in flight.
 struct BegunRequest<'a> {
-    started: std::time::Instant,
+    started: time::Instant,
     in_flight: InFlightGuard<'a>,
 }
 
 fn begin_request<'a>(broker: &'a Broker, parsed: &ParsedRequest<'_>) -> BegunRequest<'a> {
-    let started = std::time::Instant::now();
+    let started = time::Instant::now();
     broker.metrics.record_api_request(parsed.api_key);
     // Kafka's `RequestChannel` logs each request at DEBUG on
     // `kafka.request.logger`, which its default log4j configuration keeps at
@@ -488,7 +493,7 @@ fn is_inter_broker_api_on_client_listener(
 /// correctly and gates pre-auth requests on SASL listeners.
 // each api_key intercept arm adds ~15 lines.
 async fn serve_connection_stream<S>(
-    broker: std::sync::Arc<Broker>,
+    broker: Arc<Broker>,
     stream: S,
     spec: ListenerSpec,
     peer: SocketAddr,
@@ -525,7 +530,7 @@ async fn serve_connection_stream<S>(
     let frame_wait = FrameWaitPolicy {
         peer,
         metrics: broker.metrics.clone(),
-        audit_log: broker.audit_log.clone(),
+        audit_log: Arc::clone(&broker.audit_log),
         failed_authentication_delay: broker.config.failed_authentication_delay(),
     };
     // Kafka's `SocketServer` `Acceptor` and `Processor` log a new connection
@@ -546,7 +551,7 @@ async fn serve_connection_stream<S>(
     // KIP-219 channel mute. A throttled response is written immediately and
     // the quota is enforced by refusing to read the next request until this
     // deadline passes.
-    let mut mute_until: Option<tokio::time::Instant> = None;
+    let mut mute_until: Option<Instant> = None;
 
     // Raw-token mode (v0 handshake) and the last KIP-368 re-auth start.
     let mut sasl_session = sasl::SaslSession::default();
@@ -578,7 +583,10 @@ async fn serve_connection_stream<S>(
         // connection sitting idle has nothing queued and must hold no
         // capacity; taking a permit to wait on the socket would let a broker
         // with more idle connections than permits stop serving anything.
-        let Ok(permit) = broker.queued_requests_sem.clone().acquire_owned().await else {
+        let Ok(permit) = Arc::clone(&broker.queued_requests_sem)
+            .acquire_owned()
+            .await
+        else {
             break;
         };
         // Broker backpressure, like the byte budget: the idle window restarts.

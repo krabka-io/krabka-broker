@@ -5,7 +5,10 @@
 //! replica, and asserts that the Krabka follower truncates to the shared prefix
 //! and resumes at the JVM leader's exact log end offset.
 
-use crate::test_support::truncation::{prelude::*, *};
+use {
+    crate::test_support::truncation::{prelude::*, *},
+    tokio::time,
+};
 
 /// Parks the Krabka replica behind a phantom leader, then verifies that it
 /// adopts the promoted JVM leader's divergent epoch and resumes replication.
@@ -90,7 +93,7 @@ async fn kip320_krabka_follower_truncates_from_jvm_leader() {
             Instant::now() <= dl,
             "Krabka follower did not truncate to JVM prefix LEO {prefix_leo}; current LEO={final_leo}"
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
     let jvm_prefix_dump =
         dump_log_in_container(&container, &format!("/tmp/kraft-mixed-logs/{TOPIC}-0"));

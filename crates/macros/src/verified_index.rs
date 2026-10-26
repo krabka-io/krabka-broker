@@ -7,27 +7,33 @@ use {
         token::{Span, Spanner, TokenStream},
     },
     proc_macro::TokenStream as NativeTokenStream,
+    std::mem,
 };
 
-fn sections(input: TokenStream, count: usize) -> Result<Vec<TokenStream>, ParseError> {
-    let mut sections = vec![TokenStream::new()];
+fn sections<const N: usize>(input: TokenStream) -> Result<[TokenStream; N], ParseError> {
+    let mut sections = Vec::new();
+    let mut current = TokenStream::new();
     for token in input {
         if token.is_punct_semi() {
-            sections.push(TokenStream::new());
+            sections.push(mem::take(&mut current));
         } else {
-            sections.last_mut().expect("one section").extend([token]);
+            current.extend([token]);
         }
     }
+    sections.push(current);
     if sections.last().is_some_and(TokenStream::is_empty) {
         sections.pop();
     }
-    if sections.len() != count || sections.iter().any(TokenStream::is_empty) {
-        return Err(ParseError::new(
+    let error = || {
+        ParseError::new(
             Span::call_site(),
             "expected a signature; comparison; optional cursor;",
-        ));
+        )
+    };
+    if sections.iter().any(TokenStream::is_empty) {
+        return Err(error());
     }
-    Ok(sections)
+    sections.try_into().map_err(|_| error())
 }
 
 fn check_header(header: &TokenStream, expected: &[&str]) -> Result<(), ParseError> {
@@ -56,16 +62,28 @@ fn comparison(input: &TokenStream) -> Result<(), ParseError> {
     Ok(())
 }
 
-pub(crate) fn cursor(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let parts = sections(input, 2)?;
-    let header = &parts[0];
-    let before = &parts[1];
-    check_header(header, &["entries", "target"])?;
-    comparison(before)?;
-    let view: TokenStream = "@".parse().expect("Creusot view operator");
-    Ok(moxy::template! {
+/// Creusot's `@` view operator.
+fn view_operator() -> Result<TokenStream, ParseError> {
+    "@".parse()
+        .map_err(|_| ParseError::new(Span::call_site(), "Creusot view operator"))
+}
+
+/// The precondition that `entries` is ordered by `order` on its keys.
+fn sorted_entries(view: &TokenStream, order: &TokenStream) -> TokenStream {
+    moxy::template! {
         #[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries{{view}}.len()
-            ==> entries{{view}}[i].key{{view}} <= entries{{view}}[j].key{{view}})]
+            ==> entries{{view}}[i].key{{view}} {{order}} entries{{view}}[j].key{{view}})]
+    }
+}
+
+pub fn cursor(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [header, before] = sections(input)?;
+    check_header(&header, &["entries", "target"])?;
+    comparison(&before)?;
+    let view = view_operator()?;
+    let sorted = sorted_entries(&view, &"<=".parse()?);
+    Ok(moxy::template! {
+        {{sorted}}
         #[ensures(result{{view}} <= entries{{view}}.len())]
         #[ensures(forall<i: Int> 0 <= i && i < result{{view}} ==> entries{{view}}[i].key{{view}} {{before}} target{{view}})]
         #[ensures(forall<i: Int> result{{view}} <= i && i < entries{{view}}.len()
@@ -89,17 +107,15 @@ pub(crate) fn cursor(input: TokenStream) -> Result<TokenStream, ParseError> {
     })
 }
 
-pub(crate) fn floor(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let parts = sections(input, 3)?;
-    let header = &parts[0];
-    let order = &parts[1];
-    check_header(header, &["entries", "target"])?;
-    comparison(order)?;
-    let cursor = plain_path(&parts[2], parts[2].span(), "expected cursor function path")?;
-    let view: TokenStream = "@".parse().expect("Creusot view operator");
+pub fn floor(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let [header, order, cursor] = sections(input)?;
+    check_header(&header, &["entries", "target"])?;
+    comparison(&order)?;
+    let cursor = plain_path(&cursor, cursor.span(), "expected cursor function path")?;
+    let view = view_operator()?;
+    let sorted = sorted_entries(&view, &order);
     Ok(moxy::template! {
-        #[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries{{view}}.len()
-            ==> entries{{view}}[i].key{{view}} {{order}} entries{{view}}[j].key{{view}})]
+        {{sorted}}
         #[ensures((exists<i: Int> 0 <= i && i < entries{{view}}.len() && entries{{view}}[i].key{{view}} <= target{{view}})
             ==> exists<i: Int> 0 <= i && i < entries{{view}}.len()
                 && entries{{view}}[i].key{{view}} <= target{{view}} && result{{view}} == entries{{view}}[i].coordinate{{view}}
@@ -113,21 +129,21 @@ pub(crate) fn floor(input: TokenStream) -> Result<TokenStream, ParseError> {
     })
 }
 
-pub(crate) fn finished_contract(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn finished_contract(input: &TokenStream) -> Result<TokenStream, ParseError> {
     if !matches!(compact(input).as_str(), "latest" | "true" | "false") {
         return Err(ParseError::new(
             input.span(),
             "expected latest, true or false",
         ));
     }
-    let view: TokenStream = "@".parse().expect("Creusot view operator");
+    let view = view_operator()?;
     Ok(moxy::template! {
         #[requires(starts{{view}}.len() == ends{{view}}.len() && starts{{view}}.len() == finished{{view}}.len())]
         #[ensures(finished_selection(starts{{view}}, ends{{view}}, finished{{view}}, result, starts{{view}}.len(), {{input}}))]
     })
 }
 
-pub(crate) fn finished(
+pub fn finished(
     meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
@@ -157,7 +173,7 @@ pub(crate) fn finished(
     Ok(output)
 }
 
-pub(crate) fn site_contract(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn site_contract(input: &TokenStream) -> Result<TokenStream, ParseError> {
     if !matches!(compact(input).as_str(), "0" | "1") {
         return Err(ParseError::new(
             input.span(),
@@ -173,7 +189,7 @@ pub(crate) fn site_contract(input: &TokenStream) -> Result<TokenStream, ParseErr
     })
 }
 
-pub(crate) fn site(
+pub fn site(
     meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {

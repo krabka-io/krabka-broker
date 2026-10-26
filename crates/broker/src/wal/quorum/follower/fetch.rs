@@ -6,7 +6,11 @@ use {
     crate::wal::quorum::registry::ShardId,
     krabka_ids::Offset,
     krabka_kraft_core::LogOffsetMetadata,
-    krabka_protocol::owned::fetch_response::{FetchResponse, PartitionData},
+    krabka_protocol::{
+        owned::fetch_response::{FetchResponse, PartitionData},
+        primitives::uuid::Uuid,
+    },
+    std::cmp,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,17 +72,17 @@ pub(super) fn validate_diverging_epoch(
 
 pub(super) fn fetch_progress(requested: Offset, appended: Offset) -> Result<FetchProgress, String> {
     match appended.cmp(&requested) {
-        std::cmp::Ordering::Less => Err(format!(
+        cmp::Ordering::Less => Err(format!(
             "WAL follower regressed from requested offset {} to {}",
             requested.0, appended.0
         )),
-        std::cmp::Ordering::Equal => Ok(FetchProgress::Idle),
-        std::cmp::Ordering::Greater => Ok(FetchProgress::Advanced),
+        cmp::Ordering::Equal => Ok(FetchProgress::Idle),
+        cmp::Ordering::Greater => Ok(FetchProgress::Advanced),
     }
 }
 
 pub(super) fn response_partition(response: FetchResponse, shard: ShardId) -> Option<PartitionData> {
-    let topic_id = krabka_protocol::primitives::uuid::Uuid(*shard.topic_id.as_bytes());
+    let topic_id = Uuid(*shard.topic_id.as_bytes());
     response
         .responses
         .into_iter()

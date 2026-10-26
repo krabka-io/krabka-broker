@@ -1,5 +1,7 @@
 #[cfg(creusot)]
 use super::ProducerSnapshotEntryFacts;
+#[cfg(test)]
+use std::cell::Cell;
 use {super::ProducerReloadRange, creusot_std::prelude::*};
 
 // cargo-mutants: #[cfg(creusot)] spec function; not compiled outside Creusot, so no test can tell.
@@ -110,16 +112,14 @@ pub const fn producer_snapshot_reload_keeps(offset: i64, range: ProducerReloadRa
 /// offset. The snapshot offsets must be distinct; their order is irrelevant.
 ///
 /// The proof assumes `index < snapshots.len()`. Other inputs are outside
-/// that contract.
-///
-/// # Panics
-///
-/// Panics when `index` is outside `snapshots`.
+/// that contract, and an `index` outside `snapshots` answers `false`.
 #[requires(index@ < snapshots@.len())]
 #[ensures(result == kafka_stray_removed(snapshots@, index@, segment_bases@))]
 #[must_use]
 pub fn producer_snapshot_stray(snapshots: &[i64], index: usize, segment_bases: &[i64]) -> bool {
-    let offset = snapshots[index];
+    let Some(&offset) = snapshots.get(index) else {
+        return false;
+    };
     let mut is_base = false;
     let mut above_every_base = true;
     let mut i = 0usize;
@@ -129,11 +129,13 @@ pub fn producer_snapshot_stray(snapshots: &[i64], index: usize, segment_bases: &
         ==> segment_bases@[j]@ < offset@)]
     #[variant(segment_bases@.len() - i@)]
     while i < segment_bases.len() {
-        if segment_bases[i] == offset {
-            is_base = true;
-        }
-        if segment_bases[i] >= offset {
-            above_every_base = false;
+        if let Some(&base) = segment_bases.get(i) {
+            if base == offset {
+                is_base = true;
+            }
+            if base >= offset {
+                above_every_base = false;
+            }
         }
         i += 1;
     }
@@ -143,7 +145,9 @@ pub fn producer_snapshot_stray(snapshots: &[i64], index: usize, segment_bases: &
     #[invariant(newest == forall<j: Int> 0 <= j && j < k@ ==> snapshots@[j]@ <= offset@)]
     #[variant(snapshots@.len() - k@)]
     while k < snapshots.len() {
-        if snapshots[k] > offset {
+        if let Some(&snapshot) = snapshots.get(k)
+            && snapshot > offset
+        {
             newest = false;
         }
         k += 1;
@@ -179,11 +183,7 @@ pub fn producer_snapshot_stray(snapshots: &[i64], index: usize, segment_bases: &
 #[must_use]
 pub fn producer_snapshot_strays(snapshots: &[i64], segment_bases: &[i64]) -> Vec<bool> {
     let mut removed = Vec::with_capacity(snapshots.len());
-    let greatest_base = if segment_bases.is_empty() {
-        None
-    } else {
-        Some(segment_bases[segment_bases.len() - 1])
-    };
+    let greatest_base = segment_bases.last().copied();
     let mut base_index = 0usize;
     let mut snapshot_index = 0usize;
     #[invariant(snapshot_index@ <= snapshots@.len())]
@@ -197,7 +197,9 @@ pub fn producer_snapshot_strays(snapshots: &[i64], segment_bases: &[i64]) -> Vec
     #[variant(snapshots@.len() - snapshot_index@)]
     while snapshot_index < snapshots.len() {
         record_classifier_visit();
-        let offset = snapshots[snapshot_index];
+        let Some(&offset) = snapshots.get(snapshot_index) else {
+            break;
+        };
         #[invariant(base_index@ <= segment_bases@.len())]
         #[invariant(removed@.len() == snapshot_index@)]
         #[invariant(forall<i: Int> 0 <= i && i < snapshot_index@
@@ -205,7 +207,9 @@ pub fn producer_snapshot_strays(snapshots: &[i64], segment_bases: &[i64]) -> Vec
         #[invariant(forall<i: Int> 0 <= i && i < base_index@
             ==> segment_bases@[i]@ < offset@)]
         #[variant(segment_bases@.len() - base_index@)]
-        while base_index < segment_bases.len() && segment_bases[base_index] < offset {
+        while base_index < segment_bases.len()
+            && matches!(segment_bases.get(base_index), Some(&base) if base < offset)
+        {
             record_classifier_visit();
             base_index += 1;
         }
@@ -213,17 +217,15 @@ pub fn producer_snapshot_strays(snapshots: &[i64], segment_bases: &[i64]) -> Vec
         proof_assert!(base_index@ < segment_bases@.len() ==>
             forall<j: Int> base_index@ <= j && j < segment_bases@.len()
                 ==> segment_bases@[base_index@]@ <= segment_bases@[j]@);
-        let is_base = base_index < segment_bases.len() && segment_bases[base_index] == offset;
+        let is_base = base_index < segment_bases.len()
+            && matches!(segment_bases.get(base_index), Some(&base) if base == offset);
         proof_assert!(is_base == is_segment_base(segment_bases@, offset@));
-        let newest = offset == snapshots[snapshots.len() - 1];
+        let newest = matches!(snapshots.last(), Some(&last) if last == offset);
         proof_assert!(forall<j: Int> 0 <= j && j < snapshots@.len()
             ==> snapshots@[j]@ <= snapshots@[snapshots@.len() - 1]@);
         proof_assert!(newest == (forall<j: Int> 0 <= j && j < snapshots@.len()
             ==> snapshots@[j]@ <= offset@));
-        let above_every_base = match greatest_base {
-            Some(base) => offset > base,
-            None => true,
-        };
+        let above_every_base = !matches!(greatest_base, Some(base) if offset <= base);
         proof_assert!(above_every_base == (forall<j: Int> 0 <= j && j < segment_bases@.len()
             ==> segment_bases@[j]@ < offset@));
         removed.push(!(is_base || (newest && above_every_base)));
@@ -236,24 +238,23 @@ pub fn producer_snapshot_strays(snapshots: &[i64], segment_bases: &[i64]) -> Vec
 
 #[cfg(test)]
 thread_local! {
-    static CLASSIFIER_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static CLASSIFIER_VISITS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Count one classifier visit; only tests read the count.
+fn record_classifier_visit() {
+    #[cfg(test)]
+    CLASSIFIER_VISITS.with(|visits| visits.set(visits.get() + 1));
 }
 
 #[cfg(test)]
-fn record_classifier_visit() { CLASSIFIER_VISITS.with(|visits| visits.set(visits.get() + 1)); }
-
-#[cfg(not(test))]
-const fn record_classifier_visit() {}
-
-#[cfg(test)]
-pub(crate) fn take_classifier_visits() -> usize {
-    CLASSIFIER_VISITS.with(|visits| visits.replace(0))
-}
+pub fn take_classifier_visits() -> usize { CLASSIFIER_VISITS.with(|visits| visits.replace(0)) }
 
 /// Return the index of the newest snapshot a reload keeps, as Kafka's
 /// `loadFromSnapshot` loads `latestSnapshotFile()` after `truncateAndReload`
-/// deleted every snapshot outside `(log_start, log_end]`. Input order is
-/// irrelevant.
+/// deleted every snapshot outside `(log_start, log_end]`.
+///
+/// Input order is irrelevant.
 #[ensures(result == None ==>
     forall<i: Int> 0 <= i && i < offsets@.len()
         ==> !kafka_reload_keeps(offsets@[i]@, range.log_start@, range.log_end@))]
@@ -282,10 +283,15 @@ pub fn producer_snapshot_latest_index(
     })]
     #[variant(offsets@.len() - i@)]
     while i < offsets.len() {
-        if producer_snapshot_reload_keeps(offsets[i], range) {
+        if let Some(&offset) = offsets.get(i)
+            && producer_snapshot_reload_keeps(offset, range)
+        {
             match best {
                 None => best = Some(i),
-                Some(selected) if offsets[i] > offsets[selected] => best = Some(i),
+                Some(selected) if matches!(offsets.get(selected), Some(&current) if offset > current) =>
+                {
+                    best = Some(i);
+                }
                 Some(_) => {}
             }
         }

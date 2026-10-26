@@ -164,7 +164,7 @@ mod tests {
         let mutations: Vec<Mutation> = vec![
             mutation("format_version", |b| b.format_version += 1),
             mutation("segment.topic", |b| {
-                b.segment.topic = "payments".to_string();
+                b.segment.topic = "payments".to_owned();
             }),
             mutation("segment.topic_id", |b| {
                 b.segment.topic_id = Uuid::from_u128(0x12);
@@ -198,30 +198,30 @@ mod tests {
                 b.segment.txn_index_empty = true;
             }),
             mutation("objects[0].suffix", |b| {
-                b.objects[0].suffix = ".timeindex".to_string();
+                b.objects[0].suffix = ".timeindex".to_owned();
             }),
             mutation("objects[0].key", |b| {
-                b.objects[0].key = "archive/elsewhere.log".to_string();
+                b.objects[0].key = "archive/elsewhere.log".to_owned();
             }),
             mutation("objects[0].size_bytes", |b| b.objects[0].size_bytes += 1),
             mutation("objects[0].sha256", |b| {
                 b.objects[0].sha256 = Sha256Digest::of(b"other body");
             }),
             mutation("objects[0].e_tag changed", |b| {
-                b.objects[0].e_tag = Some("\"other\"".to_string());
+                b.objects[0].e_tag = Some("\"other\"".to_owned());
             }),
             mutation("objects[0].e_tag cleared", |b| b.objects[0].e_tag = None),
             mutation("objects[1].e_tag set", |b| {
-                b.objects[1].e_tag = Some("\"new\"".to_string());
+                b.objects[1].e_tag = Some("\"new\"".to_owned());
             }),
             mutation("objects[0].version_id changed", |b| {
-                b.objects[0].version_id = Some("other".to_string());
+                b.objects[0].version_id = Some("other".to_owned());
             }),
             mutation("objects[0].version_id cleared", |b| {
                 b.objects[0].version_id = None;
             }),
             mutation("objects[1].version_id set", |b| {
-                b.objects[1].version_id = Some("new".to_string());
+                b.objects[1].version_id = Some("new".to_owned());
             }),
             mutation("objects[0].create_precondition", |b| {
                 b.objects[0].create_precondition = true;
@@ -258,15 +258,15 @@ mod tests {
     #[test]
     fn length_prefixes_prevent_field_boundary_ambiguity() {
         let mut left = sample_body();
-        left.segment.topic = "ab".to_string();
+        left.segment.topic = "ab".to_owned();
         left.objects = vec![ObjectEntry {
-            key: "c".to_string(),
+            key: "c".to_owned(),
             ..bare_object()
         }];
 
         let mut right = left.clone();
-        right.segment.topic = "a".to_string();
-        right.objects[0].key = "bc".to_string();
+        right.segment.topic = "a".to_owned();
+        right.objects[0].key = "bc".to_owned();
 
         check!(canonical_manifest_bytes(&left) != canonical_manifest_bytes(&right));
     }

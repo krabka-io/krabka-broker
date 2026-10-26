@@ -25,8 +25,8 @@ pub enum MarkerType {
 impl MarkerType {
     fn type_code(self) -> i16 {
         match self {
-            MarkerType::Commit => 1,
-            MarkerType::Abort => 0,
+            Self::Commit => 1,
+            Self::Abort => 0,
         }
     }
 }
@@ -40,7 +40,7 @@ const UNSUPPORTED_FOR_MESSAGE_FORMAT: i16 = 43;
 /// `WriteTxnMarkers` answer, one variant per branch of Kafka's
 /// `TransactionMarkerRequestCompletionHandler.onComplete`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MarkerCodeClass {
+pub enum MarkerCodeClass {
     /// `NONE`: the marker is written, and the partition leaves the pending
     /// set.
     Written,
@@ -68,7 +68,7 @@ pub(crate) enum MarkerCodeClass {
 
 /// Classify one partition's `WriteTxnMarkers` error code the way Kafka's
 /// `TransactionMarkerRequestCompletionHandler` does.
-pub(crate) fn classify_marker_code(code: i16) -> MarkerCodeClass {
+pub fn classify_marker_code(code: i16) -> MarkerCodeClass {
     match code {
         codes::NONE => MarkerCodeClass::Written,
         UNSUPPORTED_FOR_MESSAGE_FORMAT | codes::UNSUPPORTED_VERSION => MarkerCodeClass::Dropped,
@@ -89,7 +89,7 @@ pub(crate) fn classify_marker_code(code: i16) -> MarkerCodeClass {
 /// failing. A [`MarkerCodeClass::Written`] or [`MarkerCodeClass::Dropped`]
 /// answer is not a failure, so it has no variant here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MarkerFailureClass {
+pub enum MarkerFailureClass {
     /// Retry this partition; the fan-out has not been superseded.
     Retriable,
     /// A newer producer or coordinator generation has fenced this fan-out.
@@ -105,8 +105,8 @@ impl MarkerFailureClass {
     /// Whether this failure ends the fan-out instead of queueing a retry.
     pub(crate) fn stops_fan_out(self) -> bool {
         match self {
-            MarkerFailureClass::Retriable => false,
-            MarkerFailureClass::Fenced | MarkerFailureClass::Unexpected => true,
+            Self::Retriable => false,
+            Self::Fenced | Self::Unexpected => true,
         }
     }
 }
@@ -125,7 +125,7 @@ impl MarkerFailureClass {
 /// its response did not name the partition, or the local append failed on
 /// the way. Kafka re-enqueues every marker of a request whose connection
 /// dropped, so those retry.
-pub(crate) fn classify_marker_failure(error: &BrokerError) -> MarkerFailureClass {
+pub fn classify_marker_failure(error: &BrokerError) -> MarkerFailureClass {
     let code = match error {
         BrokerError::ProducerEpochFenced { .. } => codes::INVALID_PRODUCER_EPOCH,
         BrokerError::CoordinatorEpochFenced { .. } => codes::TRANSACTION_COORDINATOR_FENCED,

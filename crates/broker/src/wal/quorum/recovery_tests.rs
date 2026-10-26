@@ -9,6 +9,11 @@ use {
     krabka_ids::Offset,
     krabka_kraft_core::NodeId,
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
+    std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::{Arc, Mutex},
+    },
 };
 
 #[test]
@@ -44,17 +49,17 @@ fn partition_quorum_bootstraps_existing_source_into_every_replica() {
 /// A committed source log: its directory, its open handle and the store over
 /// it.
 struct CommittedSource {
-    source_dir: std::path::PathBuf,
-    source: std::sync::Arc<std::sync::Mutex<krabka_log::Log>>,
+    source_dir: PathBuf,
+    source: Arc<Mutex<krabka_log::Log>>,
     store: super::QuorumWalStore,
 }
 
-async fn committed_source_prefix(root: &std::path::Path, records: i32) -> CommittedSource {
+async fn committed_source_prefix(root: &Path, records: i32) -> CommittedSource {
     let super::test_support::ReopenableSource {
         dir: source_dir,
         log: source,
     } = super::test_support::reopenable_source(root);
-    let store = partition_store(root, source.clone(), 3);
+    let store = partition_store(root, Arc::clone(&source), 3);
     let (_, leo) = append_source(&store, records).await;
     assert!(store.sync_durable(leo).await.unwrap() == Offset(i64::from(records)));
     CommittedSource {
@@ -77,7 +82,7 @@ async fn partition_quorum_recovers_watermark_and_repairs_one_lost_replica() {
     drop(source);
 
     let lost_replica = dir.path().join("__diskless_wal_quorum/topic-0/replica-2");
-    std::fs::remove_dir_all(&lost_replica).unwrap();
+    fs::remove_dir_all(&lost_replica).unwrap();
     let source = open_log(&source_dir);
     let reopened = partition_store(dir.path(), source, 3);
 

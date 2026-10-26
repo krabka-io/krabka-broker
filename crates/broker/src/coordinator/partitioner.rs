@@ -3,10 +3,11 @@
 use {
     super::bootstrap::{OFFSETS_NUM_PARTITIONS, OFFSETS_TOPIC},
     krabka_metadata::MetadataImage,
+    krabka_verified::broker::java_string_hash_partition,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GroupRoutingError {
+pub enum GroupRoutingError {
     Unavailable,
     NotCoordinator,
 }
@@ -18,21 +19,19 @@ pub(crate) enum GroupRoutingError {
 /// `Utils.abs(Integer.MIN_VALUE) == 0` corner and the modulo; the
 /// transaction and SHARE coordinators route through the same kernel.
 ///
-/// # Panics
-///
-/// Panics when `partition_count` is not positive. The offsets topic always
-/// has at least one partition, and the bootstrap default is positive.
+/// Returns `None` when `partition_count` is not positive.
 #[must_use]
-pub(crate) fn partition_for_group_with_count(group_id: &str, partition_count: i32) -> i32 {
+pub fn partition_for_group_with_count(group_id: &str, partition_count: i32) -> Option<i32> {
     let utf16: Vec<u16> = group_id.encode_utf16().collect();
-    krabka_verified::broker::java_string_hash_partition(&utf16, partition_count)
-        .expect("offsets topic partition count must be positive")
+    java_string_hash_partition(&utf16, partition_count)
 }
 
 /// Select from the live offsets-topic partition count, falling back to the
 /// bootstrap default while metadata is not available yet.
+///
+/// Returns `None` only if the bootstrap default is not positive.
 #[must_use]
-pub(crate) fn partition_for_group(image: &MetadataImage, group_id: &str) -> i32 {
+pub fn partition_for_group(image: &MetadataImage, group_id: &str) -> Option<i32> {
     let count = image.topic_partition_count(OFFSETS_TOPIC);
     partition_for_group_with_count(
         group_id,
@@ -46,12 +45,12 @@ pub(crate) fn partition_for_group(image: &MetadataImage, group_id: &str) -> i32 
 
 /// Resolve the group partition and verify that `node_id` is its current
 /// leader. Group RPC handlers use this before they create or access actors.
-pub(crate) fn local_partition_for_group(
+pub fn local_partition_for_group(
     image: &MetadataImage,
     node_id: krabka_raft::NodeId,
     group_id: &str,
 ) -> Result<i32, GroupRoutingError> {
-    let partition = partition_for_group(image, group_id);
+    let partition = partition_for_group(image, group_id).ok_or(GroupRoutingError::Unavailable)?;
     let record = image
         .partition(OFFSETS_TOPIC, partition)
         .ok_or(GroupRoutingError::Unavailable)?;
@@ -79,19 +78,19 @@ mod tests {
         partition_count: i32,
         expected: i32,
     ) {
-        check!(partition_for_group_with_count(group_id, partition_count) == expected);
+        check!(partition_for_group_with_count(group_id, partition_count) == Some(expected));
     }
 
     #[test]
     fn partition_for_group_falls_back_when_offsets_topic_is_unloaded() {
         let image = MetadataImage::new(uuid::Uuid::nil());
-        check!(partition_for_group(&image, "consumer-group") == 38);
+        check!(partition_for_group(&image, "consumer-group") == Some(38));
     }
 
     #[test]
     fn partition_for_group_uses_live_partition_count_when_present() {
         let image = ten_partition_image();
-        check!(partition_for_group(&image, "consumer-group") == 8);
+        check!(partition_for_group(&image, "consumer-group") == Some(8));
     }
 
     #[test]

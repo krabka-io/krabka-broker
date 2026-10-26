@@ -1,7 +1,7 @@
 //! A typed Kafka authorization refusal with an optional native error message.
 
 use {
-    crate::meta::{arguments, native_expression, plain_path},
+    crate::meta::{argument_array, native_expression, plain_path},
     moxy::{
         ast::{Parse, ParseError, Parser, Path},
         token::{Ident, Span, TokenStream},
@@ -17,35 +17,34 @@ struct Refusal {
 }
 
 fn declaration(input: TokenStream) -> Result<Refusal, ParseError> {
-    let args = arguments(input, 4)?;
+    let [response, output, version, error] = argument_array(input)?;
     let response = plain_path(
-        &args[0],
-        args[0].span(),
+        &response,
+        response.span(),
         "authorization refusal needs a concrete response type",
     )?;
     let error = plain_path(
-        &args[3],
-        args[3].span(),
+        &error,
+        error.span(),
         "authorization refusal needs an error-code path",
     )?;
-    let mut names = Vec::new();
-    for tokens in &args[1..3] {
+    let local_name = |tokens: &TokenStream| {
         let parser = Parser::from_tokens(tokens);
         let ident = Ident::parse(&parser)?;
         if !parser.is_empty() {
             return Err(parser.error("authorization output and version need local names"));
         }
-        names.push(ident);
-    }
+        Ok(ident)
+    };
     Ok(Refusal {
         response,
-        output: names.remove(0),
-        version: names.remove(0),
+        output: local_name(&output)?,
+        version: local_name(&version)?,
         error,
     })
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let mut tokens: Vec<_> = input.into_iter().collect();
     let message = match tokens.last() {
         Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Brace => {

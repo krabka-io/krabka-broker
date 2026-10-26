@@ -54,6 +54,7 @@ use {
         net::SocketAddr,
         time::{Duration, Instant},
     },
+    tokio::{task::JoinHandle, time},
 };
 
 const TID: &str = "txn-uncommitted-writes";
@@ -224,7 +225,7 @@ async fn describe_until(connection: &Connection, expected: &Described) -> Option
             return answer;
         }
         // intentional: the completion has no awaiter; the answer is the signal.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -255,7 +256,7 @@ async fn cut_and_append_commit(
     producer: ProducerIdentity,
     topic: &str,
     offset: i64,
-) -> tokio::task::JoinHandle<Result<EndTxnResponse, krabka_client_core::ClientError>> {
+) -> JoinHandle<Result<EndTxnResponse, krabka_client_core::ClientError>> {
     cluster.relay(coordinator).cut();
     let commit = tokio::spawn(async move { connection.send(end_txn_request(producer)).await });
     cluster
@@ -357,7 +358,7 @@ async fn an_end_txn_is_answered_only_once_its_commit_decision_is_replicated() {
         state_end + 1,
     )
     .await;
-    let answered = tokio::time::timeout(Duration::from_secs(2), &mut commit).await;
+    let answered = time::timeout(Duration::from_secs(2), &mut commit).await;
     assert!(
         answered.is_err(),
         "EndTxn answered for a PrepareCommit that only its coordinator holds: {answered:?}"
@@ -461,7 +462,7 @@ async fn a_transaction_completes_only_once_its_markers_are_committed() {
     // after the three records.
     let mut commit =
         cut_and_append_commit(&cluster, coordinator, to_coordinator, producer, TOPIC, 4).await;
-    let answered = tokio::time::timeout(Duration::from_secs(2), &mut commit).await;
+    let answered = time::timeout(Duration::from_secs(2), &mut commit).await;
     assert!(
         answered.is_err(),
         "EndTxn answered for a marker that only its leader holds: {answered:?}"

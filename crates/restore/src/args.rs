@@ -35,7 +35,7 @@ mod validate;
 mod value;
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 #[cfg(test)]
 mod tests;
 
@@ -236,7 +236,7 @@ const HEADING_BOUNDS: &str = "Selection and bounds";
 const HEADING_BEHAVIOUR: &str = "Behaviour";
 
 /// Partitions named by offset bounds or exclusions.
-pub(crate) fn offset_partitions(args: &RestoreArgs) -> impl Iterator<Item = &PartitionRef> {
+pub fn offset_partitions(args: &RestoreArgs) -> impl Iterator<Item = &PartitionRef> {
     args.to_offset
         .iter()
         .map(|bound| &bound.partition)

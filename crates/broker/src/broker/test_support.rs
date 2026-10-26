@@ -15,7 +15,8 @@ use {
     },
     assert2::assert,
     krabka_ids::{LeaderEpoch, NodeId, PartitionIndex},
-    std::sync::Arc,
+    krabka_protocol::records::RecordBatch,
+    std::{fs, path::Path, sync::Arc},
 };
 
 /// A metadata source over `image`, with `leader` as the controller leader and
@@ -50,7 +51,7 @@ impl Default for LocalPartitionSetup<'_> {
 
 #[bon::builder]
 pub(super) fn local_partition_with_records(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     #[builder(default = LocalPartitionSetup::default().topic)] topic: &'_ str,
     #[builder(into, default = LocalPartitionSetup::default().partition)] partition: PartitionIndex,
     #[builder(default = LocalPartitionSetup::default().values)] values: &'_ [&'static [u8]],
@@ -66,7 +67,7 @@ pub(super) fn local_partition_with_records(
         values,
     } = setup;
     let part_dir = partition_dir(log_dir, topic, partition.0);
-    std::fs::create_dir_all(&part_dir).expect("create partition dir");
+    fs::create_dir_all(&part_dir).expect("create partition dir");
     let log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default())
         .expect("open partition log");
     let part = spawn_standalone_partition()
@@ -76,7 +77,7 @@ pub(super) fn local_partition_with_records(
         .partition(partition)
         .call();
     if !values.is_empty() {
-        let mut batch = krabka_protocol::records::RecordBatch {
+        let mut batch = RecordBatch {
             last_offset_delta: i32::try_from(values.len() - 1).expect("record count fits"),
             records: record_values(values),
             ..Default::default()
@@ -146,11 +147,10 @@ pub(super) fn metadata_partition_record(
         replicas,
         isr,
         leader_epoch,
-        ..
     } = setup;
     let directories = vec![uuid::Uuid::nil(); replicas.len()];
     krabka_metadata::PartitionRecord {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         partition: partition.0,
         leader,
         replicas,

@@ -27,6 +27,10 @@ use {
         AlterUserScramCredentialsRequest, ScramCredentialDeletion,
     },
     krabka_security::SaslMechanism,
+    std::{
+        net::SocketAddr,
+        time::{SystemTime, UNIX_EPOCH},
+    },
 };
 
 /// `iterations < 4096` gives `UNACCEPTABLE_CREDENTIAL`.
@@ -110,16 +114,16 @@ async fn alter_scram_creds_unknown_mechanism_returns_unsupported_sasl_mechanism(
     let mut cfg = sasl_plaintext_config(log_dir.path().to_path_buf());
     let admin_password = format!(
         "test-pass-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     );
 
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
-        .insert("admin".to_string(), admin_password.clone());
-    cfg.super_users = maplit::hashset! {"admin".to_string()};
+        .insert("admin".to_owned(), admin_password.clone());
+    cfg.super_users = maplit::hashset! {"admin".to_owned()};
 
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
@@ -209,7 +213,7 @@ async fn alter_scram_creds_duplicate_deletion_and_upsertion_rejected_per_user() 
         .await;
     let req = AlterUserScramCredentialsRequest {
         deletions: vec![ScramCredentialDeletion {
-            name: "alice".to_string(),
+            name: "alice".to_owned(),
             mechanism: WIRE_MECH_SCRAM_SHA_512,
             ..Default::default()
         }],
@@ -248,7 +252,7 @@ async fn alter_scram_creds_missing_deletion_returns_resource_not_found_91() {
     } = random_scram_admin_fixture().await;
     let req = AlterUserScramCredentialsRequest {
         deletions: vec![ScramCredentialDeletion {
-            name: "ghost".to_string(),
+            name: "ghost".to_owned(),
             mechanism: WIRE_MECH_SCRAM_SHA_512,
             ..Default::default()
         }],
@@ -275,7 +279,7 @@ struct RandomScramAdmin {
     log_dir: tempfile::TempDir,
     admin_password: String,
     handle: krabka_broker::BrokerHandle,
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
 }
 
 async fn random_scram_admin_fixture() -> RandomScramAdmin {

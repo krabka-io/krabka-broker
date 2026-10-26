@@ -13,7 +13,10 @@ use {
     super::{InProcessInner, SubscriptionState},
     crate::log::{MetadataEventRecord, MetadataEventStream},
     futures_util::{StreamExt, stream::unfold},
-    std::{collections::VecDeque, sync::Arc},
+    std::{
+        collections::VecDeque,
+        sync::{Arc, PoisonError},
+    },
     tokio::sync::broadcast,
 };
 
@@ -40,7 +43,10 @@ fn forward_action(
     record: MetadataEventRecord,
 ) -> Option<MetadataEventRecord> {
     let action = {
-        let mut assigned = state.assigned.lock().expect("assigned mutex poisoned");
+        let mut assigned = state
+            .assigned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         match assigned.get_mut(&record.partition) {
             Some(cur) if record.offset >= cur.next => {
                 cur.next = record.offset.saturating_add(1);
@@ -92,8 +98,11 @@ pub(super) fn filtered_broadcast(
                         // have been delivered. Replay from each assigned cursor
                         // under the same log lock used by append/add, so records
                         // are either in this retained range or arrive live after it.
-                        let log = inner.log.lock().expect("metadata-log mutex poisoned");
-                        let mut assigned = state.assigned.lock().expect("assigned mutex poisoned");
+                        let log = inner.log.lock().unwrap_or_else(PoisonError::into_inner);
+                        let mut assigned = state
+                            .assigned
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner);
                         for (partition, cursor) in assigned.iter_mut() {
                             let Ok(index) = usize::try_from(*partition) else {
                                 continue;
@@ -113,6 +122,8 @@ pub(super) fn filtered_broadcast(
                                 pending.extend(replay);
                             }
                         }
+                        drop(assigned);
+                        drop(log);
                     }
                     Err(broadcast::error::RecvError::Closed) => return None,
                 }

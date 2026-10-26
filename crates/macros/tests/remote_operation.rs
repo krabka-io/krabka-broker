@@ -1,8 +1,10 @@
 //! Remote operation tracing preserves span levels, identity fields, and error events.
+#![cfg(test)]
 
 use {
     assert2::assert,
     std::sync::{Arc, Mutex},
+    tracing::subscriber,
     tracing_subscriber::fmt::{
         format::FmtSpan,
         writer::{MakeWriter, MutexGuardWriter},
@@ -123,7 +125,7 @@ fn records_only_the_operation_contract_and_preserves_results() {
         .with_span_events(FmtSpan::NEW)
         .with_writer(buffer.clone())
         .finish();
-    tracing::subscriber::with_default(subscriber, || {
+    subscriber::with_default(subscriber, || {
         let store = Store { fail: false };
         assert!(
             store

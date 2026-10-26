@@ -6,7 +6,9 @@ use {
     super::*,
     crate::partition_writer::test_support::{ObservedWriter, observed_writer, sample_batch},
     assert2::assert,
+    std::time::Duration,
     tempfile::tempdir,
+    tokio::time,
 };
 
 /// A running writer, its sender, and the directory that backs its log.
@@ -40,7 +42,7 @@ async fn writer_fires_hw_notify_after_produce_when_rf_one() {
 
     let _ack_rx = queue_batch(&tx, sample_batch().count(2).call()).await;
 
-    tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+    time::timeout(Duration::from_secs(1), waiter)
         .await
         .expect("hw_advance_notify did not fire");
 
@@ -62,7 +64,7 @@ async fn writer_does_not_notify_hw_when_append_leaves_hw_unchanged() {
 
     assert!(observed.replica_state.lock().await.hw == 0);
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(10), waiter)
+        time::timeout(Duration::from_millis(10), waiter)
             .await
             .is_err()
     );

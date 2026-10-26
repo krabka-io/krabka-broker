@@ -47,16 +47,20 @@ use {
     bytes::Bytes,
     krabka_broker::BrokerHandle,
     krabka_client_core::Client,
-    krabka_client_producer::{Producer, ProducerRecord},
+    krabka_client_producer::{Producer, ProducerError, ProducerRecord},
     krabka_protocol::owned::{
         api_versions_request::ApiVersionsRequest,
         describe_producers_request::{DescribeProducersRequest, TopicRequest},
         describe_producers_response::ProducerState,
         describe_transactions_request::DescribeTransactionsRequest,
+        describe_transactions_response::TransactionState,
         list_transactions_request::ListTransactionsRequest,
+        list_transactions_response::ListTransactionsResponse,
     },
     std::{
+        fs,
         net::SocketAddr,
+        path::Path,
         process::Output,
         sync::Arc,
         time::{Duration, Instant},
@@ -64,6 +68,7 @@ use {
     tokio::{
         io::{AsyncReadExt as _, AsyncWriteExt as _},
         net::TcpStream,
+        time,
     },
 };
 
@@ -307,8 +312,8 @@ async fn assert_the_tool_agrees_with_the_broker(bootstrap: &str, admin: &Client)
     );
     assert!(
         row == vec![
-            OPEN_TID.to_string(),
-            "1".to_string(),
+            OPEN_TID.to_owned(),
+            "1".to_owned(),
             listed.producer_id.to_string(),
             listed.transaction_state.clone(),
         ],
@@ -320,7 +325,7 @@ async fn assert_the_tool_agrees_with_the_broker(bootstrap: &str, admin: &Client)
     assert!(
         row[1..5]
             == [
-                OPEN_TID.to_string(),
+                OPEN_TID.to_owned(),
                 expected.producer_id.to_string(),
                 expected.producer_epoch.to_string(),
                 expected.transaction_state.clone(),
@@ -398,86 +403,93 @@ async fn the_transactions_tool_agrees_with_the_broker_and_can_abort() {
         ..
     } = harness("krabka-tv2-tool", &[HANGING_TOPIC]).await;
 
-    let open_producer = Arc::new(
-        Producer::builder()
-            .bootstrap(host_bootstrap.clone())
-            .transactional_id(OPEN_TID)
-            .build()
-            .await
-            .expect("in-process transactional producer"),
-    );
-    open_producer
-        .init_transactions()
-        .await
-        .expect("init transactions");
-    let transaction = Arc::clone(&open_producer)
-        .begin_transaction_owned()
-        .await
-        .expect("begin transaction");
-    drop(
-        open_producer
-            .enqueue(ProducerRecord {
-                topic: HANGING_TOPIC.into(),
-                value: Some(Bytes::from_static(b"open")),
-                ..Default::default()
-            })
-            .await
-            .expect("record is queued"),
-    );
-    open_producer
-        .flush()
-        .await
-        .expect("flush the open transaction");
-    wait_for_transaction_state(&admin, OPEN_TID, "Ongoing").await;
-
-    let open_producer_state = assert_the_tool_agrees_with_the_broker(bootstrap, &admin).await;
-
-    // 8. `abort` is the operator's `WriteTxnMarkers` path. It writes the abort
-    //    marker straight to the partition and, exactly as in Kafka, leaves the
-    //    coordinator's own state alone -- so the partition stops showing an
-    //    open transaction while `describe` still reads `Ongoing`.
-    kafka_transactions(bootstrap, &[
-        "abort",
-        "--topic",
-        HANGING_TOPIC,
-        "--partition",
-        "0",
-        "--start-offset",
-        &open_producer_state.current_txn_start_offset.to_string(),
-    ]);
-    let row = describe_open_producer_row(bootstrap, open_producer_state.producer_id);
-    assert!(
-        row[5] == "None",
-        "the aborted transaction must no longer be open on the partition: {row:?}",
-    );
-
-    // 9. The coordinator reaches `CompleteAbort` when the producer ends the
-    //    transaction it was holding. The marker the tool already wrote is
-    //    recognised as the same one, so the fan-out is a no-op and the state
-    //    still lands.
-    transaction
-        .abort()
-        .await
-        .expect("abort the open transaction");
-    let deadline = Instant::now() + SETTLE_DEADLINE;
-    loop {
-        let row = describe_open_transaction_row(bootstrap);
-        if row[4] == "CompleteAbort" {
-            break;
-        }
-        assert!(
-            Instant::now() <= deadline,
-            "the aborted transaction never reached CompleteAbort: {row:?}",
+    {
+        let open_producer = Arc::new(
+            Producer::builder()
+                .bootstrap(host_bootstrap.clone())
+                .transactional_id(OPEN_TID)
+                .build()
+                .await
+                .expect("in-process transactional producer"),
         );
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
+        open_producer
+            .init_transactions()
+            .await
+            .expect("init transactions");
+        let transaction = Arc::clone(&open_producer)
+            .begin_transaction_owned()
+            .await
+            .expect("begin transaction");
+        drop(
+            open_producer
+                .enqueue(ProducerRecord {
+                    topic: HANGING_TOPIC.into(),
+                    value: Some(Bytes::from_static(b"open")),
+                    ..Default::default()
+                })
+                .await
+                .expect("record is queued"),
+        );
+        open_producer
+            .flush()
+            .await
+            .expect("flush the open transaction");
+        wait_for_transaction_state(&admin, OPEN_TID, "Ongoing").await;
 
-    Arc::into_inner(open_producer)
+        let open_producer_state = assert_the_tool_agrees_with_the_broker(bootstrap, &admin).await;
+
+        // 8. `abort` is the operator's `WriteTxnMarkers` path. It writes the abort
+        //    marker straight to the partition and, exactly as in Kafka, leaves the
+        //    coordinator's own state alone -- so the partition stops showing an
+        //    open transaction while `describe` still reads `Ongoing`.
+        kafka_transactions(bootstrap, &[
+            "abort",
+            "--topic",
+            HANGING_TOPIC,
+            "--partition",
+            "0",
+            "--start-offset",
+            &open_producer_state.current_txn_start_offset.to_string(),
+        ]);
+        let row = describe_open_producer_row(bootstrap, open_producer_state.producer_id);
+        assert!(
+            row[5] == "None",
+            "the aborted transaction must no longer be open on the partition: {row:?}",
+        );
+
+        // 9. The coordinator reaches `CompleteAbort` when the producer ends the
+        //    transaction it was holding. The marker the tool already wrote is
+        //    recognised as the same one, so the fan-out is a no-op and the state
+        //    still lands.
+        transaction
+            .abort()
+            .await
+            .expect("abort the open transaction");
+        let deadline = Instant::now() + SETTLE_DEADLINE;
+        loop {
+            let row = describe_open_transaction_row(bootstrap);
+            if row[4] == "CompleteAbort" {
+                break;
+            }
+            assert!(
+                Instant::now() <= deadline,
+                "the aborted transaction never reached CompleteAbort: {row:?}",
+            );
+            time::sleep(Duration::from_millis(250)).await;
+        }
+
+        close_released(open_producer).await
+    }
+    .expect("close the in-process producer");
+    broker.shutdown().await;
+}
+
+/// Close the in-process producer once its transaction guard has let go of it.
+async fn close_released(producer: Arc<Producer>) -> Result<(), ProducerError> {
+    Arc::into_inner(producer)
         .expect("the transaction guard released its producer reference")
         .close()
         .await
-        .expect("close the in-process producer");
-    broker.shutdown().await;
 }
 
 /// Fail unless the cluster finalized `transaction.version` at level 2.
@@ -527,7 +539,7 @@ async fn assert_transaction_version_2(admin: &Client) {
 fn compile_transactional_producer() -> tempfile::TempDir {
     let work = tempfile::tempdir().expect("tempdir for the compiled helper");
     let source = work.path().join("TransactionalProducer.java");
-    std::fs::write(&source, TRANSACTIONAL_PRODUCER_JAVA).expect("write the Java helper");
+    fs::write(&source, TRANSACTIONAL_PRODUCER_JAVA).expect("write the Java helper");
     #[cfg(unix)]
     {
         use crate::support::chmod_for_container;
@@ -564,7 +576,7 @@ fn compile_transactional_producer() -> tempfile::TempDir {
 /// `kafka-run-class.sh` appends the image's own `libs/` to whatever `CLASSPATH`
 /// it inherits, so the mounted class directory is all this has to add, and the
 /// script rather than a bare `java` invocation is what finds the JRE.
-fn run_transactional_producer(classes: &std::path::Path, bootstrap: &str, topic: &str) -> Output {
+fn run_transactional_producer(classes: &Path, bootstrap: &str, topic: &str) -> Output {
     let out = docker_run_kafka_tool_with_image_and_mount(
         KAFKA_IMAGE_ELR,
         &format!("{}:/work:ro", classes.display()),
@@ -612,7 +624,7 @@ fn consume(bootstrap: &str, topic: &str, isolation: &str, count: usize) -> Vec<S
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(str::to_string)
+        .map(str::to_owned)
         .collect()
 }
 
@@ -639,7 +651,7 @@ fn tool_rows(out: &Output, headers: &[&str]) -> Vec<Vec<String>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             line.split_whitespace()
-                .map(str::to_string)
+                .map(str::to_owned)
                 .collect::<Vec<_>>()
         })
         .collect()
@@ -685,7 +697,7 @@ async fn wait_for_transaction_state(admin: &Client, tid: &str, state: &str) {
             Instant::now() <= deadline,
             "{tid} never reached {state}: {described:?}",
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -693,9 +705,7 @@ async fn wait_for_transaction_state(admin: &Client, tid: &str, state: &str) {
 /// partitions. Kafka answers `COORDINATOR_LOAD_IN_PROGRESS` until every
 /// partition it leads is loaded, and its admin client retries; the other
 /// state partitions can still be loading when the open transaction's is done.
-async fn list_transactions(
-    admin: &Client,
-) -> krabka_protocol::owned::list_transactions_response::ListTransactionsResponse {
+async fn list_transactions(admin: &Client) -> ListTransactionsResponse {
     let deadline = Instant::now() + SETTLE_DEADLINE;
     loop {
         let listed = admin
@@ -709,15 +719,12 @@ async fn list_transactions(
             Instant::now() <= deadline,
             "the coordinator never finished loading: {listed:?}",
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
 /// The coordinator's row for `tid`.
-async fn describe_transaction(
-    admin: &Client,
-    tid: &str,
-) -> krabka_protocol::owned::describe_transactions_response::TransactionState {
+async fn describe_transaction(admin: &Client, tid: &str) -> TransactionState {
     let resp = admin
         .send(DescribeTransactionsRequest {
             transactional_ids: vec![tid.into()],
@@ -775,8 +782,9 @@ async fn scrape_metrics(addr: SocketAddr) -> String {
         .await
         .expect("read the scrape body");
     let text = String::from_utf8_lossy(&buf).into_owned();
-    let body = text.find("\r\n\r\n").map_or(0, |head| head + 4);
-    text[body..].to_string()
+    text.split_once("\r\n\r\n")
+        .map_or(text.as_str(), |(_, body)| body)
+        .to_owned()
 }
 
 /// The value of one fully-labelled `OpenMetrics` series, or `None` when the

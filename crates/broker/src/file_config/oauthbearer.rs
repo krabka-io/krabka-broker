@@ -5,9 +5,14 @@
 //! broker builds. The sibling `oauthbearer_apply` module reads this table and
 //! constructs the validator.
 
-use krabka_units::{Time, secs};
+use {
+    krabka_units::{Time, secs},
+    std::path::PathBuf,
+};
 
-/// TOML shape of `[oauthbearer]`. Maps to
+/// TOML shape of `[oauthbearer]`.
+///
+/// Maps to
 /// [`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri`
 /// selects the signed-JWT validator; setting
 /// `introspection_endpoint_uri` selects the RFC 7662 introspection
@@ -16,6 +21,7 @@ use krabka_units::{Time, secs};
 /// (development only) is used, and that fallback is rejected at
 /// config-load unless `allow_unsecured = true`.
 #[krabka_macros::config_table(open)]
+#[derive(Eq)]
 pub struct FileOAuthBearerConfig {
     /// Claim whose value becomes the principal name. Default `sub`.
     pub principal_claim_name: Option<String>,
@@ -59,7 +65,7 @@ pub struct FileOAuthBearerConfig {
     /// the *only* trust roots used for the outbound HTTPS (replaces the
     /// default webpki-roots — Strimzi-shaped). When unset, the broker
     /// uses reqwest's default rustls webpki-roots.
-    pub idp_tls_trust: Option<std::path::PathBuf>,
+    pub idp_tls_trust: Option<PathBuf>,
 
     /// RFC 7662 introspection endpoint URL. When set,
     /// selects the introspection validator (mutually exclusive with
@@ -84,7 +90,7 @@ pub struct FileOAuthBearerConfig {
     /// File-based (not literal) so secret material doesn't sit in the
     /// TOML; operator mounts a `Secret` and writes the mount path here.
     /// The file's trailing newline (if any) is stripped at config-load.
-    pub introspection_client_secret_path: Option<std::path::PathBuf>,
+    pub introspection_client_secret_path: Option<PathBuf>,
 
     /// Timeout for the introspection (and userinfo) HTTP
     /// requests, in milliseconds. Default 10 000 (10 s).

@@ -25,7 +25,7 @@ use {
 ///
 /// The struct exists so that each call site names the field it fills, which is
 /// the reason [`PrivilegedAudit`] is a struct too.
-pub(crate) struct GatedTransition<'a> {
+pub struct GatedTransition<'a> {
     /// The gated transition this event is about.
     pub action: BreakGlassAction,
     /// What the transition applies to, in the spelling the gate resolves.
@@ -39,7 +39,7 @@ pub(crate) struct GatedTransition<'a> {
 }
 
 /// Durably admit a gated transition before it mutates cluster state.
-pub(crate) async fn require_transition(
+pub async fn require_transition(
     audit_log: &AuditLog,
     config: &BreakGlassConfig,
     ctx: &RequestContext<'_>,
@@ -72,7 +72,7 @@ pub(crate) async fn require_transition(
 /// An `Applied` event belongs after the batch append commits. Emitting one
 /// before the commit would record a transition that the quorum can still
 /// refuse.
-pub(crate) fn audit_transition(
+pub fn audit_transition(
     audit_log: &AuditLog,
     config: &BreakGlassConfig,
     ctx: &RequestContext<'_>,
@@ -136,7 +136,8 @@ mod tests {
             AuditStats, AuditWriter, AuditWriterParams, ChainState, LifecycleKind, Spool,
         },
         krabka_units::prelude::{hours, mebibytes},
-        std::sync::Arc,
+        std::{sync::Arc, time::Duration},
+        tokio::{task, time},
     };
 
     const PROPOSAL: Uuid = Uuid::from_u128(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
@@ -220,9 +221,9 @@ mod tests {
         if result.is_ok() {
             audit_transition(&log, &gated_config(), &context(&principal, &peer), &trim());
         }
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        time::timeout(Duration::from_secs(1), async {
             while stats.dropped() == 0 {
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await

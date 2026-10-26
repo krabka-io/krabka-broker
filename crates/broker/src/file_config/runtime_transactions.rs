@@ -15,13 +15,11 @@ use {
     },
     crate::config::BrokerConfig,
     krabka_units::{ByteSize, Time, convert::TimeExt, kibibytes},
+    std::time::Duration,
 };
 
 impl RuntimeFileConfig {
-    pub(super) fn apply_transactions(
-        &mut self,
-        cfg: &mut BrokerConfig,
-    ) -> Result<(), FileConfigError> {
+    pub(super) fn apply_transactions(&self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         let runtime = self;
         krabka_macros::set_runtime! {
             runtime => cfg;
@@ -97,9 +95,7 @@ impl RuntimeFileConfig {
         if let Some(value) = runtime.share_coordinator_append_linger_ms {
             cfg.share_coordinator.append_linger = match value {
                 -1 => None,
-                0.. => Some(std::time::Duration::from_millis(u64::from(
-                    value.unsigned_abs(),
-                ))),
+                0.. => Some(Duration::from_millis(u64::from(value.unsigned_abs()))),
                 _ => {
                     return Err(invalid_runtime_value(
                         "share_coordinator_append_linger_ms",
@@ -145,7 +141,7 @@ impl RuntimeFileConfig {
     /// `barrier_min_injection_interval` is a floor. A group asks for its own
     /// periodic interval through `AlterBarrierGroups`, and the coordinator
     /// refuses one below this value.
-    pub(super) fn apply_barrier(&mut self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
+    pub(super) fn apply_barrier(&self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         let runtime = self;
         krabka_macros::set_runtime! {
             runtime => cfg;
@@ -173,10 +169,7 @@ fn cached_buffer_max_bytes(name: &str, value: ByteSize) -> Result<ByteSize, File
 
 /// [`whole_millis_i32_time`] as the [`std::time::Duration`] the share
 /// coordinator's timers hold.
-fn whole_millis_i32_duration(
-    name: &str,
-    value: Time,
-) -> Result<std::time::Duration, FileConfigError> {
+fn whole_millis_i32_duration(name: &str, value: Time) -> Result<Duration, FileConfigError> {
     whole_millis_i32_time(name, value).map(TimeExt::to_std)
 }
 
@@ -390,7 +383,7 @@ barrier_max_topics_per_group = 16
         file.apply_to(&mut cfg).expect("apply");
         assert!(cfg.share_coordinator_load_buffer_size == krabka_units::mebibytes(2));
         assert!(
-            crate::config::BrokerConfig::default().share_coordinator_load_buffer_size
+            BrokerConfig::default().share_coordinator_load_buffer_size
                 == krabka_units::mebibytes(5)
         );
     }

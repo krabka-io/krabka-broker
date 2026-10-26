@@ -113,7 +113,15 @@ krabka_macros::wire_codec_helpers! {
     test_context ["admin-client"];
 }
 
-use crate::test_support::start_broker_with_authorizer_no_audit as start_broker;
+use {
+    crate::{
+        handlers::test_support::single_replica_partition,
+        test_support::start_broker_with_authorizer_no_audit as start_broker,
+    },
+    krabka_protocol::records::{Record, RecordBatch},
+    std::{fs, net::SocketAddr, ops::RangeInclusive, sync::atomic, time::Duration},
+    tokio::{task, time},
+};
 
 handler_drive!(DeleteRecordsRequest => DeleteRecordsResponse, handle, VERSION);
 
@@ -128,7 +136,7 @@ async fn drive_trim(
 async fn drive_trim_targets(
     broker: &Broker,
     admin: &krabka_security::Principal,
-    peer: &std::net::SocketAddr,
+    peer: &SocketAddr,
     topic: &str,
     targets: &[TrimTarget],
 ) -> DeleteRecordsResponse {
@@ -349,8 +357,8 @@ const PENDING_MS: i64 = 4_100_000_000_000;
 
 // A two-record batch that activates at `activation_ms`, stamped with the
 // epoch the partition writer expects from a leader append.
-fn batch_at(activation_ms: i64, leader_epoch: i32) -> krabka_protocol::records::RecordBatch {
-    krabka_protocol::records::RecordBatch {
+fn batch_at(activation_ms: i64, leader_epoch: i32) -> RecordBatch {
+    RecordBatch {
         partition_leader_epoch: leader_epoch,
         ..delivery_batch_at(activation_ms)
     }
@@ -456,7 +464,7 @@ async fn topic_with_configs_holding_a_pending_batch(
     } else {
         krabka_log::DeliveryPolicy::Immediate
     };
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    time::timeout(Duration::from_secs(5), async {
         loop {
             if broker_handle
                 .partition_log_config_for_test(topic, 0)
@@ -467,7 +475,7 @@ async fn topic_with_configs_holding_a_pending_batch(
             {
                 break;
             }
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
@@ -477,9 +485,7 @@ async fn topic_with_configs_holding_a_pending_batch(
         .partitions
         .get(topic, krabka_ids::PartitionIndex(0))
         .expect("the partition is local");
-    let leader_epoch = part
-        .current_leader_epoch
-        .load(std::sync::atomic::Ordering::Acquire);
+    let leader_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
     for activation_ms in [DELIVERED_MS, PENDING_MS] {
         part.produce_batch(batch_at(activation_ms, leader_epoch))
             .await
@@ -722,10 +728,8 @@ async fn a_replica_that_is_not_the_leader_refuses_a_trim() {
     let topic = "delete-records-follower";
     let PendingPartitionFixture { part, before } =
         pending_partition_fixture(&broker_handle, &broker, topic, &ctx).await;
-    part.current_leader.store(
-        broker.config.node_id.0 + 1,
-        std::sync::atomic::Ordering::Release,
-    );
+    part.current_leader
+        .store(broker.config.node_id.0 + 1, atomic::Ordering::Release);
 
     check_refused_trim()
         .broker(&broker)
@@ -828,13 +832,11 @@ async fn a_partition_hosted_elsewhere_answers_not_leader_or_follower() {
                 partitions: 1,
                 replication_factor: 1,
             }),
-            krabka_metadata::MetadataRecord::V1Partition(
-                crate::handlers::test_support::single_replica_partition(
-                    topic,
-                    krabka_ids::PartitionIndex(0),
-                    elsewhere,
-                ),
-            ),
+            krabka_metadata::MetadataRecord::V1Partition(single_replica_partition(
+                topic,
+                krabka_ids::PartitionIndex(0),
+                elsewhere,
+            )),
         ])
         .await
         .expect("the partition commits");
@@ -916,9 +918,7 @@ async fn an_internal_topic_refuses_a_trim() {
             .get(topic, krabka_ids::PartitionIndex(0))
             .expect("the partition is local");
         if topic != "orders" {
-            let leader_epoch = part
-                .current_leader_epoch
-                .load(std::sync::atomic::Ordering::Acquire);
+            let leader_epoch = part.current_leader_epoch.load(atomic::Ordering::Acquire);
             part.produce_batch(batch_at(DELIVERED_MS, leader_epoch))
                 .await
                 .expect("append a batch");
@@ -1006,7 +1006,7 @@ async fn replicated_topic(broker_handle: &BrokerHandle, topic: &str) -> Arc<Part
             .await
             .expect("submit topic metadata");
     }
-    let partition = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    let partition = time::timeout(Duration::from_secs(10), async {
         loop {
             if let Some(partition) = broker.partitions.get(topic, krabka_ids::PartitionIndex(0))
                 && partition
@@ -1018,15 +1018,15 @@ async fn replicated_topic(broker_handle: &BrokerHandle, topic: &str) -> Arc<Part
             {
                 return partition;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
     .expect("the broker leads the partition with the follower in the ISR");
-    let mut batch = krabka_protocol::records::RecordBatch {
+    let mut batch = RecordBatch {
         last_offset_delta: i32::try_from(APPENDED - 1).expect("delta"),
         records: (0..APPENDED)
-            .map(|offset| krabka_protocol::records::Record {
+            .map(|offset| Record {
                 offset_delta: i32::try_from(offset).expect("delta"),
                 value: Some(bytes::Bytes::from_static(b"v")),
                 ..Default::default()
@@ -1190,7 +1190,7 @@ async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
 
     // The follower catches up while a second request waits.
     let waiting = {
-        let broker = broker.clone();
+        let broker = Arc::clone(&broker);
         tokio::spawn(async move {
             delete_to()
                 .broker(&broker)
@@ -1201,10 +1201,10 @@ async fn a_trim_waits_for_every_live_follower_to_reach_the_trim_point() {
                 .await
         })
     };
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    time::sleep(Duration::from_millis(100)).await;
     check!(!waiting.is_finished(), "the row waits for the follower");
     follower_fetch(&broker, topic, APPENDED, 6).await;
-    let completed = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+    let completed = time::timeout(Duration::from_secs(5), waiting)
         .await
         .expect("the row completes once the follower reports")
         .expect("delete task");
@@ -1265,7 +1265,7 @@ async fn start_tiered_broker(authorizer: Arc<dyn Authorizer>) -> StartedBroker {
     start_broker_no_audit_with(|config| {
         config.authorizer = authorizer;
         let dir = config.log_dir.join("remote");
-        std::fs::create_dir_all(&dir).expect("create the remote tier directory");
+        fs::create_dir_all(&dir).expect("create the remote tier directory");
         config.remote_storage_backend = Some(RemoteStorageBackend::Local { dir });
         config.remote_log_metadata = RlmmKind::InMemory;
         config.remote_log_manager_interval = krabka_units::secs(3_600);
@@ -1296,12 +1296,12 @@ async fn tiered_topic(
         }])
         .call()
         .await;
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    time::timeout(Duration::from_secs(5), async {
         while !broker_handle
             .partition_log_config_for_test(topic, 0)
             .is_some_and(|config| config.remote_storage_enable)
         {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
@@ -1324,7 +1324,7 @@ async fn tiered_topic(
 
 fn archived(
     id: u128,
-    offsets: std::ops::RangeInclusive<i64>,
+    offsets: RangeInclusive<i64>,
     state: RemoteLogSegmentState,
 ) -> ArchivedSegment {
     ArchivedSegment { id, offsets, state }

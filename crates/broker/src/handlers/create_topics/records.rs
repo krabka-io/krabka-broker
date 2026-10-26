@@ -5,6 +5,7 @@
 use {
     krabka_metadata::{MetadataRecord, TopicConfigRecord, TopicRecord},
     krabka_protocol::owned::create_topics_request::CreatableTopic,
+    std::collections::BTreeMap,
     uuid::Uuid,
 };
 
@@ -28,9 +29,7 @@ pub(super) fn null_config_error(request: &CreatableTopic) -> Option<String> {
 /// A topic's config overrides, as `CreateTopics` carries them. The handler
 /// refuses a config with a null value first ([`null_config_error`]), so every
 /// config here has a value.
-pub(super) fn topic_config_overrides(
-    request: &CreatableTopic,
-) -> std::collections::BTreeMap<String, String> {
+pub(super) fn topic_config_overrides(request: &CreatableTopic) -> BTreeMap<String, String> {
     request
         .configs
         .iter()
@@ -48,7 +47,7 @@ pub(super) fn topic_records(
     topic_id: Uuid,
     assignments: &[Vec<krabka_raft::NodeId>],
     leaderships: &[super::InitialLeadership],
-    overrides: &std::collections::BTreeMap<String, String>,
+    overrides: &BTreeMap<String, String>,
 ) -> Vec<MetadataRecord> {
     let mut records = vec![MetadataRecord::V1Topic(TopicRecord {
         name: request.name.clone(),

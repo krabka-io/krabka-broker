@@ -56,7 +56,7 @@ async fn writer_replicate_offset_mismatch_surfaces_error() {
             result.expect("replicate ok");
         } else {
             let err = result.expect_err("expected offset mismatch");
-            assert!(matches!(err, crate::error::BrokerError::Log(_)));
+            assert!(matches!(err, BrokerError::Log(_)));
         }
         assert!(log.lock().unwrap().log_end_offset() == expected_end);
     }

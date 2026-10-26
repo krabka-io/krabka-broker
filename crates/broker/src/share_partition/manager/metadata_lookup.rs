@@ -7,7 +7,7 @@
 //! step and because they are the only methods here that read metadata rather
 //! than acquisition state.
 
-use {super::SharePartitionLeaderManager, krabka_ids::PartitionIndex};
+use {super::SharePartitionLeaderManager, krabka_ids::PartitionIndex, std::sync::atomic::Ordering};
 
 impl SharePartitionLeaderManager {
     /// Resolves the wire `(leader_id, leader_epoch)` for
@@ -69,10 +69,7 @@ impl SharePartitionLeaderManager {
         };
         self.partitions
             .get(topic, PartitionIndex(partition))
-            .map_or(0, |p| {
-                p.current_leader_epoch
-                    .load(std::sync::atomic::Ordering::Acquire)
-            })
+            .map_or(0, |p| p.current_leader_epoch.load(Ordering::Acquire))
     }
 }
 

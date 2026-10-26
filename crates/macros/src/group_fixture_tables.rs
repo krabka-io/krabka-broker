@@ -1,9 +1,12 @@
 //! Visible external member constructors and shared topology traversal.
 
 use {
-    crate::meta::{is_plain_sync, native_braced_bodies, parameter_ident, plain_path},
+    crate::meta::{is_plain_sync, native_braced_bodies, parameter_at, parameter_ident, plain_path},
     moxy::{
-        ast::{Attributes, FnParam, Parse, ParseError, Parser, Path, Signature, Token, Visibility},
+        ast::{
+            Attributes, FnParam, Parse, ParseError, Parser, Path, Signature, Token, Type,
+            Visibility,
+        },
         token::{Group, Ident, Spanner, ToTokenStream, TokenStream},
     },
     proc_macro::{Delimiter, Group as NativeGroup, TokenStream as NativeTokenStream, TokenTree},
@@ -41,12 +44,11 @@ fn members(input: &TokenStream) -> Result<Vec<MemberConstructor>, ParseError> {
                 "member constructor needs one ordinary member-id parameter",
             ));
         }
-        parameter_ident(
-            &signature.params.inner.inputs[0],
-            "member id needs a local parameter name",
-        )?;
-        let FnParam::Typed(parameter) = &signature.params.inner.inputs[0] else {
-            unreachable!("checked named parameter")
+        let message = "member id needs a local parameter name";
+        let first = parameter_at(&signature, 0, message)?;
+        parameter_ident(first, message)?;
+        let FnParam::Typed(parameter) = first else {
+            return Err(ParseError::new(signature.span(), message));
         };
         if !parameter.ty.as_reference().is_some_and(|reference| {
             reference.mutability.is_none()
@@ -113,7 +115,7 @@ fn identity_fields(member: &Ident) -> TokenStream {
     }
 }
 
-pub(crate) fn member_identity(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn member_identity(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let declarations = members(&input.clone().into())?;
     let mut extras = native_braced_bodies(input).into_iter();
     let mut output = NativeTokenStream::new();
@@ -125,10 +127,14 @@ pub(crate) fn member_identity(input: NativeTokenStream) -> Result<NativeTokenStr
             target,
             tagged,
         } = declaration;
-        let member = parameter_ident(&signature.params.inner.inputs[0], "member id needs a name")?;
-        let extra = extras
-            .next()
-            .expect("one native field group per checked constructor");
+        let message = "member id needs a name";
+        let member = parameter_ident(parameter_at(&signature, 0, message)?, message)?;
+        let extra = extras.next().ok_or_else(|| {
+            ParseError::new(
+                signature.span(),
+                "expected one native field group per constructor",
+            )
+        })?;
         let needs_comma =
             extra.stream().into_iter().last().is_some_and(
                 |last| !matches!(last, TokenTree::Punct(comma) if comma.as_char() == ','),
@@ -153,7 +159,7 @@ pub(crate) fn member_identity(input: NativeTokenStream) -> Result<NativeTokenStr
     Ok(output)
 }
 
-pub(crate) fn required_topics(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn required_topics(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let parser = Parser::from_tokens(input);
     let attributes = Attributes::parse(&parser)?;
     let visibility = Visibility::parse(&parser)?;
@@ -166,12 +172,11 @@ pub(crate) fn required_topics(input: &TokenStream) -> Result<TokenStream, ParseE
             "topic traversal needs one synchronous topology parameter",
         ));
     }
-    let topology = parameter_ident(
-        &signature.params.inner.inputs[0],
-        "topology needs a local name",
-    )?;
-    let FnParam::Typed(parameter) = &signature.params.inner.inputs[0] else {
-        unreachable!("checked named parameter")
+    let message = "topology needs a local name";
+    let first = parameter_at(&signature, 0, message)?;
+    let topology = parameter_ident(first, message)?;
+    let FnParam::Typed(parameter) = first else {
+        return Err(ParseError::new(signature.span(), message));
     };
     let reference = parameter
         .ty
@@ -191,7 +196,7 @@ pub(crate) fn required_topics(input: &TokenStream) -> Result<TokenStream, ParseE
     let output = signature.output.as_type().ok_or_else(|| {
         ParseError::new(signature.span(), "topic traversal must return Vec<String>")
     })?;
-    let expected: moxy::ast::Type = moxy::parse!("Vec<String>")?;
+    let expected: Type = moxy::parse!("Vec<String>")?;
     if output.to_token_stream().to_string() != expected.to_token_stream().to_string() {
         return Err(ParseError::new(
             output.span(),

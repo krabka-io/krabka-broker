@@ -48,14 +48,15 @@ impl SeqSet {
         // begin after `end`.
         let low = self.runs.partition_point(|run| run[1] < start);
         let high = self.runs.partition_point(|run| run[0] <= end);
-        let already: u64 = self.runs[low..high]
+        let overlapping = self.runs.get(low..high).unwrap_or_default();
+        let already: u64 = overlapping
             .iter()
             .map(|run| run[1].min(end).saturating_sub(run[0].max(start)))
             .sum();
-        let merged = match self.runs.get(low..high) {
-            Some([first, .., last]) => [first[0].min(start), last[1].max(end)],
-            Some([only]) => [only[0].min(start), only[1].max(end)],
-            _ => [start, end],
+        let merged = match overlapping {
+            [first, .., last] => [first[0].min(start), last[1].max(end)],
+            [only] => [only[0].min(start), only[1].max(end)],
+            [] => [start, end],
         };
         self.runs.splice(low..high, [merged]);
         (end - start) - already
@@ -154,7 +155,7 @@ impl SeqSet {
                 first += 1;
             }
             let mut cursor = start;
-            for cut in other.runs[first..].iter().take_while(|cut| cut[0] < end) {
+            for cut in other.runs.iter().skip(first).take_while(|cut| cut[0] < end) {
                 if cut[0] > cursor {
                     out.push_run([cursor, cut[0]]);
                 }
@@ -186,9 +187,15 @@ impl SeqSet {
             // with a large one costs a search per small run, not a step per
             // large run.
             if a[1] <= b[0] {
-                left += self.runs[left..].partition_point(|run| run[1] <= b[0]);
+                left += self
+                    .runs
+                    .get(left..)
+                    .map_or(0, |rest| rest.partition_point(|run| run[1] <= b[0]));
             } else if b[1] <= a[0] {
-                right += other.runs[right..].partition_point(|run| run[1] <= a[0]);
+                right += other
+                    .runs
+                    .get(right..)
+                    .map_or(0, |rest| rest.partition_point(|run| run[1] <= a[0]));
             } else if a[1] <= b[1] {
                 left += 1;
             } else {

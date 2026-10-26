@@ -16,8 +16,9 @@ use {
     crate::{
         authorizer::AllowAllAuthorizer,
         codes,
-        coordinator::unified::streams::config::{
-            KEY_NUM_STANDBY_REPLICAS, KEY_TASK_OFFSET_INTERVAL_MS,
+        coordinator::unified::streams::{
+            config,
+            config::{KEY_NUM_STANDBY_REPLICAS, KEY_TASK_OFFSET_INTERVAL_MS},
         },
         handlers::{
             alter_configs::test_support::{
@@ -37,7 +38,7 @@ use {
         alter_configs_request::{AlterConfigsRequest, AlterConfigsResource, AlterableConfig},
         alter_configs_response::{AlterConfigsResourceResponse, AlterConfigsResponse},
     },
-    std::sync::Arc,
+    std::{slice, sync::Arc},
 };
 
 fn expected_resource_response(
@@ -201,9 +202,9 @@ async fn denied_resources_report_their_authorization_error(case: DeniedResourceC
     let expected = krabka_macros::unthrottled_wire!(AlterConfigsResponse {
         responses: vec![krabka_macros::tagged_wire!(AlterConfigsResourceResponse {
             error_code,
-            error_message: Some(error_message.to_string()),
+            error_message: Some(error_message.to_owned()),
             resource_type,
-            resource_name: resource_name.to_string(),
+            resource_name: resource_name.to_owned(),
         })],
     });
     assert2::assert!(resp == expected);
@@ -425,10 +426,7 @@ fn a_group_or_client_metrics_replacement_audits_a_key_it_drops_by_omission() {
         group_audited
             == vec![
                 audit_resource("Group", "streams-app"),
-                audit_resource(
-                    "ConfigKey",
-                    crate::coordinator::unified::streams::config::KEY_TASK_OFFSET_INTERVAL_MS
-                ),
+                audit_resource("ConfigKey", config::KEY_TASK_OFFSET_INTERVAL_MS),
             ]
     );
 
@@ -481,7 +479,7 @@ fn an_oversized_value_is_refused_in_every_kind_of_config_record() {
     };
     for record in records(&long) {
         check!(
-            super::config_value_size_error(std::slice::from_ref(&record))
+            super::config_value_size_error(slice::from_ref(&record))
                 == Some((
                     codes::INVALID_CONFIG,
                     "The configuration value cannot be added because it exceeds the maximum \
@@ -491,9 +489,9 @@ fn an_oversized_value_is_refused_in_every_kind_of_config_record() {
             "{record:?}"
         );
     }
-    for record in records(&long[1..]) {
+    for record in records(long.get(1..).unwrap()) {
         check!(
-            super::config_value_size_error(std::slice::from_ref(&record)).is_none(),
+            super::config_value_size_error(slice::from_ref(&record)).is_none(),
             "{record:?}"
         );
     }

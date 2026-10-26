@@ -23,25 +23,30 @@
 
 use {
     krabka_ids::PartitionIndex,
-    krabka_log::{Log, LogConfig},
+    krabka_log::{Log, LogConfig, topic_name},
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
     krabka_raft::NodeId,
     krabka_security::ListenerProtocol,
     std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, hash_map::DefaultHasher},
+        fs,
         hash::{Hash as _, Hasher as _},
         path::PathBuf,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, LockResult, Mutex, MutexGuard, PoisonError,
+            atomic::{self, AtomicU64},
+        },
     },
     tokio_util::sync::CancellationToken,
     tracing::{info, warn},
 };
 
-pub(crate) mod connection;
+pub mod connection;
 mod fetch_loop;
 mod follower_throttle;
-/// Benchmark seam over the replicator's per-batch work, driven by
-/// `benches/perf_deferrals.rs`.
+/// Benchmark seam over the replicator's per-batch work.
+///
+/// `benches/perf_deferrals.rs` drives it.
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod hot_path;
 mod leader_link;
@@ -52,7 +57,7 @@ mod session;
 mod test_support;
 mod truncation;
 
-pub(crate) use self::follower_throttle::ReplicaLag;
+pub use self::follower_throttle::ReplicaLag;
 use {
     self::fetch_loop::run_fetcher_loop,
     crate::{
@@ -72,7 +77,7 @@ use {
 
 /// Outbound dialer and pacing policy shared by the two replication loops.
 #[derive(Clone)]
-pub(crate) struct ReplicationConnectionConfig {
+pub struct ReplicationConnectionConfig {
     /// Shared outbound dialer.
     ///
     /// The dialer connects through TLS and SASL when the inter-broker listener
@@ -87,7 +92,7 @@ pub(crate) struct ReplicationConnectionConfig {
 
 #[cfg(test)]
 #[bon::builder]
-pub(crate) fn replication_connection_for_test(
+pub fn replication_connection_for_test(
     #[builder(default = Arc::new(InterBrokerClient::new(None, None)))] inter_broker_client: Arc<
         InterBrokerClient,
     >,
@@ -105,7 +110,7 @@ pub(crate) fn replication_connection_for_test(
 }
 
 /// Configuration handed to a single replicator task.
-pub(crate) struct Config {
+pub struct Config {
     pub node_id: NodeId,
     /// The topic this task follows, as the `Arc<str>` the partition registry
     /// keys it by.
@@ -176,7 +181,7 @@ pub(crate) struct Config {
 /// Drop idempotent-producer entries for the truncated tail. Otherwise a retried
 /// batch can deduplicate against an offset the log no longer holds and stall
 /// the `acks=all` high-watermark gate.
-pub(super) async fn truncate_producer_state(cfg: &Config, end_offset: LogOffset) {
+pub async fn truncate_producer_state(cfg: &Config, end_offset: LogOffset) {
     cfg.producer_state
         .truncate(&cfg.topic, cfg.partition, end_offset)
         .await;
@@ -184,13 +189,13 @@ pub(super) async fn truncate_producer_state(cfg: &Config, end_offset: LogOffset)
 
 /// A topic and partition, as the fetcher's partition map keys it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct FollowedKey {
+pub struct FollowedKey {
     pub(crate) topic: Arc<str>,
     pub(crate) partition: PartitionIndex,
 }
 
 /// A generation of the followed partitions and the entries it holds.
-pub(crate) struct FollowedSnapshot {
+pub struct FollowedSnapshot {
     pub(crate) generation: u64,
     pub(crate) entries: BTreeMap<FollowedKey, Arc<Config>>,
 }
@@ -201,32 +206,27 @@ pub(crate) struct FollowedSnapshot {
 /// snapshot only when the generation changes, so ordinary Fetch rounds never
 /// walk this map or hold this lock.
 #[derive(Default)]
-pub(crate) struct FollowedPartitionsState {
+pub struct FollowedPartitionsState {
     entries: Mutex<BTreeMap<FollowedKey, Arc<Config>>>,
-    generation: std::sync::atomic::AtomicU64,
+    generation: AtomicU64,
 }
 
-pub(crate) type FollowedPartitions = Arc<FollowedPartitionsState>;
+pub type FollowedPartitions = Arc<FollowedPartitionsState>;
 
 impl FollowedPartitionsState {
     pub(crate) fn new(entries: BTreeMap<FollowedKey, Arc<Config>>) -> Self {
         Self {
             entries: Mutex::new(entries),
-            generation: std::sync::atomic::AtomicU64::new(1),
+            generation: AtomicU64::new(1),
         }
     }
 
-    pub(crate) fn lock(
-        &self,
-    ) -> std::sync::LockResult<std::sync::MutexGuard<'_, BTreeMap<FollowedKey, Arc<Config>>>> {
+    pub(crate) fn lock(&self) -> LockResult<MutexGuard<'_, BTreeMap<FollowedKey, Arc<Config>>>> {
         self.entries.lock()
     }
 
     pub(crate) fn replace(&self, entries: BTreeMap<FollowedKey, Arc<Config>>) {
-        let mut current = self
-            .entries
-            .lock()
-            .expect("followed-partitions mutex poisoned");
+        let mut current = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
         let unchanged = current.len() == entries.len()
             && current
                 .iter()
@@ -239,18 +239,17 @@ impl FollowedPartitionsState {
         }
         *current = entries;
         drop(current);
-        self.generation
-            .fetch_add(1, std::sync::atomic::Ordering::Release);
+        self.generation.fetch_add(1, atomic::Ordering::Release);
     }
 
     pub(crate) fn snapshot_if_changed(&self, generation: u64) -> Option<FollowedSnapshot> {
-        let current = self.generation.load(std::sync::atomic::Ordering::Acquire);
+        let current = self.generation.load(atomic::Ordering::Acquire);
         (current != generation).then(|| FollowedSnapshot {
             generation: current,
             entries: self
                 .entries
                 .lock()
-                .expect("followed-partitions mutex poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .clone(),
         })
     }
@@ -259,19 +258,18 @@ impl FollowedPartitionsState {
         if self
             .entries
             .lock()
-            .expect("followed-partitions mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .remove(key)
             .is_some()
         {
-            self.generation
-                .fetch_add(1, std::sync::atomic::Ordering::Release);
+            self.generation.fetch_add(1, atomic::Ordering::Release);
         }
     }
 }
 
 /// Everything one fetcher needs that is the same for every partition it
 /// follows: which leader it dials, how it dials, and how it paces itself.
-pub(crate) struct FetcherConfig {
+pub struct FetcherConfig {
     pub node_id: NodeId,
     pub leader_node_id: NodeId,
     /// The `host` portion of the leader from the metadata image: the
@@ -292,16 +290,16 @@ pub(crate) struct FetcherConfig {
 /// partition index, folded onto `num.replica.fetchers`. The mapping is stable,
 /// so a partition stays on one fetcher for as long as its leader does, and a
 /// topic's partitions spread across the fetchers rather than piling onto one.
-pub(crate) fn fetcher_id_for(topic: &str, partition: i32, fetchers: usize) -> usize {
+pub fn fetcher_id_for(topic: &str, partition: i32, fetchers: usize) -> usize {
     let fetchers = fetchers.max(1);
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = DefaultHasher::new();
     topic.hash(&mut hasher);
     partition.hash(&mut hasher);
     usize::try_from(hasher.finish() % fetchers as u64).unwrap_or(0)
 }
 
 /// Entry point. Drives one leader's replication loop until cancelled.
-pub(crate) async fn run_fetcher(fetcher: FetcherConfig) {
+pub async fn run_fetcher(fetcher: FetcherConfig) {
     info!(
         leader_node_id = fetcher.leader_node_id.0,
         host = %fetcher.leader_host,
@@ -324,37 +322,38 @@ pub(crate) async fn run_fetcher(fetcher: FetcherConfig) {
 ///
 /// The function inserts the partition into the shared `partitions` map of the
 /// broker. The function is idempotent.
-pub(super) fn ensure_local_partition(cfg: &Config) -> Result<(), String> {
+pub fn ensure_local_partition(cfg: &Config) -> Result<(), String> {
     // `materialize_if_vacant` runs the build under the per-key lock, so two
     // concurrent replicators for the same partition can never both build it.
     cfg.partitions
         .materialize_if_vacant(&cfg.topic, cfg.partition, || {
             // A name that fails the check would put the directory outside
             // the log directory.
-            krabka_log::topic_name::validate_topic_name(&cfg.topic).map_err(|e| e.to_string())?;
+            topic_name::validate_topic_name(&cfg.topic).map_err(|e| e.to_string())?;
             let dir = place_partition_dir_avoiding(
                 &cfg.log_dirs,
                 cfg.partitions.cordoned_log_dirs(),
                 &cfg.topic,
                 cfg.partition.get(),
             );
-            std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
+            fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
             let log =
                 Log::open(&dir, cfg.log_settings.clone()).map_err(|e| format!("Log::open: {e}"))?;
             let owning_dir = dir
                 .parent()
-                .expect("placed partition dir always has a parent log.dir")
+                .ok_or_else(|| "placed partition dir has no parent log.dir".to_owned())?
                 .to_path_buf();
-            Ok(spawn_partition_with_replication_target(
-                cfg.topic.to_string(),
-                task_replication_target(cfg),
-                cfg.partition,
-                owning_dir,
-                log,
-                cfg.log_dir_status.clone(),
-                cfg.producer_state.clone(),
-                false,
-            ))
+            spawn_partition_with_replication_target()
+                .topic(cfg.topic.to_string())
+                .replication_target(task_replication_target(cfg))
+                .partition_id(cfg.partition)
+                .log_dir(owning_dir)
+                .log(log)
+                .log_dir_status(cfg.log_dir_status.clone())
+                .producer_state(Arc::clone(&cfg.producer_state))
+                .diskless(false)
+                .call()
+                .map_err(|e| format!("spawn partition: {e}"))
         })
 }
 
@@ -396,6 +395,7 @@ mod tests {
             image_with_topic_id_and_leader, test_config,
         },
         assert2::assert,
+        std::collections::BTreeSet,
     };
 
     #[test]
@@ -431,7 +431,7 @@ mod tests {
     #[tokio::test]
     async fn following_a_partition_materializes_it_against_its_replication_target() {
         let (cfg, _log_dir) = test_config(image_with_leader(LEADER_ID));
-        let partitions = cfg.partitions.clone();
+        let partitions = Arc::clone(&cfg.partitions);
 
         ensure_local_partition(&cfg).expect("materialize");
 
@@ -470,7 +470,7 @@ mod tests {
     /// onto one, which is the whole point of `num.replica.fetchers`.
     #[test]
     fn several_fetchers_carry_more_than_one_of_a_topic_s_partitions_each() {
-        let used: std::collections::BTreeSet<usize> = (0..64)
+        let used: BTreeSet<usize> = (0..64)
             .map(|partition| fetcher_id_for("orders", partition, 4))
             .collect();
         assert!(used.len() == 4, "64 partitions reached only {used:?}");

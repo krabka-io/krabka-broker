@@ -17,9 +17,11 @@ pub fn remote_covers_offset(ranges: Seq<(i64, i64)>, offset: Int) -> bool {
 }
 
 /// Find the greatest contiguous inclusive coverage rooted at `local_start`.
+///
 /// Sorted ranges may overlap or precede the anchor; obsolete disconnected
 /// prefixes cannot suppress a later anchored component. Reject malformed ranges
-/// anywhere in the listing. Metadata truth, copy completion and bytes are external.
+/// anywhere in the listing. Metadata truth, copy completion and bytes are
+/// external.
 #[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < ranges@.len()
     ==> ranges@[i].0@ <= ranges@[j].0@)]
 #[ensures(match result {
@@ -40,7 +42,7 @@ pub fn remote_covered_through(ranges: &[(i64, i64)], local_start: i64) -> Option
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==> ranges@[j].0@ <= ranges@[j].1@)]
     #[variant(ranges@.len() - i@)]
     while i < ranges.len() {
-        if ranges[i].0 > ranges[i].1 {
+        if matches!(ranges.get(i), Some(&(start, end)) if start > end) {
             return None;
         }
         i += 1;
@@ -58,7 +60,9 @@ pub fn remote_covered_through(ranges: &[(i64, i64)], local_start: i64) -> Option
     })]
     #[variant(ranges@.len() - i@)]
     while i < ranges.len() {
-        let (start, end) = ranges[i];
+        let Some(&(start, end)) = ranges.get(i) else {
+            break;
+        };
         match covered {
             None if start <= local_start && local_start <= end => covered = Some(end),
             None => {}

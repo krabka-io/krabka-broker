@@ -17,11 +17,13 @@ use {
         upgrade_streams::{first_join, topology},
     },
     assert2::{assert, check},
+    krabka_broker::coordinator::unified::GroupType,
     krabka_protocol::owned::{
         join_group_request::JoinGroupRequest,
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
     std::time::Duration,
+    tokio::time,
 };
 
 /// Parks the `JoinGroup` of one classic member of `group` on a connection of
@@ -36,10 +38,9 @@ async fn hold_live_classic_member(
     group: &str,
     instance_id: Option<&str>,
 ) {
-    let mut member_id = String::new();
-    if instance_id.is_none() {
+    let member_id = if instance_id.is_none() {
         let client = connect(bootstrap).await;
-        let r1 = tokio::time::timeout(Duration::from_secs(5), client.send(join_request(group, "")))
+        let r1 = time::timeout(Duration::from_secs(5), client.send(join_request(group, "")))
             .await
             .expect("JoinGroup1 timeout")
             .expect("JoinGroup1");
@@ -47,18 +48,20 @@ async fn hold_live_classic_member(
             r1.error_code == ERR_MEMBER_ID_REQUIRED,
             "expected MEMBER_ID_REQUIRED, got {r1:?}"
         );
-        member_id = r1.member_id;
-    }
+        r1.member_id
+    } else {
+        String::new()
+    };
     let request = JoinGroupRequest {
-        group_instance_id: instance_id.map(str::to_string),
+        group_instance_id: instance_id.map(str::to_owned),
         ..join_request(group, &member_id)
     };
     // The join parks in the rebalance-delay wait. The member stays joined (no
     // leave), so the group has a live member.
-    let join_bootstrap = bootstrap.to_string();
+    let join_bootstrap = bootstrap.to_owned();
     tokio::spawn(async move {
         let c = connect_client(&join_bootstrap, Some("classic-joiner")).await;
-        let _ = tokio::time::timeout(Duration::from_secs(30), c.send(request)).await;
+        let _ = time::timeout(Duration::from_secs(30), c.send(request)).await;
     });
     broker.wait_until_classic_group_member_count(group, 1).await;
 }
@@ -85,8 +88,7 @@ async fn classic_group_with_live_member_rejects_streams_heartbeat() {
     for (row, group, instance_id) in rows {
         hold_live_classic_member(&broker, &bootstrap, group, instance_id).await;
         assert!(
-            broker.group_type_for_test(group)
-                == Some(krabka_broker::coordinator::unified::GroupType::Classic),
+            broker.group_type_for_test(group) == Some(GroupType::Classic),
             "{row}: precondition: group_type must be Classic, got {:?}",
             broker.group_type_for_test(group)
         );
@@ -106,8 +108,7 @@ async fn classic_group_with_live_member_rejects_streams_heartbeat() {
 
         // Group must STILL be Classic-typed (no flip), with its member.
         check!(
-            broker.group_type_for_test(group)
-                == Some(krabka_broker::coordinator::unified::GroupType::Classic),
+            broker.group_type_for_test(group) == Some(GroupType::Classic),
             "{row}: group_type must remain Classic after rejected upgrade"
         );
         broker.wait_until_classic_group_member_count(group, 1).await;

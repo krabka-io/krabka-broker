@@ -23,6 +23,7 @@ use {
     krabka_units::prelude::{Time, TimeExt as _},
     qubit_clock::Timer,
     std::sync::Arc,
+    tracing::field::Empty,
 };
 
 /// Construction parameters for [`AuditWriter`].
@@ -214,7 +215,7 @@ impl AuditWriter {
     #[tracing::instrument(
         level = "debug",
         skip_all,
-        fields(class = ?event.class(), seq = tracing::field::Empty)
+        fields(class = ?event.class(), seq = Empty)
     )]
     async fn write_chained(&mut self, event: &AuditEvent, durable: bool) -> Result<(), AuditError> {
         self.write_pending_loss_marker(durable).await?;
@@ -266,7 +267,7 @@ impl AuditWriter {
     #[tracing::instrument(
         level = "debug",
         skip_all,
-        fields(since_checkpoint = self.since_checkpoint, seq_high = tracing::field::Empty)
+        fields(since_checkpoint = self.since_checkpoint, seq_high = Empty)
     )]
     async fn emit_checkpoint(&mut self) {
         let Some(signer) = self.signer.clone() else {
@@ -351,6 +352,8 @@ mod tests {
         qubit_clock::{
             MonotonicClock, MonotonicInstant, StdMonotonicClock, TimeError, TimerFuture,
         },
+        std::path::Path,
+        tokio::task::JoinHandle,
     };
 
     #[derive(
@@ -385,12 +388,12 @@ mod tests {
     struct MemoryWriter {
         log: Arc<AuditLog>,
         sink: Arc<MemorySink>,
-        handle: tokio::task::JoinHandle<()>,
+        handle: JoinHandle<()>,
     }
 
     #[bon::builder]
     fn memory_writer(
-        directory: &std::path::Path,
+        directory: &Path,
         #[builder(into, default = MemoryWriterSetup::default().capacity)] capacity: QueueCapacity,
         #[builder(default = MemoryWriterSetup::default().checkpoints)] checkpoints: CheckpointSetup,
     ) -> MemoryWriter {
@@ -408,7 +411,7 @@ mod tests {
         let handle = spawn_writer(
             receiver,
             quiet_params()
-                .sink(sink.clone())
+                .sink(Arc::<MemorySink>::clone(&sink))
                 .spool(spool)
                 .stats(checkpoints.stats)
                 .maybe_signer(checkpoints.signer)
@@ -428,16 +431,14 @@ mod tests {
     struct SignedWriterSetup {
         #[default(QueueCapacity(16))]
         capacity: QueueCapacity,
-        #[default(crate::log::test_support::CheckpointFrequency::Every(
-            crate::log::test_support::AuditEventCount(1_000_000)
-        ))]
+        #[default(CheckpointFrequency::Every(AuditEventCount(1_000_000)))]
         frequency: CheckpointFrequency,
     }
 
     #[bon::builder]
     fn signed_writer(
         #[builder(into, default = QueueCapacity (16))] capacity: QueueCapacity,
-        #[builder(default = crate :: log :: test_support :: CheckpointFrequency :: Every (crate :: log :: test_support :: AuditEventCount (1_000_000)))]
+        #[builder(default = CheckpointFrequency::Every(AuditEventCount(1_000_000)))]
         frequency: CheckpointFrequency,
     ) -> SignedWriterFixture {
         let setup = SignedWriterSetup {
@@ -481,7 +482,7 @@ mod tests {
         losses.add(1);
         let directory = tempfile::tempdir().unwrap();
         let spool = Spool::open(directory.path(), ROOMY_CAP).unwrap();
-        let mut params = params(sink.clone(), spool, stats());
+        let mut params = params(Arc::<T>::clone(sink), spool, stats());
         params.signer = Some(signer);
         params.checkpoint_every_n = 2;
         PendingLossWriter {
@@ -526,8 +527,8 @@ mod tests {
         check!(
             (seq0, seq1, header(&recs[0], "prev_hash"))
                 == (
-                    Some("0".to_string()),
-                    Some("1".to_string()),
+                    Some("0".to_owned()),
+                    Some("1".to_owned()),
                     Some("0".repeat(64)),
                 )
         );
@@ -559,11 +560,11 @@ mod tests {
 
         let recs = sink.records();
         // 4 chained + 2 checkpoints (after record 2 and record 4)
-        let checkpoints: Vec<_> = recs
+        let checkpoints = recs
             .iter()
             .filter(|r| r.class == AuditEventClass::Checkpoint)
-            .collect();
-        check!(checkpoints.len() == 2);
+            .count();
+        check!(checkpoints == 2);
 
         // recompute the chain over the non-checkpoint records and verify each checkpoint
         let mut head = GENESIS_HEAD;
@@ -624,7 +625,11 @@ mod tests {
         let TempSpool { dir: _dir, spool } = roomy_spool();
         let sink = Arc::new(MemorySink::default());
         let (log, rx) = AuditLog::new(16);
-        let mut params = params(sink.clone(), spool, Arc::new(AuditStats::new()));
+        let mut params = params(
+            Arc::<MemorySink>::clone(&sink),
+            spool,
+            Arc::new(AuditStats::new()),
+        );
         params.timer = Arc::new(DeadTimer(StdMonotonicClock::new()));
         let handle = spawn_writer(rx, params);
 

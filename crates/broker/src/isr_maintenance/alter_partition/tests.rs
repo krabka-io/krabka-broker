@@ -25,7 +25,8 @@ use {
     },
     krabka_raft::NodeId,
     std::{
-        net::SocketAddr,
+        iter,
+        net::{SocketAddr, TcpListener},
         sync::{Arc, Mutex},
     },
 };
@@ -175,7 +176,7 @@ impl ScriptedListener {
             let mut recorded = state.lock().expect("scripted listener state");
             if api_key == api_versions_request::API_KEY {
                 recorded.connections += 1;
-                let advertised = std::iter::once((
+                let advertised = iter::once((
                     api_versions_request::API_KEY,
                     0,
                     api_versions_request::MAX_VERSION,
@@ -212,6 +213,7 @@ impl ScriptedListener {
             let request = AlterPartitionRequest::decode(&mut request_body, version)
                 .expect("an AlterPartition request");
             recorded.requests.push(RecordedRequest { version, request });
+            drop(recorded);
             MockReply::Respond(encode_body(&answer, version, true))
         })
         .await;
@@ -445,7 +447,7 @@ async fn send_alter_partition_dials_with_the_controller_listener_security() {
 
 #[tokio::test]
 async fn send_alter_partition_to_reports_transport_error_for_closed_port() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener);
 

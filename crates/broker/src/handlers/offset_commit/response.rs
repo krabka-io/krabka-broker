@@ -52,7 +52,7 @@ impl ResponseBuilder {
         if self.use_topic_ids {
             TopicKey::Id(topic_id)
         } else {
-            TopicKey::Name(name.to_string())
+            TopicKey::Name(name.to_owned())
         }
     }
 
@@ -62,7 +62,7 @@ impl ResponseBuilder {
         let key = self.key(topic_id, name);
         *self.slots.entry(key).or_insert_with(|| {
             self.topics.push(OffsetCommitResponseTopic {
-                name: name.to_string(),
+                name: name.to_owned(),
                 topic_id,
                 ..Default::default()
             });
@@ -75,18 +75,19 @@ impl ResponseBuilder {
     /// This is Kafka's `Builder.addPartitions`.
     pub fn add_topic(&mut self, topic: &OffsetCommitRequestTopic, error_code: i16) {
         let slot = self.slot(topic.topic_id, &topic.name);
-        self.topics[slot]
-            .partitions
-            .extend(
-                topic
-                    .partitions
-                    .iter()
-                    .map(|partition| OffsetCommitResponsePartition {
-                        partition_index: partition.partition_index,
-                        error_code,
-                        ..Default::default()
-                    }),
-            );
+        if let Some(row) = self.topics.get_mut(slot) {
+            row.partitions
+                .extend(
+                    topic
+                        .partitions
+                        .iter()
+                        .map(|partition| OffsetCommitResponsePartition {
+                            partition_index: partition.partition_index,
+                            error_code,
+                            ..Default::default()
+                        }),
+                );
+        }
     }
 
     /// Adds one partition row with `error_code`.
@@ -100,13 +101,13 @@ impl ResponseBuilder {
         error_code: i16,
     ) {
         let slot = self.slot(topic_id, name);
-        self.topics[slot]
-            .partitions
-            .push(OffsetCommitResponsePartition {
+        if let Some(row) = self.topics.get_mut(slot) {
+            row.partitions.push(OffsetCommitResponsePartition {
                 partition_index,
                 error_code,
                 ..Default::default()
             });
+        }
     }
 
     /// Merges the coordinator's topic rows into the response.
@@ -119,8 +120,10 @@ impl ResponseBuilder {
         }
         for topic in topics {
             let key = self.key(topic.topic_id, &topic.name);
-            if let Some(&slot) = self.slots.get(&key) {
-                self.topics[slot].partitions.extend(topic.partitions);
+            if let Some(&slot) = self.slots.get(&key)
+                && let Some(row) = self.topics.get_mut(slot)
+            {
+                row.partitions.extend(topic.partitions);
             } else {
                 self.slots.insert(key, self.topics.len());
                 self.topics.push(topic);
@@ -154,7 +157,7 @@ mod tests {
         partitions: &[i32],
     ) -> OffsetCommitRequestTopic {
         OffsetCommitRequestTopic {
-            name: name.to_string(),
+            name: name.to_owned(),
             topic_id,
             partitions: partitions
                 .iter()
@@ -194,7 +197,7 @@ mod tests {
         partitions: &[PartitionCode],
     ) -> OffsetCommitResponseTopic {
         OffsetCommitResponseTopic {
-            name: name.to_string(),
+            name: name.to_owned(),
             topic_id,
             partitions: partitions
                 .iter()

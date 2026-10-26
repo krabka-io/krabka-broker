@@ -31,7 +31,7 @@ mod policy;
 mod query;
 mod selection;
 
-pub(crate) use self::{
+pub use self::{
     background::BackgroundRecovery,
     job::{RecoveryJob, RecoveryOutcome, UncleanRecoveryHandle},
     manager::UncleanRecoveryManager,

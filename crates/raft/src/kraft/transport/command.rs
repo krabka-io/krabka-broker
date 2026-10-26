@@ -19,7 +19,7 @@ use {
         reconfig::{ReconfigOutcome, VoterChange},
     },
     bytes::Bytes,
-    std::sync::Arc,
+    std::{collections::BTreeMap, sync::Arc},
     tokio::{
         sync::{mpsc, oneshot},
         time::Instant,
@@ -340,8 +340,9 @@ pub enum TimerTick {
 }
 
 /// One observer row of `DescribeQuorum`: a replica the leader has seen fetch
-/// that is not a voter, with what the leader tracks for it. A timestamp is -1
-/// while the leader has not recorded that event, as in Kafka.
+/// that is not a voter, with what the leader tracks for it.
+///
+/// A timestamp is -1 while the leader has not recorded that event, as in Kafka.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObserverReplica {
     pub id: NodeId,
@@ -397,11 +398,11 @@ pub struct QuorumStateSnapshot {
     /// `(id, directory id)` key. Empty unless this node leads.
     pub observers: Vec<ObserverReplica>,
     /// Per-voter fetch offset, populated on the leader.
-    pub per_replica_fetch_offset: std::collections::BTreeMap<NodeId, i64>,
+    pub per_replica_fetch_offset: BTreeMap<NodeId, i64>,
     /// Per-voter last fetch timestamp in wall-clock milliseconds.
-    pub per_replica_last_fetch_ms: std::collections::BTreeMap<NodeId, i64>,
+    pub per_replica_last_fetch_ms: BTreeMap<NodeId, i64>,
     /// Per-voter last caught-up timestamp in wall-clock milliseconds.
-    pub per_replica_last_caught_up_ms: std::collections::BTreeMap<NodeId, i64>,
+    pub per_replica_last_caught_up_ms: BTreeMap<NodeId, i64>,
     /// Whether this node currently leads the metadata quorum.
     pub is_leader: bool,
     /// Raft consensus state name (leader, follower, candidate, observer).

@@ -81,6 +81,7 @@ mod tests {
             thread,
         },
         tempfile::TempDir,
+        tokio::task,
     };
 
     // The GCS backend reuses the generic `S3RemoteStorage` engine, so the
@@ -95,10 +96,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn engine_round_trips_with_prefix() {
         let store =
-            S3RemoteStorage::with_store(Arc::new(InMemory::new()), Some("cluster-a".to_string()));
+            S3RemoteStorage::with_store(Arc::new(InMemory::new()), Some("cluster-a".to_owned()));
         let src = TempDir::new().unwrap();
         let md = sample_metadata(uuid::Uuid::from_u128(10));
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             store
                 .copy_log_segment_data(&md, &sample_data(src.path(), TransactionIndex::Omitted))
                 .unwrap();

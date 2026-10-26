@@ -16,6 +16,12 @@ use {
         support::{ContainerInput, jvm_docker_command, jvm_stdin_output},
     },
     assert2::assert,
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        path::Path,
+        time::Duration,
+    },
+    tokio::time,
 };
 
 /// Segment size every tiered-storage suite boots its broker with, as
@@ -34,7 +40,7 @@ use {
 ///
 /// At this size a produce of a couple of hundred ~30-byte records seals
 /// several segments, which is what gives the tier-copy path repeated work.
-pub(crate) const TIERED_SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(2048);
+pub const TIERED_SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::bytes(2048);
 
 /// Create a KIP-405 tiered topic and wait for the config overrides to propagate
 /// into the partition's `LogConfig`.
@@ -56,7 +62,7 @@ pub(crate) const TIERED_SEGMENT_SIZE: krabka_units::ByteSize = krabka_units::byt
 /// If the broker was not started with `log_config.segment_size` set to
 /// [`TIERED_SEGMENT_SIZE`]: the produce would then fill one 1 GiB segment and
 /// seal nothing.
-pub(crate) async fn create_tiered_topic(broker: &krabka_broker::BrokerHandle, topic: &str) {
+pub async fn create_tiered_topic(broker: &krabka_broker::BrokerHandle, topic: &str) {
     // Uses the KIP-405-aware `cp-kafka:7.8.8` image — older clients' `TopicCommand`
     // validates `--config` keys client-side and rejects `remote.storage.enable` /
     // `local.retention.bytes` before the request leaves the container.
@@ -113,7 +119,7 @@ pub(crate) async fn create_tiered_topic(broker: &krabka_broker::BrokerHandle, to
 /// Without that, the JVM producer collects everything into one large batch
 /// and writes it into a single segment. Nothing then triggers a segment
 /// roll, and the tier-copy path gets no work.
-pub(crate) fn produce_records(topic: &str, n: usize) {
+pub fn produce_records(topic: &str, n: usize) {
     let mut payload = String::with_capacity(n * 12);
     for i in 0..n {
         use std::fmt::Write as _;
@@ -150,18 +156,18 @@ pub(crate) fn produce_records(topic: &str, n: usize) {
 ///
 /// The poll runs at 500 ms intervals for up to 20 s (40 iterations). It
 /// panics if the listing never reaches the threshold.
-pub(crate) async fn wait_for_minio_segments(bucket: &str, min_log_objects: usize) -> String {
+pub async fn wait_for_minio_segments(bucket: &str, min_log_objects: usize) -> String {
     let mut bucket_listing = String::new();
     let mut copied_log_objects = 0usize;
     for _ in 0..40 {
         // intentional: bounded poll of an external process (MinIO via `mc ls`);
         // no krabka metric reflects object arrival in the bucket.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
         bucket_listing = minio_list_objects(bucket);
         copied_log_objects = bucket_listing
             .lines()
             .filter(|line| {
-                std::path::Path::new(line)
+                Path::new(line)
                     .extension()
                     .is_some_and(|extension| extension == "log")
             })
@@ -205,17 +211,15 @@ struct SegmentCompleteness {
 
 /// Group `listing`'s keys by segment and report how complete they are.
 fn segment_completeness(listing: &str) -> SegmentCompleteness {
-    let mut segments: std::collections::BTreeMap<&str, std::collections::BTreeSet<&str>> =
-        std::collections::BTreeMap::new();
+    let mut segments: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for key in listing.lines().filter_map(listed_key) {
         // The suffixes share no common tail -- `.timeindex` does not end with
         // `.index` -- so at most one matches, and the stem before it names the
         // segment.
-        if let Some(suffix) = SEGMENT_ARTIFACTS
+        if let Some((suffix, stem)) = SEGMENT_ARTIFACTS
             .iter()
-            .find(|suffix| key.ends_with(**suffix))
+            .find_map(|suffix| key.strip_suffix(*suffix).map(|stem| (suffix, stem)))
         {
-            let stem = &key[..key.len() - suffix.len()];
             segments.entry(stem).or_default().insert(suffix);
         }
     }
@@ -252,7 +256,7 @@ fn segment_completeness(listing: &str) -> SegmentCompleteness {
 ///
 /// The poll runs at 500 ms intervals for up to 30 s. It panics if the archive
 /// never settles.
-pub(crate) async fn wait_for_settled_minio_segments(bucket: &str, min_segments: usize) -> String {
+pub async fn wait_for_settled_minio_segments(bucket: &str, min_segments: usize) -> String {
     // Identical consecutive listings that count as settled. The tiered
     // harness runs the `RemoteLogManager` at a 1 s tick and copies one segment
     // per partition per tick, so three unchanged 500 ms polls span a whole
@@ -267,7 +271,7 @@ pub(crate) async fn wait_for_settled_minio_segments(bucket: &str, min_segments: 
     for _ in 0..60 {
         // intentional: bounded poll of an external process (MinIO via `mc ls`);
         // no krabka metric reflects object arrival in the bucket.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
         listing = minio_list_objects(bucket);
         SegmentCompleteness { complete, seen } = segment_completeness(&listing);
         stable = if listing == previous { stable + 1 } else { 0 };
@@ -290,7 +294,7 @@ pub(crate) async fn wait_for_settled_minio_segments(bucket: &str, min_segments: 
 /// `bootstrap_host_port` is the Kafka bootstrap address that is visible from
 /// inside the Docker container, for example an allocated port.
 /// Single-broker callers should pass `broker0_advertised()`.
-pub(crate) fn consume_records(
+pub fn consume_records(
     topic: &str,
     max: usize,
     timeout_ms: u64,
@@ -306,7 +310,7 @@ pub(crate) fn consume_records(
 /// which reads a rebuilt cluster and must find the archive's oldest record at
 /// the front -- needs the lines themselves. `kafka-console-consumer` prints
 /// one record value per line with the default formatter.
-pub(crate) fn consume_record_values(
+pub fn consume_record_values(
     topic: &str,
     max: usize,
     timeout_ms: u64,

@@ -74,7 +74,8 @@ mod tests {
             test_support::{check_two_members_expired, expired_session_last_seen},
         },
         assert2::check,
-        std::time::Duration,
+        krabka_protocol::primitives::uuid::Uuid,
+        std::{sync::Arc, time::Duration},
     };
 
     /// Kafka runs a session timer per member, and each one that fires runs
@@ -92,7 +93,7 @@ mod tests {
             ..ShareGroupConfig::default()
         };
         let (coord, log) = make_coordinator_with_config(
-            metadata.clone(),
+            Arc::clone(&metadata),
             NextGenConfig::default(),
             config.clone(),
         );
@@ -150,11 +151,11 @@ mod tests {
         let (metadata, topic_id) = metadata_with_topic().partitions(2).call();
         let config = ShareGroupConfig::default();
         let (coord, log) = make_coordinator_with_config(
-            metadata.clone(),
+            Arc::clone(&metadata),
             NextGenConfig::default(),
             config.clone(),
         );
-        let gone = krabka_protocol::primitives::uuid::Uuid([9; 16]);
+        let gone = Uuid([9; 16]);
         let mut state = ShareGroupState::new("g");
         state
             .initialized

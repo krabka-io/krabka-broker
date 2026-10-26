@@ -15,7 +15,11 @@ use {
     },
     krabka_ids::{Offset, ProducerId},
     krabka_protocol::records::RecordBatch,
-    std::collections::{HashMap, HashSet},
+    std::{
+        cmp::Reverse,
+        collections::{HashMap, HashSet},
+        mem,
+    },
 };
 
 /// An aborted transaction the pass has reached, and the last batch of it the
@@ -73,14 +77,12 @@ impl CleanedTransactionMetadata {
     pub fn add_aborted_transactions(&mut self, txns: impl IntoIterator<Item = AbortedTxn>) {
         self.pending_aborted.extend(txns);
         self.pending_aborted
-            .sort_by_key(|txn| std::cmp::Reverse(txn.start_offset));
+            .sort_by_key(|txn| Reverse(txn.start_offset));
     }
 
     /// Take the aborted transactions whose abort marker the pass has kept since
     /// the last call. The rewrite writes them as the output's `.txnindex`.
-    pub fn take_cleaned_index(&mut self) -> Vec<AbortedTxn> {
-        std::mem::take(&mut self.cleaned_index)
-    }
+    pub fn take_cleaned_index(&mut self) -> Vec<AbortedTxn> { mem::take(&mut self.cleaned_index) }
 
     /// Move every aborted transaction that starts at or before `offset` from
     /// the pending list to the ongoing ones. A producer has one open

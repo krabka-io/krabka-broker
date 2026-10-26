@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use {
     krabka_docgen::schema_md::{render_field_table, render_sectioned_field_table},
     serde_json::json,

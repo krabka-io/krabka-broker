@@ -35,7 +35,7 @@ mod tests;
 
 /// What one finished injection returns to its caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InjectionOutcome {
+pub struct InjectionOutcome {
     pub(crate) epoch: i64,
     pub(crate) cut: CutValue,
 }
@@ -76,8 +76,12 @@ impl BarrierCoordinator {
                 group: group.to_owned(),
             });
         }
-        self.inject(group, &mut entry, self.effective_timeout(timeout))
-            .await
+        let outcome = self
+            .inject(group, &mut entry, self.effective_timeout(timeout))
+            .await;
+        // The group's lock spans the injection.
+        drop(entry);
+        outcome
     }
 
     /// The fan-out deadline for one injection.

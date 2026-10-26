@@ -20,6 +20,7 @@
 //! ```text
 //! cargo test -p krabka-broker --test fetch_min_bytes_jvm -- --ignored
 //! ```
+#![cfg(test)]
 
 mod support;
 #[path = "fetch_min_bytes/wire.rs"]
@@ -31,12 +32,15 @@ use {
         wire::{HELD_AT_LEAST, min_bytes_exchange},
     },
     assert2::assert,
-    base64::Engine as _,
+    base64::{Engine as _, engine::general_purpose},
     krabka_client_core::Client,
     std::{
+        error::Error,
+        fs,
         process::Command,
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// The Kafka release krabka is compared against: the newest image
@@ -88,7 +92,7 @@ impl Oracle {
         );
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("server.properties");
-        std::fs::write(&path, properties).expect("write server.properties");
+        fs::write(&path, properties).expect("write server.properties");
         // The Apache Kafka image runs as a non-root uid, and `tempfile`
         // creates its directory as 0700, so a bind-mounted file below it is
         // otherwise present but unreadable.
@@ -97,7 +101,7 @@ impl Oracle {
             support::chmod_for_container(dir.path(), 0o755, "chmod properties directory");
             support::chmod_for_container(&path, 0o644, "chmod server.properties");
         }
-        let cluster_id = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        let cluster_id = general_purpose::URL_SAFE_NO_PAD
             .encode(uuid::Uuid::from_u128(0x0FE7_C400_0000_0000_0000_0000_0000_0001).as_bytes());
         let entry = format!(
             "/opt/kafka/bin/kafka-storage.sh format -t {cluster_id} --config /tmp/s.properties \
@@ -148,13 +152,13 @@ impl Oracle {
                  container logs:\n{}",
                 self.logs(),
             );
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            time::sleep(Duration::from_secs(1)).await;
         }
     }
 
     /// One `Metadata` request, on a connection of its own, answered only by a
     /// broker that is serving.
-    async fn metadata_probe(&self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn metadata_probe(&self) -> Result<(), Box<dyn Error>> {
         let client = Client::builder()
             .bootstrap(&self.bootstrap)
             .client_id("krabka-fetch-min-bytes")

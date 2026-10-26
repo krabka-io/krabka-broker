@@ -10,6 +10,7 @@
 //! Only the leader can put a replica back into the ISR. A follower that
 //! restarts and catches up is therefore the test: it rejoins the ISR only when
 //! the `AlterPartition` of the leader reaches the controller.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -65,7 +66,7 @@ async fn start_role_separated() -> RoleSeparated {
     )
     .await;
     dirs.push(ctrl_dir);
-    controller.wait_until_controller_leader().await;
+    controller.wait_until_controller_leader().await.unwrap();
 
     let mut brokers = Vec::with_capacity(NODES - 1);
     let mut broker_configs = Vec::with_capacity(NODES - 1);

@@ -4,6 +4,7 @@
 //! group converts it in place, and that committed offsets survive. They also
 //! verify that the broker rejects a classic group with **live members** with
 //! `GROUP_ID_NOT_FOUND` (69).
+#![cfg(test)]
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling

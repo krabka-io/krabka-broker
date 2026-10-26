@@ -10,13 +10,15 @@ use {
         error::LogError,
         io::LogIo,
         retention::{self, DirSync},
+        segment::Segment,
     },
     krabka_ids::Offset,
     krabka_units::{Time, prelude::TimeExt as _},
     std::{
         collections::hash_map::RandomState,
         hash::BuildHasher,
-        sync::Arc,
+        mem,
+        sync::{Arc, PoisonError},
         time::{Duration, Instant, SystemTime},
     },
 };
@@ -83,9 +85,6 @@ impl Log {
     ///
     /// # Errors
     /// Returns the first flush or file deletion failure.
-    ///
-    /// # Panics
-    /// Panics when the configuration lock is poisoned.
     pub fn maintain(&mut self, now: SystemTime) -> Result<(), LogError> {
         self.rollover_flusher.check()?;
         self.flush_if_due(Instant::now())?;
@@ -99,9 +98,6 @@ impl Log {
     /// # Errors
     /// Returns the first flush or checkpoint failure. The retired files then
     /// stay with the log.
-    ///
-    /// # Panics
-    /// Panics when the configuration lock is poisoned.
     pub fn maintain_deferring_deletions(
         &mut self,
         now: SystemTime,
@@ -114,12 +110,12 @@ impl Log {
 
     /// Take the retired files whose deadlines have passed, leaving the rest.
     pub fn take_due_deletions(&mut self, now: SystemTime) -> DueDeletions {
-        let (due, waiting) = std::mem::take(&mut self.pending_deletes)
+        let (due, waiting) = mem::take(&mut self.pending_deletes)
             .into_iter()
             .partition(|pending| pending.deadline <= now);
         self.pending_deletes = waiting;
         DueDeletions {
-            io: Some(self.io.clone()),
+            io: Some(Arc::clone(&self.io)),
             pending: due,
         }
     }
@@ -137,11 +133,8 @@ impl Log {
 
     /// Time until the next flush, log-start checkpoint or retired-file
     /// deadline, or `None` when idle.
-    ///
-    /// # Panics
-    /// Panics when the configuration lock is poisoned.
     #[must_use]
-    pub fn maintenance_delay(&self, now: SystemTime) -> Option<std::time::Duration> {
+    pub fn maintenance_delay(&self, now: SystemTime) -> Option<Duration> {
         self.maintenance_delay_at(now, Instant::now())
     }
 
@@ -150,7 +143,7 @@ impl Log {
         now: SystemTime,
         elapsed: Instant,
     ) -> Option<Duration> {
-        let config = self.config.read().unwrap();
+        let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
         let flush = if self.unflushed_messages == 0 {
             None
         } else if config
@@ -179,18 +172,18 @@ impl Log {
         let bound = self
             .config
             .read()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .segment_jitter
             .millis_i64_trunc()
             .min(interval.millis_i64_trunc());
-        if bound <= 0 {
+        let Some(bound) = u64::try_from(bound).ok().filter(|&bound| bound > 0) else {
             return interval;
-        }
-        let base = self
-            .active
-            .as_ref()
-            .expect("an open log has an active segment")
-            .base_offset();
+        };
+        // An open log always has an active segment; without one there is no
+        // roll to jitter.
+        let Some(base) = self.active.as_ref().map(Segment::base_offset) else {
+            return interval;
+        };
         let sample = match self.roll_jitter {
             Some(RollJitter {
                 segment_base,
@@ -205,8 +198,8 @@ impl Log {
                 sample
             }
         };
-        let bound = u64::try_from(bound).expect("the jitter bound is positive");
-        let jitter = i64::try_from(sample % bound).expect("jitter is smaller than an i64 bound");
+        // The remainder is below `bound`, which came from an `i64`.
+        let jitter = i64::try_from(sample % bound).unwrap_or(i64::MAX);
         Time::from_millis(interval.millis_i64_trunc().saturating_sub(jitter))
     }
 
@@ -214,7 +207,11 @@ impl Log {
         self.unflushed_messages = self
             .unflushed_messages
             .saturating_add(u64::try_from(delta).unwrap_or(0) + 1);
-        let threshold = self.config.read().unwrap().flush_messages;
+        let threshold = self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .flush_messages;
         if force {
             // Durable sidecars must not precede records in pending rollover jobs.
             self.rollover_flusher.finish()?;
@@ -242,17 +239,14 @@ impl Log {
     #[cfg(not(target_os = "wasi"))]
     pub(super) fn pace_writeback(&mut self, appended: usize) -> Result<(), LogError> {
         let window = {
-            let config = self.config.read().unwrap();
+            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
             if config.flush_on_append {
                 0
             } else {
                 config.writeback_window.bytes_u64()
             }
         };
-        let active = self
-            .active
-            .as_ref()
-            .expect("active segment must exist after Log::open");
+        let active = self.active.as_ref().ok_or_else(super::no_active_segment)?;
         if window == 0 || active.writes_direct() {
             self.writeback_unsynced = 0;
             return Ok(());
@@ -264,16 +258,14 @@ impl Log {
             return Ok(());
         }
         self.writeback_unsynced = 0;
-        while self.writeback_jobs.len() >= 2 {
-            let oldest = self
-                .writeback_jobs
-                .pop_front()
-                .expect("two jobs are queued");
+        while self.writeback_jobs.len() >= 2
+            && let Some(oldest) = self.writeback_jobs.pop_front()
+        {
             self.rollover_flusher.finish_through(oldest)?;
         }
         let file = active.log_file_handle();
         self.rollover_flusher
-            .submit_writeback(file, self.io.clone())?;
+            .submit_writeback(file, Arc::clone(&self.io))?;
         self.writeback_jobs
             .push_back(self.rollover_flusher.ticket());
         Ok(())
@@ -281,7 +273,7 @@ impl Log {
 
     pub(super) fn flush_if_due(&mut self, now: Instant) -> Result<(), LogError> {
         let due = {
-            let config = self.config.read().unwrap();
+            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
             self.unflushed_messages > 0
                 && (config
                     .flush_messages
@@ -299,7 +291,13 @@ impl Log {
     }
 
     pub(super) fn retire_segment(&mut self, base: Offset, now: SystemTime) -> Result<(), LogError> {
-        if self.config.read().unwrap().file_delete_delay <= Time::ZERO {
+        if self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .file_delete_delay
+            <= Time::ZERO
+        {
             return retention::delete_segment_files(&*self.io, &self.dir, base);
         }
         self.retire_files(
@@ -324,9 +322,12 @@ impl Log {
         extensions: &[&str],
         sync: DirSync,
     ) -> Result<(), LogError> {
-        let delay = self.config.read().unwrap().file_delete_delay;
-        let delay =
-            std::time::Duration::from_millis(u64::try_from(delay.millis_i64_trunc()).unwrap_or(0));
+        let delay = self
+            .config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .file_delete_delay;
+        let delay = Duration::from_millis(u64::try_from(delay.millis_i64_trunc()).unwrap_or(0));
         let deadline = now
             .checked_add(delay)
             .ok_or_else(|| LogError::InvalidArgument("file deletion deadline overflow".into()))?;

@@ -8,7 +8,9 @@
 
 use {
     crate::{broker::Broker, internal_topics::is_internal_topic},
+    krabka_log::topic_name,
     krabka_protocol::owned::streams_group_heartbeat_request::Topology,
+    std::collections::HashSet,
 };
 
 krabka_macros::required_topics! {
@@ -21,8 +23,8 @@ krabka_macros::required_topics! {
 /// `names` with every repeat dropped, in first-seen order: the dedupe of
 /// Kafka's `requiredTopics`, shared by the heartbeat and describe views of a
 /// topology.
-pub(crate) fn dedup_first_seen<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
+pub fn dedup_first_seen<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = HashSet::new();
     names
         .into_iter()
         .filter(|name| seen.insert(*name))
@@ -48,7 +50,7 @@ pub(super) fn invalid_topology_message(broker: &Broker, required: &[String]) -> 
     let invalid: Vec<&str> = required
         .iter()
         .map(String::as_str)
-        .filter(|name| krabka_log::topic_name::validate_topic_name(name).is_err())
+        .filter(|name| topic_name::validate_topic_name(name).is_err())
         .collect();
     if !invalid.is_empty() {
         return Some(format!(
@@ -63,6 +65,7 @@ pub(super) fn invalid_topology_message(broker: &Broker, required: &[String]) -> 
 mod tests {
     use {
         super::*,
+        crate::test_support,
         assert2::check,
         krabka_protocol::owned::{
             common::streams_group_heartbeat_request::topic_info::TopicInfo,
@@ -84,7 +87,7 @@ mod tests {
     fn required_topics_collects_every_kind_once_each() {
         let topology = Topology {
             epoch: 1,
-            subtopologies: vec![crate::test_support::source_to_repartition(), Subtopology {
+            subtopologies: vec![test_support::source_to_repartition(), Subtopology {
                 subtopology_id: "1".into(),
                 source_topics: vec!["orders".into()],
                 repartition_source_topics: vec![info("rp")],
@@ -97,9 +100,9 @@ mod tests {
         check!(
             required_topics(&topology)
                 == vec![
-                    "orders".to_string(),
-                    "rp".to_string(),
-                    "store-changelog".to_string(),
+                    "orders".to_owned(),
+                    "rp".to_owned(),
+                    "store-changelog".to_owned(),
                 ]
         );
     }

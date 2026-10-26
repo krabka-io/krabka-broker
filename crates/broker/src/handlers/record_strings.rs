@@ -60,10 +60,11 @@ use {
             write_share_group_state_request::WriteShareGroupStateRequest,
         },
     },
+    std::iter,
 };
 
 /// A group request whose strings a coordinator record can carry.
-pub(crate) trait RecordStrings {
+pub trait RecordStrings {
     /// The length in bytes of the longest string of the request that a
     /// coordinator record can carry: a group, member or instance id, a
     /// regular expression, a protocol type or name, a topic name, or offset
@@ -80,7 +81,7 @@ pub(crate) trait RecordStrings {
 ///
 /// Returns [`BrokerError::Protocol`] when the request does not decode, or when
 /// one of its record strings is longer than 32767 bytes.
-pub(crate) fn decode_group_request<R>(buf: &mut &[u8], version: i16) -> Result<R, BrokerError>
+pub fn decode_group_request<R>(buf: &mut &[u8], version: i16) -> Result<R, BrokerError>
 where
     R: for<'de> Decode<'de> + RecordStrings,
 {
@@ -119,7 +120,7 @@ krabka_macros::record_strings! {
         optional();
         extra {
             self.members.iter().flat_map(|member| {
-                std::iter::once(member.member_id.as_str())
+                iter::once(member.member_id.as_str())
                     .chain(member.group_instance_id.as_deref())
                     .chain(member.reason.as_deref())
             })

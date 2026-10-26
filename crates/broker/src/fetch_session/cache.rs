@@ -18,14 +18,16 @@ use {
         collections::HashMap,
         mem,
         sync::{
-            Arc, Mutex,
+            Arc, Mutex, PoisonError,
             atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering},
         },
         time::Duration,
     },
 };
 
-/// How long a session remembers a partition the client forgot. The Java
+/// How long a session remembers a partition the client forgot.
+///
+/// The Java
 /// consumer names a partition it forgot over buffered records again within a
 /// few polls, so a longer memory buys nothing there, and it only costs a
 /// consumer that unsubscribed from a busy partition early answers for that
@@ -200,13 +202,38 @@ impl FetchSessionCache {
     /// in the order the response sent them, as Kafka's
     /// `IncrementalFetchContext.updateAndGenerateResponseData` moves it. The
     /// next fetch reads the partitions that had nothing to send first.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn finalize_incremental(&self, session_id: FetchSessionId, sent: &[SentPartition]) {
-        let mut guard = self.inner.lock().expect("poisoned");
-        let Some(session) = guard.sessions.get_mut(&session_id) else {
-            return;
+        let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(session) = guard.sessions.get_mut(&session_id) {
+            session.apply_sent(sent);
+        }
+    }
+
+    /// Drops the session. The handler calls it when the request is `Close`,
+    /// which is an existing session with epoch -1, or after the handler
+    /// decides to invalidate the session by force.
+    pub fn close(&self, session_id: FetchSessionId) {
+        let removed = {
+            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            let removed = guard.sessions.remove(&session_id);
+            if removed.is_some() {
+                guard.order.remove(session_id);
+            }
+            removed
         };
+        if let Some(session) = removed {
+            self.num_sessions.fetch_sub(1, Ordering::Relaxed);
+            self.num_partitions
+                .fetch_sub(session.partitions.len(), Ordering::Relaxed);
+        }
+    }
+}
+
+impl FetchSession {
+    /// The body of [`FetchSessionCache::finalize_incremental`], run on the
+    /// session while the cache lock is held.
+    fn apply_sent(&mut self, sent: &[SentPartition]) {
+        let session = self;
         let mut last_records_position = HashMap::new();
         for (
             position,
@@ -235,15 +262,12 @@ impl FetchSessionCache {
             return;
         }
 
-        if last_records_position.len() == 1 {
-            let key = last_records_position
+        if last_records_position.len() == 1
+            && let Some(index) = last_records_position
                 .keys()
                 .next()
-                .expect("one moved partition");
-            let index = session
-                .partitions
-                .get_index_of(*key)
-                .expect("cached partition");
+                .and_then(|key| session.partitions.get_index_of(*key))
+        {
             let last = session.partitions.len() - 1;
             session.partitions.move_index(index, last);
             return;
@@ -274,21 +298,6 @@ impl FetchSessionCache {
         }
         session.partitions = retained;
     }
-
-    /// Drops the session. The handler calls it when the request is `Close`,
-    /// which is an existing session with epoch -1, or after the handler
-    /// decides to invalidate the session by force.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
-    pub fn close(&self, session_id: FetchSessionId) {
-        let mut guard = self.inner.lock().expect("poisoned");
-        if let Some(session) = guard.sessions.remove(&session_id) {
-            guard.order.remove(session_id);
-            self.num_sessions.fetch_sub(1, Ordering::Relaxed);
-            self.num_partitions
-                .fetch_sub(session.partitions.len(), Ordering::Relaxed);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -304,9 +313,10 @@ mod tests {
         },
         assert2::assert,
         krabka_protocol::{
-            owned::fetch_request::{FetchTopic, ForgottenTopic},
+            owned::fetch_request::{FetchRequest, FetchTopic, ForgottenTopic},
             primitives::uuid::Uuid as WireUuid,
         },
+        std::ops::RangeInclusive,
     };
 
     #[derive(Clone, Copy)]
@@ -315,7 +325,7 @@ mod tests {
     /// Classification applies the partition diff before the count is inspected.
     fn check_incremental_count(
         cache: &FetchSessionCache,
-        request: &krabka_protocol::owned::fetch_request::FetchRequest,
+        request: &FetchRequest,
         expected: CachedPartitionCount,
     ) {
         assert!(matches!(
@@ -329,7 +339,7 @@ mod tests {
         session_id: impl Into<RequestSessionId>,
         topics: Vec<FetchTopic>,
         forgotten: Vec<ForgottenTopic>,
-    ) -> krabka_protocol::owned::fetch_request::FetchRequest {
+    ) -> FetchRequest {
         req()
             .session_id(session_id)
             .session_epoch(1)
@@ -369,8 +379,7 @@ mod tests {
             records: false,
         }];
         cache.finalize_incremental(id, &sent);
-        let g = cache.inner.lock().unwrap();
-        let s = g.sessions.get(&id).unwrap().partitions.get(&key).unwrap();
+        let s = cache.inner.lock().unwrap().sessions[&id].partitions[&key].clone();
         assert!(s.last_high_watermark == 42);
         assert!(s.last_log_start_offset == 7);
     }
@@ -421,8 +430,7 @@ mod tests {
             .map(|key| key.partition)
             .collect();
         assert2::assert!(order == expected_order);
-        let guard = cache.inner.lock().unwrap();
-        let partitions = &guard.sessions[&id].partitions;
+        let partitions = cache.inner.lock().unwrap().sessions[&id].partitions.clone();
         for row in &sent {
             let last = sent
                 .iter()
@@ -449,7 +457,7 @@ mod tests {
     }
 
     fn cached_partitions(
-        partitions: std::ops::RangeInclusive<i32>,
+        partitions: RangeInclusive<i32>,
     ) -> Vec<(FetchSessionKey, CachedPartitionState)> {
         partitions
             .map(krabka_ids::PartitionIndex)

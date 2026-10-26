@@ -19,6 +19,7 @@ use {
     assert2::check,
     krabka_remote_storage::{LocalTieredStorage, RemoteStorageManager},
     krabka_restore::{RestoreError, restore},
+    std::fs,
     uuid::Uuid,
 };
 
@@ -139,7 +140,7 @@ async fn a_capture_restores_from_the_archive_its_source_kept_writing(
             index,
         })
     });
-    std::fs::write(&snapshot, captured).unwrap();
+    fs::write(&snapshot, captured).unwrap();
 
     let storage = LocalTieredStorage::new(fixture.archive_root.path());
     for at in after.deleted() {

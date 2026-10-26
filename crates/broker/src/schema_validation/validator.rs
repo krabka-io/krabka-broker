@@ -22,9 +22,14 @@ use {
     krabka_schema_serde::registry::RegistryClient,
     krabka_units::{Time, convert::TimeExt as _},
     lru::LruCache,
+    reqwest::{
+        header,
+        header::{HeaderMap, HeaderValue},
+    },
     std::{
         num::NonZeroUsize,
         sync::{Arc, Mutex},
+        time::Duration,
     },
 };
 
@@ -77,7 +82,7 @@ pub struct SchemaValidator {
     cache: Mutex<LruCache<u32, Cached>>,
     expire_after: Time,
     #[debug(skip)]
-    operation_timeout: std::time::Duration,
+    operation_timeout: Duration,
     /// **Security-sensitive.** `true` admits a record the broker could not
     /// validate because the registry was unreachable, which is fail-open: for
     /// the length of a registry outage, a validated topic accepts whatever it
@@ -175,14 +180,14 @@ impl SchemaValidator {
     ) -> Result<Self, SchemaValidatorError> {
         let capacity =
             NonZeroUsize::new(maximum_cache_size).ok_or(SchemaValidatorError::ZeroCache)?;
-        let mut headers = reqwest::header::HeaderMap::new();
+        let mut headers = HeaderMap::new();
         if let Some(BasicAuth { username, password }) = basic_auth {
             let encoded = STANDARD.encode(format!("{username}:{password}"));
             let mut authorization = format!("Basic {encoded}")
-                .parse::<reqwest::header::HeaderValue>()
+                .parse::<HeaderValue>()
                 .map_err(|error| SchemaValidatorError::Http(format!("basic auth: {error}")))?;
             authorization.set_sensitive(true);
-            headers.insert(reqwest::header::AUTHORIZATION, authorization);
+            headers.insert(header::AUTHORIZATION, authorization);
         }
         let http = reqwest::Client::builder()
             .timeout(http_timeout.to_std())

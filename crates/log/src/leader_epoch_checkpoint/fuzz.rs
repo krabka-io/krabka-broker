@@ -5,7 +5,7 @@
 
 use {
     super::leader_epoch_model::{Action, Cluster, Violations},
-    proptest::prelude::*,
+    proptest::{collection, prelude::*},
 };
 
 const REPLICAS: usize = 4;
@@ -30,7 +30,7 @@ proptest! {
     /// follower's epoch, and every checkpoint stays strictly increasing.
     #[test]
     fn reconciliation_holds_on_random_schedules(
-        schedule in proptest::collection::vec((0u8..8, 0usize..REPLICAS), 0..400usize),
+        schedule in collection::vec((0u8..8, 0usize..REPLICAS), 0..400usize),
     ) {
         let mut cluster = Cluster::new(REPLICAS, true);
         for (kind, replica) in schedule {

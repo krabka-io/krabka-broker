@@ -132,7 +132,7 @@ pub(super) async fn verify_producer(
                 producer_id: batch.producer_id,
                 producer_epoch: req.producer_epoch,
                 partitions: vec![TopicPartition {
-                    topic: OFFSETS_TOPIC.to_string(),
+                    topic: OFFSETS_TOPIC.to_owned(),
                     partition: PartitionIndex(offsets_partition),
                 }],
                 verify_only: !supports_epoch_bump,

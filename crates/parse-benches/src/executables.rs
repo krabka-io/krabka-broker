@@ -111,7 +111,7 @@ pub fn manifest_from_cargo_messages(
     executables.sort();
     executables.dedup();
     Ok(ExecutableManifest {
-        commit: commit.to_string(),
+        commit: commit.to_owned(),
         executables,
     })
 }
@@ -179,7 +179,7 @@ pub fn verify_pass(
     if manifest.commit != commit {
         return Err(ParseBenchesError::CommitMismatch {
             manifest: manifest.commit.clone(),
-            pass: commit.to_string(),
+            pass: commit.to_owned(),
         });
     }
     let ran = ran_executables(cargo_log, source_dir);

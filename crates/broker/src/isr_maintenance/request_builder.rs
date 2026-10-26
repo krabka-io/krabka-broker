@@ -3,8 +3,11 @@
 //! and the v2/v3 dual ISR encoding are pure functions of the metadata image.
 
 use {
-    krabka_protocol::owned::alter_partition_request::{
-        AlterPartitionRequest, BrokerState, PartitionData, TopicData,
+    krabka_protocol::{
+        owned::alter_partition_request::{
+            AlterPartitionRequest, BrokerState, PartitionData, TopicData,
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
     krabka_raft::NodeId,
 };
@@ -39,7 +42,7 @@ pub(super) fn build_alter_partition_request(
         let raw: [u8; 16] = image
             .topic(change.topic)
             .map_or([0u8; 16], |t| *t.topic_id.as_bytes());
-        krabka_protocol::primitives::uuid::Uuid(raw)
+        WireUuid(raw)
     };
 
     // `new_isr` is the v2 field (versions 2 only on the wire).
@@ -137,7 +140,7 @@ mod tests {
             broker_id: 4,
             broker_epoch: -1,
             topics: vec![TopicData {
-                topic_id: krabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes()),
+                topic_id: WireUuid(*topic_id.as_bytes()),
                 partitions: vec![PartitionData {
                     partition_index: 6,
                     leader_epoch: 12,

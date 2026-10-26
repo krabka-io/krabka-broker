@@ -11,7 +11,8 @@ use {
         ClientSecurity, KeyStore, SaslCredentials, TlsConnectorConfig, TrustStore,
     },
     krabka_security::{ListenerProtocol, SaslMechanism},
-    std::{collections::BTreeMap, path::PathBuf},
+    std::{collections::BTreeMap, io::Error, mem, path::PathBuf},
+    tokio::fs,
 };
 
 /// Kafka client properties shared by capture and offset restoration.
@@ -33,8 +34,8 @@ impl SecurityArgs {
         let Some(path) = &self.command_config else {
             return Ok(None);
         };
-        let text = tokio::fs::read_to_string(path).await.map_err(|source| {
-            BackupError::Io(std::io::Error::new(
+        let text = fs::read_to_string(path).await.map_err(|source| {
+            BackupError::Io(Error::new(
                 source.kind(),
                 format!("read command config {}: {source}", path.display()),
             ))
@@ -57,7 +58,7 @@ fn parse_properties(text: &str) -> Result<BTreeMap<String, String>, BackupError>
         if trailing % 2 == 1 {
             pending.pop();
         } else {
-            logical.push(std::mem::take(&mut pending));
+            logical.push(mem::take(&mut pending));
         }
     }
     if !pending.is_empty() {

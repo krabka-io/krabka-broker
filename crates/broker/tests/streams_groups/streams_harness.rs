@@ -16,6 +16,7 @@ use {
     krabka_client_core::Client,
     krabka_protocol::owned::{
         streams_group_describe_request::StreamsGroupDescribeRequest,
+        streams_group_describe_response::StreamsGroupDescribeResponse,
         streams_group_heartbeat_request::Topology,
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
@@ -47,10 +48,7 @@ pub fn status_codes(resp: &StreamsGroupHeartbeatResponse) -> Vec<i8> {
         .map_or_default(|v| v.iter().map(|s| s.status_code).collect())
 }
 
-pub async fn describe(
-    client: &Client,
-    group: &str,
-) -> krabka_protocol::owned::streams_group_describe_response::StreamsGroupDescribeResponse {
+pub async fn describe(client: &Client, group: &str) -> StreamsGroupDescribeResponse {
     client
         .send(StreamsGroupDescribeRequest {
             group_ids: vec![group.into()],

@@ -13,7 +13,9 @@
 use std::fmt::Debug;
 
 /// A source of monotonic internal stamps folded into a partition's
-/// `.stampindex`. The log calls [`StampSource::next_stamp`] for each
+/// `.stampindex`.
+///
+/// The log calls [`StampSource::next_stamp`] for each
 /// non-transactional batch at append time and for each pure-Kafka transaction
 /// when its commit marker is durable. A cross-domain coordinator supplies its
 /// own commit stamp, which the log folds into this source with
@@ -44,7 +46,9 @@ mod test_sources {
         std::sync::atomic::{AtomicU64, Ordering},
     };
 
-    /// A deterministic monotonic stamp source for tests. It yields `start`,
+    /// A deterministic monotonic stamp source for tests.
+    ///
+    /// It yields `start`,
     /// `start + step`, `start + 2*step`, and so on, on successive calls. The
     /// sequence is fully predictable, so tests can assert the exact stamps
     /// that a sequence of appends writes into the `.stampindex`.

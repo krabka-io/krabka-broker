@@ -151,7 +151,7 @@
     },
     "FileAuthorizationConfig": {
       "additionalProperties": false,
-      "description": "TOML shape of `[authorization]`. `type` (renamed to `authz_type` on\nthe Rust side to avoid shadowing the keyword) defaults to\n`AllowAll`; `super_users` is the principal bypass list consulted by\nevery concrete authorizer impl.\n\nOmitting the whole block leaves the cluster with no authorizer, which is\nwhat Kafka has when `authorizer.class.name` is unset: every principal is\nallowed everything, and the ACL administration RPCs -- `DescribeAcls`,\n`CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) rather\nthan an empty listing or a stored binding nothing would consult.\n`kafka-acls` reports that refusal.\n\n`deny_unknown_fields` so a misspelled `super_user` typo at the top\nof the `[authorization]` block is rejected at parse time rather\nthan silently producing the wrong authorizer.",
+      "description": "TOML shape of `[authorization]`.\n\n`type` (renamed to `authz_type` on\nthe Rust side to avoid shadowing the keyword) defaults to\n`AllowAll`; `super_users` is the principal bypass list consulted by\nevery concrete authorizer impl.\n\nOmitting the whole block leaves the cluster with no authorizer, which is\nwhat Kafka has when `authorizer.class.name` is unset: every principal is\nallowed everything, and the ACL administration RPCs -- `DescribeAcls`,\n`CreateAcls` and `DeleteAcls` -- answer `SECURITY_DISABLED` (54) rather\nthan an empty listing or a stored binding nothing would consult.\n`kafka-acls` reports that refusal.\n\n`deny_unknown_fields` so a misspelled `super_user` typo at the top\nof the `[authorization]` block is rejected at parse time rather\nthan silently producing the wrong authorizer.",
       "properties": {
         "allow_everyone_if_no_acl_found": {
           "default": false,
@@ -240,7 +240,7 @@
       "type": "object"
     },
     "FileClientAuthMode": {
-      "description": "Whether a TLS listener asks for and requires a client certificate,\nKafka's `ssl.client.auth`. `Disabled` is the default and never asks;\n`Optional` asks and accepts a connection that presents none; `Required`\nrejects a connection that presents none. `Optional` and `Required` both\nneed a `client_ca_path`.",
+      "description": "Whether a TLS listener asks for and requires a client certificate,\nKafka's `ssl.client.auth`.\n\n`Disabled` is the default and never asks;\n`Optional` asks and accepts a connection that presents none; `Required`\nrejects a connection that presents none. `Optional` and `Required` both\nneed a `client_ca_path`.",
       "enum": [
         "Disabled",
         "Optional",
@@ -605,7 +605,7 @@
       "type": "object"
     },
     "FileOAuthBearerConfig": {
-      "description": "TOML shape of `[oauthbearer]`. Maps to\n[`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri`\nselects the signed-JWT validator; setting\n`introspection_endpoint_uri` selects the RFC 7662 introspection\nvalidator; the two endpoint URIs are mutually\nexclusive. With neither set, the unsecured-JWS validator\n(development only) is used, and that fallback is rejected at\nconfig-load unless `allow_unsecured = true`.",
+      "description": "TOML shape of `[oauthbearer]`.\n\nMaps to\n[`krabka_security::OAuthBearerValidator`]. Setting `jwks_endpoint_uri`\nselects the signed-JWT validator; setting\n`introspection_endpoint_uri` selects the RFC 7662 introspection\nvalidator; the two endpoint URIs are mutually\nexclusive. With neither set, the unsecured-JWS validator\n(development only) is used, and that fallback is rejected at\nconfig-load unless `allow_unsecured = true`.",
       "properties": {
         "allow_unsecured": {
           "description": "Opt-in for the unsecured-JWS (`alg:none`) development\nvalidator. Default false. With neither `jwks_endpoint_uri` nor\n`introspection_endpoint_uri` set and a listener enabling\n`OAUTHBEARER`, the broker refuses to start rather than silently\ntrusting unsigned tokens; set this to true to accept that\nfallback in development. Never set it in production.",
@@ -789,7 +789,7 @@
     },
     "FileOpaConfig": {
       "additionalProperties": false,
-      "description": "TOML shape of `[authorization.opa]`. Mirrors the constructor\narguments of [`crate::authorizer::opa::OpaAuthorizer::new`]. Defaults\nare picked to match Strimzi's `KafkaAuthorizationOpa` (`50_000` LRU\nentries, 1 h TTL, fail-closed on OPA error).",
+      "description": "TOML shape of `[authorization.opa]`.\n\nMirrors the constructor\narguments of [`crate::authorizer::opa::OpaAuthorizer::new`]. Defaults\nare picked to match Strimzi's `KafkaAuthorizationOpa` (`50_000` LRU\nentries, 1 h TTL, fail-closed on OPA error).",
       "properties": {
         "allow_on_error": {
           "default": false,

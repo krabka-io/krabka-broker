@@ -17,14 +17,19 @@ use {
         broker::Broker,
         handlers::{RequestContext, test_support as handler_fixture_support},
         test_support::{
-            self as broker_fixture_support, KafkaErrorCode, dispatch_wire,
-            start_broker_with_authorizer as start_broker,
+            self as broker_fixture_support, BrokerEpoch, KafkaErrorCode, WireBrokerId,
+            dispatch_wire, start_broker_with_authorizer as start_broker,
         },
     },
     assert2::assert,
-    krabka_protocol::owned::{
-        alter_partition_request::{PartitionData as ReqPartitionData, TopicData as ReqTopicData},
-        alter_partition_response,
+    krabka_protocol::{
+        owned::{
+            alter_partition_request::{
+                API_KEY, PartitionData as ReqPartitionData, TopicData as ReqTopicData,
+            },
+            alter_partition_response,
+        },
+        primitives::uuid::Uuid,
     },
 };
 
@@ -227,8 +232,8 @@ async fn topic_row_error_follows_version_and_topic_id() {
     for (version, kind) in cases {
         let topic_id = match kind {
             TopicIdKind::Known => wire_topic_id(),
-            TopicIdKind::Unknown => krabka_protocol::primitives::uuid::Uuid([0x0b; 16]),
-            TopicIdKind::Zero => krabka_protocol::primitives::uuid::Uuid::ZERO,
+            TopicIdKind::Unknown => Uuid([0x0b; 16]),
+            TopicIdKind::Zero => Uuid::ZERO,
         };
         // v2 carries `new_isr`, and v3 carries `new_isr_with_epochs`. An epoch
         // of -1 skips the KIP-903 broker epoch check.
@@ -236,10 +241,7 @@ async fn topic_row_error_follows_version_and_topic_id() {
             partition_index,
             leader_epoch: 5,
             new_isr: vec![1],
-            new_isr_with_epochs: vec![super::test_support::bs(
-                crate::test_support::WireBrokerId(1),
-                crate::test_support::BrokerEpoch(-1),
-            )],
+            new_isr_with_epochs: vec![super::test_support::bs(WireBrokerId(1), BrokerEpoch(-1))],
             partition_epoch,
             ..Default::default()
         };
@@ -248,14 +250,7 @@ async fn topic_row_error_follows_version_and_topic_id() {
             partitions: vec![row(0), row(1)],
             ..Default::default()
         }]);
-        let resp = dispatch_wire(
-            &broker,
-            krabka_protocol::owned::alter_partition_request::API_KEY,
-            version,
-            &req,
-            &ctx,
-        )
-        .await;
+        let resp = dispatch_wire(&broker, API_KEY, version, &req, &ctx).await;
         actual.push((version, kind, resp));
 
         let refused = |partition_index, error_code| RespPartitionData {
@@ -327,8 +322,8 @@ async fn a_stale_sender_broker_epoch_refuses_the_whole_request() {
                     partition_index: 0,
                     leader_epoch: 5,
                     new_isr_with_epochs: vec![super::test_support::bs(
-                        crate::test_support::WireBrokerId(1),
-                        crate::test_support::BrokerEpoch(-1),
+                        WireBrokerId(1),
+                        BrokerEpoch(-1),
                     )],
                     ..Default::default()
                 }],

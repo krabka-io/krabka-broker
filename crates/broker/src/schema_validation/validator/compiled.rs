@@ -19,12 +19,13 @@ use {
         Schema as AvroSchema,
         reader::datum::{GenericDatumReader, GenericDatumReaderBuilder},
     },
+    jsonschema::uri,
     krabka_schema_serde::{error::SchemaSerdeError, subject::SchemaKind},
     prost_reflect::{
         DescriptorPool, DynamicMessage, FileDescriptor, MessageDescriptor,
         prost_types::FileDescriptorSet,
     },
-    std::collections::HashMap,
+    std::{collections::HashMap, error::Error},
 };
 
 /// The name the root `.proto` file is parsed under, as
@@ -257,7 +258,7 @@ fn build_json_validator(
     writer: &serde_json::Value,
     references: &HashMap<String, String>,
 ) -> Result<jsonschema::Validator, String> {
-    let base_uri = jsonschema::uri::from_str(
+    let base_uri = uri::from_str(
         writer
             .get("$id")
             .and_then(serde_json::Value::as_str)
@@ -268,7 +269,7 @@ fn build_json_validator(
         .iter()
         .map(|(name, source)| {
             let schema = serde_json::from_str(source).map_err(|error| error.to_string())?;
-            let uri = jsonschema::uri::resolve_against(&base_uri.borrow(), name)
+            let uri = uri::resolve_against(&base_uri.borrow(), name)
                 .map_err(|error| error.to_string())?;
             Ok((uri.to_string(), schema))
         })
@@ -304,7 +305,7 @@ impl jsonschema::Retrieve for CachedJsonSchemas {
     fn retrieve(
         &self,
         uri: &jsonschema::Uri<String>,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<serde_json::Value, Box<dyn Error + Send + Sync>> {
         self.0.get(uri.as_str()).cloned().ok_or_else(|| {
             format!("JSON Schema reference {uri} is not present in the registry cache").into()
         })
@@ -382,7 +383,7 @@ mod tests {
         // The validator is built after the body parses, so a body that is not
         // JSON is what this reports.
         unbuildable_schema_and_bad_body = { DANGLING_JSON, b"plain text", Outcome::Deserialize },
-        unbuildable_schema = { DANGLING_JSON, br"{}", Outcome::Schema },
+        unbuildable_schema = { DANGLING_JSON, b"{}", Outcome::Schema },
     )]
     fn json_failures_surface_in_the_order_the_check_reads_them(
         schema: &str,

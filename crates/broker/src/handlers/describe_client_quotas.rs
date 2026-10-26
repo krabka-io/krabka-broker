@@ -100,7 +100,7 @@ fn validate_filter(components: &[ComponentData]) -> Result<(), FilterError> {
     Ok(())
 }
 
-pub(crate) fn handle(
+pub fn handle(
     broker: &Broker,
     req: &DescribeClientQuotasRequest,
     version: i16,
@@ -112,7 +112,7 @@ pub(crate) fn handle(
 
 /// Build the response from the metadata and authorization capabilities this
 /// read actually needs. The registry adapter above owns broker access.
-pub(crate) fn respond(
+pub fn respond(
     image: &MetadataImage,
     authorizer: &dyn Authorizer,
     req: &DescribeClientQuotasRequest,
@@ -196,13 +196,13 @@ pub(crate) fn respond(
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum QuotaEntityScope {
+pub enum QuotaEntityScope {
     ExactTypes,
     #[default]
     IncludeAdditionalTypes,
 }
 
-pub(crate) fn entity_matches_filter(
+pub fn entity_matches_filter(
     stored: &EntityKey,
     components: &[ComponentData],
     scope: QuotaEntityScope,
@@ -234,7 +234,7 @@ mod tests {
         crate::{
             authorizer::AllowAllAuthorizer,
             broker::BrokerHandle,
-            quota::test_support::{QuotaEntityInput, QuotaRecordSetup, QuotaValue},
+            quota::test_support::{QuotaEntityInput, QuotaRecordSetup, QuotaValue, quota_record},
         },
         assert2::{assert, check},
         krabka_metadata::MetadataRecord,
@@ -341,12 +341,15 @@ mod tests {
         test_context ["admin-client"];
     }
 
-    use crate::{
-        handlers::test_support::start_empty_acl_broker,
-        test_support::{
-            describe_configs_acl_cases, grant_optional_cluster_operation,
-            start_broker_with_authorizer_no_audit as start_broker,
+    use {
+        crate::{
+            handlers::test_support::start_empty_acl_broker,
+            test_support::{
+                describe_configs_acl_cases, grant_optional_cluster_operation,
+                start_broker_with_authorizer_no_audit as start_broker,
+            },
         },
+        std::collections::HashMap,
     };
 
     async fn seed_quota(handle: &BrokerHandle, setup: QuotaRecordSetup<'_>) {
@@ -354,7 +357,7 @@ mod tests {
             .broker_arc_for_test()
             .controller
             .submit_change(vec![MetadataRecord::V1ClientQuota(
-                crate::quota::test_support::quota_record()
+                quota_record()
                     .entity(setup.entity)
                     .key(setup.key)
                     .value(setup.value)
@@ -589,7 +592,7 @@ mod tests {
         assert!(entries.len() == 1, "{entries:?}");
         let entry = &entries[0];
         assert!(entry.entity.len() == 2, "{entry:?}");
-        let by_type: std::collections::HashMap<_, _> = entry
+        let by_type: HashMap<_, _> = entry
             .entity
             .iter()
             .map(|e| (e.entity_type.as_str(), e.entity_name.as_deref()))

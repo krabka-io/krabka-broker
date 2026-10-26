@@ -1,4 +1,4 @@
-use {super::*, assert2::assert};
+use {super::*, assert2::assert, proptest::collection};
 
 pub(super) struct TimePrefix {
     pub(super) count: usize,
@@ -67,9 +67,9 @@ fn check(entries: &[TimeEntry], offsets: &[u32], times: &[i64], max: i64, min: u
 proptest! {
     #[test]
     fn checked_time_scan_rejects_exactly_invalid_decoded_inputs(
-        rows in proptest::collection::vec((any::<i64>(), any::<u32>()).prop_map(|(key, coordinate)| TimeEntry::new(key, coordinate)), 0..8),
-        offsets in proptest::collection::vec(any::<u32>(), 0..8),
-        times in proptest::collection::vec(any::<i64>(), 0..8),
+        rows in collection::vec((any::<i64>(), any::<u32>()).prop_map(|(key, coordinate)| TimeEntry::new(key, coordinate)), 0..8),
+        offsets in collection::vec(any::<u32>(), 0..8),
+        times in collection::vec(any::<i64>(), 0..8),
         max in any::<i64>(), min in any::<u32>(), target in any::<i64>(),
     ) {
         check(&rows, &offsets, &times, max, min, target);
@@ -77,7 +77,7 @@ proptest! {
 
     #[test]
     fn validated_time_scan_matches_complete_retained_record_oracle(
-        records in proptest::collection::btree_map(any::<u32>(), any::<i64>(), 0..24),
+        records in collection::btree_map(any::<u32>(), any::<i64>(), 0..24),
         min in any::<u32>(), target in any::<i64>(), step in 1usize..8,
     ) {
         let IndexedTimestampRecords { offsets, timestamps: times, entries: rows } = indexed_timestamp_records(&records, step);

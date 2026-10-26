@@ -8,8 +8,11 @@ use {
     },
     assert2::{assert, check},
     krabka_raft::NodeId,
-    std::net::SocketAddr,
-    tokio::net::TcpListener,
+    std::{
+        collections::BTreeSet, future::Future, net::SocketAddr, path::Path, pin::Pin, ptr,
+        time::Duration,
+    },
+    tokio::{net::TcpListener, sync::watch, task, time},
 };
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -33,7 +36,7 @@ struct StaticVoter {
 
 #[bon::builder]
 fn static_voter_test_config(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     #[builder(into, default = NodeId (1))] node_id: NodeId,
     #[builder(default = SocketAddr :: from (([127 , 0 , 0 , 1] , 0)))] listen_addr: SocketAddr,
     #[builder(default = SocketAddr :: from (([127 , 0 , 0 , 1] , 0)))] controller_addr: SocketAddr,
@@ -106,36 +109,25 @@ async fn broker_handle_reports_non_default_node_and_voter_state() {
         .controller_addr(controller8)
         .voters(&voters)
         .call();
-    let start = Box::pin(tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        async {
-            tokio::try_join!(
-                Broker::start_with_listeners(
-                    config7,
-                    Some(controller_listener7),
-                    Some(data_listener7),
-                ),
-                Broker::start_with_listeners(
-                    config8,
-                    Some(controller_listener8),
-                    Some(data_listener8),
-                ),
-            )
-        },
-    ));
+    let start = Box::pin(time::timeout(Duration::from_secs(10), async {
+        tokio::try_join!(
+            Broker::start_with_listeners(config7, Some(controller_listener7), Some(data_listener7),),
+            Broker::start_with_listeners(config8, Some(controller_listener8), Some(data_listener8),),
+        )
+    }));
     let (handle7, handle8) = start
         .await
         .expect("two-voter brokers started before timeout")
         .expect("two-voter broker start");
 
-    let leader = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    let leader = time::timeout(Duration::from_secs(10), async {
         loop {
             if let Some(leader) = handle7.controller_leader_id()
                 && leader != krabka_raft::NodeId(0)
             {
                 return leader;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
@@ -151,22 +143,22 @@ async fn broker_handle_reports_non_default_node_and_voter_state() {
         handle7
             .quorum_voters_for_test()
             .into_iter()
-            .collect::<std::collections::BTreeSet<_>>()
+            .collect::<BTreeSet<_>>()
             == [krabka_raft::NodeId(7), krabka_raft::NodeId(8)]
                 .into_iter()
-                .collect::<std::collections::BTreeSet<_>>()
+                .collect::<BTreeSet<_>>()
     );
     check!(handle7.voter_count_for_test() == 2);
     check!(
         handle7.voter_ids_for_test()
             == [krabka_raft::NodeId(7), krabka_raft::NodeId(8)]
                 .into_iter()
-                .collect::<std::collections::BTreeSet<_>>()
+                .collect::<BTreeSet<_>>()
     );
 
     // The multi-thread test runtime aborts remaining tasks on exit if raft
     // shutdown takes longer than the helper assertions above.
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    let _ = time::timeout(Duration::from_secs(5), async {
         tokio::join!(handle7.shutdown(), handle8.shutdown());
     })
     .await;
@@ -176,7 +168,7 @@ async fn broker_handle_reports_non_default_node_and_voter_state() {
 async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
     struct PendingWait<'a> {
         name: &'a str,
-        wait: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>,
+        wait: Pin<Box<dyn Future<Output = ()> + 'a>>,
     }
     struct LeaderChangedCase<'a> {
         topic: &'a str,
@@ -193,7 +185,7 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
         broker: handle,
         dir: _dir,
     } = start_broker_with(|_| {}).await;
-    let timeout = std::time::Duration::from_millis(75);
+    let timeout = Duration::from_millis(75);
     let topic_id = uuid::Uuid::from_u128(0xFEED);
 
     // Every wait helper must still be pending (time out) while its
@@ -277,7 +269,7 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
     ];
     for PendingWait { name, wait } in pending_waits {
         assert!(
-            tokio::time::timeout(timeout, wait).await.is_err(),
+            time::timeout(timeout, wait).await.is_err(),
             "{name} resolved while its condition was unmet"
         );
     }
@@ -346,7 +338,7 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
             .call()
             .await;
         assert!(
-            tokio::time::timeout(
+            time::timeout(
                 timeout,
                 handle.wait_until_partition_leader_changed(topic, 0, krabka_raft::NodeId(excluded)),
             )
@@ -375,7 +367,7 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
         .call()
         .await;
     assert!(
-        tokio::time::timeout(
+        time::timeout(
             timeout,
             handle.wait_until_isr_len("isr-len-mutant-topic", 0, 1)
         )
@@ -390,8 +382,7 @@ async fn wait_helpers_remain_pending_until_their_conditions_are_met() {
 /// started it, so a failing suite says which of its waits stuck.
 #[tokio::test(start_paused = true)]
 async fn an_image_wait_that_never_holds_names_its_caller() {
-    let (_tx, rx) =
-        tokio::sync::watch::channel(Arc::new(krabka_metadata::MetadataImage::default()));
+    let (_tx, rx) = watch::channel(Arc::new(krabka_metadata::MetadataImage::default()));
     let line = line!() + 1;
     let waiting = image_awaiter(rx, |_| false);
 
@@ -416,18 +407,18 @@ async fn an_image_wait_that_never_holds_names_its_caller() {
 /// closed channel ends it too: the sender goes away only at broker shutdown.
 #[tokio::test(start_paused = true)]
 async fn an_image_wait_ends_on_a_matching_image_or_a_closed_channel() {
-    let (tx, rx) = tokio::sync::watch::channel(Arc::new(krabka_metadata::MetadataImage::default()));
+    let (tx, rx) = watch::channel(Arc::new(krabka_metadata::MetadataImage::default()));
     let awaited = Arc::new(krabka_metadata::MetadataImage::default());
     let awaited_addr = Arc::as_ptr(&awaited).addr();
     let waiting = tokio::spawn(image_awaiter(rx, move |image| {
-        std::ptr::from_ref(image).addr() == awaited_addr
+        ptr::from_ref(image).addr() == awaited_addr
     }));
-    tokio::task::yield_now().await;
+    task::yield_now().await;
     assert!(!waiting.is_finished());
     tx.send(awaited).expect("the wait holds the receiver");
     assert!(waiting.await.expect("the wait task") == Ok(()));
 
-    let (tx, rx) = tokio::sync::watch::channel(Arc::new(krabka_metadata::MetadataImage::default()));
+    let (tx, rx) = watch::channel(Arc::new(krabka_metadata::MetadataImage::default()));
     let waiting = tokio::spawn(image_awaiter(rx, |_| false));
     drop(tx);
     assert!(waiting.await.expect("the wait task") == Ok(()));

@@ -43,18 +43,19 @@ mod tests;
 use {
     self::group::{Included, describe_group},
     crate::codes,
+    std::sync::Arc,
 };
 
 // cargo-mutants: streams-coordinator response projection; integration-tested.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: StreamsGroupDescribeRequest,
     _version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<StreamsGroupDescribeResponse, BrokerError> {
     let image = broker.controller.current_image();
-    let ng = broker.group_coordinator.clone();
+    let ng = Arc::clone(&broker.group_coordinator);
 
     // KIP-1071: same gate as the heartbeat — finalized streams.version >= 1
     // AND the config kill-switch. Kafka's

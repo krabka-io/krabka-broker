@@ -78,7 +78,6 @@ mod tests {
             network::addressing::api_version_for,
         },
         assert2::check,
-        bytes::Bytes,
         krabka_ids::ApiKey,
         krabka_protocol::{
             Decode,
@@ -86,7 +85,9 @@ mod tests {
                 add_raft_voter_request, api_versions_request,
                 api_versions_response::{ApiVersion as ApiVersionEntry, ApiVersionsResponse},
                 begin_quorum_epoch_request::{self, BeginQuorumEpochRequest},
-                controller_registration_request, describe_cluster_request, describe_quorum_request,
+                broker_heartbeat_request, controller_registration_request,
+                create_topics_request::API_KEY,
+                describe_cluster_request, describe_quorum_request,
                 end_quorum_epoch_request::{self, EndQuorumEpochRequest},
                 fetch_request::{self, FetchRequest},
                 fetch_snapshot_request::{self, FetchSnapshotRequest},
@@ -327,7 +328,7 @@ mod tests {
                 (advertised.min_version..=advertised.max_version).contains(&sent),
                 "{case}: header version against the advertised range"
             );
-            let body: Bytes = request.encode();
+            let body = request.encode();
             check!(
                 decodes(&body, sent),
                 "{case}: body decodes whole at the advertised version"
@@ -342,11 +343,11 @@ mod tests {
         check!(flexible_min(vote_request::API_KEY) == Some(vote_request::FLEXIBLE_MIN));
         check!(flexible_min(fetch_request::API_KEY) == Some(fetch_request::FLEXIBLE_MIN));
         check!(
-            flexible_min(krabka_protocol::owned::create_topics_request::API_KEY) == None,
+            flexible_min(API_KEY) == None,
             "CreateTopics is an Admin-router API, not a listener-owned one"
         );
         check!(
-            flexible_min(krabka_protocol::owned::broker_heartbeat_request::API_KEY) == None,
+            flexible_min(broker_heartbeat_request::API_KEY) == None,
             "BrokerHeartbeat is served by the broker's handler through the Admin              router, so its framing rule comes from the router's table"
         );
     }

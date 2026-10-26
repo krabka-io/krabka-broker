@@ -7,12 +7,17 @@ use {
         recovery::{Ack, CommitAck, CommitHistory, LoadRecord, ProducerAcks},
     },
     assert2::{assert, check},
-    std::path::Path,
+    std::{
+        fs,
+        path::{Path, PathBuf},
+        time::Duration,
+    },
+    tokio::{net::TcpListener, sync::oneshot, time},
 };
 
-fn write_contract(dir: &Path, contract: &Contract) -> std::path::PathBuf {
+fn write_contract(dir: &Path, contract: &Contract) -> PathBuf {
     let path = dir.join(format!("{}.yaml", contract.name));
-    std::fs::write(&path, serde_saphyr::to_string(contract).unwrap()).unwrap();
+    fs::write(&path, serde_saphyr::to_string(contract).unwrap()).unwrap();
     path
 }
 
@@ -108,16 +113,16 @@ fn a_load_record_reads_back_as_it_was_written() {
 fn a_load_record_that_is_not_one_is_refused_by_name() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("load.json");
-    std::fs::write(&path, "{\"run\": 7}").unwrap();
+    fs::write(&path, "{\"run\": 7}").unwrap();
     let error = read_load(&path).unwrap_err().to_string();
     check!(error.contains("parse load record"), "{error}");
 }
 
 #[tokio::test]
 async fn source_loss_interrupts_consumer_preparation() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = Endpoint::plaintext(listener.local_addr().unwrap().to_string());
-    let (accepted, connected) = tokio::sync::oneshot::channel();
+    let (accepted, connected) = oneshot::channel();
     let server = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
         accepted.send(()).unwrap();
@@ -126,8 +131,8 @@ async fn source_loss_interrupts_consumer_preparation() {
     let lost = async {
         connected.await.unwrap();
     };
-    let record = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+    let record = time::timeout(
+        Duration::from_secs(5),
         run_load(&fixture::drill(), endpoint, "test".into(), lost),
     )
     .await

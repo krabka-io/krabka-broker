@@ -1,5 +1,4 @@
-// Rust 1.95 annotate-snippets ICE on `clippy::pedantic` in test files
-// (same upstream bug as auth_handlers.rs / mtls.rs).
+#![cfg(test)]
 
 //! TLS hot-reload.
 //!
@@ -21,7 +20,16 @@ use {
     },
     assert2::assert,
     krabka_broker::Broker,
-    std::{io, path::PathBuf, sync::Arc},
+    krabka_units::{Time, convert::TimeExt},
+    rustls::crypto::aws_lc_rs,
+    std::{
+        fs, io,
+        net::SocketAddr,
+        path::{Path, PathBuf},
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::time,
 };
 
 const DEV_CERT_A: &str = include_str!("fixtures/security/dev_cert.pem");
@@ -29,9 +37,9 @@ const DEV_KEY_A: &str = include_str!("fixtures/security/dev_key.pem");
 const DEV_CERT_B: &str = include_str!("fixtures/security/dev_cert_alt.pem");
 const DEV_KEY_B: &str = include_str!("fixtures/security/dev_key_alt.pem");
 
-fn write(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
+fn write(dir: &Path, name: &str, body: &str) -> PathBuf {
     let p = dir.join(name);
-    std::fs::write(&p, body).unwrap();
+    fs::write(&p, body).unwrap();
     p
 }
 
@@ -52,7 +60,6 @@ fn cert_der_from_pem(pem: &str) -> CertificateDer<'static> {
         .next()
         .expect("at least one cert in fixture")
         .expect("cert parses")
-        .clone()
 }
 
 /// Tries a TLS handshake against `addr` and verifies the server cert against
@@ -60,7 +67,7 @@ fn cert_der_from_pem(pem: &str) -> CertificateDer<'static> {
 /// other case. Only the completed negotiation matters, so it drops the
 /// connection at once afterwards.
 async fn handshake_against(
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
     pinned: CertificateDer<'static>,
 ) -> Result<(), io::Error> {
     let client_cfg = pinned_client_config(pinned);
@@ -76,7 +83,7 @@ async fn handshake_against(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reload_tls_swaps_served_cert() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
 
     let CertFixture {
         log_dir: _log_dir,
@@ -88,7 +95,7 @@ async fn reload_tls_swaps_served_cert() {
     // Disable the periodic watcher; this test drives reloads via the
     // explicit `BrokerHandle::reload_tls()` so it doesn't depend on
     // poll-tick timing.
-    cfg.tls_reload_interval = <krabka_units::Time as krabka_units::convert::TimeExt>::ZERO;
+    cfg.tls_reload_interval = <Time as TimeExt>::ZERO;
 
     let handle = Broker::start(cfg).await.expect("broker start");
     let addr = handle.listen_addr();
@@ -110,8 +117,8 @@ async fn reload_tls_swaps_served_cert() {
     // Overwrite the cert files with cert B and trigger an immediate
     // reload. The periodic watcher is disabled, so without this call
     // the broker would keep serving cert A indefinitely.
-    std::fs::write(&cert_path, DEV_CERT_B).unwrap();
-    std::fs::write(&key_path, DEV_KEY_B).unwrap();
+    fs::write(&cert_path, DEV_CERT_B).unwrap();
+    fs::write(&key_path, DEV_KEY_B).unwrap();
     handle.reload_tls().expect("reload_tls must succeed");
 
     // After reload: cert B is served. Now the verifiers flip.
@@ -132,7 +139,7 @@ async fn reload_tls_swaps_served_cert() {
 /// The test uses a 100 ms tick to stay fast.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn periodic_watcher_reloads_on_mtime_change() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
 
     let mut fixture = cert_fixture();
     fixture.cfg.tls_reload_interval = krabka_units::millis(100);
@@ -150,26 +157,26 @@ async fn periodic_watcher_reloads_on_mtime_change() {
     // is 1s).
     // intentional: mtime-resolution deadline is the behavior under test; no broker
     // image/metric signal reflects on-disk mtime.
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    std::fs::write(&cert_path, DEV_CERT_B).unwrap();
-    std::fs::write(&key_path, DEV_KEY_B).unwrap();
+    time::sleep(Duration::from_millis(1100)).await;
+    fs::write(&cert_path, DEV_CERT_B).unwrap();
+    fs::write(&key_path, DEV_KEY_B).unwrap();
 
     // Poll up to 5s for the watcher to pick up the change. Each
     // attempt is a fresh TCP+TLS handshake — keep going until cert B
     // is served.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if handshake_against(addr, cert_b.clone()).await.is_ok() {
             break;
         }
         assert!(
-            std::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "watcher never reloaded within 5s",
         );
         // intentional: the periodic mtime-polling reload is the behavior under test;
         // "cert B is served" is observable only via a live handshake, not any broker
         // metadata-image or metric, so keep the bounded handshake-retry poll.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 
     handle.shutdown().await;
@@ -180,8 +187,8 @@ async fn periodic_watcher_reloads_on_mtime_change() {
 struct CertFixture {
     log_dir: tempfile::TempDir,
     pem_dir: tempfile::TempDir,
-    cert_path: std::path::PathBuf,
-    key_path: std::path::PathBuf,
+    cert_path: PathBuf,
+    key_path: PathBuf,
     cfg: krabka_broker::BrokerConfig,
 }
 

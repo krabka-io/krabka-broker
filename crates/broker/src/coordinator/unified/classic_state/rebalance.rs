@@ -11,6 +11,7 @@ use {
     bytes::Bytes,
     std::{
         collections::HashMap,
+        mem,
         time::{Duration, Instant},
     },
 };
@@ -144,7 +145,7 @@ impl ClassicGroup {
             self.pending_sync_members.clear();
             return Vec::new();
         }
-        let mut removed: Vec<String> = std::mem::take(&mut self.pending_sync_members)
+        let mut removed: Vec<String> = mem::take(&mut self.pending_sync_members)
             .into_iter()
             .filter(|id| self.members.contains_key(id))
             .collect();
@@ -213,19 +214,19 @@ impl ClassicGroup {
     /// Completes the rebalance. The current leader stays if it is still a
     /// member, as Kafka's leader does. A group with no leader takes the
     /// smallest member id. It then raises the generation and advances the
-    /// state.
+    /// state. It returns `false`, and changes nothing, when the generation is
+    /// exhausted or the group has no member.
     pub fn complete_rebalance(&mut self, protocol_name: impl Into<String>) -> bool {
         let Some(generation_id) = next_i32(self.generation_id) else {
             return false;
         };
         let leader = match self.leader_id.as_deref() {
-            Some(leader) if self.members.contains_key(leader) => leader.to_string(),
-            _ => self
-                .members
-                .keys()
-                .min()
-                .cloned()
-                .expect("complete_rebalance requires ≥1 member"),
+            Some(leader) if self.members.contains_key(leader) => leader.to_owned(),
+            _ => match self.members.keys().min() {
+                Some(smallest) => smallest.clone(),
+                // A group with no member has no leader to complete with.
+                None => return false,
+            },
         };
         self.leader_id = Some(leader);
         self.protocol_name = Some(protocol_name.into());
@@ -274,6 +275,7 @@ mod tests {
             member_with_protocols, sample_member,
         },
         assert2::{assert, check},
+        std::collections::HashSet,
     };
 
     #[test]
@@ -390,12 +392,12 @@ mod tests {
     fn pending_sync_is_armed_per_generation_and_cleared_as_members_sync() {
         let now = Instant::now();
         let mut g = completed_round(now);
-        let both = std::collections::HashSet::from(["m1".to_string(), "m2".to_string()]);
+        let both = HashSet::from(["m1".to_owned(), "m2".to_owned()]);
         check!(g.pending_sync_members == both);
         check!(g.sync_deadline == Some(now + Duration::from_secs(90)));
 
         g.remove_pending_sync_member("m1");
-        check!(g.pending_sync_members == std::collections::HashSet::from(["m2".to_string()]));
+        check!(g.pending_sync_members == HashSet::from(["m2".to_owned()]));
         check!(g.sync_deadline.is_some());
 
         g.remove_pending_sync_member("m2");
@@ -530,7 +532,7 @@ mod tests {
             for id in ["m1", "m2", "m3"] {
                 g.members.insert(id.into(), sample_member(id));
             }
-            g.leader_id = leader.map(str::to_string);
+            g.leader_id = leader.map(str::to_owned);
             for id in joined {
                 g.mark_awaiting_join(id);
             }

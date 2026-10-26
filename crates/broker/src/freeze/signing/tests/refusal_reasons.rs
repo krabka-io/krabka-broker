@@ -17,6 +17,7 @@ use {
     assert2::check,
     krabka_metadata::TopicFreezeRecord,
     krabka_units::{convert::TimeExt as _, minutes},
+    std::collections::BTreeSet,
 };
 
 /// The refusal reasons are what the response message reads, so each one
@@ -99,6 +100,6 @@ fn each_refusal_names_its_own_check_under_one_code() {
         );
         messages.push(expected.message());
     }
-    let unique: std::collections::BTreeSet<&str> = messages.iter().copied().collect();
+    let unique: BTreeSet<&str> = messages.iter().copied().collect();
     check!(unique.len() == messages.len());
 }

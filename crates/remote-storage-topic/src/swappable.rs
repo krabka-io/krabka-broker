@@ -25,7 +25,7 @@ use {
         RemoteLogMetadataManager, RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate,
         RemotePartitionDeleteMetadata, RemoteStorageError, TopicIdPartition,
     },
-    std::sync::{Arc, RwLock},
+    std::sync::{Arc, PoisonError, RwLock},
 };
 
 /// Hot-swappable [`RemoteLogMetadataManager`] wrapper.
@@ -45,13 +45,8 @@ impl SwappableRlmm {
 
     /// Replace the backing implementation. The next trait call
     /// observes the new one.
-    /// # Panics
-    /// Panics if the backing-implementation lock is poisoned.
     pub fn swap(&self, new: Arc<dyn RemoteLogMetadataManager>) {
-        *self
-            .inner
-            .write()
-            .expect("SwappableRlmm write lock poisoned") = new;
+        *self.inner.write().unwrap_or_else(PoisonError::into_inner) = new;
     }
 
     /// Snapshot the current inner [`Arc`] and do not hold the read lock past
@@ -59,7 +54,7 @@ impl SwappableRlmm {
     fn current(&self) -> Arc<dyn RemoteLogMetadataManager> {
         self.inner
             .read()
-            .expect("SwappableRlmm read lock poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 }
@@ -143,7 +138,7 @@ mod tests {
     fn delegates_to_initial_then_to_swapped() {
         let first: Arc<dyn RemoteLogMetadataManager> =
             Arc::new(InmemoryRemoteLogMetadataManager::new());
-        let swap = SwappableRlmm::new(first.clone());
+        let swap = SwappableRlmm::new(Arc::clone(&first));
 
         // Write through the facade lands in `first`.
         swap.add_remote_log_segment_metadata(started(10, 0, 99))
@@ -154,7 +149,7 @@ mod tests {
         // (empty) one, not the original.
         let second: Arc<dyn RemoteLogMetadataManager> =
             Arc::new(InmemoryRemoteLogMetadataManager::new());
-        swap.swap(second.clone());
+        swap.swap(Arc::clone(&second));
         assert!(swap.list_remote_log_segments(&tp()).unwrap().is_empty());
         // The previous `first` is undisturbed — the facade just stopped
         // pointing at it.

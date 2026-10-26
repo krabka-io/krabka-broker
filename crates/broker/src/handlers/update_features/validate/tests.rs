@@ -12,8 +12,9 @@ use {
         test_support::broker_registration,
     },
     assert2::assert,
-    krabka_metadata::NodeId,
+    krabka_metadata::{NodeId, krabka_version},
     krabka_raft::UnstableFeatureVersions,
+    std::collections::BTreeMap,
 };
 
 /// The local controller at the defaults: `unstable.feature.versions.enable`
@@ -28,7 +29,7 @@ const UNSAFE: i8 = 3;
 
 #[derive(derive_more::From, derive_more::Into)]
 /// The advertised feature ranges are wire data, including unsupported levels.
-struct RegisteredFeatureRanges(std::collections::BTreeMap<String, (i16, i16)>);
+struct RegisteredFeatureRanges(BTreeMap<String, (i16, i16)>);
 
 impl Default for RegisteredFeatureRanges {
     fn default() -> Self { Self(krabka_metadata::supported_feature_ranges()) }
@@ -598,7 +599,7 @@ fn assert_planned<const N: usize>(cases: [PlanCase<'_>; N]) {
 /// `metadata changed` check applies outside `metadata.version`.
 #[test]
 fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
-    let kv = krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE;
+    let kv = krabka_version::KRABKA_VERSION_FEATURE;
     let mv = "metadata.version";
     let with_broker = |levels: &[FeatureLevel<'_>], range| {
         let image = image(levels);
@@ -756,8 +757,8 @@ fn krabka_version_finalizes_as_kafka_finalizes_a_non_metadata_feature() {
 /// every broker that supports level 2 reads reservations at every level.
 #[test]
 fn krabka_version_reservation_level_finalizes_only_when_every_broker_supports_it() {
-    let kv = krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE;
-    let level = krabka_metadata::krabka_version::DISKLESS_OBJECT_RESERVATION_LEVEL;
+    let kv = krabka_version::KRABKA_VERSION_FEATURE;
+    let level = krabka_version::DISKLESS_OBJECT_RESERVATION_LEVEL;
     let mv = FeatureLevel {
         name: "metadata.version",
         level: 30,

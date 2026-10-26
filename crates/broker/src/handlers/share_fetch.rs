@@ -30,6 +30,8 @@
 
 #[cfg(test)]
 use krabka_protocol::owned::share_fetch_request::{AcknowledgementBatch, FetchTopic};
+#[cfg(test)]
+use krabka_protocol::primitives::uuid::Uuid;
 use {
     crate::{
         broker::Broker,
@@ -115,7 +117,7 @@ fn test_fetch_request(
         batch_size: max_records,
         is_renew_ack,
         topics: vec![FetchTopic {
-            topic_id: krabka_protocol::primitives::uuid::Uuid(topic_id),
+            topic_id: Uuid(topic_id),
             partitions: vec![FetchPartition {
                 partition_index: 0,
                 partition_max_bytes,
@@ -128,7 +130,7 @@ fn test_fetch_request(
     }
 }
 
-pub(crate) use self::{
+pub use self::{
     acknowledge::{
         AckApplication, Renewal, acknowledgement_batches_are_valid, apply_acknowledgements,
     },
@@ -149,6 +151,9 @@ use {
         handlers::ErrorResponse as _,
         share_partition::session::{FetchPartitions, ResponseRow},
     },
+    krabka_protocol::api_key::ApiKey,
+    std::time::Duration,
+    tokio::time,
 };
 
 /// The longest member id that Kafka accepts: a human-readable UUID.
@@ -157,7 +162,7 @@ const MAX_MEMBER_ID_LEN: usize = 36;
 /// Kafka's `KafkaApis.isMemberIdValid`: a member id is non-empty and at most
 /// 36 characters long. The length is Java's `String.length`, that is UTF-16
 /// code units.
-pub(crate) fn member_id_is_valid(member_id: &str) -> bool {
+pub fn member_id_is_valid(member_id: &str) -> bool {
     !member_id.is_empty() && member_id.encode_utf16().count() <= MAX_MEMBER_ID_LEN
 }
 
@@ -180,7 +185,7 @@ fn renew_fetch_fields_are_zero(req: &ShareFetchRequest) -> bool {
 
 /// This handler's own wire api key, for the `api_key` label of the throttle
 /// metrics.
-const SHARE_FETCH_API_KEY: ApiKeyCode = krabka_protocol::api_key::ApiKey::ShareFetch as i16;
+const SHARE_FETCH_API_KEY: ApiKeyCode = ApiKey::ShareFetch as i16;
 
 /// The dispatch-table entry of `ShareFetch`, which charges the KIP-124
 /// request quota itself.
@@ -191,7 +196,7 @@ const SHARE_FETCH_API_KEY: ApiKeyCode = krabka_protocol::api_key::ApiKey::ShareF
 /// a top-level error is charged to `request_percentage` alone here, as
 /// Kafka's `RequestHandlerHelper.sendMaybeThrottle` charges it. Only the time
 /// spent inside `poll` is charged, so a long poll's wait is not.
-pub(crate) async fn dispatch(
+pub async fn dispatch(
     broker: &Broker,
     req: ShareFetchRequest,
     version: ApiVersion,
@@ -209,13 +214,13 @@ pub(crate) async fn dispatch(
 }
 
 #[krabka_macros::share_request_identity]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ShareFetchRequest,
     version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<ShareFetchResponse, BrokerError> {
-    let mgr = broker.share_partition_leaders.clone();
+    let mgr = Arc::clone(&broker.share_partition_leaders);
     let Timed { output, active } = with_active_time(collect_rows(
         RowsSetup {
             broker,
@@ -416,7 +421,7 @@ async fn collect_rows(
             // `MaxWaitMs`, so a client that cannot get a session does not
             // spin on the broker.
             let wait = u64::try_from(req.max_wait_ms).unwrap_or(0);
-            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+            time::sleep(Duration::from_millis(wait)).await;
             return Err(ShareFetchResponse::error(
                 codes::SHARE_SESSION_LIMIT_REACHED,
                 None,

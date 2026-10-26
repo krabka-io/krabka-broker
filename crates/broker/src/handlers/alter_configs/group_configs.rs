@@ -15,6 +15,7 @@ use {
     },
     krabka_metadata::{GroupConfigRecord, MetadataRecord},
     krabka_protocol::owned::alter_configs_request::AlterConfigsResource,
+    std::collections::BTreeMap,
 };
 
 /// Build the authoritative `V1GroupConfig` record for a GROUP resource. The
@@ -31,7 +32,7 @@ pub(super) fn group_config_record(
             "Default group resources are not allowed.".into(),
         ));
     }
-    let overrides: std::collections::BTreeMap<String, String> = resource
+    let overrides: BTreeMap<String, String> = resource
         .configs
         .iter()
         .map(|cfg| (cfg.name.clone(), cfg.value.clone().unwrap_or_default()))
@@ -50,8 +51,9 @@ mod tests {
         super::*,
         crate::{
             api_catalog::UnstableApiVersions,
-            coordinator::unified::streams::config::{
-                KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS,
+            coordinator::unified::streams::{
+                config,
+                config::{KEY_NUM_STANDBY_REPLICAS, KEY_SESSION_TIMEOUT_MS},
             },
             handlers::alter_configs::test_support::group_resource,
         },
@@ -70,8 +72,8 @@ mod tests {
         let expected = MetadataRecord::V1GroupConfig(GroupConfigRecord {
             group_id: "streams-app".into(),
             configs: maplit::btreemap! {
-                crate::coordinator::unified::streams::config::KEY_NUM_STANDBY_REPLICAS.to_string()
-                    => "1".to_string()
+                config::KEY_NUM_STANDBY_REPLICAS.to_owned()
+                    => "1".to_owned()
             },
         });
         assert!(record == expected);

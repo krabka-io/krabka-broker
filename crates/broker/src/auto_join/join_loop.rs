@@ -13,12 +13,15 @@ use crate::BrokerConfig;
 use {
     super::{
         AutoJoinParams,
-        outcome::{JoinOutcome, log_join_outcome},
+        outcome::log_join_outcome,
         request::{advertised_controller_listener, build_add_raft_voter_request, join_target},
         rpc::{send_add_raft_voter, send_remove_raft_voter},
     },
-    krabka_protocol::owned::remove_raft_voter_request::RemoveRaftVoterRequest,
+    krabka_protocol::{
+        owned::remove_raft_voter_request::RemoveRaftVoterRequest, primitives::uuid::Uuid,
+    },
     krabka_units::convert::TimeExt as _,
+    tokio::time::sleep,
 };
 
 /// Drive the auto-join loop. Returns immediately (without touching the
@@ -26,7 +29,7 @@ use {
 /// appears in the committed voter set. Each request goes to the current leader,
 /// or rotates across `bootstrap_servers` while no leader is known.
 /// Intended to be spawned as a detached background task during `Broker::start`.
-pub(crate) async fn run(params: AutoJoinParams) {
+pub async fn run(params: AutoJoinParams) {
     if !params.auto_join {
         return;
     }
@@ -49,7 +52,7 @@ pub(crate) async fn run(params: AutoJoinParams) {
         tracing::error!(node_id = self_id.0, "node_id exceeds i32; cannot auto-join");
         return;
     };
-    let directory_id = krabka_protocol::primitives::uuid::Uuid(*params.directory_id.as_bytes());
+    let directory_id = Uuid(*params.directory_id.as_bytes());
     let listener = advertised_controller_listener(params.advertised_controller.as_deref(), bound);
 
     let protocol = params.listener_protocol;
@@ -77,7 +80,15 @@ pub(crate) async fn run(params: AutoJoinParams) {
             return;
         }
 
-        let target = join_target(&controller.quorum_state(), &bootstrap_servers, next_server);
+        let Some(target) = join_target(&controller.quorum_state(), &bootstrap_servers, next_server)
+        else {
+            tracing::warn!(
+                node_id = self_id.0,
+                "auto-join: no controller leader is known and no bootstrap server is configured"
+            );
+            sleep(retry_backoff.to_std()).await;
+            continue;
+        };
         if target.from_bootstrap {
             next_server = next_server.wrapping_add(1);
         }
@@ -92,7 +103,7 @@ pub(crate) async fn run(params: AutoJoinParams) {
             {
                 tracing::debug!(node_id = self_id.0, server = %target, %error, "auto-join: stale voter removal failed");
             }
-            tokio::time::sleep(retry_backoff.to_std()).await;
+            sleep(retry_backoff.to_std()).await;
             continue;
         }
 
@@ -106,7 +117,7 @@ pub(crate) async fn run(params: AutoJoinParams) {
 
         match send_add_raft_voter(&client, protocol, &server_name, target, &req).await {
             Ok(resp) => {
-                let _: JoinOutcome = log_join_outcome(self_id, target, &resp);
+                let _ = log_join_outcome(self_id, target, &resp);
             }
             Err(e) => {
                 tracing::debug!(
@@ -118,11 +129,11 @@ pub(crate) async fn run(params: AutoJoinParams) {
             }
         }
 
-        tokio::time::sleep(retry_backoff.to_std()).await;
+        sleep(retry_backoff.to_std()).await;
     }
 }
 
-pub(crate) fn build_remove_raft_voter_request(
+pub fn build_remove_raft_voter_request(
     cluster_id: Option<uuid::Uuid>,
     voter_id: i32,
     stale_directory_id: uuid::Uuid,
@@ -130,7 +141,7 @@ pub(crate) fn build_remove_raft_voter_request(
     RemoveRaftVoterRequest {
         cluster_id: cluster_id.map(|id| id.to_string()),
         voter_id,
-        voter_directory_id: krabka_protocol::primitives::uuid::Uuid(*stale_directory_id.as_bytes()),
+        voter_directory_id: Uuid(*stale_directory_id.as_bytes()),
         ..Default::default()
     }
 }
@@ -147,9 +158,11 @@ mod tests {
             KRaftVersionRange, MetadataImage, MetadataRecord, Voter, VoterEndpoint, VoterSet,
             VotersRecord,
         },
+        krabka_protocol::owned::{add_raft_voter_request, remove_raft_voter_request},
         krabka_raft::NodeId,
         krabka_units::{millis, secs},
         std::{sync::Arc, time::Duration},
+        tokio::{net::TcpListener, sync::oneshot, time},
     };
 
     fn image_with_voter(node_id: NodeId) -> MetadataImage {
@@ -159,8 +172,8 @@ mod tests {
                 id: node_id,
                 directory_id: uuid::Uuid::from_u128(node_id.0.into()),
                 endpoints: vec![VoterEndpoint {
-                    name: "CONTROLLER".to_string(),
-                    host: "127.0.0.1".to_string(),
+                    name: "CONTROLLER".to_owned(),
+                    host: "127.0.0.1".to_owned(),
                     port: 19093,
                 }],
                 kraft_version: KRaftVersionRange::default(),
@@ -181,7 +194,7 @@ mod tests {
             voter_request_timeout: secs(30),
             node_id: NodeId(7),
             directory_id: uuid::Uuid::from_u128(7),
-            ..params(source, vec!["127.0.0.1:1".to_string()])
+            ..params(source, vec!["127.0.0.1:1".to_owned()])
         }
     }
 
@@ -201,7 +214,7 @@ mod tests {
             ..voter_params(broker.controller_for_test())
         };
 
-        tokio::time::timeout(Duration::from_secs(2), run(params))
+        time::timeout(Duration::from_secs(2), run(params))
             .await
             .expect("run() returned immediately for auto_join=false");
 
@@ -216,9 +229,9 @@ mod tests {
                 .controller_bound_addr("127.0.0.1:19093".parse().expect("bound controller addr"))
                 .build(),
         );
-        let params = voter_params(source.clone());
+        let params = voter_params(Arc::<FakeMetadataSource>::clone(&source));
 
-        tokio::time::timeout(Duration::from_secs(2), run(params))
+        time::timeout(Duration::from_secs(2), run(params))
             .await
             .expect("already-voter auto join returns without dialing");
 
@@ -233,50 +246,35 @@ mod tests {
         let req = build_remove_raft_voter_request(Some(cluster), 42, stale);
         assert2::assert!(req.cluster_id == Some(cluster.to_string()));
         assert2::assert!(req.voter_id == 42);
-        assert2::assert!(
-            req.voter_directory_id == krabka_protocol::primitives::uuid::Uuid(*stale.as_bytes())
-        );
+        assert2::assert!(req.voter_directory_id == Uuid(*stale.as_bytes()));
 
         let req_no_cluster = build_remove_raft_voter_request(None, 42, stale);
         assert2::assert!(req_no_cluster.cluster_id.is_none());
         assert2::assert!(req_no_cluster.voter_id == 42);
-        assert2::assert!(
-            req_no_cluster.voter_directory_id
-                == krabka_protocol::primitives::uuid::Uuid(*stale.as_bytes())
-        );
+        assert2::assert!(req_no_cluster.voter_directory_id == Uuid(*stale.as_bytes()));
     }
 
     #[tokio::test]
     async fn run_attempts_stale_voter_removal_when_directory_id_differs() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
 
         // The fake controller hands over the api key of the request that
         // follows ApiVersions. The test waits for it rather than for a fixed
         // window, so a slow runner cannot end the join loop before the
         // RemoveRaftVoter frame has been read.
-        let (key_tx, key_rx) = tokio::sync::oneshot::channel::<i16>();
+        let (key_tx, key_rx) = oneshot::channel::<i16>();
         tokio::spawn(async move {
             use crate::auto_join::test_support::{AdvertisedApi, negotiate_versions, read_frame};
             if let Ok((mut socket, _)) = listener.accept().await {
                 let apis = [
                     AdvertisedApi {
-                        api_key: krabka_ids::ApiKey(
-                            krabka_protocol::owned::remove_raft_voter_request::API_KEY,
-                        ),
-                        max_version: krabka_ids::ApiVersion(
-                            krabka_protocol::owned::remove_raft_voter_request::MAX_VERSION,
-                        ),
+                        api_key: krabka_ids::ApiKey(remove_raft_voter_request::API_KEY),
+                        max_version: krabka_ids::ApiVersion(remove_raft_voter_request::MAX_VERSION),
                     },
                     AdvertisedApi {
-                        api_key: krabka_ids::ApiKey(
-                            krabka_protocol::owned::add_raft_voter_request::API_KEY,
-                        ),
-                        max_version: krabka_ids::ApiVersion(
-                            krabka_protocol::owned::add_raft_voter_request::MAX_VERSION,
-                        ),
+                        api_key: krabka_ids::ApiKey(add_raft_voter_request::API_KEY),
+                        max_version: krabka_ids::ApiVersion(add_raft_voter_request::MAX_VERSION),
                     },
                 ];
                 if negotiate_versions(&mut socket, &apis).await.is_ok()
@@ -299,15 +297,15 @@ mod tests {
             voter_request_timeout: secs(1),
             directory_id: uuid::Uuid::from_u128(42), // differs from image_with_voter's 7
             bootstrap_servers: vec![addr.to_string()],
-            ..voter_params(source.clone())
+            ..voter_params(Arc::<FakeMetadataSource>::clone(&source))
         };
 
         let join = tokio::spawn(run(params));
-        let key = tokio::time::timeout(Duration::from_secs(10), key_rx)
+        let key = time::timeout(Duration::from_secs(10), key_rx)
             .await
             .expect("the join loop sends a request after ApiVersions within 10s")
             .expect("the fake controller reads that request");
         join.abort();
-        assert2::assert!(key == krabka_protocol::owned::remove_raft_voter_request::API_KEY);
+        assert2::assert!(key == remove_raft_voter_request::API_KEY);
     }
 }

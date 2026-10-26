@@ -245,6 +245,7 @@ mod tests {
         assert2::check,
         krabka_ids::ApiKey,
         krabka_metadata::MetadataRecord,
+        std::{iter, slice},
         uuid::Uuid,
     };
 
@@ -375,7 +376,7 @@ mod tests {
         let first = dispatch(
             ApiKey(API_KEY_SUBMIT_CHANGE),
             0,
-            submit_change_body(std::slice::from_ref(&topic)),
+            submit_change_body(slice::from_ref(&topic)),
             &engine,
         )
         .await
@@ -440,7 +441,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_metadata_fetch_clamps_negative_request_and_reports_unknown_leader() {
-        let (engine, _dir) = test_engine_with_voters(1, std::iter::empty());
+        let (engine, _dir) = test_engine_with_voters(1, iter::empty());
 
         let body = dispatch(
             ApiKey(API_KEY_METADATA_FETCH),

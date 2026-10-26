@@ -10,10 +10,11 @@ use {
     assert2::assert,
     krabka_metadata::{
         ControllerRegistrationRecord, FeatureLevelRecord, MetadataImage, MetadataRecord, NodeId,
+        metadata_version::{METADATA_VERSION_FEATURE, METADATA_VERSION_MAX, METADATA_VERSION_MIN},
         voters::{KRaftVersionRange, Voter, VoterSet},
     },
     krabka_protocol::owned::unregister_controller_response::MAX_VERSION,
-    std::sync::Arc,
+    std::{collections::BTreeMap, sync::Arc},
 };
 
 krabka_macros::wire_codec_helpers! {
@@ -34,19 +35,16 @@ fn registration(node_id: u64) -> MetadataRecord {
 
 /// A controller that supports every `metadata.version`, so finalizing one
 /// with `UpdateFeatures` passes Kafka's per-controller range check.
-fn supported_metadata_versions() -> std::collections::BTreeMap<String, (i16, i16)> {
-    std::collections::BTreeMap::from([(
-        krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.to_owned(),
-        (
-            krabka_metadata::metadata_version::METADATA_VERSION_MIN,
-            krabka_metadata::metadata_version::METADATA_VERSION_MAX,
-        ),
+fn supported_metadata_versions() -> BTreeMap<String, (i16, i16)> {
+    BTreeMap::from([(
+        METADATA_VERSION_FEATURE.to_owned(),
+        (METADATA_VERSION_MIN, METADATA_VERSION_MAX),
     )])
 }
 
 fn metadata_version(level: i16) -> MetadataRecord {
     MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-        name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+        name: METADATA_VERSION_FEATURE.into(),
         level,
     })
 }
@@ -141,7 +139,7 @@ async fn finalize_metadata_version(broker: &Broker, level: i16) {
         broker,
         UpdateFeaturesRequest {
             feature_updates: vec![FeatureUpdateKey {
-                feature: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                feature: METADATA_VERSION_FEATURE.into(),
                 max_version_level: level,
                 upgrade_type: 1,
                 ..Default::default()

@@ -9,15 +9,19 @@
 //! on the seed, so most tests run a range of seeds and check what holds for
 //! every one of them.
 
-use {super::*, assert2::assert, std::collections::BTreeSet};
+use {
+    super::*,
+    assert2::assert,
+    std::{collections::BTreeSet, iter, ops::Range},
+};
 
 /// The seeds that a test runs the placement with.
-const SEEDS: std::ops::Range<u64> = 0..64;
+const SEEDS: Range<u64> = 0..64;
 
 fn broker(node_id: u64, site: Option<&str>, is_witness: bool) -> SiteBrokerView {
     SiteBrokerView {
         node_id: NodeId(node_id),
-        site: site.map(str::to_string),
+        site: site.map(str::to_owned),
         is_witness,
         fenced: false,
     }
@@ -80,7 +84,7 @@ fn site_of(brokers: &[SiteBrokerView], node_id: NodeId) -> &str {
 fn sites_of(brokers: &[SiteBrokerView], replicas: &[NodeId]) -> Vec<String> {
     let mut sites = replicas
         .iter()
-        .map(|node_id| site_of(brokers, *node_id).to_string())
+        .map(|node_id| site_of(brokers, *node_id).to_owned())
         .collect::<Vec<_>>();
     sites.sort();
     sites
@@ -523,8 +527,8 @@ fn a_seed_fixes_the_placement() {
 
 #[test]
 fn the_entropy_seed_is_not_a_constant() {
-    let seeds = (0..8)
-        .map(|_| PlacementRng::from_entropy().next_u64())
+    let seeds = iter::repeat_with(|| PlacementRng::from_entropy().next_u64())
+        .take(8)
         .collect::<BTreeSet<_>>();
 
     assert!(seeds.len() > 1);

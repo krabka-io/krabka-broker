@@ -25,8 +25,9 @@ use {
     krabka_broker::{Broker, BrokerConfig, BrokerHandle, SslPrincipalMapper, config::ListenerSpec},
     krabka_protocol::owned::create_delegation_token_request::CreateDelegationTokenRequest,
     krabka_security::ListenerProtocol,
-    std::{net::SocketAddr, sync::Arc},
+    std::{fs, net::SocketAddr, sync::Arc},
     tempfile::TempDir,
+    tokio_rustls::{client::TlsStream, rustls::crypto::aws_lc_rs::default_provider},
 };
 
 const DEV_CERT: &str = include_str!("../fixtures/security/dev_cert.pem");
@@ -54,20 +55,20 @@ async fn start_broker(protocol: ListenerProtocol, super_users: &[&str]) -> Start
     let pem_dir = tempfile::tempdir().unwrap();
     let cert_path = pem_dir.path().join("cert.pem");
     let key_path = pem_dir.path().join("key.pem");
-    std::fs::write(&cert_path, DEV_CERT).unwrap();
-    std::fs::write(&key_path, DEV_KEY).unwrap();
+    fs::write(&cert_path, DEV_CERT).unwrap();
+    fs::write(&key_path, DEV_KEY).unwrap();
 
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.listeners = vec![ListenerSpec {
-        name: "PUBLIC".to_string(),
+        name: "PUBLIC".to_owned(),
         bind_addr: "127.0.0.1:0".parse().unwrap(),
-        advertised: "127.0.0.1:0".to_string(),
+        advertised: "127.0.0.1:0".to_owned(),
         protocol,
         tls_config: None,
         sasl_mechanisms: None,
         principal_mapper: SslPrincipalMapper::default(),
     }];
-    cfg.inter_broker_listener_name = "PUBLIC".to_string();
+    cfg.inter_broker_listener_name = "PUBLIC".to_owned();
     if protocol == ListenerProtocol::Ssl {
         cfg.tls_config = Some(TlsConfig {
             cert_chain_path: cert_path,
@@ -78,7 +79,7 @@ async fn start_broker(protocol: ListenerProtocol, super_users: &[&str]) -> Start
         });
     }
     for user in super_users {
-        cfg.super_users.insert((*user).to_string());
+        cfg.super_users.insert((*user).to_owned());
     }
     delegation_token_defaults(&mut cfg, b"anon-master-key");
 
@@ -93,9 +94,7 @@ async fn start_broker(protocol: ListenerProtocol, super_users: &[&str]) -> Start
 }
 
 /// Opens a one-way TLS session — no client certificate — to `addr`.
-async fn tls_connect_without_client_cert(
-    addr: SocketAddr,
-) -> tokio_rustls::client::TlsStream<TcpStream> {
+async fn tls_connect_without_client_cert(addr: SocketAddr) -> TlsStream<TcpStream> {
     let pinned = CertificateDer::pem_slice_iter(DEV_CERT.as_bytes())
         .next()
         .expect("dev cert holds one PEM block")
@@ -104,7 +103,7 @@ async fn tls_connect_without_client_cert(
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier {
             pinned,
-            schemes: tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
+            schemes: default_provider()
                 .signature_verification_algorithms
                 .supported_schemes(),
             mismatch: "presented cert does not match pinned dev cert",
@@ -124,7 +123,7 @@ async fn unauthenticated_create_delegation_token_is_refused() {
     // The broker installs the rustls crypto provider in `Broker::start`, but
     // the client side below needs one too, and it builds its config first.
     // `.ok()` swallows `AlreadySet`.
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = default_provider().install_default();
 
     for protocol in [ListenerProtocol::Plaintext, ListenerProtocol::Ssl] {
         for super_users in [&[][..], &["operator"][..]] {

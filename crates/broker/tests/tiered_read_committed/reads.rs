@@ -27,6 +27,7 @@ use {
         collections::{BTreeMap, BTreeSet},
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// Kafka's `IsolationLevel.READ_COMMITTED` on the wire.
@@ -263,7 +264,7 @@ impl ShareReader {
                     ..Default::default()
                 })
                 .await;
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            time::sleep(Duration::from_millis(50)).await;
         }
         Self {
             group,
@@ -285,12 +286,12 @@ impl ShareReader {
                 self.acquired
             );
             if self.fetch(tiered).await == 0 {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                time::sleep(Duration::from_millis(100)).await;
             }
         }
         for _ in 0..3 {
             self.fetch(tiered).await;
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
         }
     }
 

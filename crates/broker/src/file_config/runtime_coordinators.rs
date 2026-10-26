@@ -15,14 +15,11 @@ use {
     },
     crate::{config::BrokerConfig, coordinator::unified::share::config::ShareGroupConfig},
     krabka_units::{Time, convert::TimeExt as _},
-    std::{ops::RangeInclusive, time::Duration},
+    std::{fmt, ops::RangeInclusive, time::Duration},
 };
 
 impl RuntimeFileConfig {
-    pub(super) fn apply_coordinators(
-        &mut self,
-        cfg: &mut BrokerConfig,
-    ) -> Result<(), FileConfigError> {
+    pub(super) fn apply_coordinators(&self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         let runtime = self;
         krabka_macros::set_runtime! {
             runtime => cfg;
@@ -58,10 +55,7 @@ impl RuntimeFileConfig {
     /// The order check runs over `cfg` rather than over this table alone, so
     /// a command-line overlay applied after the file is checked against the
     /// file's values.
-    pub(super) fn apply_share_group(
-        &mut self,
-        cfg: &mut BrokerConfig,
-    ) -> Result<(), FileConfigError> {
+    pub(super) fn apply_share_group(&self, cfg: &mut BrokerConfig) -> Result<(), FileConfigError> {
         let runtime = self;
         let share = &mut *cfg.share_group;
         krabka_macros::set_runtime! {
@@ -189,7 +183,7 @@ fn int_millis(
 }
 
 /// `value` within `range`: Kafka's `between` over an `INT` key.
-fn in_range<T: PartialOrd + std::fmt::Display>(
+fn in_range<T: PartialOrd + fmt::Display>(
     name: &str,
     value: T,
     range: RangeInclusive<T>,

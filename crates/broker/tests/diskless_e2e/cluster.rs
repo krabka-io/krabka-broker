@@ -19,15 +19,20 @@
 use {
     crate::{
         CLIENT_PRINCIPAL, PASSWORD, TOPIC, VOTERS,
-        support::{self, ClusterBootstrapSetup, ClusterNodeSetup, NodeIndex},
+        support::{self, ClusterBootstrapSetup, ClusterNodeSetup, NodeIndex, listeners},
     },
     krabka_broker::{
-        BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId,
-        RemoteStorageBackend, RlmmKind,
+        BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, RemoteStorageBackend,
     },
     krabka_security::ListenerProtocol,
-    std::{net::SocketAddr, path::Path, time::Duration},
+    std::{
+        iter,
+        net::SocketAddr,
+        path::Path,
+        time::{Duration, Instant},
+    },
     tempfile::TempDir,
+    tokio::time,
 };
 
 /// Name of the one data-plane listener every broker binds. It carries both the
@@ -41,7 +46,7 @@ const LISTENER: &str = "SASL_PLAINTEXT";
 /// A handle is `None` while its broker is down. The configs stay because a
 /// restart re-binds the same client and controller ports: a fresh ephemeral
 /// port would leave the surviving peers dialing an address nobody answers.
-pub(crate) struct DisklessCluster {
+pub struct DisklessCluster {
     brokers: Vec<Option<BrokerHandle>>,
     configs: Vec<BrokerConfig>,
     log_dirs: Vec<TempDir>,
@@ -97,7 +102,7 @@ impl DisklessCluster {
             broker.wait_until_brokers_registered(VOTERS).await;
         }
         for broker in self.brokers.iter().flatten() {
-            broker.wait_until_diskless_flusher_ready().await;
+            broker.wait_until_diskless_flusher_ready().await.unwrap();
         }
     }
 
@@ -160,9 +165,7 @@ impl DisklessCluster {
 /// `customize` runs on each broker's config after the shared diskless wiring
 /// and before the broker starts, so a case can set its own flush cadence and
 /// trim policy without restating the rest.
-pub(crate) async fn start_diskless_cluster(
-    customize: impl Fn(&mut BrokerConfig),
-) -> DisklessCluster {
+pub async fn start_diskless_cluster(customize: impl Fn(&mut BrokerConfig)) -> DisklessCluster {
     support::init_tracing();
 
     // Concrete ports up front, held live until each broker adopts them. The
@@ -171,8 +174,8 @@ pub(crate) async fn start_diskless_cluster(
     // voter set, so neither can be `:0`.
     let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
         support::bind_and_hold_ports(VOTERS).await;
-    let log_dirs: Vec<TempDir> = (0..VOTERS)
-        .map(|_| TempDir::new().expect("broker log dir"))
+    let log_dirs: Vec<TempDir> = iter::repeat_with(|| TempDir::new().expect("broker log dir"))
+        .take(VOTERS)
         .collect();
     let remote_dir = TempDir::new().expect("shared object store dir");
 
@@ -259,7 +262,7 @@ fn broker_config(log_dir: &Path, remote_dir: &Path, setup: ClusterNodeSetup<'_>)
     // leader can tie an incoming shard fetch to a voter. Every broker holds
     // every principal, because any of them can end up leading the shard and
     // having to authenticate the other two.
-    config.listeners = vec![crate::support::listeners::listener(
+    config.listeners = vec![listeners::listener(
         LISTENER,
         client,
         ListenerProtocol::SaslPlaintext,
@@ -284,15 +287,7 @@ fn broker_config(log_dir: &Path, remote_dir: &Path, setup: ClusterNodeSetup<'_>)
     // topic-backed metadata log. One partition replicated across all three
     // brokers keeps the index cheap and survives the leader loss the failover
     // case injects. Every broker bootstraps that client against broker 1.
-    config.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
-        bootstrap: rlmm_bootstrap,
-        num_partitions: 1,
-        replication: i32::try_from(VOTERS).expect("small cluster"),
-        snapshot_interval: krabka_units::hours(1),
-        snapshot_dir: std::path::PathBuf::new(), // derived from log_dir
-        security: None,
-        ..KafkaRlmmConfig::default()
-    });
+    config.remote_log_metadata = support::diskless::flush_index_metadata(rlmm_bootstrap, VOTERS);
     config
 }
 
@@ -302,26 +297,23 @@ fn broker_config(log_dir: &Path, remote_dir: &Path, setup: ClusterNodeSetup<'_>)
 ///
 /// The predicate returns a future because some of the state this suite waits
 /// on -- the projected flush frontier, for one -- sits behind an async lock.
-pub(crate) async fn wait_for<F, Fut>(what: &str, timeout: Duration, mut ready: F)
+pub async fn wait_for<F, Fut>(what: &str, timeout: Duration, mut ready: F)
 where
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = bool>,
+    Fut: Future<Output = bool>,
 {
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     loop {
         if ready().await {
             return;
         }
-        assert2::assert!(
-            std::time::Instant::now() <= deadline,
-            "timed out waiting for {what}"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert2::assert!(Instant::now() <= deadline, "timed out waiting for {what}");
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
 /// Flush the WAL at a chosen cadence and trim directly to its committed frontier.
-pub(crate) async fn start_flushing_cluster(interval: krabka_units::Time) -> DisklessCluster {
+pub async fn start_flushing_cluster(interval: krabka_units::Time) -> DisklessCluster {
     start_diskless_cluster(|config| {
         config.diskless_wal_flush_interval = interval;
         config.diskless_wal_trim_safety_lag = 0;

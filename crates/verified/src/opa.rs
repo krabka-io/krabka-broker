@@ -66,10 +66,10 @@ pub fn opa_cache_expiry(now_ms: i128, ttl_ms: i64) -> OpaCacheExpiry {
     if ttl_ms <= 0 {
         return OpaCacheExpiry::DoNotCache;
     }
-    match now_ms.checked_add(i128::from(ttl_ms)) {
-        Some(expires_at_ms) => OpaCacheExpiry::CacheUntil { expires_at_ms },
-        None => OpaCacheExpiry::DoNotCache,
-    }
+    let Some(expires_at_ms) = now_ms.checked_add(i128::from(ttl_ms)) else {
+        return OpaCacheExpiry::DoNotCache;
+    };
+    OpaCacheExpiry::CacheUntil { expires_at_ms }
 }
 
 /// Map the explicit outage policy without changing successful OPA decisions.

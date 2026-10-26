@@ -52,7 +52,7 @@ pub fn select_protocol(members: &HashMap<String, Member>) -> Option<String> {
     votes
         .into_iter()
         .max_by(|(a, va), (b, vb)| va.cmp(vb).then_with(|| b.cmp(a)))
-        .map(|(name, _)| name.to_string())
+        .map(|(name, _)| name.to_owned())
 }
 
 impl ClassicGroup {
@@ -88,7 +88,7 @@ mod tests {
 
     fn one_range_first_member() -> HashMap<String, super::super::member::Member> {
         HashMap::from([(
-            "m1".to_string(),
+            "m1".to_owned(),
             member_with_protocols("m1", vec![("range", b""), ("cooperative_sticky", b"")]),
         )])
     }
@@ -103,11 +103,11 @@ mod tests {
     fn select_protocol_intersection_empty_returns_none() {
         let mut members = HashMap::new();
         members.insert(
-            "m1".to_string(),
+            "m1".to_owned(),
             member_with_protocols("m1", vec![("range", b"")]),
         );
         members.insert(
-            "m2".to_string(),
+            "m2".to_owned(),
             member_with_protocols("m2", vec![("cooperative_sticky", b"")]),
         );
         assert!(select_protocol(&members) == None);
@@ -117,11 +117,11 @@ mod tests {
     fn select_protocol_max_votes_wins() {
         let mut members = one_range_first_member();
         members.insert(
-            "m2".to_string(),
+            "m2".to_owned(),
             member_with_protocols("m2", vec![("range", b""), ("cooperative_sticky", b"")]),
         );
         members.insert(
-            "m3".to_string(),
+            "m3".to_owned(),
             member_with_protocols("m3", vec![("cooperative_sticky", b""), ("range", b"")]),
         );
         assert!(select_protocol(&members).as_deref() == Some("range"));
@@ -131,7 +131,7 @@ mod tests {
     fn select_protocol_tie_breaks_lexicographically() {
         let mut members = one_range_first_member();
         members.insert(
-            "m2".to_string(),
+            "m2".to_owned(),
             member_with_protocols("m2", vec![("cooperative_sticky", b""), ("range", b"")]),
         );
         assert!(select_protocol(&members).as_deref() == Some("cooperative_sticky"));

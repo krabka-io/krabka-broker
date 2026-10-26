@@ -1,8 +1,10 @@
-//! Record-payload generator. The first 24 bytes of every produced record
-//! hold `(magic_be, scenario_id_be, send_unix_nanos_be)`, so a consumer can
-//! compute the end-to-end latency when it re-reads the embedded
-//! `send_unix_nanos`. The remaining bytes are a deterministic filler, so
-//! the wire size is exactly the scenario's message size.
+//! Record-payload generator.
+//!
+//! The first 24 bytes of every produced record hold `(magic_be, scenario_id_be,
+//! send_unix_nanos_be)`, so a consumer can compute the end-to-end latency when
+//! it re-reads the embedded `send_unix_nanos`. The remaining bytes are a
+//! deterministic filler, so the wire size is exactly the scenario's message
+//! size.
 //!
 //! The header is 24 bytes and not the 16 the plan sketched, because it needs a
 //! magic to detect "this is one of ours". Kafka's own producers leave their own
@@ -21,9 +23,10 @@ pub const MAGIC: [u8; 8] = *b"KRABKA_B";
 pub const HEADER_LEN: usize = MAGIC.len() + 8 + 8; // magic + scenario_id + send_nanos = 24
 
 /// Builds a reusable filler template of exactly `msg_size` bytes, or of the
-/// header length if that is larger. The first 24 bytes are zero, and
-/// `stamp_into` overwrites them at send time. The remaining bytes are a
-/// repeating pattern.
+/// header length if that is larger.
+///
+/// The first 24 bytes are zero, and `stamp_into` overwrites them at send time.
+/// The remaining bytes are a repeating pattern.
 #[must_use]
 pub fn template(msg_size: ByteSize) -> BytesMut {
     let len = msg_size.bytes_usize().max(HEADER_LEN);
@@ -58,7 +61,9 @@ pub fn key(key_size: ByteSize, sequence: u64) -> Option<Bytes> {
     let mut buf = BytesMut::with_capacity(len);
     buf.resize(len, 0u8);
     let stamped = len.min(8);
-    buf[..stamped].copy_from_slice(&sequence.to_be_bytes()[..stamped]);
+    for (slot, byte) in buf.iter_mut().zip(sequence.to_be_bytes()) {
+        *slot = byte;
+    }
     for (index, byte) in buf.iter_mut().enumerate().skip(stamped) {
         *byte = u8::try_from(index & 0xff).unwrap_or_default();
     }
@@ -73,9 +78,13 @@ pub fn stamp_into(buf: &mut BytesMut, scenario_id: u64) -> Bytes {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| saturating_u128_to_u64(d.as_nanos()));
-    buf[..MAGIC.len()].copy_from_slice(&MAGIC);
-    buf[8..16].copy_from_slice(&scenario_id.to_be_bytes());
-    buf[16..24].copy_from_slice(&nanos.to_be_bytes());
+    let header = MAGIC
+        .into_iter()
+        .chain(scenario_id.to_be_bytes())
+        .chain(nanos.to_be_bytes());
+    for (slot, byte) in buf.iter_mut().zip(header) {
+        *slot = byte;
+    }
     // Freeze a copy into a Bytes the producer can keep.
     Bytes::copy_from_slice(buf)
 }
@@ -85,14 +94,13 @@ pub fn stamp_into(buf: &mut BytesMut, scenario_id: u64) -> Bytes {
 /// short. The consumer skips both cases silently.
 #[must_use]
 pub fn read_send_nanos(value: &[u8], scenario_id: u64) -> Option<u64> {
-    if value.len() < HEADER_LEN || value[..MAGIC.len()] != MAGIC {
+    let (magic, rest) = value.split_first_chunk::<8>()?;
+    let (sid, rest) = rest.split_first_chunk::<8>()?;
+    let (nanos, _) = rest.split_first_chunk::<8>()?;
+    if *magic != MAGIC || u64::from_be_bytes(*sid) != scenario_id {
         return None;
     }
-    let sid = u64::from_be_bytes(value[8..16].try_into().ok()?);
-    if sid != scenario_id {
-        return None;
-    }
-    Some(u64::from_be_bytes(value[16..24].try_into().ok()?))
+    Some(u64::from_be_bytes(*nanos))
 }
 
 #[cfg(test)]

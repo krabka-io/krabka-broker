@@ -26,12 +26,14 @@ use {
     krabka_log::{LogError, Offset, RawRead},
     krabka_protocol::{
         owned::share_fetch_response::{AcquiredRecords, PartitionData},
-        records::{Attributes, HEADER_LEN, RecordBatchHeader, RecordsPayload},
+        records::{Attributes, HEADER_LEN, RecordBatchHeader, RecordsError, RecordsPayload},
     },
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
     std::{
         collections::HashMap,
-        sync::Arc,
+        io,
+        ops::Range,
+        sync::{Arc, PoisonError},
         time::{Duration, Instant},
     },
     zerocopy::FromBytes as _,
@@ -73,7 +75,7 @@ pub(super) struct DisklessSource<'a> {
 
 /// Kafka's `ShareAcquireMode` with the request's `BatchSize`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AcquireMode {
+pub enum AcquireMode {
     /// `batch_optimized` (0, and the only mode before v2): `MaxRecords` is a
     /// soft limit that rounds up to a log batch end, and new records come
     /// back in rows of about `batch_size` records on log batch boundaries.
@@ -84,7 +86,7 @@ pub(crate) enum AcquireMode {
 
 impl AcquireMode {
     /// The mode of a request: its `ShareAcquireMode` and `BatchSize`.
-    pub(crate) fn of(share_acquire_mode: i8, batch_size: i32) -> Self {
+    pub fn of(share_acquire_mode: i8, batch_size: i32) -> Self {
         if share_acquire_mode == 1 {
             Self::RecordLimit
         } else {
@@ -139,7 +141,7 @@ pub(super) async fn acquire_read_records(
     let local_start = partition
         .log
         .lock()
-        .expect("log mutex poisoned")
+        .unwrap_or_else(PoisonError::into_inner)
         .local_log_start_offset();
     let read = if partition.diskless
         && let Some(DisklessSource { reader, topic_id }) = request.diskless
@@ -272,7 +274,7 @@ fn rows_of(range: &AcquiredRange, mode: AcquireMode, bases: &[i64]) -> Vec<Acqui
 /// One v2 batch of a read: where its bytes sit, the offsets it holds, and the
 /// header fields that decide whether a share consumer may get it.
 pub(super) struct BatchSpan {
-    bytes: std::ops::Range<usize>,
+    bytes: Range<usize>,
     pub(super) base: i64,
     pub(super) last: i64,
     pub(super) attributes: Attributes,
@@ -337,26 +339,34 @@ pub(super) struct OffsetSpan {
 
 /// The byte ranges of `bytes`, joined into one buffer. It copies nothing
 /// when one range covers them.
-fn gather(bytes: &Bytes, ranges: &[std::ops::Range<usize>]) -> Bytes {
+///
+/// # Errors
+///
+/// A corrupt-read error when a range runs past `bytes`.
+fn gather(bytes: &Bytes, ranges: &[Range<usize>]) -> Result<Bytes, BrokerError> {
     // Adjacent ranges read as one run.
-    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut runs: Vec<Range<usize>> = Vec::new();
     for range in ranges {
         match runs.last_mut() {
             Some(run) if run.end == range.start => run.end = range.end,
             _ => runs.push(range.clone()),
         }
     }
-    match runs.as_slice() {
+    Ok(match runs.as_slice() {
         [] => Bytes::new(),
         [run] => bytes.slice(run.clone()),
         runs => {
             let mut blob = BytesMut::with_capacity(runs.iter().map(ExactSizeIterator::len).sum());
             for run in runs {
-                blob.extend_from_slice(&bytes[run.clone()]);
+                blob.extend_from_slice(
+                    bytes
+                        .get(run.clone())
+                        .ok_or_else(|| corrupt_read("a batch outside its buffer"))?,
+                );
             }
             blob.freeze()
         }
-    }
+    })
 }
 
 /// Returns the batches of `bytes` that hold at least one offset of
@@ -374,7 +384,7 @@ fn batches_holding(bytes: &Bytes, acquired: &[AcquiredRange]) -> Result<Bytes, B
         })
         .map(|span| span.bytes)
         .collect();
-    Ok(gather(bytes, &kept))
+    gather(bytes, &kept)
 }
 
 /// The leading whole batches of `bytes` that fit in `max_bytes`.
@@ -402,7 +412,7 @@ fn batches_within(
     if kept.is_empty() && min_one_batch {
         kept.extend(spans.into_iter().next().map(|span| span.bytes));
     }
-    Ok(gather(bytes, &kept))
+    gather(bytes, &kept)
 }
 
 /// Joins the batches that a later acquire pass read onto the batches that
@@ -433,7 +443,7 @@ pub(super) fn merge_batches(before: &Bytes, added: &Bytes) -> Result<MergedBatch
             records: gather(
                 added,
                 &fresh.into_iter().map(|span| span.bytes).collect::<Vec<_>>(),
-            ),
+            )?,
             added_bytes: added_len,
         });
     }
@@ -453,7 +463,11 @@ pub(super) fn merge_batches(before: &Bytes, added: &Bytes) -> Result<MergedBatch
     all.sort_by_key(|span| span.base);
     let mut blob = BytesMut::with_capacity(all.iter().map(|span| span.range.len()).sum());
     for SourcedSpan { source, range, .. } in all {
-        blob.extend_from_slice(&source[range]);
+        blob.extend_from_slice(
+            source
+                .get(range)
+                .ok_or_else(|| corrupt_read("a batch outside its buffer"))?,
+        );
     }
     Ok(MergedBatches {
         records: blob.freeze(),
@@ -472,7 +486,7 @@ pub(super) struct MergedBatches {
 struct SourcedSpan<'a> {
     base: i64,
     source: &'a Bytes,
-    range: std::ops::Range<usize>,
+    range: Range<usize>,
 }
 
 /// The bytes of a v2 batch in front of its `batch_length` field: the base
@@ -482,11 +496,9 @@ const LOG_OVERHEAD: usize = 12;
 /// A read whose bytes are not a run of whole record batches. Kafka reports
 /// such a batch as `CORRUPT_MESSAGE`, which [`LogError::Records`] maps to.
 fn corrupt_read(what: &str) -> BrokerError {
-    BrokerError::Log(krabka_log::LogError::Records(
-        krabka_protocol::records::RecordsError::RecordParse(format!(
-            "share-fetch read returned {what}"
-        )),
-    ))
+    BrokerError::Log(krabka_log::LogError::Records(RecordsError::RecordParse(
+        format!("share-fetch read returned {what}"),
+    )))
 }
 
 /// Reads the verbatim on-disk batch bytes for `[fetch_offset, limit_offset)`
@@ -502,15 +514,15 @@ async fn read_raw(
         return Ok(None);
     }
     let read_max = ByteSize::from_bytes_i64(i64::from(max_bytes.max(0)));
-    let log = part.log.clone();
+    let log = Arc::clone(&part.log);
     let join = spawn_blocking(move || {
-        let log = log.lock().expect("log mutex poisoned");
+        let log = log.lock().unwrap_or_else(PoisonError::into_inner);
         log.read_raw(fetch_offset, limit_offset, read_max)
     });
     let raw = match join.await {
         Ok(res) => res?,
         Err(join_err) => {
-            return Err(BrokerError::Io(std::io::Error::other(format!(
+            return Err(BrokerError::Io(io::Error::other(format!(
                 "share-fetch read task panicked: {join_err}"
             ))));
         }
@@ -668,14 +680,14 @@ async fn scan_log<T: Send + 'static>(
     kind: &'static str,
     read: impl FnOnce(&krabka_log::Log) -> T + Send + 'static,
 ) -> Result<T, BrokerError> {
-    let log = part.log.clone();
+    let log = Arc::clone(&part.log);
     spawn_blocking(move || {
-        let log = log.lock().expect("log mutex poisoned");
+        let log = log.lock().unwrap_or_else(PoisonError::into_inner);
         read(&log)
     })
     .await
     .map_err(|join_err| {
-        BrokerError::Io(std::io::Error::other(format!(
+        BrokerError::Io(io::Error::other(format!(
             "share-fetch {kind} scan panicked: {join_err}"
         )))
     })
@@ -691,6 +703,7 @@ mod tests {
         },
         assert2::assert,
         krabka_log::DeliveryPolicy,
+        krabka_protocol::records::{Record, RecordBatch},
         qubit_clock::{FixedWallClock, WallClock},
     };
 
@@ -891,9 +904,9 @@ mod tests {
         let batches: Vec<Bytes> = (0..3)
             .map(|base| {
                 let mut one = BytesMut::new();
-                krabka_protocol::records::RecordBatch {
+                RecordBatch {
                     base_offset: base,
-                    records: vec![krabka_protocol::records::Record {
+                    records: vec![Record {
                         value: Some(Bytes::from(vec![0_u8; 32])),
                         ..Default::default()
                     }],
@@ -929,7 +942,7 @@ mod tests {
             (size + size / 2, true, first.clone()),
             (size / 2, true, first.clone()),
             (0, true, first.clone()),
-            (2 * size, true, first_two.clone()),
+            (2 * size, true, first_two),
             (size / 2, false, Bytes::new()),
             (size + size / 2, false, first),
             (3 * size, false, read.clone()),

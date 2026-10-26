@@ -36,52 +36,55 @@ async fn fetch_v3_drops_control_batch() {
     p.broker.wait_until_transaction_coordinator_ready().await;
 
     let addr = p.broker.listen_addr();
-    let producer = Producer::builder()
-        .bootstrap(addr.to_string())
-        .transactional_id("legacy-fetch-control-marker")
-        .build()
-        .await
-        .unwrap();
-    producer.init_transactions().await.unwrap();
-    let transaction = producer.begin_transaction().await.unwrap();
-    producer
-        .send(
-            producer_record()
-                .topic(("legacy_fetch_ctrl").into())
-                .maybe_value(Some(Some(Bytes::from_static(b"data-before-marker"))))
-                .call(),
-        )
-        .await
-        .expect("transactional produce");
-    transaction.commit().await.expect("commit transaction");
-    p.broker
-        .wait_until_local_log_end_offset("legacy_fetch_ctrl", 0, 2)
-        .await;
+    {
+        let producer = Producer::builder()
+            .bootstrap(addr.to_string())
+            .transactional_id("legacy-fetch-control-marker")
+            .build()
+            .await
+            .unwrap();
+        producer.init_transactions().await.unwrap();
+        let transaction = producer.begin_transaction().await.unwrap();
+        producer
+            .send(
+                producer_record()
+                    .topic(("legacy_fetch_ctrl").into())
+                    .maybe_value(Some(Some(Bytes::from_static(b"data-before-marker"))))
+                    .call(),
+            )
+            .await
+            .expect("transactional produce");
+        transaction.commit().await.expect("commit transaction");
+        p.broker
+            .wait_until_local_log_end_offset("legacy_fetch_ctrl", 0, 2)
+            .await;
 
-    // Offset 0 is the data batch; offset 1 is the internally generated marker.
-    let resp_body = fetch_legacy_raw_at(addr, "legacy_fetch_ctrl", 3, 1).await;
-    let fetch_resp =
-        LegacyFetchResponse::decode(&mut &resp_body[..], 3).expect("decode LegacyFetchResponse v3");
+        // Offset 0 is the data batch; offset 1 is the internally generated marker.
+        let resp_body = fetch_legacy_raw_at(addr, "legacy_fetch_ctrl", 3, 1).await;
+        let fetch_resp = LegacyFetchResponse::decode(&mut &resp_body[..], 3)
+            .expect("decode LegacyFetchResponse v3");
 
-    let part = &fetch_resp.responses[0].partitions[0];
-    assert!(
-        part.error_code == 0,
-        "fetch partition error: {}",
-        part.error_code
-    );
-    // An empty record set, not a null one. Kafka's schema types the field as
-    // nullable and Kafka's broker never uses that, so krabka does not either:
-    // a client that drops the connection on a negative length -- sarama does --
-    // must still be able to read a response whose only batch was dropped.
-    assert!(
-        part.records
-            .as_ref()
-            .is_some_and(|records| records.payload_len() == 0),
-        "control batch must be dropped, leaving an empty record set on the \
+        let part = &fetch_resp.responses[0].partitions[0];
+        assert!(
+            part.error_code == 0,
+            "fetch partition error: {}",
+            part.error_code
+        );
+        // An empty record set, not a null one. Kafka's schema types the field as
+        // nullable and Kafka's broker never uses that, so krabka does not either:
+        // a client that drops the connection on a negative length -- sarama does --
+        // must still be able to read a response whose only batch was dropped.
+        assert!(
+            part.records
+                .as_ref()
+                .is_some_and(|records| records.payload_len() == 0),
+            "control batch must be dropped, leaving an empty record set on the \
          wire, but the partition carried {:?}",
-        part.records
-    );
+            part.records
+        );
 
-    producer.close().await.unwrap();
+        producer.close().await
+    }
+    .unwrap();
     p.broker.shutdown().await;
 }

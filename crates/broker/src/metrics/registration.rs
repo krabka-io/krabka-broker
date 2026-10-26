@@ -3,9 +3,14 @@
 //! `#[metric(buckets = ...)]` attributes on [`BrokerMetrics`] name, and the
 //! entry point that runs the derived constructor and registration.
 
-use crate::metrics::{
-    BrokerMetrics, ClientMetricsEviction, ClientMetricsEvictionLabel, ClientMetricsRejection,
-    ClientMetricsRejectionLabel, FetchDrainPath, FetchDrainPathLabel,
+use {
+    crate::metrics::{
+        BrokerMetrics, ClientMetricsEviction, ClientMetricsEvictionLabel, ClientMetricsRejection,
+        ClientMetricsRejectionLabel, FetchDrainPath, FetchDrainPathLabel, REGISTRY_PREFIX,
+    },
+    prometheus_client::registry::Registry,
+    std::sync::Arc,
+    tokio::sync::Mutex,
 };
 
 #[cfg(test)]
@@ -58,21 +63,13 @@ pub(super) const EVENT_QUEUE_DURATION_BUCKETS: [f64; 12] = [
 
 impl BrokerMetrics {
     /// Build and register every broker metric.
-    ///
-    /// # Panics
-    ///
-    /// Never in practice: the registry is locked once, before any clone of it
-    /// exists.
     #[must_use]
     pub fn new() -> Self {
-        let metrics = Self::unregistered();
-        {
-            let mut registry = metrics
-                .registry
-                .try_lock()
-                .expect("fresh metrics registry cannot be locked");
-            metrics.register(&mut registry);
-        }
+        let mut metrics = Self::unregistered();
+        // Register into a registry that nothing shares yet, then share it.
+        let mut registry = Registry::with_prefix(REGISTRY_PREFIX);
+        metrics.register(&mut registry);
+        metrics.registry = Arc::new(Mutex::new(registry));
         // Create all three series at zero. The drain only ever touches the
         // path it took, and on some targets it can never take two of them, so
         // without this a dashboard panel or an alert that names `sendfile` has

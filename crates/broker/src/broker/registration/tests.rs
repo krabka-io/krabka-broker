@@ -6,6 +6,10 @@ use {
         host_port::{HostPort, local_host_name},
     },
     assert2::assert,
+    krabka_metadata::metadata_version::{
+        METADATA_VERSION_FEATURE, METADATA_VERSION_MIN, ONLINE_DOWNGRADE_MIN_LEVEL,
+    },
+    std::path::{Path, PathBuf},
     tempfile::tempdir,
 };
 
@@ -22,12 +26,12 @@ mod publish_race {
         crate::{config::BrokerConfig, error::BrokerError, test_support::FakeMetadataSource},
         assert2::assert,
         krabka_metadata::{MetadataImage, MetadataRecord, NodeId},
-        std::{sync::Arc, time::Duration},
+        std::{path::Path, sync::Arc, time::Duration},
         tempfile::tempdir,
-        tokio::sync::watch,
+        tokio::{sync::watch, task::JoinHandle, time},
     };
 
-    fn registration_config(log_dir: &std::path::Path) -> BrokerConfig {
+    fn registration_config(log_dir: &Path) -> BrokerConfig {
         BrokerConfig {
             node_id: NodeId(9),
             ..BrokerConfig::for_tests(log_dir.to_path_buf())
@@ -37,7 +41,7 @@ mod publish_race {
     fn spawn_registration(
         config: BrokerConfig,
         image_tx: &watch::Sender<Arc<MetadataImage>>,
-    ) -> tokio::task::JoinHandle<Result<Option<i64>, BrokerError>> {
+    ) -> JoinHandle<Result<Option<i64>, BrokerError>> {
         let source = FakeMetadataSource::published_image_channel(image_tx.clone());
         tokio::spawn(async move { register_broker(&config, &source).await })
     }
@@ -65,7 +69,7 @@ mod publish_race {
         // the image the test controls has not published the registration
         // yet. A `register_broker` that trusted the reply alone would have
         // returned here already.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
         assert!(
             !call.is_finished(),
             "register_broker must not return before its own registration is visible \
@@ -78,7 +82,7 @@ mod publish_race {
             .send(Arc::new(image))
             .expect("test receiver kept alive");
 
-        let result = tokio::time::timeout(Duration::from_secs(1), &mut call)
+        let result = time::timeout(Duration::from_secs(1), &mut call)
             .await
             .expect("register_broker did not observe the published image")
             .expect("register_broker task");
@@ -112,7 +116,7 @@ mod publish_race {
         let (image_tx, _keep_alive) = watch::channel(Arc::new(initial));
         let mut call = spawn_registration(config, &image_tx);
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
         assert!(
             !call.is_finished(),
             "register_broker must not return on the strength of the pre-existing (stale) \
@@ -129,7 +133,7 @@ mod publish_race {
         image_tx
             .send(Arc::new(fenced_stale))
             .expect("test receiver kept alive");
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
         assert!(
             !call.is_finished(),
             "register_broker must not return on the controller fencing the stale registration"
@@ -141,7 +145,7 @@ mod publish_race {
             .send(Arc::new(published))
             .expect("test receiver kept alive");
 
-        let result = tokio::time::timeout(Duration::from_secs(1), &mut call)
+        let result = time::timeout(Duration::from_secs(1), &mut call)
             .await
             .expect("register_broker did not observe the freshly published registration")
             .expect("register_broker task");
@@ -240,7 +244,7 @@ fn three_site_profile() -> StretchProfile {
 ///
 /// The registration record mints a directory id under `log_dir`, so the
 /// caller passes a temporary directory rather than the source tree.
-fn node_with_roles(log_dir: &std::path::Path, roles: Vec<NodeRole>) -> BrokerConfig {
+fn node_with_roles(log_dir: &Path, roles: Vec<NodeRole>) -> BrokerConfig {
     BrokerConfig {
         node_id: krabka_metadata::NodeId(4),
         roles,
@@ -252,7 +256,7 @@ fn broker_witness_record(node_id: u64, value: Option<&str>) -> krabka_metadata::
     krabka_metadata::MetadataRecord::V1BrokerConfig(krabka_metadata::BrokerConfigRecord {
         node_id: krabka_metadata::NodeId(node_id),
         config_name: "broker.witness".into(),
-        config_value: value.map(str::to_string),
+        config_value: value.map(str::to_owned),
     })
 }
 
@@ -284,7 +288,7 @@ fn registration_batch_publishes_or_clears_the_witness_role(
 fn a_stretch_profile_publishes_the_preferred_leader_site_as_a_cluster_default() {
     let config = BrokerConfig {
         stretch: Some(three_site_profile()),
-        ..BrokerConfig::for_tests(std::path::PathBuf::new())
+        ..BrokerConfig::for_tests(PathBuf::new())
     };
 
     assert!(
@@ -301,7 +305,7 @@ fn a_stretch_profile_publishes_the_preferred_leader_site_as_a_cluster_default() 
 
 #[test]
 fn a_node_without_a_stretch_profile_publishes_no_cluster_default() {
-    let config = BrokerConfig::for_tests(std::path::PathBuf::new());
+    let config = BrokerConfig::for_tests(PathBuf::new());
 
     assert!(stretch_default_records(&config) == vec![]);
 }
@@ -316,7 +320,7 @@ fn only_a_bootstrapping_controller_publishes_the_stretch_cluster_default() {
     let combined = vec![NodeRole::Broker, NodeRole::Controller];
     let stretch = BrokerConfig {
         stretch: Some(three_site_profile()),
-        ..BrokerConfig::for_tests(std::path::PathBuf::new())
+        ..BrokerConfig::for_tests(PathBuf::new())
     };
     let default = stretch_default_records(&stretch);
     // (roles, bootstrap mode, stretch profile, the records submitted)
@@ -349,7 +353,7 @@ fn only_a_bootstrapping_controller_publishes_the_stretch_cluster_default() {
             roles: roles.clone(),
             bootstrap_mode,
             stretch: has_stretch.then(three_site_profile),
-            ..BrokerConfig::for_tests(std::path::PathBuf::new())
+            ..BrokerConfig::for_tests(PathBuf::new())
         };
         submitted.push((
             roles.clone(),
@@ -383,10 +387,7 @@ fn self_controller_registration_uses_quorum_endpoint_and_feature_ranges() {
     // production levels, the node's default
     // `unstable.feature.versions.enable=false`.
     let mut expected = krabka_metadata::supported_feature_ranges();
-    expected.insert(
-        "metadata.version".into(),
-        (krabka_metadata::metadata_version::METADATA_VERSION_MIN, 30),
-    );
+    expected.insert("metadata.version".into(), (METADATA_VERSION_MIN, 30));
     expected.insert("share.version".into(), (0, 1));
     assert!(registration.features == expected);
     assert!(
@@ -445,8 +446,8 @@ fn controller_registration_starts_at_kip_919_floor_and_is_idempotent() {
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     image.apply(&krabka_metadata::MetadataRecord::V1FeatureLevel(
         krabka_metadata::FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-            level: krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL - 1,
+            name: METADATA_VERSION_FEATURE.into(),
+            level: ONLINE_DOWNGRADE_MIN_LEVEL - 1,
         },
     ));
 
@@ -454,8 +455,8 @@ fn controller_registration_starts_at_kip_919_floor_and_is_idempotent() {
 
     image.apply(&krabka_metadata::MetadataRecord::V1FeatureLevel(
         krabka_metadata::FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-            level: krabka_metadata::metadata_version::ONLINE_DOWNGRADE_MIN_LEVEL,
+            name: METADATA_VERSION_FEATURE.into(),
+            level: ONLINE_DOWNGRADE_MIN_LEVEL,
         },
     ));
     let update = controller_registration_update(&image, &registration)
@@ -630,7 +631,7 @@ mod unclean_restart {
 
         handle.shutdown().await;
 
-        assert!(crate::clean_shutdown::take(&log_dir) == epoch);
+        assert!(take(&log_dir) == epoch);
         drop(dir);
     }
 }

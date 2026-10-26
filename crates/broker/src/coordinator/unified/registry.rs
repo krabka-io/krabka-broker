@@ -22,7 +22,7 @@ use {
 /// group that does not exist: Kafka's `getOrMaybeCreateConsumerGroup` says
 /// `Consumer group <id> not found.`, and `consumerGroupLeave` reaches the
 /// generic `Group <id> not found.` through `consumerGroup`.
-pub(crate) fn consumer_group_not_found(group_id: &str, member_epoch: i32) -> String {
+pub fn consumer_group_not_found(group_id: &str, member_epoch: i32) -> String {
     if member_epoch < 0 {
         format!("Group {group_id} not found.")
     } else {
@@ -50,7 +50,7 @@ impl GroupCoordinator {
             // has exited (typically after a log-write failure). Drop the
             // entry and fall through to spawn a fresh actor.
             if !h.value().tx.is_closed() {
-                return h.value().clone();
+                return Arc::clone(h.value());
             }
             drop(h);
             self.groups.remove(group_id);
@@ -58,17 +58,12 @@ impl GroupCoordinator {
         let h = Arc::new(GroupActorHandle::spawn(
             group_id.into(),
             initial_kind,
-            self.config.clone(),
-            self.metadata.clone(),
-            self.offsets_log.clone(),
-            self.clone(),
+            Arc::clone(&self.config),
+            Arc::clone(&self.metadata),
+            Arc::clone(&self.offsets_log),
+            Arc::clone(self),
         ));
-        let inserted = self
-            .groups
-            .entry(group_id.into())
-            .or_insert(h)
-            .value()
-            .clone();
+        let inserted = Arc::clone(self.groups.entry(group_id.into()).or_insert(h).value());
         // Re-hydrate a respawned consumer actor from its last-known-good state.
         if initial_kind == GroupKindTag::Consumer
             && let Some(seed) = self.cached_seed(group_id)
@@ -100,7 +95,7 @@ impl GroupCoordinator {
 
     #[must_use]
     pub fn find(&self, group_id: &str) -> Option<Arc<GroupActorHandle>> {
-        self.groups.get(group_id).map(|e| e.value().clone())
+        self.groups.get(group_id).map(|e| Arc::clone(e.value()))
     }
 
     #[must_use]
@@ -109,23 +104,23 @@ impl GroupCoordinator {
             // Dead-actor detection: a closed mpsc sender means the actor exited
             // (typically after a log-write failure). Drop the entry and respawn.
             if !h.value().tx.is_closed() {
-                return h.value().clone();
+                return Arc::clone(h.value());
             }
             drop(h);
             self.share_groups.remove(group_id);
         }
         let h = Arc::new(ShareGroupActorHandle::spawn(
             group_id.into(),
-            self.share_config.clone(),
-            self.metadata.clone(),
-            self.clone(),
+            Arc::clone(&self.share_config),
+            Arc::clone(&self.metadata),
+            Arc::clone(self),
         ));
-        let inserted = self
-            .share_groups
-            .entry(group_id.into())
-            .or_insert(h)
-            .value()
-            .clone();
+        let inserted = Arc::clone(
+            self.share_groups
+                .entry(group_id.into())
+                .or_insert(h)
+                .value(),
+        );
         if let Some(seed) = self.cached_share_seed(group_id) {
             let _ = inserted.tx.try_send(ShareGroupActorMessage::Seed(seed));
         }
@@ -134,7 +129,9 @@ impl GroupCoordinator {
 
     #[must_use]
     pub fn find_share(&self, group_id: &str) -> Option<Arc<ShareGroupActorHandle>> {
-        self.share_groups.get(group_id).map(|e| e.value().clone())
+        self.share_groups
+            .get(group_id)
+            .map(|e| Arc::clone(e.value()))
     }
 
     /// Snapshot the ids of every live share group, per KIP-932.
@@ -156,22 +153,22 @@ impl GroupCoordinator {
             // Dead-actor detection: a closed mpsc sender means the actor exited
             // (typically after a log-write failure). Drop the entry and respawn.
             if !h.value().tx.is_closed() {
-                return h.value().clone();
+                return Arc::clone(h.value());
             }
             drop(h);
             self.streams_groups.remove(group_id);
         }
         let h = Arc::new(StreamsGroupActorHandle::spawn(
             group_id.into(),
-            self.streams_config.clone(),
-            self.clone(),
+            Arc::clone(&self.streams_config),
+            Arc::clone(self),
         ));
-        let inserted = self
-            .streams_groups
-            .entry(group_id.into())
-            .or_insert(h)
-            .value()
-            .clone();
+        let inserted = Arc::clone(
+            self.streams_groups
+                .entry(group_id.into())
+                .or_insert(h)
+                .value(),
+        );
         if let Some(seed) = self.cached_streams_seed(group_id) {
             let _ = inserted.tx.try_send(StreamsGroupActorMessage::Seed(seed));
         }
@@ -180,7 +177,9 @@ impl GroupCoordinator {
 
     #[must_use]
     pub fn find_streams(&self, group_id: &str) -> Option<Arc<StreamsGroupActorHandle>> {
-        self.streams_groups.get(group_id).map(|e| e.value().clone())
+        self.streams_groups
+            .get(group_id)
+            .map(|e| Arc::clone(e.value()))
     }
 
     /// The actor of the streams group `group_id`, when the group exists.
@@ -215,15 +214,15 @@ impl GroupCoordinator {
         let respawned = match self.streams_groups.entry(group_id.into()) {
             Entry::Vacant(_) => return None,
             Entry::Occupied(entry) if !Arc::ptr_eq(entry.get(), closed) => {
-                return Some(entry.get().clone());
+                return Some(Arc::clone(entry.get()));
             }
             Entry::Occupied(mut entry) => {
                 let respawned = Arc::new(StreamsGroupActorHandle::spawn(
                     group_id.into(),
-                    self.streams_config.clone(),
-                    self.clone(),
+                    Arc::clone(&self.streams_config),
+                    Arc::clone(self),
                 ));
-                entry.insert(respawned.clone());
+                entry.insert(Arc::clone(&respawned));
                 respawned
             }
         };
@@ -408,11 +407,11 @@ mod tests {
 
         let mut share_ids = coord.share_group_ids();
         share_ids.sort();
-        assert!(share_ids == vec!["share-a".to_string(), "share-b".to_string()]);
+        assert!(share_ids == vec!["share-a".to_owned(), "share-b".to_owned()]);
 
         let mut streams_ids = coord.streams_group_ids();
         streams_ids.sort();
-        assert!(streams_ids == vec!["streams-a".to_string()]);
+        assert!(streams_ids == vec!["streams-a".to_owned()]);
 
         coord.shutdown_all().await;
     }

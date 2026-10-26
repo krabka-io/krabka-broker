@@ -7,7 +7,7 @@
 //! retry loops around a bare `Client`, which is what keeps them together and
 //! away from the produce-side workload.
 
-pub(crate) use crate::support::topic_id_for;
+pub use crate::support::topic_id_for;
 use {
     crate::support::{
         client::connect_owned,
@@ -16,12 +16,13 @@ use {
     assert2::assert,
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 /// Fetches all records from `(topic, partition)`, starting at `start_offset`,
 /// from the broker at `bootstrap`. It retries until `expected_count` records
 /// arrive or the deadline passes. Returns the total record count.
-pub(crate) async fn fetch_all_records(
+pub async fn fetch_all_records(
     bootstrap: &str,
     topic: &str,
     partition: i32,
@@ -44,7 +45,7 @@ pub(crate) async fn fetch_all_records(
         );
         // intentional: topic-id visibility is polled over the wire client (this
         // helper has no BrokerHandle); retry until the survivor's metadata settles.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     };
 
     let mut total_records = 0usize;
@@ -99,7 +100,7 @@ pub(crate) async fn fetch_all_records(
         );
         // intentional: records are fetched over the wire client (no BrokerHandle
         // here); retry the bounded Fetch poll until the survivor serves them all.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        time::sleep(Duration::from_millis(300)).await;
     }
 
     total_records

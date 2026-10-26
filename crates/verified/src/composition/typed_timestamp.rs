@@ -55,13 +55,18 @@ pub(super) fn typed_timestamp_records_preserve_visibility(
             && decoded@[i].1@ == match append_time { Some(stamp) => stamp@, None => batch_time@ + records@[i].1@ })]
     #[variant(records@.len() - index@)]
     while index < records.len() {
-        let (offset_delta, timestamp_delta) = records[index];
-        let timestamp = timestamp_record_time(batch_time, timestamp_delta, append_time)
-            .expect("valid effective timestamp");
-        decoded.push(
-            timestamp_record_coordinates(base, offset_delta, timestamp, 0)
-                .expect("valid absolute offset"),
-        );
+        let Some(&(offset_delta, timestamp_delta)) = records.get(index) else {
+            return ListOffsetsSelectionDecision::RejectMalformed;
+        };
+        let Some(timestamp) = timestamp_record_time(batch_time, timestamp_delta, append_time)
+        else {
+            return ListOffsetsSelectionDecision::RejectMalformed;
+        };
+        let Some(coordinates) = timestamp_record_coordinates(base, offset_delta, timestamp, 0)
+        else {
+            return ListOffsetsSelectionDecision::RejectMalformed;
+        };
+        decoded.push(coordinates);
         index += 1;
     }
     let records: &[(i64, i64)] = &decoded;

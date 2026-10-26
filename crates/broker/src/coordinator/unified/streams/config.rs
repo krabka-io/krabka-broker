@@ -9,7 +9,12 @@ use {
         },
     },
     krabka_metadata::{MetadataImage, NodeId},
-    std::{borrow::Cow, collections::BTreeMap, time::Duration},
+    std::{
+        borrow::Cow,
+        collections::{BTreeMap, BTreeSet},
+        str::FromStr,
+        time::Duration,
+    },
 };
 
 /// Kafka's `group.streams.max.standby.replicas` default, which krabka does not
@@ -171,10 +176,10 @@ fn iso8601(duration: Duration) -> String {
 /// in Java. Returns `None` for a malformed or negative duration.
 fn parse_iso8601(text: &str) -> Option<Duration> {
     let lowered = text.to_ascii_lowercase();
-    let (negate, body) = match lowered.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, lowered.strip_prefix('+').unwrap_or(&lowered)),
-    };
+    let (negate, body) = lowered.strip_prefix('-').map_or_else(
+        || (false, lowered.strip_prefix('+').unwrap_or(&lowered)),
+        |rest| (true, rest),
+    );
     let body = body.strip_prefix('p')?;
     let (days_part, time_part) = match body.split_once('t') {
         Some((days, time)) => (days, Some(time)),
@@ -283,9 +288,10 @@ fn parse_signed(text: &str) -> Option<i128> {
     })
 }
 
-/// KIP-1071 streams-group membership and assignment configuration. Static
-/// broker values provide defaults; GROUP resources can override the supported
-/// `streams.*` keys for one group through `IncrementalAlterConfigs`.
+/// KIP-1071 streams-group membership and assignment configuration.
+///
+/// Static broker values provide defaults; GROUP resources can override the
+/// supported `streams.*` keys for one group through `IncrementalAlterConfigs`.
 #[krabka_macros::membership_defaults]
 #[derive(Debug, Clone, PartialEq, Eq, krabka_macros::FieldDefaults)]
 pub struct StreamsGroupConfig {
@@ -546,7 +552,7 @@ fn split_tag_list(value: &str) -> Vec<String> {
 }
 
 fn has_duplicate_tag(tags: &[String]) -> bool {
-    let distinct: std::collections::BTreeSet<&String> = tags.iter().collect();
+    let distinct: BTreeSet<&String> = tags.iter().collect();
     distinct.len() != tags.len()
 }
 
@@ -592,7 +598,7 @@ fn parse_positive_millis(key: &str, value: &str) -> Result<Duration, String> {
 
 fn parse_nonnegative<T>(key: &str, value: &str) -> Result<T, String>
 where
-    T: std::str::FromStr + PartialOrd + Default,
+    T: FromStr + PartialOrd + Default,
 {
     let parsed = value
         .parse::<T>()

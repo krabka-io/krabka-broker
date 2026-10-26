@@ -11,27 +11,27 @@ use {
         wal::{ControllerSequencer, OffsetSequencer},
     },
     krabka_raft::NodeId,
-    std::path::PathBuf,
+    std::{path::PathBuf, sync::Arc},
 };
 
 /// Only assigned replicas open a local partition.
-pub(crate) fn should_materialize_locally(replicas: &[NodeId], node_id: NodeId) -> bool {
+pub fn should_materialize_locally(replicas: &[NodeId], node_id: NodeId) -> bool {
     replicas.contains(&node_id)
 }
 
 #[derive(Clone, Copy)]
 /// The broker resources and topic settings of a committed partition batch.
-pub(crate) struct PartitionMaterialization<'a> {
-    pub(crate) broker: &'a Broker,
-    pub(crate) log_dirs: &'a [PathBuf],
-    pub(crate) diskless: bool,
-    pub(crate) topic_id: uuid::Uuid,
+pub struct PartitionMaterialization<'a> {
+    pub broker: &'a Broker,
+    pub log_dirs: &'a [PathBuf],
+    pub diskless: bool,
+    pub topic_id: uuid::Uuid,
 }
 
 impl PartitionMaterialization<'_> {
     /// Materializes each assigned local replica after the metadata commit.
     /// A failure leaves the supervisor to retry that partition.
-    pub(crate) async fn materialize(
+    pub async fn materialize(
         self,
         operation: &str,
         topic: &str,
@@ -66,11 +66,11 @@ impl PartitionMaterialization<'_> {
                     &broker.config,
                     self.diskless,
                     (
-                        Some(broker.hot_tail.clone()),
-                        Some(broker.wal_shards.clone()),
+                        Some(Arc::clone(&broker.hot_tail)),
+                        Some(Arc::clone(&broker.wal_shards)),
                         self.diskless.then(|| {
-                            std::sync::Arc::new(ControllerSequencer::new(broker.controller.clone()))
-                                as std::sync::Arc<dyn OffsetSequencer>
+                            Arc::new(ControllerSequencer::new(Arc::clone(&broker.controller)))
+                                as Arc<dyn OffsetSequencer>
                         }),
                     ),
                 ),

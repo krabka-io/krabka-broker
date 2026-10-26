@@ -61,11 +61,13 @@ pub(super) fn apply_submit_error(
         other => submit_failure_code(other, codes::UNKNOWN_SERVER_ERROR),
     };
     for creation in to_submit {
-        results[creation.result_index] = AclCreationResult {
-            error_code: code,
-            error_message: None,
-            ..Default::default()
-        };
+        if let Some(result) = results.get_mut(creation.result_index) {
+            *result = AclCreationResult {
+                error_code: code,
+                error_message: None,
+                ..Default::default()
+            };
+        }
     }
 }
 

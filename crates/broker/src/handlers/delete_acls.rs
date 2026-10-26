@@ -92,7 +92,7 @@ fn match_filter<'a>(
     Some(matched)
 }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DeleteAclsRequest,
     _version: ApiVersion,

@@ -19,13 +19,14 @@ use {
         transactions::{ProducerIdentity, init_producer_request},
     },
     assert2::assert,
-    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle, api_catalog::UnstableApiVersions},
     krabka_client_core::security::{ClientSecurity, SaslCredentials},
     krabka_client_producer::{Producer, ProducerRecord},
     krabka_protocol::owned::create_topics_request::CreatableTopicConfig,
     krabka_security::{ListenerProtocol, SaslMechanism},
     std::time::Duration,
     tempfile::TempDir,
+    tokio::{time, time::Instant},
 };
 
 pub async fn boot_single() -> (BrokerHandle, String, TempDir) { boot_single_with(|_| {}).await }
@@ -34,8 +35,7 @@ pub async fn boot_single() -> (BrokerHandle, String, TempDir) { boot_single_with
 /// cases that drive Kafka trunk's `TxnOffsetCommit` v6 (KIP-1319).
 pub async fn boot_single_trunk() -> (BrokerHandle, String, TempDir) {
     boot_single_with(|config| {
-        config.features.unstable_api_versions =
-            krabka_broker::api_catalog::UnstableApiVersions::Enabled;
+        config.features.unstable_api_versions = UnstableApiVersions::Enabled;
     })
     .await
 }
@@ -95,7 +95,7 @@ pub async fn init_transaction(
 ) -> ProducerIdentity {
     support::find_coordinator(client, support::KEY_TYPE_TRANSACTION, transactional_id).await;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let response = client
             .send(
@@ -115,10 +115,10 @@ pub async fn init_transaction(
             "InitProducerId: {response:?}"
         );
         assert!(
-            tokio::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "InitProducerId coordinator did not become ready"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -127,14 +127,14 @@ pub async fn init_transaction(
 /// `(handle, bootstrap, dir)` triple as [`boot_single`].
 pub fn boot_single_sasl(
     users: &[(&str, &str)],
-) -> impl std::future::Future<Output = (BrokerHandle, String, TempDir)> {
+) -> impl Future<Output = (BrokerHandle, String, TempDir)> {
     let dir = TempDir::new().unwrap();
     let mut cfg = sasl_plaintext_mechanisms(dir.path().to_path_buf(), vec![SaslMechanism::Plain]);
     // Match the plaintext single-broker fixture's tolerance under parallel load.
     cfg.heartbeat_timeout = krabka_units::secs(30);
     for (name, pass) in users {
         cfg.plain_credentials
-            .insert((*name).to_string(), (*pass).to_string());
+            .insert((*name).to_owned(), (*pass).to_owned());
     }
     Box::pin(async move {
         let broker = Broker::start(cfg).await.unwrap();
@@ -150,8 +150,8 @@ pub fn sasl_plain_security(user: &str, pass: &str) -> ClientSecurity {
         protocol: ListenerProtocol::SaslPlaintext,
         tls: None,
         sasl: Some(SaslCredentials::Plain {
-            username: user.to_string(),
-            password: pass.to_string(),
+            username: user.to_owned(),
+            password: pass.to_owned(),
         }),
         sasl_host: None,
     }
@@ -181,7 +181,7 @@ pub async fn send_ok(producer: &Producer, record: ProducerRecord) {
 }
 
 /// Bring up all three voters and the group coordinator before a transaction failover scenario.
-pub(crate) async fn registered_transaction_cluster(
+pub async fn registered_transaction_cluster(
     configure: impl Fn(usize, &mut BrokerConfig),
 ) -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
     let cluster = support::start_n_node_with(3, configure)

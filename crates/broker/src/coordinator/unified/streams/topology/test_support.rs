@@ -16,7 +16,7 @@ krabka_macros::single_replica_partition_fixture!(partition_record);
 
 fn topic_record(name: &str, id: u8, partitions: i32) -> TopicRecord {
     TopicRecord {
-        name: name.to_string(),
+        name: name.to_owned(),
         topic_id: Uuid::from_bytes([id; 16]),
         partitions,
         replication_factor: 1,
@@ -44,7 +44,7 @@ pub fn image_with(topics: &[(&str, u8, i32)]) -> MetadataImage {
 
 pub fn sub(id: &str) -> StoredSubtopology {
     StoredSubtopology {
-        subtopology_id: id.to_string(),
+        subtopology_id: id.to_owned(),
         source_topics: vec![],
         source_topic_regex: vec![],
         repartition_sink_topics: vec![],

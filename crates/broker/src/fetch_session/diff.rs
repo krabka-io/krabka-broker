@@ -31,7 +31,7 @@ use {
 ///
 /// `fetch_session_model` exercises the asymmetry between the OR-match forget
 /// and the either-half-match merge exhaustively.
-pub(crate) fn apply_incremental(
+pub fn apply_incremental(
     partitions: &mut SessionPartitions,
     forgotten: &[ForgottenTopic],
     topics: &[FetchTopic],
@@ -221,10 +221,7 @@ mod tests {
             topic_id: requested_id,
             partition: 0,
         };
-        for keys in [[by_name.clone(), by_id.clone()], [
-            by_id.clone(),
-            by_name.clone(),
-        ]] {
+        for keys in [[by_name.clone(), by_id.clone()], [by_id, by_name]] {
             let mut partitions: SessionPartitions = keys
                 .iter()
                 .cloned()
@@ -257,11 +254,11 @@ mod fuzz {
             owned::fetch_request::{FetchPartition, FetchTopic},
             primitives::uuid::Uuid as WireUuid,
         },
-        proptest::prelude::*,
+        proptest::{collection, prelude::*},
     };
 
     // name index 0 = empty (id-only wire form), 1 = "A", 2 = "B".
-    fn name_of(i: u8) -> String { ["", "A", "B"][i as usize].to_string() }
+    fn name_of(i: u8) -> String { ["", "A", "B"][i as usize].to_owned() }
     // id index 0 = ZERO (name-only wire form), 1 = U, 2 = V.
     fn id_of(i: u8) -> WireUuid {
         [WireUuid::ZERO, WireUuid([1; 16]), WireUuid([2; 16])][i as usize]
@@ -271,7 +268,7 @@ mod fuzz {
         #![proptest_config(ProptestConfig::with_cases(2000))]
         #[test]
         fn forget_merge_invariants(
-            ops in proptest::collection::vec(
+            ops in collection::vec(
                 // (forget name, forget id, forget partition,
                 //  do-subscribe, sub name, sub id, sub partition, sub max_bytes)
                 (0u8..3, 0u8..3, 0i32..2, any::<bool>(), 0u8..3, 0u8..3, 0i32..2, 1i32..4),

@@ -18,7 +18,10 @@ use {
         ByteSize,
         prelude::{ByteSizeExt as _, mebibytes},
     },
-    std::sync::{Arc, Mutex},
+    std::{
+        io,
+        sync::{Arc, Mutex},
+    },
 };
 
 type CheckedBatches = (Vec<ProduceData>, Vec<Option<ProducerAppendCheck>>);
@@ -214,20 +217,22 @@ fn try_append_direct_group(
         .collect::<Option<Vec<_>>>()?;
     let mut remaining = batches.as_slice();
     let mut results = Vec::with_capacity(datas.len());
-    while !remaining.is_empty() {
+    while let Some((&first, after_first)) = remaining.split_first() {
         let count = direct_group_len(remaining);
-        if let Some(result) = log.try_append_verbatim_group(&remaining[..count]) {
+        if let Some((group, after)) = remaining.split_at_checked(count)
+            && let Some(result) = log.try_append_verbatim_group(group)
+        {
             results.extend(direct_group_results(result, count));
-            remaining = &remaining[count..];
+            remaining = after;
         } else {
             // A roll or an empty segment needs one ordinary append before
             // the following batches can share its Direct I/O write.
             results.push(
-                log.append_verbatim(remaining[0])
+                log.append_verbatim(first)
                     .map(|(base, stamp)| appended(base, stamp))
                     .map_err(Into::into),
             );
-            remaining = &remaining[1..];
+            remaining = after_first;
         }
     }
     Some(results)
@@ -261,7 +266,7 @@ fn direct_group_results(
             for _ in 1..count {
                 let failure = match &error {
                     krabka_log::LogError::Io(io) => {
-                        krabka_log::LogError::Io(std::io::Error::new(io.kind(), io.to_string()))
+                        krabka_log::LogError::Io(io::Error::new(io.kind(), io.to_string()))
                     }
                     other => krabka_log::LogError::Corrupt(other.to_string()),
                 };
@@ -284,13 +289,10 @@ fn append_produce_batch_at(
     let mut results = Vec::with_capacity(datas.len());
     let mut control_entries = Vec::new();
     for (index, data) in datas.into_iter().enumerate() {
-        let count = i64::from(data.record_count());
+        let count = data.record_count();
         let control_producer = data.control_producer_id();
-        let result = if let Some(refused) = refuse_transactional_append(guard, checks.get(index)) {
-            Err(refused)
-        } else {
-            append_data(guard, data, Some(next))
-        };
+        let result = refuse_transactional_append(guard, checks.get(index))
+            .map_or_else(|| append_data(guard, data, Some(next)), Err);
         capture_control_entry(
             guard,
             result.is_ok(),
@@ -306,7 +308,7 @@ fn append_produce_batch_at(
 }
 
 /// Run [`append_produce_batch`] under `log`'s lock: on the calling task for page-cache writes or one verbatim append that fits an initialized direct queue. Flushes, segment setup, backpressure, and lock contention use blocking placement; see [`run_page_cache_io`].
-pub(crate) async fn run_produce_append_batch(
+pub async fn run_produce_append_batch(
     log: &Arc<Mutex<Log>>,
     high_watermark: Option<Offset>,
     datas: CheckedBatches,
@@ -317,7 +319,7 @@ pub(crate) async fn run_produce_append_batch(
     .await
 }
 
-pub(crate) async fn run_produce_append_batch_at(
+pub async fn run_produce_append_batch_at(
     log: &Arc<Mutex<Log>>,
     base: Offset,
     high_watermark: Option<Offset>,
@@ -386,20 +388,27 @@ mod tests {
         assert2::{assert, check},
         krabka_compression::CompressionType,
         krabka_log::{LogConfig, LogIo},
+        krabka_protocol::{records, records::TimestampType},
+        std::{
+            fs::File,
+            io, iter,
+            path::Path,
+            sync::{atomic, atomic::AtomicUsize},
+        },
         tempfile::tempdir,
     };
 
     #[derive(Debug)]
     struct FailNthWrite {
-        next: std::sync::atomic::AtomicUsize,
+        next: AtomicUsize,
         fail_at: usize,
     }
 
     impl FailNthWrite {
-        fn check_write(&self) -> std::io::Result<()> {
-            let call = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        fn check_write(&self) -> io::Result<()> {
+            let call = self.next.fetch_add(1, atomic::Ordering::Relaxed) + 1;
             if call == self.fail_at {
-                Err(std::io::ErrorKind::StorageFull.into())
+                Err(io::ErrorKind::StorageFull.into())
             } else {
                 Ok(())
             }
@@ -407,27 +416,22 @@ mod tests {
     }
 
     impl LogIo for FailNthWrite {
-        fn write(&self, file: &std::fs::File, buf: &[u8]) -> std::io::Result<usize> {
+        fn write(&self, file: &File, buf: &[u8]) -> io::Result<usize> {
             use std::io::Write;
 
             self.check_write()?;
             (&*file).write(buf)
         }
 
-        fn open_direct(&self, path: &std::path::Path) -> std::io::Result<krabka_log::DirectFile> {
+        fn open_direct(&self, path: &Path) -> io::Result<krabka_log::DirectFile> {
             Ok(krabka_log::DirectFile {
-                file: std::fs::File::options().read(true).write(true).open(path)?,
+                file: File::options().read(true).write(true).open(path)?,
                 mem_align: 1,
                 block: 1,
             })
         }
 
-        fn write_direct(
-            &self,
-            file: &std::fs::File,
-            buf: &[u8],
-            offset: u64,
-        ) -> std::io::Result<usize> {
+        fn write_direct(&self, file: &File, buf: &[u8], offset: u64) -> io::Result<usize> {
             use std::io::{Seek, SeekFrom, Write};
 
             self.check_write()?;
@@ -437,7 +441,7 @@ mod tests {
         }
     }
 
-    fn lz4_log(path: &std::path::Path) -> Mutex<Log> {
+    fn lz4_log(path: &Path) -> Mutex<Log> {
         Mutex::new(
             Log::open(path, LogConfig {
                 compression_type: Some(CompressionType::Lz4),
@@ -447,10 +451,10 @@ mod tests {
         )
     }
 
-    fn failing_log(path: &std::path::Path) -> Mutex<Log> {
+    fn failing_log(path: &Path) -> Mutex<Log> {
         let mut log = Log::open(path, LogConfig::default()).expect("open log");
         log.test_set_io(Arc::new(FailNthWrite {
-            next: std::sync::atomic::AtomicUsize::new(0),
+            next: AtomicUsize::new(0),
             fail_at: 2,
         }));
         Mutex::new(log)
@@ -460,14 +464,14 @@ mod tests {
         assert!(results[0].as_ref().unwrap().base_offset == Offset(0));
         assert!(matches!(
             &results[1],
-            Err(crate::error::BrokerError::Log(krabka_log::LogError::Io(error)))
-                if error.kind() == std::io::ErrorKind::StorageFull
+            Err(BrokerError::Log(krabka_log::LogError::Io(error)))
+                if error.kind() == io::ErrorKind::StorageFull
         ));
         assert!(leo == Offset(1));
     }
 
     fn two_single_record_batches() -> Vec<ProduceData> {
-        std::iter::repeat_with(|| ProduceData::Owned(sample_batch().call()))
+        iter::repeat_with(|| ProduceData::Owned(sample_batch().call()))
             .take(2)
             .collect()
     }
@@ -484,14 +488,14 @@ mod tests {
         if seeded {
             log.append(&mut sample_batch().call()).unwrap();
         }
-        log.test_set_io(disk.clone());
+        log.test_set_io(Arc::<FailNthWrite>::clone(disk));
         log.set_config(LogConfig {
             segment_allocation: krabka_log::SegmentAllocation::Preallocate,
             segment_size: mebibytes(16),
             message_timestamp_type: if append_time {
-                krabka_protocol::records::TimestampType::LogAppendTime
+                TimestampType::LogAppendTime
             } else {
-                krabka_protocol::records::TimestampType::CreateTime
+                TimestampType::CreateTime
             },
             ..LogConfig::default()
         });
@@ -504,10 +508,10 @@ mod tests {
         sample.records[0].value = Some(bytes::Bytes::from(vec![7; payload]));
         sample.encode(&mut bytes).unwrap();
         let bytes = bytes.freeze();
-        let validated = krabka_protocol::records::validate_one_v2_batch(&bytes).unwrap();
+        let validated = records::validate_one_v2_batch(&bytes).unwrap();
         let batch = krabka_log::VerbatimBatch::from_header(validated.header, bytes.clone());
-        (0..jobs)
-            .map(|_| ProduceData::Verbatim(batch.clone()))
+        iter::repeat_with(|| ProduceData::Verbatim(batch.clone()))
+            .take(jobs)
             .collect()
     }
 
@@ -524,7 +528,7 @@ mod tests {
             (8, 0, true, true),
         ] {
             let disk = Arc::new(FailNthWrite {
-                next: std::sync::atomic::AtomicUsize::new(0),
+                next: AtomicUsize::new(0),
                 fail_at: usize::MAX,
             });
             let (_dir, log) = preallocated_log(seeded, append_time, &disk);
@@ -549,10 +553,9 @@ mod tests {
             assert!(leo == Offset(end));
             let mut log = lock_log(&log);
             log.sync().unwrap();
-            assert!(
-                log.read(Offset(0), mebibytes(16)).unwrap().batches.len()
-                    == usize::try_from(leo.0).unwrap()
-            );
+            let read = log.read(Offset(0), mebibytes(16)).unwrap();
+            drop(log);
+            assert!(read.batches.len() == usize::try_from(leo.0).unwrap());
         }
     }
 
@@ -563,7 +566,7 @@ mod tests {
     #[test]
     fn a_direct_write_that_fails_after_the_ack_fails_the_next_group() {
         let disk = Arc::new(FailNthWrite {
-            next: std::sync::atomic::AtomicUsize::new(0),
+            next: AtomicUsize::new(0),
             fail_at: 1,
         });
         let (_dir, log) = preallocated_log(true, false, &disk);
@@ -579,8 +582,8 @@ mod tests {
         let (next, _, _) =
             append_produce_batch(&mut lock_log(&log), None, (verbatim_jobs(8, 0), Vec::new()));
         assert!(next.iter().all(|result| matches!(result,
-            Err(crate::error::BrokerError::Log(krabka_log::LogError::Io(error)))
-            if error.kind() == std::io::ErrorKind::StorageFull)));
+            Err(BrokerError::Log(krabka_log::LogError::Io(error)))
+            if error.kind() == io::ErrorKind::StorageFull)));
     }
 
     #[test]
@@ -747,7 +750,7 @@ mod tests {
                 name: "zstd on a LogAppendTime partition",
                 log: LogConfig {
                     compression_type: Some(CompressionType::Zstd),
-                    message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
+                    message_timestamp_type: TimestampType::LogAppendTime,
                     ..LogConfig::default()
                 },
                 gate_codec: CompressionType::Zstd,
@@ -765,7 +768,7 @@ mod tests {
                 name: "gzip level changed after the gates",
                 log: LogConfig {
                     compression_gzip_level: 9,
-                    ..gzip.clone()
+                    ..gzip
                 },
                 gate_codec: CompressionType::Gzip,
                 gate_level: Some(1),
@@ -828,9 +831,7 @@ mod tests {
                     "{name}"
                 );
             }
-            if case.log.message_timestamp_type
-                == krabka_protocol::records::TimestampType::CreateTime
-            {
+            if case.log.message_timestamp_type == TimestampType::CreateTime {
                 check!(candidate.raw == reference.raw, "{name}");
                 check!(candidate.producer == reference.producer, "{name}");
             } else {
@@ -867,7 +868,7 @@ mod tests {
     /// end-transaction marker Kafka writes, a 4-byte key (version 0, type 1)
     /// and a 6-byte value (version 0, coordinator epoch 17), so the append
     /// path's control-record check accepts it.
-    fn commit_marker_batch() -> krabka_protocol::records::RecordBatch {
+    fn commit_marker_batch() -> RecordBatch {
         let mut marker = sample_batch().call();
         marker.attributes = marker
             .attributes
@@ -882,7 +883,7 @@ mod tests {
         marker
     }
 
-    fn one_appended_batch(log: &Mutex<Log>) -> krabka_protocol::records::RecordBatch {
+    fn one_appended_batch(log: &Mutex<Log>) -> RecordBatch {
         let read = log
             .lock()
             .unwrap()

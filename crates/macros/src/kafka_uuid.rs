@@ -1,8 +1,11 @@
 //! Display, parsing and string serde for the format crate's Kafka UUID wrappers.
 
-use moxy::ast::{ItemStruct, ParseError};
+use moxy::{
+    ast::{ItemStruct, ParseError},
+    token::TokenStream,
+};
 
-pub(crate) fn expand(item: ItemStruct) -> Result<moxy::token::TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     use crate::meta::inner_type;
 
     inner_type(&item, "KafkaUuid")?;
@@ -47,7 +50,7 @@ pub(crate) fn expand(item: ItemStruct) -> Result<moxy::token::TokenStream, Parse
 
 #[cfg(test)]
 mod tests {
-    use {super::expand, crate::meta::compact, assert2::assert};
+    use {super::expand, crate::meta::compact, assert2::assert, moxy::ast::ItemStruct};
 
     #[yare::parameterized(
         unit_struct = { "struct Id;" },
@@ -57,13 +60,13 @@ mod tests {
         const_generic = { "struct Id<const DOMAIN: u8>(Uuid);" },
     )]
     fn refuses_non_newtypes_and_generic_wrappers(input: &str) {
-        let item: moxy::ast::ItemStruct = moxy::parse!({ input }).unwrap();
+        let item: ItemStruct = moxy::parse!({ input }).unwrap();
         assert2::assert!(expand(item).is_err(), "{input}");
     }
 
     #[test]
     fn emits_the_four_trait_implementations_for_a_single_field_wrapper() {
-        let item: moxy::ast::ItemStruct = moxy::parse!("pub struct Id(pub Uuid);").unwrap();
+        let item: ItemStruct = moxy::parse!("pub struct Id(pub Uuid);").unwrap();
         let output = compact(&expand(item).unwrap());
         assert!(output.contains("DisplayforId"));
         assert!(output.contains("FromStrforId"));

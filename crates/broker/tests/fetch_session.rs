@@ -4,6 +4,7 @@
 //! These tests drive the wire protocol directly through the shared `Client`,
 //! so they exercise the exact `session_id` / `session_epoch` paths
 //! end-to-end.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -16,6 +17,7 @@ use {
         produce::{SinglePartitionProduceSetup, batch_request},
     },
     assert2::{assert, check},
+    krabka_protocol::owned::fetch_response::FetchResponse,
 };
 mod support;
 
@@ -32,10 +34,7 @@ const INVALID_FETCH_SESSION_EPOCH: i16 = 71;
 
 use crate::support::records::empty_record_batch as one_record_batch;
 
-async fn incremental_after_produce(
-    process: &support::InProcess,
-    session: i32,
-) -> krabka_protocol::owned::fetch_response::FetchResponse {
+async fn incremental_after_produce(process: &support::InProcess, session: i32) -> FetchResponse {
     process
         .client
         .send(
@@ -355,7 +354,7 @@ async fn open_session(
     tid: WireUuid,
     partitions: i32,
     max_wait_ms: i32,
-) -> krabka_protocol::owned::fetch_response::FetchResponse {
+) -> FetchResponse {
     client
         .send(
             build_fetch_session_request()
@@ -383,7 +382,7 @@ async fn open_session(
 struct TopicSession {
     p: support::InProcess,
     tid: WireUuid,
-    response: krabka_protocol::owned::fetch_response::FetchResponse,
+    response: FetchResponse,
 }
 
 /// Creates t and opens a full fetch session with the caller's wait and partition count.

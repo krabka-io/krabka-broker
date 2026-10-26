@@ -5,13 +5,13 @@
 
 #![cfg_attr(creusot, allow(dead_code))] // Theorems are checked without a runtime caller.
 
-pub(super) use crate::broker::FetchVisibility;
+pub use crate::broker::FetchVisibility;
 #[cfg(creusot)]
 pub(super) use crate::broker::{clamped_fetch_watermarks, committed_fetch_response};
 #[cfg(creusot)]
 pub(super) use crate::leader_epoch::kafka_end_offset_for;
 
-pub(super) mod oauth_jwks_prelude {
+pub mod oauth_jwks_prelude {
     pub(super) use crate::{
         jwks::{JwksCacheDecision, JwksCacheFacts, jwks_cache_admission},
         oauth::{
@@ -269,11 +269,14 @@ fn remote_retention_facts(
         && facts@[j].time_expired == finished@[j].3 && facts@[j].size == finished@[j].2)]
     #[variant(finished@.len() - i@)]
     while i < finished.len() {
+        let Some(&(_, last, size, time_expired)) = finished.get(i) else {
+            break;
+        };
         facts.push(RemoteRetentionSegment {
             blocked: false,
-            log_start_breached: matches!(deleted_below, Some(floor) if finished[i].1 < floor),
-            time_expired: finished[i].3,
-            size: finished[i].2,
+            log_start_breached: matches!(deleted_below, Some(floor) if last < floor),
+            time_expired,
+            size,
         });
         i += 1;
     }

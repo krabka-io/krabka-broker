@@ -157,7 +157,7 @@ impl Request {
     }
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let requests = requests(&input.clone().into())?;
     let native_bodies = native_braced_bodies(input);
     if native_bodies.len() != requests.len() {

@@ -51,6 +51,7 @@
 //! - [`high_watermark`] -- `LATEST` against an unacknowledged tail.
 //! - [`timestamp_sentinels`] -- `MAX_TIMESTAMP` and a lookup by timestamp.
 //! - [`wire`] -- the requests the cases send and the rows they expect back.
+#![cfg(test)]
 
 mod support;
 

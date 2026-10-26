@@ -26,18 +26,19 @@ use {
         leave_group_request::LeaveGroupRequest,
         leave_group_response::{LeaveGroupResponse, MemberResponse},
     },
+    std::sync::Arc,
 };
 
 #[cfg(test)]
 mod tests;
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: LeaveGroupRequest,
     version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<LeaveGroupResponse, BrokerError> {
-    let coordinator = broker.group_coordinator.clone();
+    let coordinator = Arc::clone(&broker.group_coordinator);
 
     // ── ACL preamble ────────────────────────────────────────────────
     // `Read` on `Group(group_id)`. On Deny → whole-response

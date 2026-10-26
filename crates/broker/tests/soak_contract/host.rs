@@ -4,16 +4,19 @@
 
 /// The wall clock, shared with the load so every timestamp of the evidence is
 /// in one coordinate.
-pub(crate) use krabka_bench_driver::soak::client::now_ms;
+pub use krabka_bench_driver::soak::client::now_ms;
 use {
     serde::Serialize,
     std::{
         collections::BTreeMap,
-        fs::{File, OpenOptions},
+        env,
+        fs::{self, File, OpenOptions},
         io::Write as _,
+        num::NonZero,
         path::{Path, PathBuf},
         process::Command,
         sync::Mutex,
+        thread,
     },
 };
 
@@ -23,7 +26,7 @@ use {
 /// Fault injection and cleanup run through this rather than through the
 /// panicking `support::docker`: a cleanup that fails is recorded in the
 /// evidence, and a panic in a `Drop` would hide the real failure.
-pub(crate) fn docker_try(args: &[&str]) -> Result<String, String> {
+pub fn docker_try(args: &[&str]) -> Result<String, String> {
     let output = Command::new("docker")
         .args(args)
         .output()
@@ -46,7 +49,7 @@ pub(crate) fn docker_try(args: &[&str]) -> Result<String, String> {
 ///
 /// A variable exported empty counts as unset, so it does not hide the one
 /// below it.
-pub(crate) fn chosen_evidence_dir(
+pub fn chosen_evidence_dir(
     explicit: Option<String>,
     bazel_outputs: Option<String>,
 ) -> Option<PathBuf> {
@@ -57,10 +60,10 @@ pub(crate) fn chosen_evidence_dir(
 }
 
 /// The evidence directory for this run, created if need be.
-pub(crate) fn evidence_dir() -> PathBuf {
+pub fn evidence_dir() -> PathBuf {
     let dir = chosen_evidence_dir(
-        std::env::var("KRABKA_SOAK_EVIDENCE_DIR").ok(),
-        std::env::var("TEST_UNDECLARED_OUTPUTS_DIR").ok(),
+        env::var("KRABKA_SOAK_EVIDENCE_DIR").ok(),
+        env::var("TEST_UNDECLARED_OUTPUTS_DIR").ok(),
     )
     .unwrap_or_else(|| {
         // Kept, not removed on drop: the evidence is the point of the run.
@@ -70,26 +73,25 @@ pub(crate) fn evidence_dir() -> PathBuf {
             .expect("create an evidence directory")
             .keep()
     });
-    std::fs::create_dir_all(&dir)
-        .unwrap_or_else(|error| panic!("create {}: {error}", dir.display()));
+    fs::create_dir_all(&dir).unwrap_or_else(|error| panic!("create {}: {error}", dir.display()));
     dir
 }
 
 /// Write `value` as pretty JSON to `dir/name`.
-pub(crate) fn write_json(dir: &Path, name: &str, value: &impl Serialize) {
+pub fn write_json(dir: &Path, name: &str, value: &impl Serialize) {
     let text = serde_json::to_string_pretty(value).expect("evidence serializes");
     // Through a sibling and a rename, so a checkpoint the run dies in the
     // middle of leaves the previous one whole.
     let partial = dir.join(format!("{name}.tmp"));
-    std::fs::write(&partial, text)
-        .and_then(|()| std::fs::rename(&partial, dir.join(name)))
+    fs::write(&partial, text)
+        .and_then(|()| fs::rename(&partial, dir.join(name)))
         .unwrap_or_else(|error| panic!("write {name}: {error}"));
 }
 
 /// `faults.jsonl`: one line when a fault is injected and one when it is
 /// cleared, appended as it happens, so a run that dies mid-way still leaves
 /// its fault timeline behind.
-pub(crate) struct FaultLog {
+pub struct FaultLog {
     file: Mutex<File>,
 }
 
@@ -119,7 +121,7 @@ impl FaultLog {
 }
 
 /// `MemTotal` in bytes, from a `/proc/meminfo` body.
-pub(crate) fn mem_total_bytes(meminfo: &str) -> Option<u64> {
+pub fn mem_total_bytes(meminfo: &str) -> Option<u64> {
     let line = meminfo.lines().find(|line| line.starts_with("MemTotal:"))?;
     let mut fields = line.split_whitespace().skip(1);
     let kibibytes: u64 = fields.next()?.parse().ok()?;
@@ -128,7 +130,7 @@ pub(crate) fn mem_total_bytes(meminfo: &str) -> Option<u64> {
 
 /// The available bytes `df -B1 --output=avail` printed: a header, then the
 /// number.
-pub(crate) fn df_available_bytes(output: &str) -> Option<u64> {
+pub fn df_available_bytes(output: &str) -> Option<u64> {
     output.lines().nth(1)?.trim().parse().ok()
 }
 
@@ -136,7 +138,7 @@ pub(crate) fn df_available_bytes(output: &str) -> Option<u64> {
 ///
 /// Read through `df`, which every runner has, because the broker's
 /// dependencies expose no `statvfs`.
-pub(crate) fn free_bytes(path: &Path) -> Option<u64> {
+pub fn free_bytes(path: &Path) -> Option<u64> {
     let output = Command::new("df")
         .args(["-B1", "--output=avail"])
         .arg(path)
@@ -147,7 +149,7 @@ pub(crate) fn free_bytes(path: &Path) -> Option<u64> {
 
 /// The broker image and how the daemon identifies it: its id, and its
 /// registry digests where it has any.
-pub(crate) fn image_identity(image: &str) -> String {
+pub fn image_identity(image: &str) -> String {
     match docker_try(&[
         "image",
         "inspect",
@@ -161,11 +163,11 @@ pub(crate) fn image_identity(image: &str) -> String {
 }
 
 /// What the run measured its host as.
-pub(crate) fn environment(data_dir: &Path, image: &str) -> BTreeMap<String, String> {
+pub fn environment(data_dir: &Path, image: &str) -> BTreeMap<String, String> {
     let mut environment = BTreeMap::new();
-    let cpus = std::thread::available_parallelism().map_or(0, std::num::NonZero::get);
+    let cpus = thread::available_parallelism().map_or(0, NonZero::get);
     environment.insert("cpus".to_owned(), cpus.to_string());
-    if let Some(memory) = std::fs::read_to_string("/proc/meminfo")
+    if let Some(memory) = fs::read_to_string("/proc/meminfo")
         .ok()
         .as_deref()
         .and_then(mem_total_bytes)

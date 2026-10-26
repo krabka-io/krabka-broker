@@ -36,10 +36,11 @@ use {
         metadata_source::MetadataSource,
     },
     krabka_protocol::owned::{
-        streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
+        streams_group_heartbeat_request::{StreamsGroupHeartbeatRequest, Topology},
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
     std::{collections::BTreeMap, sync::Arc, time::Instant},
+    tokio::time,
 };
 
 /// Fences each member silent past the session timeout, and each member past
@@ -162,7 +163,7 @@ pub(super) async fn handle_heartbeat(
             && actor.initial_rebalance_deadline.is_none()
         {
             actor.initial_rebalance_deadline =
-                Some(tokio::time::Instant::now() + config.initial_rebalance_delay);
+                Some(time::Instant::now() + config.initial_rebalance_delay);
         }
         let m = build_member(&new_member_id, req, client_id, client_host, now);
         actor.state.add_or_update_member(m);
@@ -232,7 +233,10 @@ pub(super) async fn handle_heartbeat(
             epoch_error_message(actor, req, error_code),
         ));
     }
-    let before = MemberBefore::of(&actor.state.members[&req.member_id]);
+    let Some(member) = actor.state.members.get(&req.member_id) else {
+        return Ok(error_resp(codes::UNKNOWN_MEMBER_ID, None));
+    };
+    let before = MemberBefore::of(member);
     if let Some(resp) = topology_error(actor, req, metadata_source) {
         return Ok(resp);
     }
@@ -319,7 +323,9 @@ fn accepted_response(
     before: &MemberBefore,
     group_existed: bool,
 ) -> StreamsGroupHeartbeatResponse {
-    let member = &actor.state.members[member_id];
+    let Some(member) = actor.state.members.get(member_id) else {
+        return error_resp(codes::UNKNOWN_MEMBER_ID, None);
+    };
     let tasks = [
         member.active.clone(),
         member.standby.clone(),
@@ -355,7 +361,7 @@ fn accepted_response(
     }
     build_assignment_resp(&actor.state, member_id, config, ResponseDelta {
         send_tasks: req.member_epoch == 0 || tasks_changed,
-        assignment_delayed: assignment_delay(actor, config, tokio::time::Instant::now()),
+        assignment_delayed: assignment_delay(actor, config, time::Instant::now()),
         endpoint_information_epoch: actor.state.endpoint_information_epoch,
         partitions_by_user_endpoint,
     })
@@ -513,19 +519,20 @@ fn update_member_steady_state(
         return false;
     };
     m.last_seen = now;
-    let mut changed = false;
 
     // Kafka's `hasStreamsMemberMetadataChanged` compares the whole member, its
     // client id and host included, and a dynamic member that changed bumps
     // the group epoch.
-    if m.client_id != client_id || m.client_host != client_host {
-        m.client_id = client_id.to_string();
-        m.client_host = client_host.to_string();
+    let mut changed = if m.client_id != client_id || m.client_host != client_host {
+        client_id.clone_into(&mut m.client_id);
+        client_host.clone_into(&mut m.client_host);
         if req.instance_id.is_none() {
             actor.state.dirty = true;
         }
-        changed = true;
-    }
+        true
+    } else {
+        false
+    };
     let epoch_relevant = |m: &StreamsMemberState| {
         (
             m.topology_epoch,
@@ -707,8 +714,12 @@ fn static_member_error(
 ) -> Option<StreamsGroupHeartbeatResponse> {
     if req.member_epoch == 0 {
         let existing = existing?;
-        let released =
-            actor.state.members[existing].member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH;
+        // An instance id whose member is gone is not held any more.
+        let released = actor
+            .state
+            .members
+            .get(existing)
+            .is_none_or(|member| member.member_epoch == LEAVE_GROUP_STATIC_MEMBER_EPOCH);
         return (!released).then(|| {
             error_resp(
                 codes::UNRELEASED_INSTANCE_ID,
@@ -753,7 +764,7 @@ fn replace_static_member(actor: &mut ActorState, previous: &str, member_id: &str
     if member_id != previous {
         state.remove_member(member_id);
     }
-    member.member_id = member_id.to_string();
+    member_id.clone_into(&mut member.member_id);
     member.member_epoch = 0;
     member.previous_member_epoch = 0;
     for role in [
@@ -763,14 +774,14 @@ fn replace_static_member(actor: &mut ActorState, previous: &str, member_id: &str
     ] {
         match role.remove(previous) {
             Some(tasks) => {
-                role.insert(member_id.to_string(), tasks);
+                role.insert(member_id.to_owned(), tasks);
             }
             None => {
                 role.remove(member_id);
             }
         }
     }
-    state.members.insert(member_id.to_string(), member);
+    state.members.insert(member_id.to_owned(), member);
 }
 
 /// Kafka's `streamsGroupStaticMemberGroupLeave`: the static member stays in
@@ -804,10 +815,7 @@ async fn leave_static_member(
 /// Accepts a client-supplied topology. It stores the resolved value for
 /// persistence and reconcile, stamps the epoch on the state handle, and marks
 /// the group dirty.
-fn accept_topology(
-    actor: &mut ActorState,
-    wire_topology: &krabka_protocol::owned::streams_group_heartbeat_request::Topology,
-) {
+fn accept_topology(actor: &mut ActorState, wire_topology: &Topology) {
     let stored = topology::to_stored_topology(wire_topology);
     actor.state.topology = Some(StoredTopologyHandle {
         epoch: stored.epoch,

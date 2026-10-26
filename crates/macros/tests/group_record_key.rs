@@ -1,4 +1,5 @@
 //! Compiled group-key adapters preserve legacy framing and decoder boundaries.
+#![cfg(test)]
 
 use {
     assert2::assert,

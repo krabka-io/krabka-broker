@@ -167,7 +167,7 @@ async fn drive(
         group_id: group.clone(),
         topics: vec![
             super::test_topic_row()
-                .name(name.to_string())
+                .name(name.to_owned())
                 .topic_id(topic_id.0)
                 .call(),
         ],
@@ -183,7 +183,7 @@ async fn drive(
             name: if id_only {
                 String::new()
             } else {
-                name.to_string()
+                name.to_owned()
             },
             topic_id: if id_only { topic_id } else { WireUuid::ZERO },
             partitions: vec![OffsetCommitResponsePartition {
@@ -306,7 +306,7 @@ async fn refused_rows_precede_the_committed_row() {
         ..Default::default()
     };
     let request = OffsetCommitRequest {
-        group_id: GROUP.to_string(),
+        group_id: GROUP.to_owned(),
         topics: vec![row(known_id), row(WireUuid::ZERO), row(UNKNOWN_ID)],
         ..Default::default()
     };
@@ -378,7 +378,7 @@ async fn unknown_partition_answers_on_its_own_row() {
         let request = OffsetCommitRequest {
             group_id: group.clone(),
             topics: vec![OffsetCommitRequestTopic {
-                name: name.to_string(),
+                name: name.to_owned(),
                 topic_id,
                 partitions: vec![partition(MISSING_PARTITION), partition(0)],
                 ..Default::default()
@@ -387,7 +387,7 @@ async fn unknown_partition_answers_on_its_own_row() {
         };
         let response: OffsetCommitResponse = dispatch_wire(
             &shared,
-            krabka_protocol::owned::offset_commit_request::API_KEY,
+            offset_commit_request::API_KEY,
             version,
             &request,
             &ctx,
@@ -398,7 +398,7 @@ async fn unknown_partition_answers_on_its_own_row() {
             version,
             OffsetCommitResponse {
                 topics: vec![OffsetCommitResponseTopic {
-                    name: name.to_string(),
+                    name: name.to_owned(),
                     topic_id,
                     partitions: vec![
                         answer(MISSING_PARTITION, codes::UNKNOWN_TOPIC_OR_PARTITION),

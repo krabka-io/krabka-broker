@@ -3,6 +3,7 @@
 //! These tests are gated off Windows, like the other multi-broker tests.
 //! openraft and `tokio` scheduling on Windows runners cause flakes that have
 //! nothing to do with the protocol under test.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -270,46 +271,49 @@ async fn read_committed_under_rf1_unchanged() {
     // FindCoordinator. Bring the transaction coordinator up first.
     broker.wait_until_transaction_coordinator_ready().await;
 
-    let producer = transactional_producer(bootstrap.clone(), "rc-tid").await;
-    let txn = producer.begin_transaction().await.unwrap();
-    for v in ["p", "q", "r"] {
-        drop(
-            producer
-                .enqueue(
-                    producer_record()
-                        .topic(("rctxn").into())
-                        .value(Some(Bytes::from(v.to_string())))
-                        .call(),
-                )
-                .await
-                .expect("record is queued"),
-        );
-    }
-    txn.commit().await.unwrap();
-
-    let mut consumer = Consumer::builder()
-        .bootstrap(bootstrap)
-        .group_id("rc-g")
-        .auto_offset_reset(AutoOffsetReset::Earliest)
-        .isolation_level(IsolationLevel::ReadCommitted)
-        .subscribe(["rctxn".to_string()])
-        .build()
-        .await
-        .unwrap();
-
-    // Await the records committed to the local log before polling the consumer
-    // so the consumer poll returns promptly rather than racing the commit.
-    broker.wait_until_local_log_end_offset("rctxn", 0, 3).await;
-
-    let mut seen: Vec<String> = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while seen.len() < 3 && Instant::now() < deadline {
-        for r in consumer.poll(krabka_units::millis(200)).await.unwrap() {
-            seen.push(String::from_utf8_lossy(r.value.as_deref().unwrap_or(b"")).into_owned());
+    let consumer = {
+        let producer = transactional_producer(bootstrap.clone(), "rc-tid").await;
+        let txn = producer.begin_transaction().await.unwrap();
+        for v in ["p", "q", "r"] {
+            drop(
+                producer
+                    .enqueue(
+                        producer_record()
+                            .topic(("rctxn").into())
+                            .value(Some(Bytes::from(v.to_owned())))
+                            .call(),
+                    )
+                    .await
+                    .expect("record is queued"),
+            );
         }
+        txn.commit().await.unwrap();
+
+        let mut consumer = Consumer::builder()
+            .bootstrap(bootstrap)
+            .group_id("rc-g")
+            .auto_offset_reset(AutoOffsetReset::Earliest)
+            .isolation_level(IsolationLevel::ReadCommitted)
+            .subscribe(["rctxn".to_owned()])
+            .build()
+            .await
+            .unwrap();
+
+        // Await the records committed to the local log before polling the consumer
+        // so the consumer poll returns promptly rather than racing the commit.
+        broker.wait_until_local_log_end_offset("rctxn", 0, 3).await;
+
+        let mut seen: Vec<String> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while seen.len() < 3 && Instant::now() < deadline {
+            for r in consumer.poll(krabka_units::millis(200)).await.unwrap() {
+                seen.push(String::from_utf8_lossy(r.value.as_deref().unwrap_or(b"")).into_owned());
+            }
+        }
+        assert!(seen == vec!["p", "q", "r"]);
+        producer.close().await.map(|()| consumer)
     }
-    assert!(seen == vec!["p", "q", "r"]);
-    producer.close().await.unwrap();
+    .unwrap();
     consumer.close().await.unwrap();
     broker.shutdown().await;
 }
@@ -424,7 +428,7 @@ async fn create_topic_with_partitions(
     bootstrap: &str,
     setup: CreateTopicSetup<'_>,
 ) {
-    let client = connect_client(bootstrap.to_string(), None).await;
+    let client = connect_client(bootstrap.to_owned(), None).await;
     support::client::create_topic_named(&client, setup).await;
     for index in 0..setup.num_partitions.0 {
         broker
@@ -450,7 +454,7 @@ async fn produce_every_partition(
     acks: i16,
     timeout_ms: i32,
 ) -> Vec<PartitionAnswer> {
-    let client = connect_client(bootstrap.to_string(), None).await;
+    let client = connect_client(bootstrap.to_owned(), None).await;
     let topic_id = topic_id_for(&client, topic).await;
     let resp = client
         .send(

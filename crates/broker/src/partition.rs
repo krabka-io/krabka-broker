@@ -36,12 +36,16 @@ use {
         task::JoinHandle,
     },
 };
+use {
+    std::{collections::HashMap, path::Path, sync::PoisonError},
+    tokio::{sync, sync::RwLock},
+};
 
 /// Per producer, the offset resolution a durable `__consumer_offsets` marker
 /// still owes the group actors: the marker type, the marker's offset, and
 /// the offsets the transaction wrote.
-pub(crate) type OwedMarkerResolutions =
-    std::collections::HashMap<krabka_log::ProducerId, (MarkerType, i64, CommittedOffsets)>;
+pub type OwedMarkerResolutions =
+    HashMap<krabka_log::ProducerId, (MarkerType, i64, CommittedOffsets)>;
 use crate::{delivery::DeliveryHandles, error::BrokerError, replica_state::ReplicaState};
 
 mod commands;
@@ -52,23 +56,24 @@ mod messages;
 mod watermark;
 mod writer_gate;
 
-pub(crate) use self::{follower_progress::FollowerPosition, writer_gate::WriterGate};
+pub use self::{follower_progress::FollowerPosition, writer_gate::WriterGate};
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 
-pub use self::messages::{
-    AppendedBatch, EncodedBatch, ProduceData, ProduceJob, ProducerAppendCheck, ReplicatedBatch,
-    SwapOutcome, WriterMessage,
-};
+#[cfg(any(test, feature = "test-helpers"))]
+pub use self::leadership::initial_replication_target;
 // Only watermark's own tests name crate::partition::HwTimeout.
 #[cfg(test)]
 pub use self::watermark::HwTimeout;
-pub(crate) use self::{
+pub use self::{
     commands::ProduceBatchError,
     commit_wait::Uncommitted,
-    leadership::{ReplicationTarget, initial_replication_target},
-    messages::verbatim_of,
+    leadership::ReplicationTarget,
+    messages::{
+        AppendedBatch, EncodedBatch, ProduceData, ProduceJob, ProducerAppendCheck, ReplicatedBatch,
+        SwapOutcome, WriterMessage, verbatim_of,
+    },
 };
 
 /// Absolute record offset within a partition's log (base offset, log end
@@ -77,7 +82,7 @@ pub(crate) use self::{
 pub type LogOffset = i64;
 
 /// Writer sizing and diskless services shared by startup and first-touch materialization.
-pub(crate) struct PartitionRuntimeConfig {
+pub struct PartitionRuntimeConfig {
     pub max_produce_group: usize,
     pub partition_writer_queue_depth: usize,
     pub diskless_wal_local_replica_count: usize,
@@ -163,9 +168,9 @@ pub struct Partition {
     /// resolution for this partition. Holds, per producer, the resolution a
     /// durable `__consumer_offsets` marker still owes the group actors: the
     /// marker type, its offset, and the offsets the transaction wrote.
-    pub(crate) marker_materialization: Arc<tokio::sync::Mutex<OwedMarkerResolutions>>,
+    pub(crate) marker_materialization: Arc<sync::Mutex<OwedMarkerResolutions>>,
     pub append_notify: Arc<Notify>,
-    pub(crate) replica_state: Arc<tokio::sync::Mutex<ReplicaState>>,
+    pub(crate) replica_state: Arc<sync::Mutex<ReplicaState>>,
     pub hw_advance_notify: Arc<Notify>,
     /// Deliver-at-time state: the lock-free delivery-watermark mirror, the
     /// wake a long poll parks on until a scheduled batch comes due, and the
@@ -183,7 +188,7 @@ pub struct Partition {
     /// Serializes follower mutations against topic recreation and local
     /// leader/epoch installation. Replication holds a read guard through the
     /// writer acknowledgement; metadata reconciliation takes the write guard.
-    pub(crate) replication_target: Arc<tokio::sync::RwLock<ReplicationTarget>>,
+    pub(crate) replication_target: Arc<RwLock<ReplicationTarget>>,
     /// True for diskless runtime partitions whose client-visible HW may only
     /// advance through the WAL durable-sync path.
     pub(crate) diskless: bool,
@@ -199,11 +204,11 @@ pub struct Partition {
 }
 
 /// New partitions begin with no leader log start recorded below their floor.
-pub(crate) fn unreported_leader_log_start() -> Arc<AtomicI64> { Arc::new(AtomicI64::new(-1)) }
+pub fn unreported_leader_log_start() -> Arc<AtomicI64> { Arc::new(AtomicI64::new(-1)) }
 
 /// New partitions begin with no transaction-marker resolutions owed to group actors.
-pub(crate) fn empty_marker_materialization() -> Arc<tokio::sync::Mutex<OwedMarkerResolutions>> {
-    Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::default()))
+pub fn empty_marker_materialization() -> Arc<sync::Mutex<OwedMarkerResolutions>> {
+    Arc::new(sync::Mutex::new(HashMap::default()))
 }
 
 impl Partition {
@@ -230,28 +235,28 @@ impl Partition {
     ) -> Self {
         let (writer_tx, rx) = mpsc::channel::<WriterMessage>(8);
         let append_notify = Arc::new(Notify::new());
-        let replica_state = Arc::new(tokio::sync::Mutex::new(ReplicaState::new()));
+        let replica_state = Arc::new(sync::Mutex::new(ReplicaState::new()));
         let hw_advance_notify = Arc::new(Notify::new());
         let delivery = DeliveryHandles::new();
         let writer = spawn(
             WriterIdentity {
-                topic: topic.to_string(),
+                topic: topic.to_owned(),
                 partition: PartitionIndex(0),
             },
             WriterStorage {
-                log: log.clone(),
-                log_dir: log_dir.clone(),
+                log: Arc::clone(&log),
+                log_dir: Arc::clone(&log_dir),
             },
             rx,
             WriterSignals {
-                append_notify: append_notify.clone(),
-                replica_state: replica_state.clone(),
-                hw_advance_notify: hw_advance_notify.clone(),
+                append_notify: Arc::clone(&append_notify),
+                replica_state: Arc::clone(&replica_state),
+                hw_advance_notify: Arc::clone(&hw_advance_notify),
                 delivery: delivery.clone(),
             },
         );
         Self {
-            topic: topic.to_string(),
+            topic: topic.to_owned(),
             index: PartitionIndex(0),
             log_dir,
             log,
@@ -280,10 +285,7 @@ impl Partition {
     /// writer-died path later reports a clearer error.
     #[must_use]
     pub fn log_end_offset(&self) -> Offset {
-        match self.log.lock() {
-            Ok(g) => g.log_end_offset(),
-            Err(_) => Offset(0),
-        }
+        self.log.lock().map_or(Offset(0), |g| g.log_end_offset())
     }
 
     /// The bytes of the log's segments when its directory is `dir`: Kafka's
@@ -297,7 +299,7 @@ impl Partition {
     /// Returns `None` when the log lives in another directory, or if the log
     /// mutex is poisoned.
     #[must_use]
-    pub fn log_size_in(&self, dir: &std::path::Path) -> Option<ByteSize> {
+    pub fn log_size_in(&self, dir: &Path) -> Option<ByteSize> {
         let log = self.log.lock().ok()?;
         (log.dir() == dir).then(|| log.size())
     }
@@ -313,10 +315,9 @@ impl Partition {
     /// writer-died path later reports a clearer error.
     #[must_use]
     pub fn last_stable_offset(&self, high_watermark: Offset) -> Offset {
-        match self.log.lock() {
-            Ok(mut g) => g.last_stable_offset(high_watermark),
-            Err(_) => Offset(0),
-        }
+        self.log
+            .lock()
+            .map_or(Offset(0), |mut g| g.last_stable_offset(high_watermark))
     }
 
     /// First absolute offset still present in the underlying [`Log`].
@@ -327,10 +328,7 @@ impl Partition {
     /// offset.
     #[must_use]
     pub(crate) fn log_start_offset(&self) -> Offset {
-        match self.log.lock() {
-            Ok(g) => g.log_start_offset(),
-            Err(_) => Offset(0),
-        }
+        self.log.lock().map_or(Offset(0), |g| g.log_start_offset())
     }
 
     /// The additional internal stamp coordinate that covers `offset`. Returns
@@ -344,10 +342,7 @@ impl Partition {
     #[cfg(test)]
     #[must_use]
     pub fn stamp_for_offset(&self, offset: Offset) -> Option<u64> {
-        match self.log.lock() {
-            Ok(g) => g.stamp_for_offset(offset),
-            Err(_) => None,
-        }
+        self.log.lock().ok()?.stamp_for_offset(offset)
     }
 
     /// Fence the log and then remove and return the writer task handle, for a
@@ -361,7 +356,7 @@ impl Partition {
     pub(crate) fn retire(&self) -> Option<JoinHandle<()>> {
         self.log
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .fence();
         self.take_writer_handle()
     }
@@ -371,7 +366,7 @@ impl Partition {
     pub(crate) fn take_writer_handle(&self) -> Option<JoinHandle<()>> {
         self.writer_handle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .take()
     }
 

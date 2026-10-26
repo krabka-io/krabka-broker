@@ -6,7 +6,11 @@
 use {
     super::*,
     crate::HandshakeStream,
-    tokio::{io::DuplexStream, time::Instant},
+    std::io,
+    tokio::{
+        io::{DuplexStream, duplex},
+        time::{self, Instant},
+    },
 };
 
 /// The bytes each side of the stand-in handshake sends.
@@ -16,7 +20,7 @@ const HANDSHAKE_BYTES: usize = 8;
 /// stream back, as a TLS or SASL exchange hands the listener its stream.
 async fn stand_in_handshake(
     mut stream: HandshakeStream<DuplexStream>,
-) -> std::io::Result<HandshakeStream<DuplexStream>> {
+) -> io::Result<HandshakeStream<DuplexStream>> {
     let mut request = [0u8; HANDSHAKE_BYTES];
     stream.read_exact(&mut request).await?;
     stream.write_all(&[0xab; HANDSHAKE_BYTES]).await?;
@@ -45,7 +49,7 @@ async fn the_handshake_idle_window_restarts_on_every_byte(
 ) {
     let window = Duration::from_millis(10);
     let gap = Duration::from_millis(6);
-    let (mut client, server) = tokio::io::duplex(1);
+    let (mut client, server) = duplex(1);
     let mut upgrade = tokio::spawn(upgrade_within_idle_window(
         server,
         Some(window),
@@ -54,7 +58,7 @@ async fn the_handshake_idle_window_restarts_on_every_byte(
 
     let mut last_byte = Instant::now();
     for _ in 0..sent {
-        tokio::time::sleep(gap).await;
+        time::sleep(gap).await;
         if client.write_all(&[0x5a]).await.is_err() {
             break;
         }
@@ -62,7 +66,7 @@ async fn the_handshake_idle_window_restarts_on_every_byte(
     }
     let mut answer = Vec::new();
     for _ in 0..received {
-        tokio::time::sleep(gap).await;
+        time::sleep(gap).await;
         let mut byte = [0u8];
         if client.read_exact(&mut byte).await.is_err() {
             break;
@@ -71,7 +75,7 @@ async fn the_handshake_idle_window_restarts_on_every_byte(
         last_byte = Instant::now();
     }
 
-    let upgraded = tokio::time::timeout(Duration::from_secs(5), &mut upgrade)
+    let upgraded = time::timeout(Duration::from_secs(5), &mut upgrade)
         .await
         .expect("the handshake ends")
         .expect("the handshake task does not panic");
@@ -80,7 +84,7 @@ async fn the_handshake_idle_window_restarts_on_every_byte(
         let mut stream = upgraded
             .expect("the handshake is not closed as idle")
             .expect("the handshake succeeds");
-        tokio::time::sleep(window * 3).await;
+        time::sleep(window * 3).await;
         client.write_all(&[0x01]).await.unwrap();
         let mut byte = [0u8];
         stream.read_exact(&mut byte).await.unwrap();

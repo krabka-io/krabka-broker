@@ -1,4 +1,5 @@
 //! Ordinary field methods retain ownership, wire order and early error returns.
+#![cfg(test)]
 
 #[path = "support/codec.rs"]
 mod error;

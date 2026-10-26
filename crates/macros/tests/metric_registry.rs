@@ -1,9 +1,13 @@
 //! Direct registry expansion keeps caller bindings and the lock's original scope.
+#![cfg(test)]
 
 use {
     assert2::assert,
     prometheus_client::{metrics::counter::Counter, registry::Registry},
-    std::sync::{Mutex, MutexGuard},
+    std::{
+        future::{self, Ready},
+        sync::{Mutex, MutexGuard},
+    },
 };
 
 struct RegistryLock {
@@ -11,9 +15,7 @@ struct RegistryLock {
 }
 
 impl RegistryLock {
-    fn lock(&self) -> std::future::Ready<MutexGuard<'_, Registry>> {
-        std::future::ready(self.inner.lock().unwrap())
-    }
+    fn lock(&self) -> Ready<MutexGuard<'_, Registry>> { future::ready(self.inner.lock().unwrap()) }
 }
 
 struct Metrics {

@@ -11,7 +11,8 @@ use {
     assert2::assert,
     krabka_audit::{AuditEvent, LifecycleKind},
     krabka_raft::RaftError,
-    std::sync::Arc,
+    std::{future, sync::Arc, time::Duration},
+    tokio::time::Instant,
 };
 
 #[tokio::test]
@@ -34,8 +35,8 @@ async fn election_batch_rejects_changes_while_durable_audit_is_pending() {
         );
         let image = source.current_image();
         let (audit, pause, writer) = PausedAudit::start();
-        let committing_source = source.clone();
-        let admission = audit.clone();
+        let committing_source = Arc::clone(&source);
+        let admission = Arc::clone(&audit);
         let commit = tokio::spawn(async move {
             submit_election_after_audit(
                 committing_source.as_ref(),
@@ -90,9 +91,9 @@ async fn election_batch_rejects_a_pending_tail_without_audit_admission() {
 
     let failure = submit_election_after_audit(
         &source,
-        image.clone(),
+        Arc::clone(&image),
         vec![MetadataRecord::V1Partition(elected())],
-        std::future::ready(Ok(())),
+        future::ready(Ok(())),
     )
     .await;
 
@@ -118,10 +119,8 @@ async fn election_retry_replans_the_original_operation_against_fresh_metadata() 
     let alive = HashSet::from([2, 3]);
     let witnesses = HashSet::new();
 
-    let result = guarded_operation_on_source(
-        &source,
-        tokio::time::Instant::now() + std::time::Duration::from_secs(1),
-        |image| {
+    let result =
+        guarded_operation_on_source(&source, Instant::now() + Duration::from_secs(1), |image| {
             let source = &source;
             let alive = &alive;
             let witnesses = &witnesses;
@@ -139,17 +138,16 @@ async fn election_retry_replans_the_original_operation_against_fresh_metadata() 
                     source,
                     image,
                     vec![MetadataRecord::V1Partition(elected.clone())],
-                    std::future::ready(Ok(())),
+                    future::ready(Ok(())),
                 )
                 .await?
                 .expect("audit admission is disabled");
                 Ok(elected)
             }
-        },
-    )
-    .await
-    .expect("bounded retry completes")
-    .expect("fresh operation commits");
+        })
+        .await
+        .expect("bounded retry completes")
+        .expect("fresh operation commits");
 
     let expected = PartitionRecord {
         isr: vec![NodeId(3)],

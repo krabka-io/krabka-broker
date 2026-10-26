@@ -5,13 +5,16 @@
 //! all three, and because a delta only folds into a total of its own shape,
 //! which is the check that keeps a counter and a histogram from merging.
 
-use prometheus_client::{
-    encoding::{EncodeMetric, MetricEncoder},
-    metrics::{MetricType, counter::ConstCounter, gauge::ConstGauge},
+use {
+    prometheus_client::{
+        encoding::{EncodeMetric, MetricEncoder},
+        metrics::{MetricType, counter::ConstCounter, gauge::ConstGauge},
+    },
+    std::fmt,
 };
 
 #[derive(Debug, Clone)]
-pub(crate) enum PointValue {
+pub enum PointValue {
     Gauge(f64),
     Counter(f64),
     Histogram {
@@ -82,7 +85,7 @@ impl PointValue {
         }
     }
 
-    pub(super) fn encode(&self, encoder: MetricEncoder) -> Result<(), std::fmt::Error> {
+    pub(super) fn encode(&self, encoder: MetricEncoder) -> Result<(), fmt::Error> {
         match self {
             Self::Gauge(value) => ConstGauge::new(*value).encode(encoder),
             Self::Counter(value) => ConstCounter::new(*value).encode(encoder),
@@ -100,7 +103,7 @@ impl PointValue {
 
 /// A single decoded client metric data point destined for Prometheus.
 #[derive(Debug, Clone)]
-pub(crate) struct DataPoint {
+pub struct DataPoint {
     pub metric: String,
     pub client_instance_id: String,
     pub client_id: String,

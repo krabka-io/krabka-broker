@@ -9,6 +9,7 @@ use {
         transport::{Command, api_key, wire},
         types::{Epoch, LogView, NodeId},
     },
+    krabka_units::prelude::Time,
     std::sync::Arc,
 };
 
@@ -21,7 +22,7 @@ const MAX_FETCH_WAIT_MS: u64 = 500;
 /// its default fetch timeout (500 ms of 2 s), so a held Fetch is answered well
 /// before the timer counts it as a miss, and a krabka fetch timeout can be far
 /// shorter than Kafka's default.
-fn fetch_max_wait_ms(fetch_timeout: krabka_units::prelude::Time) -> i32 {
+fn fetch_max_wait_ms(fetch_timeout: Time) -> i32 {
     let quarter_timer = whole_millis(fetch_timeout) / 4;
     i32::try_from(MAX_FETCH_WAIT_MS.min(quarter_timer)).unwrap_or(0)
 }
@@ -96,7 +97,7 @@ impl Engine {
             .get(self.me)
             .map_or_default(|voter| voter.endpoints.clone());
         for peer in self.other_voters() {
-            let body = wire::PeerRequest::BeginQuorumEpoch {
+            let Some(body) = wire::PeerRequest::BeginQuorumEpoch {
                 cluster_id: Some(state.cluster_id),
                 voter_id: peer,
                 voter_directory_id: state
@@ -107,7 +108,9 @@ impl Engine {
                 leader_epoch: epoch,
                 leader_endpoints: leader_endpoints.clone(),
             }
-            .encode();
+            .try_encode() else {
+                continue;
+            };
             self.spawn_send(peer, api_key::BEGIN_QUORUM_EPOCH, body);
         }
     }
@@ -120,7 +123,7 @@ impl Engine {
     pub fn broadcast_end_quorum_epoch(&self, epoch: Epoch, preferred_successors: &[NodeId]) {
         let state = self.core.quorum_state();
         let voters = &state.voters;
-        let body = wire::PeerRequest::EndQuorumEpoch {
+        let Some(body) = wire::PeerRequest::EndQuorumEpoch {
             cluster_id: Some(state.cluster_id),
             leader_id: self.me,
             leader_epoch: epoch,
@@ -134,7 +137,9 @@ impl Engine {
                 })
                 .collect(),
         }
-        .encode();
+        .try_encode() else {
+            return;
+        };
         for peer in self.other_voters() {
             self.spawn_send(peer, api_key::END_QUORUM_EPOCH, body.clone());
         }
@@ -175,7 +180,7 @@ impl Engine {
         // the responder's `validateLeaderOnlyRequest` checks, and the local
         // high watermark, which the leader answers at once when its own is
         // higher.
-        let body = wire::PeerRequest::Fetch {
+        let Some(body) = wire::PeerRequest::Fetch {
             cluster_id: Some(self.core.quorum_state().cluster_id),
             from: self.me,
             max_wait_ms: fetch_max_wait_ms(self.timeouts.fetch),
@@ -186,7 +191,9 @@ impl Engine {
             replica_directory_id,
             high_watermark: self.log.hwm().0,
         }
-        .encode();
+        .try_encode() else {
+            return;
+        };
         self.spawn_send(leader_id, api_key::FETCH, body);
     }
 
@@ -196,7 +203,7 @@ impl Engine {
             return;
         }
         let state = self.core.quorum_state();
-        let body = wire::PeerRequest::FetchSnapshot {
+        let Some(body) = wire::PeerRequest::FetchSnapshot {
             cluster_id: Some(state.cluster_id),
             from: self.me,
             current_leader_epoch: i32::try_from(state.leader_epoch).unwrap_or(i32::MAX),
@@ -206,7 +213,9 @@ impl Engine {
             // converts here, at the wire boundary.
             max_bytes: self.metadata_raft_fetch_max.bytes(),
         }
-        .encode();
+        .try_encode() else {
+            return;
+        };
         self.spawn_send(leader_id, api_key::FETCH_SNAPSHOT, body);
     }
 

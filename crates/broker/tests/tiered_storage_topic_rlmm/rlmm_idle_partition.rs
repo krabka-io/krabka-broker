@@ -24,6 +24,7 @@ use {
     krabka_client_core::Client,
     krabka_protocol::owned::list_offsets_request::ListOffsetsRequest,
     std::time::{Duration, Instant},
+    tokio::{task, time},
 };
 
 const TOPIC: &str = "tiered-idle-partition-itest";
@@ -63,7 +64,7 @@ async fn an_idle_tiered_partition_leaves_local_disk_through_its_last_record_case
             Instant::now() <= deadline,
             "the local log start stayed at {earliest_local}, short of the log end {RECORDS}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 
     // The records left local disk, and the remote tier still answers for
@@ -111,7 +112,7 @@ async fn await_idle_tiered_config(broker: &BrokerHandle) {
             "tiered-storage topic config never propagated; saw {:?}",
             broker.partition_log_config_for_test(TOPIC, 0)
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
 }
 

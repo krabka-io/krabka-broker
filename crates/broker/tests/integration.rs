@@ -1,5 +1,6 @@
 //! Multi-RPC sequences against an in-process broker, driven through
 //! `krabka-client-core`. These run on every push (no Docker required).
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -13,6 +14,7 @@ use {
         wire::write_frame,
     },
     assert2::{assert, check},
+    tokio::{net::TcpStream, time},
 };
 mod support;
 
@@ -80,7 +82,7 @@ fn timestamped_batch(entries: &[TimestampedValue<'_>]) -> RecordBatch {
             timestamp_delta: entry.timestamp - base_ts,
             ..value_record(
                 i32::try_from(i).expect("small"),
-                Some(Bytes::from(entry.value.to_string())),
+                Some(Bytes::from(entry.value.to_owned())),
             )
         });
     }
@@ -241,7 +243,7 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
         .expect("create topic");
     assert!(create.topics[0].error_code == 0);
 
-    let mut stream = tokio::net::TcpStream::connect(p.broker.listen_addr())
+    let mut stream = TcpStream::connect(p.broker.listen_addr())
         .await
         .expect("connect raw client");
     let produce = batch_request(
@@ -265,8 +267,7 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
     frame.put_slice(&body);
     write_frame(&mut stream, &frame, None).await.unwrap();
 
-    let unexpected_response =
-        tokio::time::timeout(Duration::from_millis(150), stream.readable()).await;
+    let unexpected_response = time::timeout(Duration::from_millis(150), stream.readable()).await;
     assert!(
         unexpected_response.is_err(),
         "acks=0 must not make a response frame readable"
@@ -288,7 +289,7 @@ async fn produce_acks_zero_sends_no_frame_and_keeps_connection_usable() {
         .await
         .unwrap();
 
-    let response_len = tokio::time::timeout(Duration::from_secs(5), stream.read_u32())
+    let response_len = time::timeout(Duration::from_secs(5), stream.read_u32())
         .await
         .expect("Metadata response arrives")
         .expect("read Metadata frame length");

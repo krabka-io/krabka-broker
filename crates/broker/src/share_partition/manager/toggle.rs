@@ -44,6 +44,7 @@ mod tests {
         krabka_log::Offset,
         krabka_metadata::{FeatureLevelRecord, MetadataImage, MetadataRecord},
         std::{sync::Arc, time::Duration},
+        tokio::time::sleep,
     };
 
     fn image_with_share_version(level: i16) -> MetadataImage {
@@ -64,7 +65,10 @@ mod tests {
                 .image(image_with_share_version(1))
                 .build(),
         );
-        let mgr = manager_over(source.clone(), Arc::new(PartitionRegistry::new()));
+        let mgr = manager_over(
+            Arc::<FakeMetadataSource>::clone(&source),
+            Arc::new(PartitionRegistry::new()),
+        );
         mgr.spawn_share_version_watcher();
         let tid = uuid::Uuid::from_bytes([31; 16]);
         mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
@@ -72,11 +76,11 @@ mod tests {
 
         // A change that keeps share groups on clears nothing.
         source.set_image(image_with_share_version(2));
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
         let kept = cells();
         // The downgrade drops the cell.
         source.set_image(image_with_share_version(0));
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
 
         assert!((kept, cells()) == (true, false));
     }

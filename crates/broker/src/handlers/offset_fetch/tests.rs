@@ -71,11 +71,11 @@ async fn seed_committed_offset(
         .group_coordinator
         .get_or_create_group(group, GroupKindTag::Classic);
     let rx = rpc::begin(&h, |reply| GroupActorMessage::UpdateCommitted {
-        entries: vec![((topic.to_string(), partition.0), OffsetEntry {
+        entries: vec![((topic.to_owned(), partition.0), OffsetEntry {
             offset,
             leader_epoch: 5,
             metadata: String::new(),
-            commit_timestamp_ms: crate::time_util::now_ms(),
+            commit_timestamp_ms: now_ms(),
             expire_timestamp_ms: None,
             topic_id: None,
         })],
@@ -103,13 +103,11 @@ async fn start_seeded_offset_broker() -> LiveBrokerFixture {
 fn named_topic_request(group: &str, topic: &str, partitions: Vec<i32>) -> OffsetFetchRequest {
     OffsetFetchRequest {
         group_id: group.into(),
-        topics: Some(vec![
-            krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
-                name: topic.into(),
-                partition_indexes: partitions,
-                ..Default::default()
-            },
-        ]),
+        topics: Some(vec![OffsetFetchRequestTopic {
+            name: topic.into(),
+            partition_indexes: partitions,
+            ..Default::default()
+        }]),
         ..Default::default()
     }
 }
@@ -234,11 +232,7 @@ async fn resolve_pending_txn_offsets(
     rx.await.expect("ResolveTxnOffsets ack");
 }
 
-async fn fetch(
-    broker: &Broker,
-    version: i16,
-    req: &OffsetFetchRequest,
-) -> krabka_protocol::owned::offset_fetch_response::OffsetFetchResponse {
+async fn fetch(broker: &Broker, version: i16, req: &OffsetFetchRequest) -> OffsetFetchResponse {
     krabka_macros::request_test_identity! {
         bind(p, peer, ctx);
         user ["admin"];
@@ -246,14 +240,7 @@ async fn fetch(
     };
     // The response shape changes with the version (KIP-516 moves it into
     // `groups[]` at v8), so this reads it back off the wire.
-    dispatch_wire(
-        broker,
-        krabka_protocol::owned::offset_fetch_request::API_KEY,
-        version,
-        req,
-        &ctx,
-    )
-    .await
+    dispatch_wire(broker, API_KEY, version, req, &ctx).await
 }
 
 // KIP-447 on the pre-KIP-516 shape. `orders-0` carries a stable offset that an
@@ -373,7 +360,13 @@ const UNKNOWN_NAME: &str = "no-such-topic";
 /// An id that no topic in the topic-reference tables has.
 const UNKNOWN_ID: WireUuid = WireUuid([0x0b; 16]);
 
-use crate::handlers::test_support::{DenyTopics, TopicRef, WireTopic};
+use {
+    crate::{
+        authorizer::AuthorizationResult,
+        handlers::test_support::{DenyTopics, TopicRef, WireTopic},
+    },
+    krabka_protocol::owned::offset_fetch_request::{API_KEY, OffsetFetchRequestTopic},
+};
 
 /// Create the known topic and return its id. Seed a committed offset for
 /// `(KNOWN_NAME, 0)`, and one for the empty topic name, which a zero-id row
@@ -455,7 +448,7 @@ fn topic_reference_rows(
         },
     );
     let request = OffsetFetchRequestTopics {
-        name: name.to_string(),
+        name: name.to_owned(),
         topic_id,
         partition_indexes: vec![0],
         ..Default::default()
@@ -466,7 +459,7 @@ fn topic_reference_rows(
         name: if id_only {
             String::new()
         } else {
-            name.to_string()
+            name.to_owned()
         },
         topic_id: if id_only { topic_id } else { WireUuid::ZERO },
         partitions: vec![setup.partition],
@@ -726,9 +719,9 @@ krabka_macros::test_authorizer!(DescribeKnownTopic, req; {
         || (req.operation == krabka_metadata::AclOperation::Describe
             && req.resource_name == KNOWN_NAME);
     if allowed {
-        crate::authorizer::AuthorizationResult::Allow
+        AuthorizationResult::Allow
     } else {
-        crate::authorizer::AuthorizationResult::Deny
+        AuthorizationResult::Deny
     }
 });
 
@@ -762,7 +755,7 @@ fn legacy_response(topics: Vec<LegacyTopic<'_>>) -> OffsetFetchResponse {
         topics: topics
             .into_iter()
             .map(|LegacyTopic { name, partition }| OffsetFetchResponseTopic {
-                name: name.to_string(),
+                name: name.to_owned(),
                 partitions: vec![partition],
                 ..Default::default()
             })
@@ -780,13 +773,11 @@ fn legacy_request(topics: Option<&[&str]>) -> OffsetFetchRequest {
         topics: topics.map(|names| {
             names
                 .iter()
-                .map(
-                    |name| krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
-                        name: (*name).to_string(),
-                        partition_indexes: vec![0],
-                        ..Default::default()
-                    },
-                )
+                .map(|name| OffsetFetchRequestTopic {
+                    name: (*name).to_owned(),
+                    partition_indexes: vec![0],
+                    ..Default::default()
+                })
                 .collect()
         }),
         ..Default::default()
@@ -803,7 +794,7 @@ fn named_groups_request(topics: Option<&[&str]>) -> OffsetFetchRequest {
                 names
                     .iter()
                     .map(|name| OffsetFetchRequestTopics {
-                        name: (*name).to_string(),
+                        name: (*name).to_owned(),
                         partition_indexes: vec![0],
                         ..Default::default()
                     })
@@ -818,7 +809,7 @@ fn named_groups_request(topics: Option<&[&str]>) -> OffsetFetchRequest {
 /// A KIP-516 (v8 and v9) topic row by name, with one partition row.
 fn named_topic(name: &str, partition: OffsetFetchResponsePartitions) -> OffsetFetchResponseTopics {
     OffsetFetchResponseTopics {
-        name: name.to_string(),
+        name: name.to_owned(),
         partitions: vec![partition],
         ..Default::default()
     }
@@ -994,7 +985,7 @@ fn member_offset_fetch(
     OffsetFetchRequest {
         groups: vec![OffsetFetchRequestGroup {
             group_id: group_id.into(),
-            member_id: member_id.map(str::to_string),
+            member_id: member_id.map(str::to_owned),
             member_epoch,
             topics: Some(vec![OffsetFetchRequestTopics {
                 name: "orders".into(),
@@ -1156,13 +1147,11 @@ async fn seed_streams_member(broker: &Broker, group_id: &str, member_epoch: i32)
     handle
         .tx
         .send(StreamsGroupActorMessage::Seed(StreamsGroupSeed {
-            members: [("m1".to_string(), plain_streams_member(1))].into(),
-            current_per_member: [
-                ("m1".to_string(), StreamsGroupCurrentMemberAssignmentValue {
-                    member_epoch,
-                    ..Default::default()
-                }),
-            ]
+            members: [("m1".to_owned(), plain_streams_member(1))].into(),
+            current_per_member: [("m1".to_owned(), StreamsGroupCurrentMemberAssignmentValue {
+                member_epoch,
+                ..Default::default()
+            })]
             .into(),
             ..Default::default()
         }))
@@ -1356,7 +1345,7 @@ async fn require_stable(version: i16, shape: RequireStableShape) {
         .broker(&broker)
         .producer(PRODUCER_ID)
         .committed(vec![CommittedTxnOffset {
-            topic: "orders".to_string(),
+            topic: "orders".to_owned(),
             partition: 0,
             entry: committed_entry(77),
         }])
@@ -1377,13 +1366,11 @@ fn request(shape: RequireStableShape, require_stable: bool) -> OffsetFetchReques
     match shape {
         RequireStableShape::Legacy => OffsetFetchRequest {
             group_id: "grp".into(),
-            topics: Some(vec![
-                krabka_protocol::owned::offset_fetch_request::OffsetFetchRequestTopic {
-                    name: "orders".into(),
-                    partition_indexes: vec![0, 1],
-                    ..Default::default()
-                },
-            ]),
+            topics: Some(vec![OffsetFetchRequestTopic {
+                name: "orders".into(),
+                partition_indexes: vec![0, 1],
+                ..Default::default()
+            }]),
             require_stable,
             ..Default::default()
         },
@@ -1446,7 +1433,7 @@ fn expected_response(
                 group_id: "grp".into(),
                 topics: vec![OffsetFetchResponseTopics {
                     name: "orders".into(),
-                    topic_id: krabka_protocol::primitives::uuid::Uuid::ZERO,
+                    topic_id: WireUuid::ZERO,
                     partitions: rows
                         .into_iter()
                         .map(

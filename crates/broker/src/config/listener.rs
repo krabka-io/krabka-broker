@@ -11,15 +11,17 @@ use {
     },
     krabka_security::{ListenerProtocol, SaslMechanism, TlsConfig},
     std::{
+        fs,
         net::SocketAddr,
         path::{Path, PathBuf},
+        time::Duration,
     },
 };
 
 /// Validate that an inter-broker OAUTHBEARER token file is readable and
 /// contains a token accepted by RFC 7628's SASL framing.
-pub(crate) fn validate_oauthbearer_token_file(path: &Path) -> Result<(), String> {
-    let token = std::fs::read(path).map_err(|error| {
+pub fn validate_oauthbearer_token_file(path: &Path) -> Result<(), String> {
+    let token = fs::read(path).map_err(|error| {
         format!(
             "cannot read inter-broker OAUTHBEARER token {}: {error}",
             path.display()
@@ -123,7 +125,7 @@ impl BrokerConfig {
             return self.listeners.clone();
         }
         vec![ListenerSpec {
-            name: "PLAINTEXT".to_string(),
+            name: "PLAINTEXT".to_owned(),
             bind_addr: self.listen_addr,
             advertised: self.advertised_listener.clone(),
             protocol: ListenerProtocol::Plaintext,
@@ -165,7 +167,7 @@ impl BrokerConfig {
     /// configured value asks for that, the way Kafka's `Selector` arms no
     /// `IdleExpiryManager` when `connections.max.idle.ms` is not positive.
     #[must_use]
-    pub fn connections_max_idle_for(&self, listener_name: &str) -> Option<std::time::Duration> {
+    pub fn connections_max_idle_for(&self, listener_name: &str) -> Option<Duration> {
         use krabka_units::convert::TimeExt as _;
 
         let configured = self
@@ -183,10 +185,10 @@ impl BrokerConfig {
     /// Kafka's `connection.failed.authentication.delay.ms`. A non-positive
     /// value is no delay, as Kafka's `Selector` then closes at once.
     #[must_use]
-    pub fn failed_authentication_delay(&self) -> std::time::Duration {
+    pub fn failed_authentication_delay(&self) -> Duration {
         use krabka_units::convert::TimeExt as _;
 
-        std::time::Duration::from_millis(
+        Duration::from_millis(
             u64::try_from(self.connection_failed_authentication_delay.millis_i64()).unwrap_or(0),
         )
     }
@@ -317,6 +319,7 @@ mod tests {
             test_support::{OAuthTokenContents, oauth_token_file},
         },
         assert2::assert,
+        std::{iter, path::PathBuf},
     };
 
     fn sasl_listener(name: &str, mechanisms: Vec<SaslMechanism>) -> ListenerSpec {
@@ -388,14 +391,14 @@ mod tests {
         assert!(c.client_metrics_receiver() == ClientMetricsReceiver::Configured);
 
         c.client_metrics_enable = false;
-        c.client_metrics_otlp_endpoint = Some("http://collector:4317".to_string());
+        c.client_metrics_otlp_endpoint = Some("http://collector:4317".to_owned());
         assert!(c.client_metrics_receiver() == ClientMetricsReceiver::Configured);
     }
 
     #[test]
     fn rejects_missing_inter_broker_listener() {
         let mut c = base();
-        c.inter_broker_listener_name = "NONESUCH".to_string();
+        c.inter_broker_listener_name = "NONESUCH".to_owned();
         assert!(matches!(
             c.validate(),
             Err(BrokerStartError::InvalidInterBrokerListener { .. })
@@ -474,8 +477,7 @@ mod tests {
             inter_broker_credentials: Some(InterBrokerCredentials::OAuthBearer {
                 token_path: "/unused/token".into(),
             }),
-            plain_credentials: [("admin".to_string(), "admin-secret".to_string())]
-                .into_iter()
+            plain_credentials: iter::once(("admin".to_owned(), "admin-secret".to_owned()))
                 .collect(),
             ..BrokerConfig::default()
         };
@@ -493,8 +495,7 @@ mod tests {
             enabled_sasl_mechanisms: vec![SaslMechanism::Plain],
             // A controller listener offering PLAIN needs a credential table to
             // reach the outbound-mismatch error this case is about.
-            plain_credentials: [("admin".to_string(), "admin-secret".to_string())]
-                .into_iter()
+            plain_credentials: iter::once(("admin".to_owned(), "admin-secret".to_owned()))
                 .collect(),
             inter_broker_credentials: Some(InterBrokerCredentials::OAuthBearer {
                 token_path: "/unused/token".into(),
@@ -532,8 +533,8 @@ mod tests {
     #[test]
     fn per_listener_sasl_mechanisms_satisfy_validation_without_broker_default() {
         let tls = TlsConfig {
-            cert_chain_path: std::path::PathBuf::from("/tls/c"),
-            private_key_path: std::path::PathBuf::from("/tls/k"),
+            cert_chain_path: PathBuf::from("/tls/c"),
+            private_key_path: PathBuf::from("/tls/k"),
             trust_roots_path: None,
             client_ca_path: None,
             client_auth: krabka_security::ClientAuthMode::Disabled,
@@ -672,7 +673,7 @@ mod tests {
         let c = BrokerConfig {
             listeners: vec![],
             listen_addr: "127.0.0.1:19092".parse().unwrap(),
-            advertised_listener: "broker-0:19092".to_string(),
+            advertised_listener: "broker-0:19092".to_owned(),
             ..BrokerConfig::default()
         };
 
@@ -725,6 +726,7 @@ mod connections_max_idle_tests {
         },
         assert2::assert,
         krabka_units::{Time, convert::TimeExt as _, millis, secs},
+        std::time::Duration,
     };
 
     /// A broker-wide window of `idle` with the named per-listener overrides.
@@ -742,19 +744,15 @@ mod connections_max_idle_tests {
         assert!(DEFAULT_CONNECTIONS_MAX_IDLE.millis_i64() == 600_000);
         assert!(
             BrokerConfig::default().connections_max_idle_for("PLAINTEXT")
-                == Some(std::time::Duration::from_mins(10))
+                == Some(Duration::from_mins(10))
         );
     }
 
     #[test]
     fn a_listener_override_wins_over_the_broker_wide_window() {
         let config = config(secs(600), &[("EXTERNAL", secs(20))]);
-        assert!(
-            config.connections_max_idle_for("EXTERNAL") == Some(std::time::Duration::from_secs(20))
-        );
-        assert!(
-            config.connections_max_idle_for("INTERNAL") == Some(std::time::Duration::from_mins(10))
-        );
+        assert!(config.connections_max_idle_for("EXTERNAL") == Some(Duration::from_secs(20)));
+        assert!(config.connections_max_idle_for("INTERNAL") == Some(Duration::from_mins(10)));
     }
 
     /// Kafka lowercases the listener name in `listener.name.<name>.…`, so an
@@ -762,9 +760,7 @@ mod connections_max_idle_tests {
     #[test]
     fn an_override_matches_its_listener_without_ascii_case() {
         let config = config(secs(600), &[("external", secs(20))]);
-        assert!(
-            config.connections_max_idle_for("EXTERNAL") == Some(std::time::Duration::from_secs(20))
-        );
+        assert!(config.connections_max_idle_for("EXTERNAL") == Some(Duration::from_secs(20)));
     }
 
     /// Kafka arms no idle-expiry manager for a non-positive

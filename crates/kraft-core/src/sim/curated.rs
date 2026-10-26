@@ -53,15 +53,15 @@ fn split_brain_prevented() -> ScenarioTrace {
          stepped down to follower. Exactly one leader remains."
     );
     ScenarioTrace {
-        id: "split_brain_prevented".to_string(),
-        title: "Split-brain prevented (leader partition)".to_string(),
+        id: "split_brain_prevented".to_owned(),
+        title: "Split-brain prevented (leader partition)".to_owned(),
         summary: "A 3-voter cluster elects a leader, the leader is network-partitioned \
                   away from the majority, and the two-node majority elects a new leader \
                   at a higher epoch. The isolated old leader cannot make progress without \
                   a quorum, so there is never a second live leader. When the partition \
                   heals, the stale leader learns the newer epoch and steps down."
-            .to_string(),
-        invariant: "At most one leader per epoch (election safety)".to_string(),
+            .to_owned(),
+        invariant: "At most one leader per epoch (election safety)".to_owned(),
         nodes: nodes.iter().map(|n| n.0).collect(),
         steps: sim.steps,
         outcome,
@@ -102,15 +102,15 @@ fn out_of_order_delivery() -> ScenarioTrace {
         final_leaders.len()
     );
     ScenarioTrace {
-        id: "out_of_order_delivery".to_string(),
-        title: "Reordered message delivery".to_string(),
+        id: "out_of_order_delivery".to_owned(),
+        title: "Reordered message delivery".to_owned(),
         summary: "The simulator deliberately delivers a round of replication messages \
                   back-to-front (non-FIFO). Because every fetch and append carries a \
                   monotonic offset and the producing leader epoch, a node detects and \
                   ignores any message that is stale or out of order — the replicated \
                   logs still converge to the same contents."
-            .to_string(),
-        invariant: "Log matching under reordered delivery".to_string(),
+            .to_owned(),
+        invariant: "Log matching under reordered delivery".to_owned(),
         nodes: nodes.iter().map(|n| n.0).collect(),
         steps: sim.steps,
         outcome,
@@ -142,15 +142,15 @@ fn message_duplication() -> ScenarioTrace {
         final_leaders.len()
     );
     ScenarioTrace {
-        id: "message_duplication".to_string(),
-        title: "Duplicate message delivery".to_string(),
+        id: "message_duplication".to_owned(),
+        title: "Duplicate message delivery".to_owned(),
         summary: "The simulator delivers the same in-flight message twice. KRaft handles \
                   duplicates idempotently: a vote that was already granted/counted has no \
                   additional effect, and a BeginQuorumEpoch for an epoch the node already \
                   knows is a no-op. No double application happens and no spurious second \
                   leader emerges."
-            .to_string(),
-        invariant: "Idempotent handling of duplicate messages".to_string(),
+            .to_owned(),
+        invariant: "Idempotent handling of duplicate messages".to_owned(),
         nodes: nodes.iter().map(|n| n.0).collect(),
         steps: sim.steps,
         outcome,

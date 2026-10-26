@@ -16,7 +16,13 @@ use {
         },
     },
     assert2::{assert, check},
+    std::{
+        path::Path,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
     tempfile::tempdir,
+    tokio::{task::yield_now, time::sleep},
 };
 
 const TOPIC: uuid::Uuid = uuid::Uuid::from_bytes([5; 16]);
@@ -153,7 +159,10 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             lead_all(&coord).await;
             let image = image_with_topic(TOPIC, 1);
             let partition = registry
-                .get(SHARE_STATE_TOPIC, coord.state_partition_for("g", &TOPIC, 0))
+                .get(
+                    SHARE_STATE_TOPIC,
+                    coord.state_partition_for("g", &TOPIC, 0).unwrap(),
+                )
                 .expect("state partition is open");
             // The first request reaches its append while the logical key is
             // still absent. Pause that append at the metadata transition seam.
@@ -164,13 +173,13 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             tokio::select! {
                 biased;
                 result = &mut first => panic!("paused append completed: {result:?}"),
-                () = tokio::task::yield_now() => {}
+                () = yield_now() => {}
             }
             assert!(coord.entry("g", TOPIC, 0).is_none());
             tokio::select! {
                 biased;
                 result = &mut next => panic!("queued initialize completed: {result:?}"),
-                () = tokio::task::yield_now() => {}
+                () = yield_now() => {}
             }
             drop(transition);
             let (first, next) = tokio::join!(first, next);
@@ -190,7 +199,7 @@ async fn concurrent_first_initializes_preserve_epoch_fencing_and_replay() {
             };
             assert!(coord.read_summary("g", TOPIC, 0).await == Ok(Some(expected)));
             let snapshots: Vec<_> =
-                logged_records(&coord, coord.state_partition_for("g", &TOPIC, 0))
+                logged_records(&coord, coord.state_partition_for("g", &TOPIC, 0).unwrap())
                     .into_iter()
                     .filter_map(|record| match record.logged {
                         Logged::Snapshot(snapshot) => {
@@ -370,7 +379,7 @@ async fn initialize_follows_the_rules_of_each_kafka_release() {
                 .initialize(&image, "g", TOPIC, 0, *state_epoch, Offset(*start))
                 .await;
 
-            let state_partition = coord.state_partition_for("g", &TOPIC, 0);
+            let state_partition = coord.state_partition_for("g", &TOPIC, 0).unwrap();
             let logged = logged_records(&coord, state_partition)
                 .into_iter()
                 .filter(|record| matches!(record.logged, Logged::Snapshot(_)))
@@ -395,7 +404,7 @@ struct Seeded {
 /// partitions: partition 0 at state epoch 2, leader epoch 3, start offset
 /// 10 and delivery complete count 4, and partition 2 (not in the image of
 /// two partitions) at state epoch 2.
-async fn seeded(dir: &std::path::Path, trunk: bool) -> Seeded {
+async fn seeded(dir: &Path, trunk: bool) -> Seeded {
     let ConfiguredCoordinator {
         coord,
         registry: _reg,
@@ -710,7 +719,7 @@ async fn write_matches_kafka_checks_and_record_rules() {
             let dir = tempdir().unwrap();
             let Seeded { coord, image } = seeded(dir.path(), trunk).await;
             if drop_log {
-                let state_partition = coord.state_partition_for("g", &TOPIC, partition);
+                let state_partition = coord.state_partition_for("g", &TOPIC, partition).unwrap();
                 coord.partitions.remove(SHARE_STATE_TOPIC, state_partition);
             }
             let result = coord
@@ -897,7 +906,7 @@ async fn read_fences_and_persists_the_leader_epoch() {
 async fn failed_read_append_changes_no_state() {
     let dir = tempdir().unwrap();
     let Seeded { coord, image } = seeded(dir.path(), false).await;
-    let state_partition = coord.state_partition_for("g", &TOPIC, 0);
+    let state_partition = coord.state_partition_for("g", &TOPIC, 0).unwrap();
     coord.partitions.remove(SHARE_STATE_TOPIC, state_partition);
 
     let read = coord.read(&image, "g", TOPIC, 0, 8).await;
@@ -995,7 +1004,7 @@ async fn writes_append_updates_then_one_snapshot_at_the_threshold() {
             .unwrap();
     }
 
-    let state_partition = coord.state_partition_for("g", &TOPIC, 0);
+    let state_partition = coord.state_partition_for("g", &TOPIC, 0).unwrap();
     let logged: Vec<Logged> = logged_records(&coord, state_partition)
         .into_iter()
         .map(|record| record.logged)
@@ -1086,8 +1095,8 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
             // The setup `initialize` below commits under the same timeout,
             // so the no-commit case keeps enough of it for a loaded machine.
             let timeout = match fault {
-                Fault::NoCommit => std::time::Duration::from_secs(2),
-                Fault::MovesAway | Fault::NewerEpoch => std::time::Duration::from_secs(30),
+                Fault::NoCommit => Duration::from_secs(2),
+                Fault::MovesAway | Fault::NewerEpoch => Duration::from_secs(30),
             };
             let config = ShareCoordinatorConfig {
                 write_timeout: timeout,
@@ -1099,7 +1108,7 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
                 clock: _clock,
             } = configured_coordinator(dir.path(), config);
             let image = initialize_led_group().coordinator(&coord).call().await;
-            let state_partition = coord.state_partition_for("g", &TOPIC, 0);
+            let state_partition = coord.state_partition_for("g", &TOPIC, 0).unwrap();
             let part = reg
                 .get(SHARE_STATE_TOPIC, state_partition)
                 .expect("the state partition is open");
@@ -1110,16 +1119,16 @@ async fn an_operation_answers_only_when_its_record_commits_in_the_term() {
                         &both,
                         &both,
                         krabka_raft::NodeId(1),
-                        std::time::Instant::now(),
+                        Instant::now(),
                     );
                 }
                 Fault::NewerEpoch => part.install_leader_change(1, 1).await,
             }
             let mover = matches!(fault, Fault::MovesAway).then(|| {
-                let part = std::sync::Arc::clone(&part);
+                let part = Arc::clone(&part);
                 tokio::spawn(async move {
                     // intentional: the operation has to wait before the move.
-                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    sleep(Duration::from_millis(20)).await;
                     part.install_leader_change(2, 1).await;
                 })
             });

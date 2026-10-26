@@ -119,7 +119,9 @@ pub fn quorum_survives_any_single_site_loss(voters_per_site: &[i64]) -> bool {
     while i < n {
         proof_assert!(sum_prefix(voters_per_site@, i@ + 1)
             == sum_prefix(voters_per_site@, i@) + voters_per_site@[i@]@);
-        total += voters_per_site[i];
+        if let Some(&voters) = voters_per_site.get(i) {
+            total += voters;
+        }
         i += 1;
     }
 
@@ -132,7 +134,9 @@ pub fn quorum_survives_any_single_site_loss(voters_per_site: &[i64]) -> bool {
         ==> 2 * (sum_all(voters_per_site@) - voters_per_site@[j]@) > sum_all(voters_per_site@)))]
     #[variant(n@ - k@)]
     while k < n {
-        if 2 * (total - voters_per_site[k]) <= total {
+        if let Some(&voters) = voters_per_site.get(k)
+            && 2 * (total - voters) <= total
+        {
             survives = false;
         }
         k += 1;

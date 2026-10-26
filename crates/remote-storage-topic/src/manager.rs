@@ -28,8 +28,13 @@
 use {
     krabka_remote_storage::{InmemoryRemoteLogMetadataManager, RemoteStorageError},
     krabka_units::prelude::{StdDurationExt as _, TimeExt as _},
-    std::sync::Arc,
-    tokio::{runtime::Handle, task::JoinHandle},
+    std::{
+        collections::HashMap,
+        path::PathBuf,
+        sync::{Arc, Mutex, PoisonError},
+        time::Duration,
+    },
+    tokio::{runtime::Handle, task::JoinHandle, time},
     tokio_util::sync::CancellationToken,
     tracing::warn,
 };
@@ -47,6 +52,7 @@ pub use self::readiness::MetadataPartitionReadiness;
 use {
     self::{mutations::MutationWaiters, persistence::ResumePlan, pump::pump_loop},
     crate::{
+        error::MetadataLogError,
         log::{AssignmentHandle, MetadataEventLog},
         snapshot::{SNAPSHOT_FILE_NAME, Snapshot},
     },
@@ -62,17 +68,17 @@ use {
 pub struct TopicBasedRemoteLogMetadataManager {
     log: Arc<dyn MetadataEventLog>,
     inner: Arc<InmemoryRemoteLogMetadataManager>,
-    applied: Arc<std::sync::Mutex<Vec<i64>>>,
+    applied: Arc<Mutex<Vec<i64>>>,
     mutation_waiters: Arc<MutationWaiters>,
     runtime: Handle,
     shutdown: CancellationToken,
-    pump: std::sync::Mutex<Option<JoinHandle<()>>>,
+    pump: Mutex<Option<JoinHandle<()>>>,
     /// Directory the on-disk RLMM cache snapshot is written to (one
     /// [`SNAPSHOT_FILE_NAME`](crate::snapshot::SNAPSHOT_FILE_NAME) file).
-    snapshot_dir: std::path::PathBuf,
+    snapshot_dir: PathBuf,
     /// Handle of the background snapshotter task. `Drop` aborts it, and
     /// [`Self::shutdown_and_flush`] joins it.
-    snapshotter: std::sync::Mutex<Option<JoinHandle<()>>>,
+    snapshotter: Mutex<Option<JoinHandle<()>>>,
     /// Live assignment handle for the metadata-log subscription. The manager
     /// holds it so the resume-from-snapshot logic and the per-broker
     /// partition-assignment logic can mutate the consumed set at runtime.
@@ -91,7 +97,7 @@ pub struct TopicBasedRemoteLogMetadataManager {
     /// Reads for a user-partition that hashes into it return
     /// [`RemoteStorageError::NotReady`] until `applied[mp] >= target - 1`.
     /// An empty map means no partition is assigned and every read is a miss.
-    ready_targets: Arc<std::sync::Mutex<std::collections::HashMap<i32, i64>>>,
+    ready_targets: Arc<Mutex<HashMap<i32, i64>>>,
 }
 
 impl TopicBasedRemoteLogMetadataManager {
@@ -114,21 +120,22 @@ impl TopicBasedRemoteLogMetadataManager {
     ///
     /// # Errors
     ///
-    /// This method is currently infallible, because the consumed set starts
-    /// empty. It returns a `Result` so the bootstrap contract stays stable if
-    /// `start` regains a fallible step.
-    /// # Panics
-    /// Panics if the event log reports a negative partition count.
+    /// Returns an error when the event log reports a negative partition
+    /// count. Nothing else fails, because the consumed set starts empty.
     pub fn start(
         log: Arc<dyn MetadataEventLog>,
         runtime: Handle,
-        snapshot_dir: std::path::PathBuf,
-        snapshot_interval: std::time::Duration,
+        snapshot_dir: PathBuf,
+        snapshot_interval: Duration,
     ) -> Result<Arc<Self>, RemoteStorageError> {
         // The parameter is a `Duration` because the broker's config layer hands
         // one over; the cadence is a time extent everywhere below this line.
         let snapshot_interval = snapshot_interval.as_time();
-        let n = usize::try_from(log.partition_count()).expect("partition_count fits in usize");
+        let count = log.partition_count();
+        let n = usize::try_from(count).map_err(|_| {
+            MetadataLogError::Other(format!("negative metadata partition count {count}"))
+                .into_storage()
+        })?;
         let mutation_waiters = Arc::new(MutationWaiters::default());
         let inner = Arc::new(InmemoryRemoteLogMetadataManager::new());
         let shutdown = CancellationToken::new();
@@ -162,7 +169,7 @@ impl TopicBasedRemoteLogMetadataManager {
             Err(e) => {
                 warn!(error = ?e, "topic-based RLMM: snapshot cursor invalid; starting from empty cache");
                 Self::resume_from_snapshot(None, n)
-                    .expect("missing snapshot always yields full-replay cursors")
+                    .map_err(|error| MetadataLogError::Other(error.to_string()).into_storage())?
                     .committed
             }
         };
@@ -170,7 +177,7 @@ impl TopicBasedRemoteLogMetadataManager {
         // Pre-seed `applied` to the committed offsets so readiness checks for
         // a later-added partition only block on the delta from committed+1 to
         // the assignment-time HWM.
-        let applied = Arc::new(std::sync::Mutex::new(committed.clone()));
+        let applied = Arc::new(Mutex::new(committed.clone()));
 
         let (stream, assignment_handle) = log.subscribe(Vec::new());
         let pump = runtime.spawn(pump_loop(
@@ -188,12 +195,12 @@ impl TopicBasedRemoteLogMetadataManager {
             mutation_waiters,
             runtime,
             shutdown,
-            pump: std::sync::Mutex::new(Some(pump)),
+            pump: Mutex::new(Some(pump)),
             snapshot_dir,
-            snapshotter: std::sync::Mutex::new(None),
+            snapshotter: Mutex::new(None),
             assignment: assignment_handle,
             committed_offsets: committed,
-            ready_targets: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            ready_targets: Arc::new(Mutex::new(HashMap::new())),
         });
 
         // Spawn the periodic snapshotter: flush whenever the cache
@@ -207,12 +214,12 @@ impl TopicBasedRemoteLogMetadataManager {
                     tokio::select! {
                         biased;
                         () = shutdown.cancelled() => return,
-                        () = tokio::time::sleep(snapshot_interval.to_std()) => {}
+                        () = time::sleep(snapshot_interval.to_std()) => {}
                     }
                     let Some(m) = weak.upgrade() else { return };
                     // Only write when the cache advanced since the last snapshot.
                     let highest = {
-                        let applied = m.applied.lock().expect("applied mutex poisoned");
+                        let applied = m.applied.lock().unwrap_or_else(PoisonError::into_inner);
                         applied.iter().copied().max().unwrap_or(-1)
                     };
                     if highest > last_written {
@@ -229,7 +236,7 @@ impl TopicBasedRemoteLogMetadataManager {
         *manager
             .snapshotter
             .lock()
-            .expect("snapshotter mutex poisoned") = Some(snapshotter);
+            .unwrap_or_else(PoisonError::into_inner) = Some(snapshotter);
 
         // Nothing is consumed at bootstrap (empty assignment), so the manager
         // is immediately ready. Per-partition catch-up after a later
@@ -247,8 +254,6 @@ impl TopicBasedRemoteLogMetadataManager {
     /// Cancel the pump and the snapshotter, then write a final snapshot that
     /// captures everything applied so far. It is safe to call this once on a
     /// graceful shutdown.
-    /// # Panics
-    /// Panics if a task-handle, applied-offset, or partition-cache mutex is poisoned.
     pub async fn shutdown_and_flush(&self) {
         self.shutdown.cancel();
         // Take the handle out of the lock BEFORE awaiting it, so the
@@ -256,7 +261,7 @@ impl TopicBasedRemoteLogMetadataManager {
         let handle = self
             .snapshotter
             .lock()
-            .expect("snapshotter mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .take();
         // Let the snapshotter observe cancellation and stop touching
         // `applied` before we take the final consistent capture.
@@ -272,15 +277,20 @@ impl TopicBasedRemoteLogMetadataManager {
 impl Drop for TopicBasedRemoteLogMetadataManager {
     fn drop(&mut self) {
         self.shutdown.cancel();
-        if let Some(handle) = self.pump.lock().expect("pump mutex poisoned").take() {
+        let pump = self
+            .pump
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(handle) = pump {
             handle.abort();
         }
-        if let Some(handle) = self
+        let snapshotter = self
             .snapshotter
             .lock()
-            .expect("snapshotter mutex poisoned")
-            .take()
-        {
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(handle) = snapshotter {
             handle.abort();
         }
     }

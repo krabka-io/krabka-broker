@@ -37,12 +37,12 @@ mod tests;
 mod truncation_replay;
 
 #[cfg(test)]
-pub(crate) use self::decision::check_pure;
+pub use self::decision::check_pure;
 use self::entry::Completion;
-pub(crate) use self::expiry::producer_id_expiration;
 pub use self::{
     decision::{Checked, Decision, SequenceContext},
     entry::{NO_EARLIER_BATCHES, PartitionProducerState, ProducerEntry, RetainedBatch},
+    expiry::producer_id_expiration,
 };
 
 /// Per-partition idempotent-producer state, nested under the owning
@@ -174,10 +174,10 @@ impl ProducerState {
     /// restart or a promotion rebuilds the exact state from the (correctly
     /// truncated) log through [`Self::rebuild_from_log`].
     pub async fn truncate(&self, topic: &str, partition: PartitionIndex, offset: LogOffset) {
-        let Some(parts) = self.by_topic.get(topic).map(|e| e.value().clone()) else {
+        let Some(parts) = self.by_topic.get(topic).map(|e| Arc::clone(e.value())) else {
             return;
         };
-        let Some(handle) = parts.get(&partition).map(|e| e.value().clone()) else {
+        let Some(handle) = parts.get(&partition).map(|e| Arc::clone(e.value())) else {
             return;
         };
         let mut s = handle.lock().await;
@@ -196,24 +196,27 @@ impl ProducerState {
         // `get` first to avoid allocating the topic `String` on the hot
         // path (the topic almost always already exists).
         let parts = self.topic_partitions(topic);
-        parts
-            .entry(partition)
-            .or_insert_with(|| Arc::new(Mutex::new(PartitionProducerState::default())))
-            .value()
-            .clone()
+        Arc::clone(
+            parts
+                .entry(partition)
+                .or_insert_with(|| Arc::new(Mutex::new(PartitionProducerState::default())))
+                .value(),
+        )
     }
 
     /// Get the topic's partition map without allocating its key on a hit.
     fn topic_partitions(&self, topic: &str) -> Arc<PartitionMap> {
-        if let Some(existing) = self.by_topic.get(topic) {
-            existing.value().clone()
-        } else {
-            self.by_topic
-                .entry(topic.to_string())
-                .or_insert_with(|| Arc::new(DashMap::new()))
-                .value()
-                .clone()
-        }
+        self.by_topic.get(topic).map_or_else(
+            || {
+                Arc::clone(
+                    self.by_topic
+                        .entry(topic.to_owned())
+                        .or_insert_with(|| Arc::new(DashMap::new()))
+                        .value(),
+                )
+            },
+            |existing| Arc::clone(existing.value()),
+        )
     }
 
     /// Read-only snapshot of every tracked producer entry on
@@ -235,12 +238,12 @@ impl ProducerState {
         let Some(topic_ref) = self.by_topic.get(topic) else {
             return Vec::new();
         };
-        let parts = topic_ref.value().clone();
+        let parts = Arc::clone(topic_ref.value());
         drop(topic_ref);
         let Some(part_ref) = parts.get(&partition) else {
             return Vec::new();
         };
-        let handle = part_ref.value().clone();
+        let handle = Arc::clone(part_ref.value());
         drop(part_ref);
         let state = handle.lock().await;
         state

@@ -14,6 +14,7 @@ use {
         file_config::FileConfig,
     },
     krabka_security::ListenerProtocol::{self, Plaintext, SaslPlaintext, SaslSsl, Ssl},
+    std::iter,
 };
 
 /// The five keys, in the name order that `describe_one` reports them in.
@@ -154,7 +155,7 @@ fn named(
         .mutability(setup.mutability)
         .source(CONFIG_SOURCE_STATIC_BROKER)
         .synonyms(
-            std::iter::once(synonym(
+            iter::once(synonym(
                 setup.name,
                 setup.value,
                 CONFIG_SOURCE_STATIC_BROKER,

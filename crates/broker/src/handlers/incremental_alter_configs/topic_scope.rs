@@ -25,6 +25,7 @@ use {
         },
         topic_policy::{TopicPolicy, check as check_topic_policy},
     },
+    krabka_log::topic_name,
     krabka_metadata::{MetadataImage, MetadataRecord, TopicConfigRecord},
     krabka_protocol::owned::incremental_alter_configs_request::AlterConfigsResource,
     std::collections::BTreeMap,
@@ -122,7 +123,7 @@ pub(super) fn topic_config_record(
             "Default topic resources are not allowed.".into(),
         ));
     }
-    if let Err(invalid) = krabka_log::topic_name::validate_topic_name(topic) {
+    if let Err(invalid) = topic_name::validate_topic_name(topic) {
         return Err((codes::INVALID_TOPIC_EXCEPTION, invalid.to_string()));
     }
     let (audit_epochs, user_configs): (BTreeMap<_, _>, _) = merged
@@ -172,7 +173,7 @@ mod tests {
                 },
                 test_support::check_config_result,
             },
-            throttle::LEADER_THROTTLED_REPLICAS_KEY,
+            throttle::{LEADER_THROTTLED_REPLICAS_KEY, ThrottledReplicas},
         },
     };
 
@@ -194,8 +195,8 @@ mod tests {
     fn topic_throttle_config_value_validated() {
         // Verify ThrottledReplicas::parse rejects malformed input that
         // the validator delegates to.
-        assert!(crate::throttle::ThrottledReplicas::parse("not-a-pair").is_err());
-        assert!(crate::throttle::ThrottledReplicas::parse("0:bad").is_err());
+        assert!(ThrottledReplicas::parse("not-a-pair").is_err());
+        assert!(ThrottledReplicas::parse("0:bad").is_err());
     }
 
     #[test]
@@ -260,8 +261,8 @@ mod tests {
         let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "orders".into(),
             overrides: maplit::btreemap! {
-            config_keys::RETENTION_MS.to_string() => "60000".to_string(),
-            config_keys::SEGMENT_BYTES.to_string() => "1048576".to_string()},
+            config_keys::RETENTION_MS.to_owned() => "60000".to_owned(),
+            config_keys::SEGMENT_BYTES.to_owned() => "1048576".to_owned()},
         });
         assert!(record == expected);
     }
@@ -355,7 +356,7 @@ mod tests {
 
         let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "orders".into(),
-            overrides: maplit::btreemap! {config_keys::CLEANUP_POLICY.to_string() => "compact".to_string()},
+            overrides: maplit::btreemap! {config_keys::CLEANUP_POLICY.to_owned() => "compact".to_owned()},
         });
         assert!(record == expected);
     }
@@ -460,10 +461,10 @@ mod tests {
         let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "retries".into(),
             overrides: maplit::btreemap! {
-            config_keys::RETENTION_MS.to_string() => "60000".to_string(),
-            config_keys::DELIVERY_MODE.to_string() => "scheduled".to_string(),
-            config_keys::DELIVERY_MAX_DELAY_MS.to_string() => "3600000".to_string(),
-            config_keys::DELIVERY_SCHEDULE_MONOTONIC.to_string() => "true".to_string()},
+            config_keys::RETENTION_MS.to_owned() => "60000".to_owned(),
+            config_keys::DELIVERY_MODE.to_owned() => "scheduled".to_owned(),
+            config_keys::DELIVERY_MAX_DELAY_MS.to_owned() => "3600000".to_owned(),
+            config_keys::DELIVERY_SCHEDULE_MONOTONIC.to_owned() => "true".to_owned()},
         });
         assert!(record == expected);
     }
@@ -524,7 +525,7 @@ mod tests {
         let expected = MetadataRecord::V1TopicConfig(TopicConfigRecord {
             topic: "orders".into(),
             overrides: maplit::btreemap! {
-            config_keys::MIN_INSYNC_REPLICAS.to_string() => "2".to_string()},
+            config_keys::MIN_INSYNC_REPLICAS.to_owned() => "2".to_owned()},
         });
         check!(record == expected);
     }

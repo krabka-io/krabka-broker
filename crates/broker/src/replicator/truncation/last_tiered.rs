@@ -23,6 +23,7 @@ use {
         partition::Partition,
         replicator::Config,
     },
+    std::sync::PoisonError,
 };
 
 /// Kafka's `ReplicationConfigs.FOLLOWER_FETCH_LAST_TIERED_OFFSET_ENABLE_CONFIG`.
@@ -85,7 +86,7 @@ impl LocalTieringFacts {
     /// log, under one log mutex hold.
     pub(super) fn read(cfg: &Config, partition: &Partition) -> Self {
         let enabled = follower_fetch_last_tiered_offset_enabled(cfg);
-        let log = partition.log.lock().expect("log mutex poisoned");
+        let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
         let config = log.config_snapshot();
         Self {
             enabled,
@@ -175,6 +176,7 @@ mod tests {
         krabka_metadata::{
             BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataRecord, NodeId,
         },
+        std::future,
     };
 
     fn facts(
@@ -314,7 +316,7 @@ mod tests {
         let answer = earliest_pending_upload_offset(
             &mut |timestamp| {
                 asked.push(timestamp);
-                std::future::ready(match timestamp {
+                future::ready(match timestamp {
                     EARLIEST_PENDING_UPLOAD_TIMESTAMP => pending.clone(),
                     EARLIEST_LOCAL_TIMESTAMP => local_start.clone(),
                     other => Err(format!("unexpected sentinel {other}")),

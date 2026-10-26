@@ -131,7 +131,7 @@ fn reject_parked_member(
     if let Some(sender) = joiners.remove(member_id) {
         let _ = sender.send(JoinResult {
             error_code,
-            member_id: member_id.to_string(),
+            member_id: member_id.to_owned(),
             ..JoinResult::default()
         });
     }
@@ -246,9 +246,9 @@ mod tests {
         );
         assert!(state.state == ClassicGroupState::PreparingRebalance);
 
-        let (tx1, _rx1) = tokio::sync::oneshot::channel();
-        let (tx2, _rx2) = tokio::sync::oneshot::channel();
-        let mut joiners = maplit::hashmap! {"m1".to_string() => tx1, "m2".to_string() => tx2};
+        let (tx1, _rx1) = oneshot::channel();
+        let (tx2, _rx2) = oneshot::channel();
+        let mut joiners = maplit::hashmap! {"m1".to_owned() => tx1, "m2".to_owned() => tx2};
         let mut followers = HashMap::new();
 
         complete_classic_rebalance(&mut state, &mut joiners, &mut followers);
@@ -261,12 +261,12 @@ mod tests {
 
     #[tokio::test]
     async fn removed_classic_members_drain_parked_waiters() {
-        let (join_tx, join_rx) = tokio::sync::oneshot::channel();
-        let (sync_tx, sync_rx) = tokio::sync::oneshot::channel();
-        let mut joiners = maplit::hashmap! {"m1".to_string() => join_tx};
-        let mut followers = maplit::hashmap! {"m1".to_string() => sync_tx};
+        let (join_tx, join_rx) = oneshot::channel();
+        let (sync_tx, sync_rx) = oneshot::channel();
+        let mut joiners = maplit::hashmap! {"m1".to_owned() => join_tx};
+        let mut followers = maplit::hashmap! {"m1".to_owned() => sync_tx};
 
-        drain_removed_classic_waiters(&["m1".to_string()], &mut joiners, &mut followers);
+        drain_removed_classic_waiters(&["m1".to_owned()], &mut joiners, &mut followers);
 
         check!(joiners.is_empty());
         check!(followers.is_empty());

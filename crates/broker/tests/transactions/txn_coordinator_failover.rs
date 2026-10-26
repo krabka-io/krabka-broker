@@ -27,9 +27,10 @@ use {
     assert2::assert,
     krabka_broker::{BrokerConfig, BrokerHandle, NodeId},
     krabka_client_core::Client,
-    krabka_protocol::owned::end_txn_response::EndTxnResponse,
+    krabka_protocol::{owned::end_txn_response::EndTxnResponse, primitives::uuid::Uuid},
     std::time::{Duration, Instant},
     tempfile::TempDir,
+    tokio::time,
 };
 
 const TID: &str = "txn-coordinator-failover";
@@ -92,7 +93,7 @@ async fn find_coordinator(client: &Client) {
         }
         assert!(Instant::now() < deadline, "FindCoordinator: {found:?}");
         // intentional: the topic creation has no awaiter from this client.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -125,7 +126,7 @@ async fn produce(client: &Client, producer: Option<ProducerIdentity>, values: &[
     let topic_id = client
         .send(topic_metadata_request(Some(vec![metadata_topic(
             Some(TOPIC.into()),
-            krabka_protocol::primitives::uuid::Uuid::default(),
+            Uuid::default(),
         )])))
         .await
         .expect("Metadata")

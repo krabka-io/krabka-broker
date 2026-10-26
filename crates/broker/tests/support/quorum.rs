@@ -1,7 +1,8 @@
 //! Controller quorum request and response fixtures.
 
-use krabka_protocol::owned::describe_quorum_request::{
-    DescribeQuorumRequest, PartitionData, TopicData,
+use krabka_protocol::owned::{
+    describe_quorum_request::{DescribeQuorumRequest, PartitionData, TopicData},
+    describe_quorum_response::DescribeQuorumResponse,
 };
 
 pub fn describe_quorum_request(
@@ -32,10 +33,7 @@ pub fn metadata_quorum_request() -> DescribeQuorumRequest {
 ///
 /// # Panics
 /// Panics if the response is missing its metadata partition or has an unexpected leader.
-pub fn two_node_leader(
-    response: &krabka_protocol::owned::describe_quorum_response::DescribeQuorumResponse,
-    expected: (i32, i32),
-) -> i32 {
+pub fn two_node_leader(response: &DescribeQuorumResponse, expected: (i32, i32)) -> i32 {
     let leader_id = response.topics[0].partitions[0].leader_id;
     assert2::assert!(
         leader_id == expected.0 || leader_id == expected.1,

@@ -1,5 +1,4 @@
-// rustc 1.95 clippy ICEs on `clippy::pedantic` in test files (same
-// upstream bug as `tests/compaction.rs` / `tests/mtls.rs`).
+#![cfg(test)]
 
 //! Broker-side recompression.
 //!
@@ -24,6 +23,7 @@ use {
         fetch::single_partition_fetch,
         produce::{SinglePartitionProduceSetup, batch_request},
         records::{batch_from_records, value_record},
+        topics,
     },
     assert2::{assert, check},
     bytes::Bytes,
@@ -57,14 +57,14 @@ async fn start_broker() -> StartedBroker {
     let cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
     let handle = Broker::start(cfg).await.expect("broker must start");
     let addr = handle.listen_addr();
-    std::mem::forget(log_dir);
+    let _ = log_dir.keep();
     StartedBroker { handle, addr }
 }
 
 async fn create_topic_with_compression(addr: SocketAddr, topic: &str, codec: &str) {
     let req = CreateTopicsRequest {
         topics: vec![
-            crate::support::topics::creatable_topic_with_configs()
+            topics::creatable_topic_with_configs()
                 .name(topic.into())
                 .configs(vec![CreatableTopicConfig {
                     name: "compression.type".into(),

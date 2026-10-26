@@ -15,6 +15,7 @@ use {
     assert2::assert,
     krabka_broker::RlmmKind,
     std::time::Duration,
+    tokio::time,
 };
 
 /// While the topic-backed RLMM has not yet activated, the RLM copy task must
@@ -66,7 +67,7 @@ async fn copy_task_skips_tiering_while_rlmm_not_ready_case() {
     // nothing tiered within a window" wait. We let several copy-task ticks
     // elapse (200 ms interval × ~10 ticks) and then assert 0 tiered objects;
     // there is no "did-not-happen" event to await on.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    time::sleep(Duration::from_secs(2)).await;
 
     // The RLMM is still NotReady, so add_remote_log_segment_metadata returns
     // NotReady and the copy task must have skipped every segment.

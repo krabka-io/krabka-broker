@@ -40,7 +40,7 @@ use {
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition},
     krabka_units::prelude::ByteSizeExt,
     krabka_verified::list_offsets::earliest_timestamp_candidate,
-    std::{future::Future, time::Duration},
+    std::{future::Future, sync::PoisonError, time::Duration},
     tokio::time::Instant,
 };
 
@@ -65,7 +65,7 @@ pub(super) async fn resolve_timestamp_offset(
     let remote_enabled = partition
         .log
         .lock()
-        .expect("log mutex poisoned")
+        .unwrap_or_else(PoisonError::into_inner)
         .config_snapshot()
         .remote_storage_enable;
     resolve_timestamp_with_sources(
@@ -90,7 +90,7 @@ pub(super) async fn resolve_timestamp_offset(
 /// bounded by the established deletion floor. Diskless flushing
 /// advances that local checkpoint while WAL records remain readable, so its
 /// committed index deletion floor alone bounds the WAL and local candidates.
-pub(crate) async fn resolve_timestamp_with_sources(
+pub async fn resolve_timestamp_with_sources(
     partition: &Partition,
     tp: &TopicIdPartition,
     timestamp: i64,
@@ -102,7 +102,7 @@ pub(crate) async fn resolve_timestamp_with_sources(
     let mut minimum = partition
         .log
         .lock()
-        .expect("log mutex poisoned")
+        .unwrap_or_else(PoisonError::into_inner)
         // Only a checkpointed deletion floor bounds the archive. The floor
         // inferred from surviving local files can sit above readable tiered
         // records after a restart.
@@ -120,7 +120,7 @@ pub(crate) async fn resolve_timestamp_with_sources(
         let limit = partition
             .log
             .lock()
-            .expect("log mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .config_snapshot()
             .max_decompressed_record
             .map(ByteSizeExt::bytes_usize);
@@ -147,7 +147,7 @@ pub(crate) async fn resolve_timestamp_with_sources(
         // Kafka's `findOffsetByTimestamp` reads the leader-epoch cache, the
         // log end offset and the local segments when the lookup starts.
         let (lineage, local_base) = {
-            let log = partition.log.lock().expect("log mutex poisoned");
+            let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
             (
                 EpochLineage::of(&log),
                 log.first_segment_base().map(|base| base.0),
@@ -218,7 +218,7 @@ where
         let max_record_body = partition
             .log
             .lock()
-            .expect("log mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .config_snapshot()
             .max_decompressed_record
             .map(ByteSizeExt::bytes_usize);
@@ -246,7 +246,7 @@ where
             }
         }
     }
-    let log = partition.log.lock().expect("log mutex poisoned");
+    let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(found) = remote_found
         && found.0 < log.local_log_start_offset().0
     {
@@ -255,6 +255,7 @@ where
         return Ok(found);
     }
     let found = log.offset_for_timestamp_checked_from(timestamp, Offset(minimum));
+    drop(log);
     match found {
         Ok(found) => Ok(earliest_timestamp_candidate(
             remote_found,
@@ -301,16 +302,16 @@ mod tests {
     }
 
     struct BrokerPartition {
-        broker: std::sync::Arc<Broker>,
-        partition: std::sync::Arc<Partition>,
+        broker: sync::Arc<Broker>,
+        partition: sync::Arc<Partition>,
     }
 
     struct RemotePartitionTopic {
         broker_handle: BrokerHandle,
         client: krabka_client_core::Client,
         _directories: [tempfile::TempDir; 2],
-        broker: std::sync::Arc<Broker>,
-        partition: std::sync::Arc<Partition>,
+        broker: sync::Arc<Broker>,
+        partition: sync::Arc<Partition>,
     }
 
     fn broker_partition(handle: &BrokerHandle, topic: &str) -> BrokerPartition {
@@ -354,7 +355,7 @@ mod tests {
             std::sync::{Arc, Mutex},
         };
 
-        let (partition, _dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
         {
             let mut log = partition.log.lock().expect("partition log lock");
             log.append(&mut RecordBatch {
@@ -386,7 +387,7 @@ mod tests {
             ),
             (
                 "an I/O failure of the remote tier answers unknown server error",
-                Some(Err(RemoteStorageError::Io(std::io::Error::other("boom")))),
+                Some(Err(RemoteStorageError::Io(io::Error::other("boom")))),
                 Err(codes::UNKNOWN_SERVER_ERROR),
             ),
             (
@@ -410,7 +411,7 @@ mod tests {
             let remote = remote.map(|answer| {
                 |limit| {
                     limits.lock().expect("limits lock").push(limit);
-                    std::future::ready(answer)
+                    future::ready(answer)
                 }
             });
             let had_remote = remote.is_some();
@@ -443,7 +444,8 @@ mod tests {
         crate::test_support::UnixMillis,
         krabka_ids::Offset,
         krabka_units::{ByteSize, bytes},
-        std::ops::RangeInclusive,
+        std::{fs, future, io, ops::RangeInclusive, sync},
+        tokio::sync::Notify,
     };
 
     #[derive(krabka_macros::FieldDefaults)]
@@ -665,8 +667,8 @@ mod tests {
         let log_path = source_dir.path().join("segment.log");
         let offset_index_path = source_dir.path().join("segment.index");
         let time_index_path = source_dir.path().join("segment.timeindex");
-        std::fs::write(&log_path, &log_bytes).expect("write log");
-        std::fs::write(
+        fs::write(&log_path, &log_bytes).expect("write log");
+        fs::write(
             &offset_index_path,
             [
                 0_u32.to_be_bytes(),
@@ -682,7 +684,7 @@ mod tests {
         time_index.extend_from_slice(&0_u32.to_be_bytes());
         time_index.extend_from_slice(&2_400_i64.to_be_bytes());
         time_index.extend_from_slice(&4_u32.to_be_bytes());
-        std::fs::write(&time_index_path, time_index).expect("write time index");
+        fs::write(&time_index_path, time_index).expect("write time index");
 
         let topic_id = broker_arc
             .controller
@@ -729,9 +731,9 @@ mod tests {
             })
             .expect("hide the full remote copy");
         let suffix = &log_bytes[usize::try_from(last_position).expect("position")..];
-        std::fs::write(&log_path, suffix).expect("write suffix");
-        std::fs::write(&offset_index_path, [0_u8; 8]).expect("write suffix offset index");
-        std::fs::write(
+        fs::write(&log_path, suffix).expect("write suffix");
+        fs::write(&offset_index_path, [0_u8; 8]).expect("write suffix offset index");
+        fs::write(
             &time_index_path,
             [
                 2_400_i64.to_be_bytes().as_slice(),

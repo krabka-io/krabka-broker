@@ -8,14 +8,14 @@ use {
     krabka_units::convert::ByteSizeExt as _,
     std::{
         collections::{BTreeMap, HashMap, VecDeque},
-        sync::Mutex,
+        sync::{Mutex, PoisonError},
     },
     uuid::Uuid,
 };
 
 /// Advisory cache of recently quorum-committed diskless WAL batches.
 #[derive(Debug)]
-pub(crate) struct HotTailCache {
+pub struct HotTailCache {
     max_bytes: usize,
     state: Mutex<HotTailState>,
 }
@@ -81,23 +81,22 @@ impl HotTailCache {
         limit_offset: i64,
         max_bytes: usize,
     ) -> Option<Bytes> {
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let map = state.entries.get(&ShardId {
-            topic_id,
-            partition,
-        })?;
-        let (_base, entry) = map.range(..=fetch_offset).next_back()?;
-        if fetch_offset <= entry.last_offset
-            && entry.last_offset < limit_offset
-            && entry.bytes.len() <= max_bytes
-        {
-            Some(entry.bytes.clone())
-        } else {
-            None
-        }
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let bytes = state
+            .entries
+            .get(&ShardId {
+                topic_id,
+                partition,
+            })
+            .and_then(|map| map.range(..=fetch_offset).next_back())
+            .filter(|(_base, entry)| {
+                fetch_offset <= entry.last_offset
+                    && entry.last_offset < limit_offset
+                    && entry.bytes.len() <= max_bytes
+            })
+            .map(|(_base, entry)| entry.bytes.clone());
+        drop(state);
+        bytes
     }
 
     fn insert_batch(
@@ -119,10 +118,7 @@ impl HotTailCache {
         } else {
             bytes
         };
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
 
         if let Some(old) = state
             .entries
@@ -174,6 +170,7 @@ impl HotTailCache {
                 state.entries.remove(&old_key);
             }
         }
+        drop(state);
     }
 
     pub(crate) fn remove_partition(&self, topic_id: Uuid, partition: PartitionIndex) {
@@ -181,10 +178,7 @@ impl HotTailCache {
             topic_id,
             partition,
         };
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(entries) = state.entries.remove(&key) {
             state.total_bytes -= entries
                 .into_values()

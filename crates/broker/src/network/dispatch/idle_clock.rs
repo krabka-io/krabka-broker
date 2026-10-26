@@ -49,8 +49,8 @@ impl IdleClock {
     /// The instant the window passes unless the socket shows activity first.
     /// A window too long to add to an `Instant` never passes.
     pub(super) fn deadline(&self) -> Option<Instant> {
-        self.window
-            .and_then(|window| self.last_activity.checked_add(window))
+        let window = self.window?;
+        self.last_activity.checked_add(window)
     }
 
     /// Resolves once the window has passed with no activity, and never when
@@ -60,7 +60,7 @@ impl IdleClock {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, tokio::time};
 
     /// The deadline is one window after the last activity, and touching the
     /// clock moves it to one window after the touch.
@@ -71,7 +71,7 @@ mod tests {
         let mut clock = IdleClock::start(Some(window));
         assert2::assert!(clock.deadline() == Some(started + window));
 
-        tokio::time::advance(Duration::from_millis(7)).await;
+        time::advance(Duration::from_millis(7)).await;
         clock.touch();
         assert2::assert!(clock.deadline() == Some(started + Duration::from_millis(17)));
 
@@ -90,7 +90,7 @@ mod tests {
         let clock = IdleClock::start(window);
         assert2::assert!(clock.deadline().is_none());
         assert2::assert!(
-            tokio::time::timeout(Duration::from_secs(3600), clock.expired())
+            time::timeout(Duration::from_secs(3600), clock.expired())
                 .await
                 .is_err()
         );

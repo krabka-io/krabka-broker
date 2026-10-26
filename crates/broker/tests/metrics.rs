@@ -1,5 +1,4 @@
-// Rust 1.95 annotate-snippets ICE on `clippy::pedantic` in test files
-// (same upstream bug as `tests/mtls.rs` etc).
+#![cfg(test)]
 
 //! Prometheus `/metrics` HTTP endpoint.
 //!
@@ -33,9 +32,10 @@ use {
             produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
             produce_response::ProduceResponse,
         },
+        primitives::uuid::Uuid,
     },
-    std::time::Duration,
-    tokio::net::TcpStream,
+    std::{net::SocketAddr, time::Duration},
+    tokio::{net::TcpStream, task, time},
 };
 
 const TOPIC: &str = "metrics-it";
@@ -46,9 +46,9 @@ const CREATE_TOPICS_VERSION: i16 = 7;
 /// The client id every request header in this suite carries.
 const CLIENT_ID: &str = "krabka-metrics-test";
 
-async fn create_topic(addr: std::net::SocketAddr) { create_topic_named(addr, TOPIC).await; }
+async fn create_topic(addr: SocketAddr) { create_topic_named(addr, TOPIC).await; }
 
-async fn create_topic_named(addr: std::net::SocketAddr, topic: &str) {
+async fn create_topic_named(addr: SocketAddr, topic: &str) {
     let req = create_topic_request(creatable_topic().name((topic).into()).call());
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let mut body = BytesMut::new();
@@ -68,7 +68,7 @@ async fn create_topic_named(addr: std::net::SocketAddr, topic: &str) {
     assert!(r.topics[0].error_code == 0, "create: {:?}", r.topics[0]);
 }
 
-async fn produce_one(addr: std::net::SocketAddr) -> u64 {
+async fn produce_one(addr: SocketAddr) -> u64 {
     let ProduceOutcome {
         response_bytes,
         error_code,
@@ -85,7 +85,7 @@ struct ProduceOutcome {
     error_code: i16,
 }
 
-async fn produce_to(addr: std::net::SocketAddr, topic: &str, partition: i32) -> ProduceOutcome {
+async fn produce_to(addr: SocketAddr, topic: &str, partition: i32) -> ProduceOutcome {
     let batch = batch_from_records(vec![value_record(
         0,
         Some(bytes::Bytes::from_static(b"hello")),
@@ -125,27 +125,27 @@ async fn produce_to(addr: std::net::SocketAddr, topic: &str, partition: i32) -> 
     }
 }
 
-async fn fetch_one(addr: std::net::SocketAddr) {
+async fn fetch_one(addr: SocketAddr) {
     use krabka_protocol::owned::fetch_response::FetchResponse;
     let req = single_partition_fetch()
         .topic(TOPIC.into())
-        .topic_id(krabka_protocol::primitives::uuid::Uuid::default())
+        .topic_id(Uuid::default())
         .call();
     let (_, r): (usize, FetchResponse) =
         kafka_wire::request_once(addr, &req, (1, FETCH_VERSION), CLIENT_ID, (1, true)).await;
     assert!(r.error_code == 0, "fetch top-level: {r:?}");
 }
 
-async fn scrape(addr: std::net::SocketAddr) -> String { scrape_metrics(addr).await }
+async fn scrape(addr: SocketAddr) -> String { scrape_metrics(addr).await }
 
-async fn wait_until_absent(addr: std::net::SocketAddr, needle: &str) -> String {
-    tokio::time::timeout(Duration::from_secs(5), async {
+async fn wait_until_absent(addr: SocketAddr, needle: &str) -> String {
+    time::timeout(Duration::from_secs(5), async {
         loop {
             let body = scrape(addr).await;
             if !body.contains(needle) {
                 return body;
             }
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
@@ -385,5 +385,5 @@ async fn partition_level_metrics_and_disk_gauge_render() {
         "missing partition_disk_bytes for materialized partition in:\n{body}"
     );
 
-    let _ = tokio::time::timeout(Duration::from_secs(10), handle.shutdown()).await;
+    let _ = time::timeout(Duration::from_secs(10), handle.shutdown()).await;
 }

@@ -1,4 +1,5 @@
 //! Mutation tables compile against Kafka's real request schemas.
+#![cfg(test)]
 
 use {
     assert2::assert,

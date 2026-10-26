@@ -8,7 +8,7 @@ use {
     },
 };
 
-pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     struct TimingDefault {
         name: &'static str,
         seconds: &'static str,
@@ -65,7 +65,10 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
                 format!("`{name}` already has a default"),
             ));
         }
-        let seconds: TokenStream = default.seconds.parse().expect("known timing default");
+        let seconds: TokenStream = default
+            .seconds
+            .parse()
+            .map_err(|_| ParseError::new(span, "invalid timing default"))?;
         let default = moxy::template! {
             #[default(::std::time::Duration::from_secs({{ seconds }}))]
         };

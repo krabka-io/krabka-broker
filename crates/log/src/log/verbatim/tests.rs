@@ -10,12 +10,13 @@ use {
         leader_epoch_checkpoint::EpochEntry,
         log::test_support::{
             EncodedVerbatim, TempLog, check_append_time_lookup, configured_test_log,
-            install_stamps, log_append_time_log, sample_batch, stamped_test_log, test_batch_at,
-            test_log, verbatim_from,
+            install_stamps, log_append_time_log, sample_batch, stamp_entries, stamped_test_log,
+            test_batch_at, test_log, verbatim_from,
         },
+        test_support::stamp_entry,
     },
     assert2::{assert, check},
-    krabka_protocol::records::RecordBatch,
+    krabka_protocol::records::{RecordBatch, TimestampType},
     krabka_units::prelude::{kibibytes, mebibytes},
 };
 
@@ -130,7 +131,7 @@ fn append_verbatim_at_stamps_base_byte_exact() {
 
     let mut expected_wire = bytes::BytesMut::new();
     prefix.encode(&mut expected_wire).unwrap();
-    let mut stamped = producer.clone();
+    let mut stamped = producer;
     stamped.base_offset = 1;
     stamped.partition_leader_epoch = 4;
     stamped.encode(&mut expected_wire).unwrap();
@@ -265,10 +266,7 @@ fn append_verbatim_stamps_full_offset_range() {
     check!(log.stamp_for_offset(Offset(3)) == Some(500));
     check!(log.stamp_for_offset(Offset(4)) == None);
 
-    assert2::assert!(
-        crate::log::test_support::stamp_entries(dir.path(), 0)
-            == [crate::test_support::stamp_entry(0, 3, 500)]
-    );
+    assert2::assert!(stamp_entries(dir.path(), 0) == [stamp_entry(0, 3, 500)]);
 }
 
 // Verbatim counterpart of `non_txn_batch_with_valid_pid_advances_lso`,
@@ -308,7 +306,7 @@ fn verbatim_log_append_time_patches_three_header_fields_and_nothing_else() {
     let mut expected = assigned_header(&wire, 4);
     let attributes = producer
         .attributes
-        .with_timestamp_type(krabka_protocol::records::TimestampType::LogAppendTime);
+        .with_timestamp_type(TimestampType::LogAppendTime);
     expected[ATTRIBUTES_RANGE].copy_from_slice(&attributes.0.to_be_bytes());
     expected[MAX_TIMESTAMP_RANGE].copy_from_slice(&stamp.to_be_bytes());
     let crc = crc32c::crc32c(&expected[CRC_COVERAGE_START..]);
@@ -331,7 +329,7 @@ fn verbatim_log_append_time_patches_three_header_fields_and_nothing_else() {
                 producer_id: producer.producer_id,
                 producer_epoch: producer.producer_epoch,
                 base_sequence: producer.base_sequence,
-                records: producer.records.clone(),
+                records: producer.records,
             }
     );
     drop(dir);
@@ -377,7 +375,7 @@ fn verbatim_stamped_with_log_append_time_patches_attributes_and_crc() {
     let mut producer = test_batch_at(0);
     producer.attributes = producer.attributes.with_transactional(true);
     let EncodedVerbatim { batch: vb, .. } = verbatim_from(&producer, LeaderEpoch(4));
-    let stamped = vb.stamped_with_log_append_time(98765);
+    let stamped = vb.stamped_with_log_append_time(98765).unwrap();
     assert!(stamped.max_timestamp == 98765);
     let mut cur = &stamped.bytes[..];
     let decoded = RecordBatch::decode(&mut cur).unwrap();

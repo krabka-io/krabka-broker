@@ -5,12 +5,14 @@
 //! sit beside `krabka restore`'s own: `2` is a bad argument in both tools, `4`
 //! is an unreadable archive in both, and `5` is an integrity failure in both.
 
+use std::io::Error;
+
 /// Everything that can stop a capture, a verification, or an offset restore.
 #[derive(Debug, thiserror::Error)]
 pub enum BackupError {
     /// A local file could not be read, or a directory could not be walked.
     #[error("{0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] Error),
 
     /// The archive could not be read or written.
     #[error("archive: {0}")]
@@ -81,12 +83,14 @@ impl From<krabka_object_store::ArchiveArgsError> for BackupError {
 
 /// The reason half of [`BackupError::UnsupportedVersion`]'s message.
 fn unsupported_version_reason(found: Option<&str>, expected: i16) -> String {
-    match found {
-        None => "no \"version\" field: the capture predates krabka 1.0, which this build \
-                 does not read"
-            .to_owned(),
-        Some(found) => format!("unsupported version {found}: this build reads version {expected}"),
-    }
+    found.map_or_else(
+        || {
+            "no \"version\" field: the capture predates krabka 1.0, which this build does not \
+             read"
+                .to_owned()
+        },
+        |found| format!("unsupported version {found}: this build reads version {expected}"),
+    )
 }
 
 impl BackupError {
@@ -115,11 +119,12 @@ mod tests {
             EXIT_UNREADABLE,
         },
         assert2::check,
+        std::io::Error,
     };
 
     #[yare::parameterized(
         invalid_argument = { BackupError::InvalidArgument("bad".to_owned()), EXIT_BAD_ARGUMENT },
-        io = { BackupError::Io(std::io::Error::other("disk")), EXIT_UNREADABLE },
+        io = { BackupError::Io(Error::other("disk")), EXIT_UNREADABLE },
         no_such_capture = { BackupError::NoSuchCapture("none".to_owned()), EXIT_UNREADABLE },
         unsupported_version = {
             BackupError::UnsupportedVersion { context: "manifest.json".to_owned(), found: None, expected: 0 },

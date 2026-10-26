@@ -1,9 +1,7 @@
 //! Shared group-handler fixtures and subscription authorization cases.
 
 #[cfg(test)]
-pub(crate) use crate::handlers::test_support::{
-    LiveBrokerFixture, StartedBroker as HandlerStartedBroker,
-};
+pub use crate::handlers::test_support::{LiveBrokerFixture, StartedBroker as HandlerStartedBroker};
 use {
     crate::{test_support as broker_fixture_support, test_support::principal as make_principal},
     assert2::assert,
@@ -89,7 +87,7 @@ pub(super) async fn grant_group_read(broker: &Broker, group: &str) {
 
 fn group_version(level: GroupFeatureLevel) -> MetadataRecord {
     MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-        name: krabka_metadata::group_version::GROUP_VERSION_FEATURE.into(),
+        name: GROUP_VERSION_FEATURE.into(),
         level: level.0,
     })
 }
@@ -111,7 +109,7 @@ pub(super) async fn set_group_version(broker: &Broker, level: GroupFeatureLevel)
 
 /// Start the coordinator fixture with an explicit finalized group version.
 pub(super) async fn versioned_group_broker(
-    authorizer: std::sync::Arc<dyn Authorizer>,
+    authorizer: Arc<dyn Authorizer>,
     level: GroupFeatureLevel,
 ) -> LiveBrokerFixture {
     let HandlerStartedBroker {
@@ -203,7 +201,7 @@ pub(super) fn alice() -> krabka_security::Principal { sasl_principal("alice") }
 /// The authenticated user and host used together by subscription ACL probes.
 pub(super) struct RequestIdentity {
     pub(super) principal: krabka_security::Principal,
-    pub(super) peer: std::net::SocketAddr,
+    pub(super) peer: SocketAddr,
 }
 pub(super) fn alice_peer() -> RequestIdentity {
     RequestIdentity {
@@ -260,7 +258,7 @@ pub(super) fn subscribed_names_describe_denied_table() {
                 .collect::<Vec<_>>()
         });
         assert!(
-            crate::handlers::acl_gates::subscribed_names_describe_denied(
+            acl_gates::subscribed_names_describe_denied(
                 &authorizer,
                 &image,
                 &ctx,
@@ -270,17 +268,22 @@ pub(super) fn subscribed_names_describe_denied_table() {
         );
     }
 }
-pub(super) fn streams_request(
-    group_id: &str,
-    member_id: &str,
-) -> krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest {
+pub(super) fn streams_request(group_id: &str, member_id: &str) -> StreamsGroupHeartbeatRequest {
     streams_request_with_topology()
         .group_id(group_id)
         .member_id(member_id)
         .call()
 }
 
-use krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo;
+use {
+    super::acl_gates,
+    krabka_metadata::group_version::GROUP_VERSION_FEATURE,
+    krabka_protocol::owned::{
+        common::streams_group_heartbeat_request::topic_info::TopicInfo,
+        streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
+    },
+    std::{net::SocketAddr, sync::Arc},
+};
 
 #[derive(krabka_macros::FieldDefaults)]
 pub(super) struct StreamsTopologySetup<'a> {
@@ -299,7 +302,7 @@ pub(super) fn streams_request_with_topology(
     #[builder(default = "m1")] member_id: &'_ str,
     #[builder(default = "in")] source_topic: &'_ str,
     #[builder(default)] state_changelog_topics: Vec<TopicInfo>,
-) -> krabka_protocol::owned::streams_group_heartbeat_request::StreamsGroupHeartbeatRequest {
+) -> StreamsGroupHeartbeatRequest {
     use krabka_protocol::owned::streams_group_heartbeat_request::{Subtopology, Topology};
 
     let setup = StreamsTopologySetup {

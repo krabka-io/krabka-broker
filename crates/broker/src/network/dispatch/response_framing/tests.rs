@@ -23,7 +23,7 @@ use {
     bytes::{BufMut, Bytes, BytesMut},
     futures_util::SinkExt as _,
     krabka_protocol::api_key::ApiKey,
-    tokio::io::AsyncReadExt as _,
+    tokio::{io, io::AsyncReadExt as _},
     tokio_util::codec::{Encoder as _, Framed},
 };
 
@@ -113,7 +113,7 @@ fn expected_header(api_key: ApiKey, encoding: ResponseBodyEncoding) -> Bytes {
 /// `poll_flush` that `serve_connection_stream` drives per response. Dropping
 /// it closes the write half so the read side sees EOF.
 async fn wire_bytes(response: Bytes, codec: KafkaCodec) -> Vec<u8> {
-    let (client, mut server) = tokio::io::duplex(1024 * 1024);
+    let (client, mut server) = io::duplex(1024 * 1024);
     let mut framed = Framed::new(client, codec);
     framed
         .send(response)

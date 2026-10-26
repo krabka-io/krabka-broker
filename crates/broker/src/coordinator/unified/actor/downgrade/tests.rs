@@ -4,14 +4,17 @@
 use {
     crate::{
         codes,
-        coordinator::unified::actor::{
-            GroupKindTag,
-            test_support::{
-                ClassicMemberSetup, bidirectional_coordinator, bidirectional_with_members,
-                decode_assignment, join_native_consumer, log_has_classic_group_metadata_write,
-                make_coordinator_with_topic, make_coordinator_with_topic_policy, rpc,
-                seed_classic_member, seeded_bidirectional_coordinator, spawn_and_downgrade,
-                upgrade_with_transient_native,
+        coordinator::{
+            DeleteGroupError,
+            unified::actor::{
+                GroupKindTag,
+                test_support::{
+                    ClassicMemberSetup, bidirectional_coordinator, bidirectional_with_members,
+                    decode_assignment, join_native_consumer, log_has_classic_group_metadata_write,
+                    make_coordinator_with_topic, make_coordinator_with_topic_policy, rpc,
+                    seed_classic_member, seeded_bidirectional_coordinator, spawn_and_downgrade,
+                    upgrade_with_transient_native,
+                },
             },
         },
     },
@@ -213,7 +216,7 @@ async fn committed_offsets_survive_a_flip() {
     let native = join_native_consumer(&handle).await.member_id;
     let after_upgrade = rpc::fetch_committed(&handle).await;
     assert!(
-        after_upgrade.get(&("t".to_string(), 0)).map(|e| e.offset) == Some(Offset(99)),
+        after_upgrade.get(&("t".to_owned(), 0)).map(|e| e.offset) == Some(Offset(99)),
         "committed offset must survive the upgrade"
     );
 
@@ -222,7 +225,7 @@ async fn committed_offsets_survive_a_flip() {
     assert!(leave.error_code == codes::NONE);
     let after_downgrade = rpc::fetch_committed(&handle).await;
     assert!(
-        after_downgrade.get(&("t".to_string(), 0)).map(|e| e.offset) == Some(Offset(99)),
+        after_downgrade.get(&("t".to_owned(), 0)).map(|e| e.offset) == Some(Offset(99)),
         "committed offset must survive the downgrade too"
     );
 }
@@ -250,7 +253,7 @@ async fn downgraded_group_is_deletable_once_empty() {
     // NOT `NotFound` — proving delete sees it as classic.
     check!(handle.kind == GroupKindTag::Consumer);
     check!(
-        coord.delete_group("g").await == Err(crate::coordinator::DeleteGroupError::NonEmpty),
+        coord.delete_group("g").await == Err(DeleteGroupError::NonEmpty),
         "a downgraded non-empty group must report NonEmpty (seen as classic), \
          not the stale-handle.kind NotFound"
     );

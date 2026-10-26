@@ -16,6 +16,7 @@
 //! These tests run against a plaintext loopback listener through the in-process
 //! handler dispatch. There is no SASL framing step. The tests drive
 //! `BrokerConfig.authorizer` directly with a `SimpleAclAuthorizer`.
+#![cfg(test)]
 
 mod support;
 
@@ -38,12 +39,17 @@ use {
         Decode, Encode,
         owned::{
             describe_cluster_request::DescribeClusterRequest,
-            describe_groups_request::DescribeGroupsRequest, metadata_request::MetadataRequest,
+            describe_groups_request::DescribeGroupsRequest,
+            describe_groups_response::DescribeGroupsResponse, metadata_request::MetadataRequest,
             metadata_response::MetadataResponse,
         },
+        primitives::uuid::Uuid,
     },
     std::{collections::HashSet, sync::Arc},
-    tokio::io::{AsyncReadExt, AsyncWriteExt},
+    tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpStream,
+    },
 };
 
 // Bit positions match Kafka's `AclOperation.code()` (verified by the
@@ -86,12 +92,12 @@ impl Harness {
 ///
 /// The name goes to the authorizer only, which is all this suite needs to
 /// drive metadata over a PLAINTEXT listener.
-fn boot_with_super_user(super_user: &str) -> impl std::future::Future<Output = Harness> {
+fn boot_with_super_user(super_user: &str) -> impl Future<Output = Harness> {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let mut cfg = BrokerConfig::for_tests(tempdir.path().to_path_buf());
     let authorizer_super_users: HashSet<String> = {
         let mut s = HashSet::new();
-        s.insert(super_user.to_string());
+        s.insert(super_user.to_owned());
         s
     };
     cfg.authorizer = Arc::new(SimpleAclAuthorizer::new(authorizer_super_users));
@@ -117,7 +123,7 @@ async fn create_topic(client: &Client, name: &str, partitions: i32) {
     let resp = client
         .send(create_topic_request(
             creatable_topic()
-                .name(name.to_string())
+                .name(name.to_owned())
                 .partitions(partitions)
                 .call(),
         ))
@@ -135,7 +141,7 @@ async fn seeded_group() -> Harness {
 async fn describe_group(
     client: &Client,
     include_authorized_operations: bool,
-) -> krabka_protocol::owned::describe_groups_response::DescribeGroupsResponse {
+) -> DescribeGroupsResponse {
     let resp = client
         .send(DescribeGroupsRequest {
             groups: vec!["g1".into()],
@@ -163,10 +169,7 @@ async fn metadata_topic_authorized_operations_default_is_not_present() {
     let resp = h
         .client
         .send(MetadataRequest {
-            topics: Some(vec![metadata_topic(
-                Some("foo".into()),
-                krabka_protocol::primitives::uuid::Uuid::default(),
-            )]),
+            topics: Some(vec![metadata_topic(Some("foo".into()), Uuid::default())]),
             // include_topic_authorized_operations defaults to false.
             ..Default::default()
         })
@@ -331,7 +334,7 @@ async fn metadata_cluster_authorized_operations_super_user_gets_full_mask_v9() {
         .maybe_capacity(Some(request_body_capacity(&body)))
         .call();
 
-    let mut stream = tokio::net::TcpStream::connect(h.handle.listen_addr())
+    let mut stream = TcpStream::connect(h.handle.listen_addr())
         .await
         .expect("tcp connect");
     stream

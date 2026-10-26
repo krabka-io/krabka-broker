@@ -12,7 +12,7 @@ use {
     },
     krabka_client_core::security::ClientSecurity,
     krabka_units::{ByteSize, Time, convert::TimeExt},
-    std::path::PathBuf,
+    std::{path::PathBuf, time::Duration},
 };
 
 /// Parameters for the topic-backed
@@ -67,7 +67,7 @@ pub struct KafkaRlmmConfig {
     pub event_queue_capacity: krabka_remote_storage_topic::MetadataEventQueueCapacity,
     /// Directory the manager writes the RLMM cache snapshot to, as one
     /// `snapshot` file. The broker derives the path from `log.dir`.
-    pub snapshot_dir: std::path::PathBuf,
+    pub snapshot_dir: PathBuf,
     /// Client TLS/SASL security for the metadata client. `None` means
     /// plaintext loopback, which suits single-broker and fully-plaintext
     /// clusters. The broker overrides this at runtime in
@@ -120,14 +120,12 @@ impl KafkaRlmmConfig {
             BrokerError::InvalidRuntimeConfig(format!("remote_storage.kafka_metadata: {error}"))
         })?;
 
-        let snapshot_interval = std::time::Duration::try_from_secs_f64(
-            self.snapshot_interval.secs_f64(),
-        )
-        .map_err(|error| {
-            BrokerError::InvalidRuntimeConfig(format!(
-                "remote_storage.kafka_metadata.snapshot_interval: {error}"
-            ))
-        })?;
+        let snapshot_interval = Duration::try_from_secs_f64(self.snapshot_interval.secs_f64())
+            .map_err(|error| {
+                BrokerError::InvalidRuntimeConfig(format!(
+                    "remote_storage.kafka_metadata.snapshot_interval: {error}"
+                ))
+            })?;
         if snapshot_interval.is_zero() {
             return Err(BrokerError::InvalidRuntimeConfig(
                 "remote_storage.kafka_metadata.snapshot_interval must be positive".into(),
@@ -184,6 +182,7 @@ mod tests {
         super::*,
         assert2::{assert, check},
         krabka_units::{convert::ByteSizeExt, mebibytes, millis, minutes, secs},
+        std::path::PathBuf,
     };
 
     #[test]
@@ -194,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_default_selects_in_memory_rlmm() {
-        let c = BrokerConfig::for_tests(std::path::PathBuf::from("/tmp"));
+        let c = BrokerConfig::for_tests(PathBuf::from("/tmp"));
         assert!(matches!(c.remote_log_metadata, RlmmKind::InMemory));
     }
 
@@ -205,7 +204,7 @@ mod tests {
         check!(c.replication == 3);
         check!(c.min_isr == 2);
         check!(c.bootstrap.is_empty());
-        check!(c.snapshot_dir == std::path::PathBuf::new());
+        check!(c.snapshot_dir == PathBuf::new());
         check!(c.snapshot_interval == DEFAULT_RLMM_SNAPSHOT_INTERVAL);
         check!(c.topic_create_timeout == secs(30));
         check!(c.fetch_max_wait == millis(500));
@@ -277,11 +276,11 @@ mod tests {
         let c = KafkaRlmmConfig {
             bootstrap: "127.0.0.1:9092".into(),
             snapshot_interval: minutes(1),
-            snapshot_dir: std::path::PathBuf::from("/data/remote-log-metadata"),
+            snapshot_dir: PathBuf::from("/data/remote-log-metadata"),
             ..KafkaRlmmConfig::default()
         };
         assert!(c.snapshot_interval == minutes(1));
-        assert!(c.snapshot_dir == std::path::PathBuf::from("/data/remote-log-metadata"));
+        assert!(c.snapshot_dir == PathBuf::from("/data/remote-log-metadata"));
     }
 
     #[test]
@@ -290,7 +289,7 @@ mod tests {
             bootstrap: "127.0.0.1:9092".into(),
             num_partitions: 1,
             replication: 1,
-            snapshot_dir: std::path::PathBuf::from("/data/remote-log-metadata"),
+            snapshot_dir: PathBuf::from("/data/remote-log-metadata"),
             ..KafkaRlmmConfig::default()
         };
         assert!(c.security.is_none());

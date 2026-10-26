@@ -3,7 +3,7 @@ use {
     assert2::assert,
     bytes::Bytes,
     std::{
-        io,
+        future, io,
         pin::Pin,
         sync::{
             Arc,
@@ -12,7 +12,10 @@ use {
         task::{Context, Poll},
         time::Duration,
     },
-    tokio::io::{AsyncRead, ReadBuf},
+    tokio::{
+        io::{AsyncRead, ReadBuf, duplex},
+        time::{self, Instant},
+    },
 };
 
 struct CountingRead {
@@ -46,7 +49,7 @@ fn stream(body: &[u8]) -> CountedStream {
     CountedStream {
         reader: CountingRead {
             remaining: Bytes::from(bytes),
-            consumed: consumed.clone(),
+            consumed: Arc::clone(&consumed),
         },
         consumed,
     }
@@ -121,7 +124,7 @@ async fn invalid_sizes_are_rejected_before_reading_the_body() {
         remaining.extend_from_slice(b"unread body");
         let mut reader = CountingRead {
             remaining: Bytes::from(remaining),
-            consumed: consumed.clone(),
+            consumed: Arc::clone(&consumed),
         };
         let budget = RequestByteBudget::of(budget_bytes);
         assert!(
@@ -145,7 +148,7 @@ async fn a_truncated_body_returns_its_reserved_capacity() {
 
 #[tokio::test]
 async fn idle_connections_reserve_no_request_bytes() {
-    let (_client, mut server) = tokio::io::duplex(16);
+    let (_client, mut server) = duplex(16);
     let budget = RequestByteBudget::of(8);
     let mut clock = IdleClock::start(None);
     let mut request = Box::pin(receive_request(&mut server, 8, Some(&budget), &mut clock));
@@ -165,7 +168,7 @@ async fn broker_budget_waits_do_not_expire_the_client_idle_window() {
     let mut request = Box::pin(receive_request(&mut reader, 8, Some(&budget), &mut clock));
     assert!(futures_util::poll!(&mut request).is_pending());
     assert!(consumed.load(Ordering::SeqCst) == 4);
-    tokio::time::advance(Duration::from_secs(1)).await;
+    time::advance(Duration::from_secs(1)).await;
     drop(held);
     assert!(request.await.unwrap().unwrap().bytes == Bytes::from_static(b"abcdefgh"));
 }
@@ -174,14 +177,14 @@ async fn broker_budget_waits_do_not_expire_the_client_idle_window() {
 async fn an_idle_body_releases_its_byte_permit() {
     use tokio::io::AsyncWriteExt as _;
 
-    let (mut client, mut server) = tokio::io::duplex(16);
+    let (mut client, mut server) = duplex(16);
     client.write_all(&8_i32.to_be_bytes()).await.unwrap();
     let budget = RequestByteBudget::of(8);
     let mut clock = IdleClock::start(Some(Duration::from_millis(10)));
     let mut request = Box::pin(receive_request(&mut server, 8, Some(&budget), &mut clock));
     assert!(futures_util::poll!(&mut request).is_pending());
     assert!(budget.available() == 0);
-    tokio::time::advance(Duration::from_millis(11)).await;
+    time::advance(Duration::from_millis(11)).await;
     assert!(matches!(request.await, Err(ReceiveError::Idle)));
     assert!(budget.available() == 8);
 }
@@ -194,11 +197,12 @@ async fn pipelined_frames_are_read_one_body_at_a_time() {
     remaining.extend_from_slice(b"second");
     reader.remaining = Bytes::from(remaining);
     for expected in [b"first".as_slice(), b"second".as_slice()] {
-        let frame = receive_request(&mut reader, 8, None, &mut IdleClock::start(None))
+        let bytes = receive_request(&mut reader, 8, None, &mut IdleClock::start(None))
             .await
             .unwrap()
-            .unwrap();
-        assert!(frame.bytes.as_ref() == expected);
+            .unwrap()
+            .bytes;
+        assert!(bytes.as_ref() == expected);
     }
     assert!(
         receive_request(&mut reader, 8, None, &mut IdleClock::start(None))
@@ -224,7 +228,7 @@ struct Trickle {
 async fn trickle(case: &Trickle, idle: Duration) -> (Result<Bytes, String>, Duration) {
     use tokio::io::AsyncWriteExt as _;
 
-    let (mut client, mut server) = tokio::io::duplex(64);
+    let (mut client, mut server) = duplex(64);
     let mut frame = 4_i32.to_be_bytes().to_vec();
     frame.extend_from_slice(b"body");
     let bytes = frame[..case.sent].to_vec();
@@ -232,12 +236,12 @@ async fn trickle(case: &Trickle, idle: Duration) -> (Result<Bytes, String>, Dura
     let writer = tokio::spawn(async move {
         for byte in bytes {
             client.write_all(&[byte]).await.unwrap();
-            tokio::time::sleep(gap).await;
+            time::sleep(gap).await;
         }
         // Holds the socket open: a peer that goes quiet, not one that hangs up.
-        std::future::pending::<()>().await;
+        future::pending::<()>().await;
     });
-    let started = tokio::time::Instant::now();
+    let started = Instant::now();
     let outcome = receive_request(&mut server, 8, None, &mut IdleClock::start(Some(idle)))
         .await
         .map(|frame| frame.expect("a frame").bytes)
@@ -284,7 +288,7 @@ async fn the_idle_window_measures_silence_not_frame_duration() {
         ),
     ] {
         let (outcome, elapsed) = trickle(&case, idle).await;
-        assert!(outcome == Err("Idle".to_string()), "{case:?}");
+        assert!(outcome == Err("Idle".to_owned()), "{case:?}");
         assert!(elapsed == expected_close, "{}", case.what);
     }
 }

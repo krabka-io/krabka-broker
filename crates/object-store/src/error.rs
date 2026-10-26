@@ -1,6 +1,10 @@
 //! Error taxonomy for object-store construction and access.
 
-use {super::object_store_api as object_store, object_store::path::Path as ObjectPath};
+use {
+    super::object_store_api as object_store,
+    object_store::path::{Path as ObjectPath, Path},
+    std::io,
+};
 
 /// Errors raised by the object-store substrate.
 #[derive(Debug, thiserror::Error)]
@@ -8,7 +12,7 @@ pub enum ObjectStoreError {
     /// A local-filesystem I/O failure, for example during a read of a segment
     /// file to upload.
     #[error("object store I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
     /// The backend builder rejected the config: a bad bucket, region,
     /// endpoint, or credential.
     #[error("invalid object store config: {0}")]
@@ -23,7 +27,7 @@ pub enum ObjectStoreError {
     #[error("object `{key}` is {size} bytes, exceeds cap of {max_bytes} bytes")]
     TooLarge {
         /// The object that breached the cap.
-        key: object_store::path::Path,
+        key: Path,
         /// The metadata size or the bytes observed when streaming exceeded the cap.
         size: u64,
         /// The cap in bytes.
@@ -68,11 +72,13 @@ mod tests {
     use {
         super::{object_store, *},
         assert2::assert,
+        object_store::path::Path,
+        std::{io, io::ErrorKind},
     };
 
     #[test]
     fn io_error_converts_via_from() {
-        let io = std::io::Error::new(std::io::ErrorKind::NotFound, "nope");
+        let io = io::Error::new(ErrorKind::NotFound, "nope");
         let err: ObjectStoreError = io.into();
         assert!(matches!(err, ObjectStoreError::Io(_)));
     }
@@ -80,7 +86,7 @@ mod tests {
     #[test]
     fn not_found_maps_to_structured_variant() {
         let err = object_store::Error::NotFound {
-            path: "tenant/block".to_string(),
+            path: "tenant/block".to_owned(),
             source: "missing".into(),
         };
         let mapped = ObjectStoreError::from(err);
@@ -92,7 +98,7 @@ mod tests {
     #[test]
     fn already_exists_maps_to_structured_variant() {
         let err = object_store::Error::AlreadyExists {
-            path: "worm/manifest.json".to_string(),
+            path: "worm/manifest.json".to_owned(),
             source: "exists".into(),
         };
         let mapped = ObjectStoreError::from(err);
@@ -104,7 +110,7 @@ mod tests {
     #[test]
     fn precondition_maps_to_structured_variant() {
         let err = object_store::Error::Precondition {
-            path: "worm/manifest.json".to_string(),
+            path: "worm/manifest.json".to_owned(),
             source: "etag mismatch".into(),
         };
         let mapped = ObjectStoreError::from(err);
@@ -117,7 +123,7 @@ mod tests {
     #[test]
     fn too_large_display_includes_sizes() {
         let err = ObjectStoreError::TooLarge {
-            key: object_store::path::Path::from("index/snapshot.json"),
+            key: Path::from("index/snapshot.json"),
             size: 1000,
             max_bytes: 256,
         };

@@ -34,43 +34,44 @@ use {
     krabka_metadata::{MetadataImage, MetadataRecord},
     krabka_units::{Time, convert::TimeExt as _, hours, minutes},
     std::sync::Arc,
+    tokio::time,
     tokio_util::sync::CancellationToken,
     tracing::{debug, info, warn},
     uuid::Uuid,
 };
 
 /// How long a proposal stays in the image after it expires.
-pub(crate) const PROPOSAL_RETENTION: Time = hours(24);
+pub const PROPOSAL_RETENTION: Time = hours(24);
 
 /// How often the sweep runs.
 ///
 /// The interval is far below [`PROPOSAL_RETENTION`], so a proposal is
 /// tombstoned close to the moment it falls out of retention. It is far above
 /// the cost of one image scan, so an idle cluster pays almost nothing.
-pub(crate) const SWEEP_INTERVAL: Time = minutes(5);
+pub const SWEEP_INTERVAL: Time = minutes(5);
 
 /// The controller surface the sweep needs. [`crate::broker`] adapts the real
 /// [`krabka_raft::ControllerHandle`], and tests inject a mock.
 #[async_trait]
-pub(crate) trait BreakGlassController: Send + Sync {
+pub trait BreakGlassController: Send + Sync {
     fn current_image(&self) -> Arc<MetadataImage>;
     async fn submit_change(&self, records: Vec<MetadataRecord>) -> Result<(), String>;
 }
 
 /// The spawned task. It returns when `shutdown` is cancelled.
-pub(crate) async fn run(
+pub async fn run(
     controller: Arc<dyn BreakGlassController>,
     interval: Time,
     retention: Time,
     shutdown: CancellationToken,
 ) {
-    let tick = tokio::time::interval(interval.to_std());
+    let tick = time::interval(interval.to_std());
     run_every(tick, &shutdown, || sweep(&*controller, retention)).await;
     info!("break-glass proposal sweep shutting down");
 }
 
 /// Tombstone every proposal that fell out of retention.
-pub(crate) async fn sweep(controller: &dyn BreakGlassController, retention: Time) {
+pub async fn sweep(controller: &dyn BreakGlassController, retention: Time) {
     let now_ms = now_ms();
     let reapable: Vec<Uuid> = reapable_ids(&controller.current_image(), retention, now_ms);
     if reapable.is_empty() {
@@ -118,6 +119,7 @@ mod tests {
         krabka_metadata::{BreakGlassAction, BreakGlassProposalRecord},
         krabka_units::{days, millis},
         std::{sync::Mutex, time::Duration},
+        tokio::{task, time},
     };
 
     struct MockController {
@@ -294,32 +296,32 @@ mod tests {
         let controller = MockController::holding(&[long_ago(1)]);
         let shutdown = CancellationToken::new();
         let mut task = tokio::spawn(run(
-            controller.clone(),
+            Arc::<MockController>::clone(&controller),
             millis(50),
             PROPOSAL_RETENTION,
             shutdown.clone(),
         ));
 
-        tokio::time::timeout(Duration::from_secs(1), async {
+        time::timeout(Duration::from_secs(1), async {
             loop {
                 if !controller.tombstoned().is_empty() {
                     break;
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
         .expect("the sweep runs on its first tick");
 
         check!(
-            tokio::time::timeout(Duration::from_millis(25), &mut task)
+            time::timeout(Duration::from_millis(25), &mut task)
                 .await
                 .is_err(),
             "the sweep loop stopped before the shutdown"
         );
 
         shutdown.cancel();
-        tokio::time::timeout(Duration::from_secs(1), task)
+        time::timeout(Duration::from_secs(1), task)
             .await
             .expect("the sweep task sees the shutdown")
             .expect("the sweep task does not panic");

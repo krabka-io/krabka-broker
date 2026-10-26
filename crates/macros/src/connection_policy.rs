@@ -36,13 +36,13 @@ fn policy(config: &Ident) -> TokenStream {
     }
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let config = configuration(&input.clone().into())?;
     let mut builder: Vec<_> = input.into_iter().collect();
     builder.truncate(builder.len() - 2);
     // Group only the opaque expression; nested compiler groups retain their native spans.
     let expression = Group::new(Delimiter::Parenthesis, builder.into_iter().collect());
-    let mut output: NativeTokenStream = [NativeTokenTree::Group(expression)].into_iter().collect();
+    let mut output = NativeTokenStream::from(NativeTokenTree::Group(expression));
     output.extend(NativeTokenStream::from(policy(&config)));
     Ok(output)
 }

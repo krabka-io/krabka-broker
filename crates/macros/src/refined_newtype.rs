@@ -3,7 +3,7 @@
 use {
     crate::meta::{Tokens, inner_type},
     moxy::{
-        ast::{Attributed, ItemStruct, ParseError},
+        ast::{Attributed, FromMeta, ItemStruct, Meta, MetaContent, ParseError},
         token::{Ident, LitStr, Spanner, ToTokenStream, TokenStream},
     },
 };
@@ -13,10 +13,10 @@ use {
 /// at the `<`.
 struct Parenthesized(TokenStream);
 
-impl moxy::ast::FromMeta for Parenthesized {
-    fn from_meta(meta: &moxy::ast::Meta) -> Result<Self, ParseError> {
+impl FromMeta for Parenthesized {
+    fn from_meta(meta: &Meta) -> Result<Self, ParseError> {
         match &meta.content {
-            moxy::ast::MetaContent::List(group) => Ok(Self(group.tokens.clone())),
+            MetaContent::List(group) => Ok(Self(group.tokens.clone())),
             _ => Err(ParseError::new(meta.span(), "expected `key(<type>)`")),
         }
     }
@@ -124,7 +124,7 @@ fn whole_unit_error(label: Option<&str>, unit: &str, inner: &str) -> String {
 }
 
 /// Expands `#[derive(RefinedNewtype)]` on `item`.
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let inner = inner_type(&item, "RefinedNewtype")?;
     let Some(args) = item.parse_meta::<RefinedArgs>("refined")? else {
         return Err(ParseError::new(
@@ -351,7 +351,7 @@ mod tests {
     fn expanded(source: &str) -> Expansion {
         let item: ItemStruct = moxy::parse!({ source }).expect("valid newtype declaration");
         let tokens = expand(item).expect("valid refined policy");
-        let items = moxy::parse!({ tokens.clone() }).expect("generated outer items");
+        let items = moxy::parse!({ &tokens }).expect("generated outer items");
         Expansion { tokens, items }
     }
 

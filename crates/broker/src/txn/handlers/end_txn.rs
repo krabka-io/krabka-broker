@@ -38,6 +38,7 @@ use {
     },
     krabka_log::ProducerId,
     krabka_protocol::owned::{end_txn_request::EndTxnRequest, end_txn_response::EndTxnResponse},
+    std::sync::Arc,
 };
 
 mod marker_rpc;
@@ -54,10 +55,10 @@ mod test_support;
 
 // Only the #[cfg(test)] stateright models in txn/ reach these variants.
 #[cfg(test)]
-pub(crate) use self::producer_identity::{
+pub use self::producer_identity::{
     prepare_completion_identities_with_fresh, prepare_server_abort_identities_with_fresh,
 };
-pub(crate) use self::{
+pub use self::{
     markers::{MarkerDispatchContext, MarkerFanOut, dispatch_markers, write_local_markers},
     producer_identity::{
         client_producer_identity, completion_producer_identity, next_producer_identity,
@@ -72,14 +73,14 @@ use self::{
     validation::{EndTxnValidation, validate_end_txn},
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: EndTxnRequest,
     version: i16,
     ctx: &RequestContext<'_>,
 ) -> Result<EndTxnResponse, BrokerError> {
-    let coord = broker.txn_coordinator.clone();
-    let controller = broker.controller.clone();
+    let coord = Arc::clone(&broker.txn_coordinator);
+    let controller = Arc::clone(&broker.controller);
     let authorizer = broker.config.authorizer.as_ref();
 
     // Refresh leader-partition view from the current metadata image

@@ -24,6 +24,7 @@ use {
     krabka_broker::Broker,
     krabka_security::SaslMechanism,
     std::time::Duration,
+    tokio::time,
 };
 
 /// Single-broker SASL/PLAIN cluster.
@@ -40,13 +41,13 @@ async fn non_super_user_without_acl_denied() {
     // exists; alice has credentials but no ACLs.
     let (_log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
-        .insert("admin".to_string(), "admin-secret".to_string());
+        .insert("admin".to_owned(), "admin-secret".to_owned());
     cfg.plain_credentials
-        .insert("alice".to_string(), "alice-secret".to_string());
+        .insert("alice".to_owned(), "alice-secret".to_owned());
     // The controller listener is PLAINTEXT, so this broker's own heartbeat
     // arrives as ANONYMOUS; like a Kafka inter-broker principal it needs
     // `ClusterAction`, or the broker never unfences and places no replica.
-    cfg.super_users = ["admin".to_string(), "ANONYMOUS".to_string()]
+    cfg.super_users = ["admin".to_owned(), "ANONYMOUS".to_owned()]
         .into_iter()
         .collect();
     // Install `SimpleAclAuthorizer` so the cluster-Alter gate
@@ -88,7 +89,7 @@ async fn non_super_user_without_acl_denied() {
     // intentional: defensive barrier for ACL visibility to the authorizer;
     // no ACL-image awaiter/metric exists, and the retry loop below is the
     // real convergence gate.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    time::sleep(Duration::from_millis(50)).await;
 
     // Drive ElectLeaders Preferred as alice. Because the compat shim is
     // now off (image.acls is non-empty) and alice has no Cluster Alter
@@ -102,7 +103,7 @@ async fn non_super_user_without_acl_denied() {
             drive_elect_leaders_sasl_plain(
                 addr,
                 ElectionSetup {
-                    topic: ("foo-auth-test").to_string(),
+                    topic: ("foo-auth-test").to_owned(),
                     ..Default::default()
                 },
                 &PlainAuthenticationSetup::with_password(CLIENT_ID, b"alice-secret"),

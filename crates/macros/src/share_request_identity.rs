@@ -19,7 +19,10 @@ fn admission(item: &TokenStream) -> Result<TokenStream, ParseError> {
     }
     let types =
         named_async_parameter_types(&signature, &["broker", "req", "version", "ctx"], message)?;
-    let response = match types[1].as_str() {
+    let [broker, request, version, ctx] = types.as_slice() else {
+        return Err(ParseError::new(signature.span(), message));
+    };
+    let response = match request.as_str() {
         "ShareFetchRequest" => moxy::template! { ShareFetchResponse },
         "ShareAcknowledgeRequest" => moxy::template! { ShareAcknowledgeResponse },
         _ => {
@@ -30,9 +33,9 @@ fn admission(item: &TokenStream) -> Result<TokenStream, ParseError> {
         }
     };
     let output = compact(&moxy::template! { {{ signature.output }} });
-    if types[0] != "&Broker"
-        || types[2] != "ApiVersion"
-        || types[3] != "&RequestContext<'_>"
+    if broker != "&Broker"
+        || version != "ApiVersion"
+        || ctx != "&RequestContext<'_>"
         || output != format!("->Result<{},BrokerError>", compact(&response))
     {
         return Err(ParseError::new(
@@ -53,10 +56,7 @@ fn admission(item: &TokenStream) -> Result<TokenStream, ParseError> {
     })
 }
 
-pub(crate) fn expand(
-    meta: TokenStream,
-    item: NativeTokenStream,
-) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     no_arguments(meta, "share_request_identity")?;
     let prefix: NativeTokenStream = admission(&item.clone().into())?.into();
     Ok(edit_native_body(item, |body| {

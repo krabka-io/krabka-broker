@@ -33,11 +33,15 @@ use {
         Decode, Encode,
         owned::{
             add_offsets_to_txn_response::AddOffsetsToTxnResponse,
-            api_versions_response::ApiVersionsResponse,
+            api_versions_response::ApiVersionsResponse, fetch_response::FetchResponse,
+            produce_response::ProduceResponse,
         },
     },
-    std::time::{Duration, Instant},
-    tokio::net::TcpStream,
+    std::{
+        net::SocketAddr,
+        time::{Duration, Instant},
+    },
+    tokio::{net::TcpStream, time},
 };
 
 /// `ApiVersions` is `api_key` 18.
@@ -128,7 +132,7 @@ async fn request_percentage_throttles_produce() {
     // Alice produces a single small record. Retry past TOPIC_AUTHORIZATION_FAILED
     // (29) while the alice Write ACL propagates to the handler's image snapshot.
     let resp = produce_when_acl_applied(addr, ZeroFilledRecordsSetup {
-        topic: ("throttle-request").to_string(),
+        topic: ("throttle-request").to_owned(),
         value_bytes: ProduceValueBytes(16),
         ..Default::default()
     })
@@ -250,7 +254,7 @@ async fn consumer_byte_rate_throttles_fetch() {
     let produce_resp = drive_produce_sasl(
         addr,
         ZeroFilledRecordsSetup {
-            topic: ("throttle-fetch").to_string(),
+            topic: ("throttle-fetch").to_owned(),
             count: ProduceRecordCount(8),
             ..Default::default()
         },
@@ -283,7 +287,7 @@ async fn consumer_byte_rate_throttles_fetch() {
             r.error_code
         );
         // real-time wait (not a progress poll): retry cadence between network fetch attempts, deadline-guarded
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     };
 
     assert!(
@@ -296,7 +300,7 @@ async fn consumer_byte_rate_throttles_fetch() {
     // The client did not get the records, so its position does not move.
     assert!(
         fetch_resp
-            == krabka_protocol::owned::fetch_response::FetchResponse {
+            == FetchResponse {
                 throttle_time_ms: fetch_resp.throttle_time_ms,
                 ..Default::default()
             }
@@ -374,7 +378,7 @@ async fn user_client_tuple_overrides_user_specific() {
     // Alice produces 8 KB with `krabka-quota-test`. The 128-byte tuple quota
     // throttles it; the 8192-byte user-only quota would fit in the burst window.
     let resp = produce_when_acl_applied(addr, ZeroFilledRecordsSetup {
-        topic: ("precedence-topic").to_string(),
+        topic: ("precedence-topic").to_owned(),
         count: ProduceRecordCount(8),
         ..Default::default()
     })
@@ -458,7 +462,7 @@ async fn request_percentage_throttle_is_echoed_on_a_patched_api() {
 const API_VERSIONS_VERSION: i16 = 3;
 
 /// Open the fixture's Alice session without charging a second handshake.
-async fn alice_quota_connection(addr: std::net::SocketAddr, context: &str) -> TcpStream {
+async fn alice_quota_connection(addr: SocketAddr, context: &str) -> TcpStream {
     kafka_wire::sasl_plain_authenticate(addr, &PlainAuthenticationSetup {
         client_id: CLIENT_ID,
         password: b"alice-secret".to_vec(),
@@ -476,7 +480,7 @@ async fn alice_quota_connection(addr: std::net::SocketAddr, context: &str) -> Tc
 /// client which has not yet learned the broker's versions can always parse the
 /// reply. The two header flexibilities therefore differ.
 async fn drive_api_versions(stream: &mut TcpStream, corr_id: i32) -> ApiVersionsResponse {
-    let req = api_versions_request_for("krabka-quota-test".to_string(), "0.0.1".to_string());
+    let req = api_versions_request_for("krabka-quota-test".to_owned(), "0.0.1".to_owned());
     let mut body = BytesMut::new();
     req.encode(&mut body, API_VERSIONS_VERSION)
         .expect("encode ApiVersions");
@@ -568,9 +572,9 @@ async fn request_percentage_throttle_is_reported_on_api_versions() {
 }
 
 async fn produce_when_acl_applied(
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
     records: ZeroFilledRecordsSetup,
-) -> krabka_protocol::owned::produce_response::ProduceResponse {
+) -> ProduceResponse {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let r = drive_produce_sasl(addr, records.clone(), &PlainAuthenticationSetup {
@@ -591,7 +595,7 @@ async fn produce_when_acl_applied(
             Instant::now() <= deadline,
             "ACL still not applied after 15s; error_code=29"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -600,7 +604,7 @@ async fn produce_when_acl_applied(
 struct QuotaFixture {
     handle: krabka_broker::BrokerHandle,
     dir: tempfile::TempDir,
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
 }
 
 async fn quota_fixture() -> QuotaFixture {
@@ -614,7 +618,7 @@ async fn quota_fixture() -> QuotaFixture {
 
 async fn prepare_quota_topic(
     broker: &krabka_broker::BrokerHandle,
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
     topic: &str,
     operation: krabka_metadata::AclOperation,
 ) {
@@ -637,7 +641,7 @@ async fn prepare_quota_topic(
         .await;
 }
 
-fn check_successful_produce(response: &krabka_protocol::owned::produce_response::ProduceResponse) {
+fn check_successful_produce(response: &ProduceResponse) {
     let part = &response.responses[0].partition_responses[0];
     assert!(
         part.error_code == 0,
@@ -651,7 +655,7 @@ fn check_successful_produce(response: &krabka_protocol::owned::produce_response:
 struct ThrottledProducer {
     handle: krabka_broker::BrokerHandle,
     dir: tempfile::TempDir,
-    response: krabka_protocol::owned::produce_response::ProduceResponse,
+    response: ProduceResponse,
 }
 
 /// A successful Produce request after Alice's topic ACL and 128-byte quota become visible.
@@ -670,7 +674,7 @@ async fn throttled_producer_fixture(topic: &str) -> ThrottledProducer {
         .call()
         .await;
     let response = produce_when_acl_applied(addr, ZeroFilledRecordsSetup {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         count: ProduceRecordCount(8),
         ..Default::default()
     })
@@ -708,7 +712,7 @@ impl QuotaSettingSetup<'_> {
 #[bon::builder]
 async fn set_alice_quota(
     broker: &krabka_broker::BrokerHandle,
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
     #[builder(default = "producer_byte_rate")] key: &'_ str,
     #[builder(into, default)] value: QuotaValue,
 ) {
@@ -723,7 +727,7 @@ async fn set_alice_quota(
         .await;
 }
 
-async fn set_request_time_quota(broker: &krabka_broker::BrokerHandle, addr: std::net::SocketAddr) {
+async fn set_request_time_quota(broker: &krabka_broker::BrokerHandle, addr: SocketAddr) {
     let setup = QuotaSettingSetup::request_time();
     set_alice_quota()
         .broker(broker)

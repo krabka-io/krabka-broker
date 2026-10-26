@@ -23,7 +23,7 @@ use {
     krabka_ids::Offset,
     krabka_protocol::records::{Record, RecordBatch},
     krabka_units::{bytes, millis},
-    std::sync::Arc,
+    std::sync::{Arc, PoisonError},
 };
 
 // ── KFC-1 scheduled delivery ─────────────────────────────────────
@@ -246,7 +246,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
     let now_ms = part.delivery.now_ms();
     part.log
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .append(&mut batch_delivered_at(now_ms + 600_000))
         .expect("seed the partition schedule");
     fixture
@@ -326,7 +326,7 @@ async fn a_scheduled_partition_rejects_and_appends_by_delivery_time() {
     let stored = part
         .log
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .read_raw(Offset(1), Offset(2), bytes(4096))
         .expect("read the appended batch back");
     check!(stored.bytes == Bytes::from(want_bytes));

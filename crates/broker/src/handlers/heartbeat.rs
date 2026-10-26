@@ -14,9 +14,10 @@ use {
     krabka_protocol::owned::{
         heartbeat_request::HeartbeatRequest, heartbeat_response::HeartbeatResponse,
     },
+    std::sync::Arc,
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: HeartbeatRequest,
     _version: ApiVersion,
@@ -26,7 +27,7 @@ pub(crate) async fn handle(
         coordinator::unified::actor::GroupActorMessage, handlers::acl_gates::classic_group_refusal,
     };
 
-    let coordinator = broker.group_coordinator.clone();
+    let coordinator = Arc::clone(&broker.group_coordinator);
 
     // Kafka's `GroupCoordinatorService.heartbeat` answers an empty group
     // id before any group lookup.

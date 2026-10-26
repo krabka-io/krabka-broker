@@ -22,15 +22,21 @@ use {
     krabka_units::prelude::{
         ByteSize, ByteSizeExt as _, Ratio, RatioExt as _, Time, TimeExt as _, fraction,
     },
-    std::{collections::BTreeSet, sync::Arc},
+    std::{
+        collections::BTreeSet,
+        sync::{Arc, PoisonError},
+    },
     tracing::instrument,
 };
 
 mod job;
 
 pub(in crate::log) use self::job::CompactionGate;
-use self::job::GroupPlan;
 pub use self::job::{BuiltCompaction, CompactionJob, CompactionOutcome};
+use {
+    self::job::GroupPlan,
+    std::{fs, time::SystemTime},
+};
 
 /// Inputs to one [`Log::compact`] pass that depend on broker-side state.
 ///
@@ -41,7 +47,7 @@ pub use self::job::{BuiltCompaction, CompactionJob, CompactionOutcome};
 #[derive(Debug, Clone)]
 pub struct CompactionContext {
     /// Wall clock for this pass. It drives delete-horizon stamps and expiry.
-    pub now: std::time::SystemTime,
+    pub now: SystemTime,
     /// The replica's last stable offset: the first offset that still belongs
     /// to an open transaction, or that a complete transaction's marker has
     /// not yet reached the high watermark for.
@@ -188,13 +194,10 @@ impl Log {
     /// The cleanup policy itself is not read here. That is the caller's test,
     /// because a partition the policy excludes is one the broker's cleaner
     /// skips before it opens the log at all.
-    ///
-    /// # Panics
-    /// Panics if the configuration lock is poisoned.
     #[must_use]
-    pub fn compaction_due(&self, now: std::time::SystemTime, last_stable_offset: Offset) -> bool {
+    pub fn compaction_due(&self, now: SystemTime, last_stable_offset: Offset) -> bool {
         let (min_lag, max_lag, min_ratio) = {
-            let cfg = self.config.read().unwrap();
+            let cfg = self.config.read().unwrap_or_else(PoisonError::into_inner);
             (
                 cfg.min_compaction_lag,
                 cfg.max_compaction_lag,
@@ -230,15 +233,18 @@ impl Log {
         // can remove a previous pass's output out from under this count, and
         // a clean prefix wider than the sealed list itself is nonsensical.
         let clean_segments = self.clean_prefix_segments.min(self.segments.len());
-        let clean_bytes = self.segments[..clean_segments]
+        let clean_bytes = self
+            .segments
             .iter()
+            .take(clean_segments)
             .fold(ByteSize::ZERO, |total, segment| total + segment.size());
-        let dirty: Vec<&Segment> = self.segments[clean_segments..].iter().collect();
+        let dirty: Vec<&Segment> = self.segments.iter().skip(clean_segments).collect();
         let cleanable = self
             .cleanable_sealed_count(min_lag_ms, now_ms, last_stable_offset)
             .saturating_sub(clean_segments);
-        let cleanable_bytes = dirty[..cleanable]
+        let cleanable_bytes = dirty
             .iter()
+            .take(cleanable)
             .fold(ByteSize::ZERO, |total, segment| total + segment.size());
         let oldest_dirty_timestamp_ms = dirty
             .iter()
@@ -275,8 +281,10 @@ impl Log {
         last_stable_offset: Offset,
     ) -> usize {
         let clean_segments = self.clean_prefix_segments.min(self.segments.len());
-        let dirty_timestamps: Vec<i64> = self.segments[clean_segments..]
+        let dirty_timestamps: Vec<i64> = self
+            .segments
             .iter()
+            .skip(clean_segments)
             .map(Segment::max_timestamp)
             .collect();
         let by_lag = clean_segments + cleanable_prefix(&dirty_timestamps, now_ms, min_lag_ms);
@@ -310,20 +318,22 @@ impl Log {
     /// `sizes.len()`. An empty input returns no groups.
     fn group_segments_by_size(sizes: &[ByteSize], segment_bytes: ByteSize) -> Vec<usize> {
         let mut groups = Vec::new();
-        let mut start = 0usize;
-        while start < sizes.len() {
-            let mut group_len = 1usize;
-            let mut total = sizes[start];
-            while start + group_len < sizes.len() {
-                let candidate = total + sizes[start + group_len];
-                if candidate > segment_bytes {
-                    break;
+        // The length and total size of the group being filled.
+        let mut current: Option<(usize, ByteSize)> = None;
+        for &size in sizes {
+            current = match current {
+                Some((len, total)) if total + size <= segment_bytes => {
+                    Some((len + 1, total + size))
                 }
-                total = candidate;
-                group_len += 1;
-            }
-            groups.push(group_len);
-            start += group_len;
+                Some((len, _)) => {
+                    groups.push(len);
+                    Some((1, size))
+                }
+                None => Some((1, size)),
+            };
+        }
+        if let Some((len, _)) = current {
+            groups.push(len);
         }
         groups
     }
@@ -374,8 +384,6 @@ impl Log {
     )]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn compact(&mut self, ctx: &CompactionContext) -> Result<(), LogError> {
         let Some(job) = self.prepare_compaction(ctx)? else {
             return Ok(());
@@ -403,8 +411,6 @@ impl Log {
     ///
     /// # Errors
     /// Returns an error when the log's rolled segments could not be flushed.
-    /// # Panics
-    /// Panics if the configuration lock is poisoned.
     pub fn prepare_compaction(
         &mut self,
         ctx: &CompactionContext,
@@ -420,7 +426,7 @@ impl Log {
         }
 
         let (index_interval, delete_retention, min_lag, segment_bytes, record_limit) = {
-            let cfg_guard = self.config.read().unwrap();
+            let cfg_guard = self.config.read().unwrap_or_else(PoisonError::into_inner);
             if !cfg_guard.cleanup_policy.contains_compact() {
                 return Ok(None);
             }
@@ -458,13 +464,22 @@ impl Log {
         // active producer from the producer state of the log, once for the
         // groups of one pass.
         let fenced = self.compaction_gate.fenced_flag();
-        let inputs: Vec<SealedInput> = self.segments[..consumed]
+        let past_sealed = || {
+            LogError::Corrupt(format!(
+                "a compaction pass over {consumed} segments reaches past the sealed segments"
+            ))
+        };
+        let inputs: Vec<SealedInput> = self
+            .segments
             .iter()
+            .take(consumed)
             .map(|segment| segment.sealed_input().watched_by(Arc::clone(&fenced)))
             .collect();
         let upper_bound = self.sealed_segment_end(consumed - 1);
-        let sizes: Vec<ByteSize> = self.segments[..consumed]
+        let sizes: Vec<ByteSize> = self
+            .segments
             .iter()
+            .take(consumed)
             .map(Segment::size)
             .collect();
         let mut groups = Vec::new();
@@ -473,7 +488,10 @@ impl Log {
             groups.push(GroupPlan {
                 len,
                 aborted: self.aborted_in_range(
-                    self.segments[start].base_offset(),
+                    self.segments
+                        .get(start)
+                        .ok_or_else(past_sealed)?
+                        .base_offset(),
                     self.sealed_segment_end(start + len - 1),
                 ),
             });
@@ -482,7 +500,10 @@ impl Log {
         Ok(Some(CompactionJob {
             dir: self.dir.clone(),
             io: Arc::clone(&self.io),
-            map_aborted: self.aborted_in_range(inputs[0].base_offset(), upper_bound),
+            map_aborted: self.aborted_in_range(
+                inputs.first().ok_or_else(past_sealed)?.base_offset(),
+                upper_bound,
+            ),
             inputs,
             groups,
             active_producers: self.last_records_of_active_producers(),
@@ -518,8 +539,6 @@ impl Log {
     /// Returns the build's error when the build failed on a log that still
     /// holds its input, and an error when the swap's log I/O fails or the
     /// rewritten segment is corrupt.
-    /// # Panics
-    /// Panics if the configuration lock is poisoned.
     pub fn finish_compaction(
         &mut self,
         built: BuiltCompaction,
@@ -535,7 +554,7 @@ impl Log {
         // here, while the consumed segments are still in place and dropping
         // the job deletes the outputs.
         for GroupRewrite { rewrite, .. } in &rewrites {
-            let held = std::fs::metadata(&rewrite.log_swap)?.len();
+            let held = fs::metadata(&rewrite.log_swap)?.len();
             if held != rewrite.frontier.valid_end() {
                 return Err(LogError::Corrupt(format!(
                     "compaction output {} holds {held} bytes, the build wrote {}",
@@ -593,12 +612,18 @@ impl Log {
             rewrite,
         } in &rewrites
         {
-            if self.config.read().unwrap().file_delete_delay <= krabka_units::Time::ZERO {
+            if self
+                .config
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .file_delete_delay
+                <= krabka_units::Time::ZERO
+            {
                 atomic_swap(&*self.io, &self.dir, group_bases, rewrite)?;
             } else {
-                let io = self.io.clone();
+                let io = Arc::clone(&self.io);
                 let dir = self.dir.clone();
-                let now = std::time::SystemTime::now();
+                let now = SystemTime::now();
                 atomic_swap_retiring(&*io, &dir, group_bases, rewrite, |base| {
                     let mut files = vec!["log", "index", "timeindex"];
                     if !without_txn_file.contains(&base) {
@@ -618,7 +643,7 @@ impl Log {
             // segment opens without decoding its batches again under the log.
             let mut new_seg =
                 Segment::open_rewritten(&self.dir, rewrite.new_base_offset, &rewrite.frontier)?;
-            new_seg.set_io(self.io.clone());
+            new_seg.set_io(Arc::clone(&self.io));
             new_seg.seal()?;
             let txn_index = TxnIndex::open(new_seg.txn_index_path())?;
             for base in group_bases {
@@ -676,7 +701,12 @@ mod tests {
         },
         bytes::BytesMut,
         krabka_units::prelude::{bytes, mebibytes},
-        std::io::Write as _,
+        std::{
+            fs::{self, OpenOptions},
+            io::Write as _,
+            path::Path,
+            time::{Duration, SystemTime},
+        },
         tempfile::tempdir,
     };
 
@@ -812,21 +842,21 @@ mod tests {
         // the bulk of the log and the ratio falls under Kafka's 0.5 default.
         let TempLog { dir: _dir, mut log } = compact_test_log();
         append_keyed_samples(&mut log, 12, |i| format!("k{i}"));
-        assert2::check!(log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW));
+        assert2::check!(log.compaction_due(SystemTime::now(), UNBOUNDED_HW));
 
         // Grouping shares `segment.bytes` with the roll that packed these
         // one-record segments, so widen it before the pass: the fixture
         // still needs many small sealed segments going in, but this test is
         // about the ratio the pass leaves behind, not the grouping cap.
-        set_segment_size(&mut log, mebibytes(1));
+        set_segment_size(&log, mebibytes(1));
         log.compact(&compaction_ctx()).unwrap();
-        assert2::check!(!log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW));
+        assert2::check!(!log.compaction_due(SystemTime::now(), UNBOUNDED_HW));
     }
 
     /// One sealed segment per batch, each stamped `1_000 * i` milliseconds
     /// after the epoch, all under one key. The last append lands in the active
     /// segment.
-    fn log_stamped_a_second_apart(dir: &std::path::Path, cfg: LogConfig, batches: i64) -> Log {
+    fn log_stamped_a_second_apart(dir: &Path, cfg: LogConfig, batches: i64) -> Log {
         let mut log = Log::open(dir, cfg).unwrap();
         for i in 0..batches {
             let value = format!("v{i}");
@@ -844,8 +874,8 @@ mod tests {
 
     /// A `SystemTime` `millis` after the epoch, which is the clock the
     /// stamped-segment tests reason in.
-    fn at_epoch_millis(millis: u64) -> std::time::SystemTime {
-        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(millis)
+    fn at_epoch_millis(millis: u64) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_millis(millis)
     }
 
     fn compact_at(log: &mut Log, millis: u64, stable: Offset) -> Result<(), LogError> {
@@ -1045,7 +1075,7 @@ mod tests {
         // still needs many small sealed segments going in, but this test is
         // about the min-lag withhold, not the grouping cap, so the output
         // should be free to collapse them into one.
-        set_segment_size(&mut log, mebibytes(1));
+        set_segment_size(&log, mebibytes(1));
         compact_at(&mut log, 6_000, UNBOUNDED_HW).unwrap();
 
         assert2::check!(log.segments.len() == 2);
@@ -1082,7 +1112,7 @@ mod tests {
         // these one-record segments, and this test is about the last-stable-
         // offset bound, not the grouping cap.
         assert2::check!(log.compaction_due(at_epoch_millis(6_000), Offset(3)));
-        set_segment_size(&mut log, mebibytes(1));
+        set_segment_size(&log, mebibytes(1));
         compact_at(&mut log, 6_000, Offset(3)).unwrap();
         assert2::check!(log.segments.len() == 3);
         let values = read_values(&log);
@@ -1126,7 +1156,7 @@ mod tests {
         // watermark straddle, not the grouping cap, and the straddling
         // segment must stay untouched either way.
         assert2::check!(log.compaction_due(at_epoch_millis(6_000), first_end));
-        set_segment_size(&mut log, mebibytes(1));
+        set_segment_size(&log, mebibytes(1));
         compact_at(&mut log, 6_000, first_end).unwrap();
         assert2::check!(log.segments.len() == sealed_before);
         let out = log.read(Offset(0), mebibytes(1)).unwrap();
@@ -1155,7 +1185,7 @@ mod tests {
             }]);
             log.append(&mut batch).unwrap();
         }
-        assert2::check!(!log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW));
+        assert2::check!(!log.compaction_due(SystemTime::now(), UNBOUNDED_HW));
 
         // The batches carry timestamp 0, so any max lag has long elapsed and
         // the pass is owed however clean the ratio says the log is.
@@ -1163,7 +1193,7 @@ mod tests {
             max_compaction_lag: Some(Time::from_millis(1)),
             ..cfg
         });
-        assert2::check!(log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW));
+        assert2::check!(log.compaction_due(SystemTime::now(), UNBOUNDED_HW));
     }
 
     fn assert_corrupt_suffix_preserves_originals(suffix: &[u8]) {
@@ -1180,7 +1210,7 @@ mod tests {
         assert2::assert!(!log.segments.is_empty());
 
         let corrupt_path = name::log_path(dir.path(), log.segments[0].base_offset().0);
-        std::fs::OpenOptions::new()
+        OpenOptions::new()
             .append(true)
             .open(&corrupt_path)
             .unwrap()
@@ -1192,7 +1222,7 @@ mod tests {
             .iter()
             .map(|segment| {
                 let path = name::log_path(dir.path(), segment.base_offset().0);
-                (path.clone(), std::fs::read(path).unwrap())
+                (path.clone(), fs::read(path).unwrap())
             })
             .collect();
         let bases_before: Vec<_> = log.segments.iter().map(Segment::base_offset).collect();
@@ -1207,7 +1237,7 @@ mod tests {
                 == bases_before
         );
         for (path, bytes) in originals {
-            assert2::assert!(std::fs::read(path).unwrap() == bytes);
+            assert2::assert!(fs::read(path).unwrap() == bytes);
         }
     }
 
@@ -1274,7 +1304,7 @@ mod tests {
         contents: Vec<u8>,
     }
 
-    fn versioned_log(dir: &std::path::Path, active: KeyValue<'_>) -> Log {
+    fn versioned_log(dir: &Path, active: KeyValue<'_>) -> Log {
         let cfg = LogConfig {
             cleanup_policy: CleanupPolicy::Compact,
             segment_size: bytes(256), // force rolls
@@ -1336,7 +1366,7 @@ mod tests {
                     let base = segment.base_offset().0;
                     SegmentFile {
                         base,
-                        contents: std::fs::read(name::log_path(dir.path(), base)).unwrap(),
+                        contents: fs::read(name::log_path(dir.path(), base)).unwrap(),
                     }
                 })
                 .collect()
@@ -1478,7 +1508,7 @@ mod tests {
         // Grouping shares `segment.bytes` with the roll that packed these
         // one-record segments, so widen it before the pass: this test is
         // about dedup collapsing the sealed segments, not the grouping cap.
-        set_segment_size(&mut log, mebibytes(1));
+        set_segment_size(&log, mebibytes(1));
         log.compact(&compaction_ctx()).unwrap();
 
         // Sealed segments collapse to exactly one rewritten segment.
@@ -1540,7 +1570,7 @@ mod tests {
 
         // `segment.bytes` at compact time is what `Log::compact` reads for
         // the grouping cap; widen it to exactly `group_cap`.
-        set_segment_size(&mut log, group_cap);
+        set_segment_size(&log, group_cap);
         log.compact(&compaction_ctx()).unwrap();
 
         let output_segments = log.segments.len();
@@ -1553,7 +1583,7 @@ mod tests {
             "every rewritten output segment must count toward the clean prefix"
         );
         assert2::check!(
-            !log.compaction_due(std::time::SystemTime::now(), UNBOUNDED_HW),
+            !log.compaction_due(SystemTime::now(), UNBOUNDED_HW),
             "a log made entirely of this pass's own outputs owes no further pass"
         );
     }
@@ -1585,7 +1615,7 @@ mod tests {
 
         let sealed_bytes: Vec<ByteSize> = sealed_sizes(&log);
         let group_cap = sealed_bytes[0] + sealed_bytes[1];
-        set_segment_size(&mut log, group_cap);
+        set_segment_size(&log, group_cap);
         log.compact(&compaction_ctx()).unwrap();
         assert2::assert!(
             log.segments.len() >= 2,
@@ -1613,7 +1643,7 @@ mod tests {
         for base in &new_bases {
             assert2::assert!(name::log_path(dir.path(), *base).exists());
         }
-        let leftover_swaps = std::fs::read_dir(dir.path())
+        let leftover_swaps = fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)
             .any(|entry| entry.file_name().to_string_lossy().ends_with(".swap"));

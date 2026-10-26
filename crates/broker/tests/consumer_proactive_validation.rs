@@ -68,6 +68,7 @@
 //!
 //! This test is Windows-gated like the other broker integration tests, because
 //! openraft's `debug_assert!` races on the hosted Windows scheduler.
+#![cfg(test)]
 
 mod support;
 
@@ -88,6 +89,7 @@ use {
     krabka_protocol::records::RecordBatch,
     std::time::{Duration, Instant},
     support::topic_id_for,
+    tokio::time,
 };
 
 /// Produces each value as its OWN single-record batch, one batch per offset,
@@ -105,7 +107,7 @@ async fn produce(client: &Client, topic: &str, values: &[&str]) {
         };
         batch
             .records
-            .push(value_record(0, Some(Bytes::from((*v).to_string()))));
+            .push(value_record(0, Some(Bytes::from((*v).to_owned()))));
         let mut produced = false;
         for attempt in 1..=5 {
             let resp = client
@@ -127,7 +129,7 @@ async fn produce(client: &Client, topic: &str, values: &[&str]) {
                 // client-only helper with no broker handle, so it polls the
                 // produce response's error_code rather than a broker awaiter;
                 // back off briefly and re-send.
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                time::sleep(Duration::from_millis(100)).await;
                 continue;
             }
             panic!("produce failed after {attempt} attempt(s): code {err}");
@@ -238,7 +240,7 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
     //     ISR). This is the metadata event the consumer's refresh_leader_epochs
     //     keys on to flag awaiting_validation.
     let forged = MetadataRecord::V1Partition(PartitionRecord {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         partition: 0,
         leader: pr0.leader,
         replicas: pr0.replicas.clone(),
@@ -299,7 +301,7 @@ async fn consumer_proactively_validates_and_surfaces_truncation() {
         // (`wait_until_classic_group_member_count`) fires; that client-side state
         // has no metadata-image or metric signal to await on. The brief sleep
         // avoids a tight `yield_now` busy-spin on loaded runners.
-        tokio::time::sleep(Duration::from_millis(1)).await;
+        time::sleep(Duration::from_millis(1)).await;
     }
 
     // Snapshot the OFLE counter immediately before the truncating poll.

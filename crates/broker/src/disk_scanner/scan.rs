@@ -1,5 +1,7 @@
 //! Pure-logic helper that sums the regular-file sizes inside a partition
-//! directory. It returns 0 for a missing directory, which it treats as not yet
+//! directory.
+//!
+//! It returns 0 for a missing directory, which it treats as not yet
 //! materialized and not as an error. It propagates IO errors for every other
 //! failure mode.
 
@@ -17,9 +19,10 @@ pub fn sum_partition_dir(path: &Path) -> Result<u64, io::Error> { sum_files(path
 
 /// Sums the `.log` segment files of a partition directory, and nothing else:
 /// Kafka's `UnifiedLog.size`, which `DescribeLogDirs` reports as
-/// `PartitionSize`. The indexes, the producer snapshots, the leader-epoch
-/// checkpoint and `partition.metadata` do not count, so an empty partition is
-/// 0.
+/// `PartitionSize`.
+///
+/// The indexes, the producer snapshots, the leader-epoch checkpoint and
+/// `partition.metadata` do not count, so an empty partition is 0.
 ///
 /// # Errors
 /// Returns an error when the directory cannot be read.
@@ -46,7 +49,11 @@ fn sum_files(path: &Path, keep: impl Fn(&str) -> bool) -> Result<u64, io::Error>
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert, std::io::Write};
+    use {
+        super::*,
+        assert2::assert,
+        std::{fs::File, io::Write},
+    };
 
     #[test]
     fn empty_dir_returns_zero() {
@@ -62,7 +69,7 @@ mod tests {
     }
 
     fn write_file(path: &Path, bytes: &[u8]) {
-        let mut f = std::fs::File::create(path).unwrap();
+        let mut f = File::create(path).unwrap();
         f.write_all(bytes).unwrap();
         // Drop closes the handle so Windows updates the directory metadata
         // before `sum_partition_dir` walks it.
@@ -80,7 +87,7 @@ mod tests {
     #[test]
     fn ignores_subdirectories() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir(tmp.path().join("subdir")).unwrap();
+        fs::create_dir(tmp.path().join("subdir")).unwrap();
         write_file(&tmp.path().join("subdir/inner.log"), &[0u8; 999]);
         write_file(&tmp.path().join("top.log"), &[0u8; 100]);
         assert!(sum_partition_dir(tmp.path()).unwrap() == 100);
@@ -108,7 +115,7 @@ mod tests {
         ] {
             write_file(&tmp.path().join(name), &vec![0u8; len]);
         }
-        std::fs::create_dir(tmp.path().join("00000000000000000200.log")).unwrap();
+        fs::create_dir(tmp.path().join("00000000000000000200.log")).unwrap();
 
         assert!(sum_log_segments(tmp.path()).unwrap() == 1024 + 512);
         assert!(sum_partition_dir(tmp.path()).unwrap() > 1024 + 512);

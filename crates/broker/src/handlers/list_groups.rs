@@ -68,7 +68,7 @@ const SHARE_PROTOCOL_TYPE: &str = "share";
 /// Kafka's `StreamsGroup.PROTOCOL_TYPE`.
 const STREAMS_PROTOCOL_TYPE: &str = "streams";
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ListGroupsRequest,
     _version: ApiVersion,
@@ -273,10 +273,11 @@ mod tests {
         },
         assert2::assert,
         krabka_metadata::{AclOperation, MetadataRecord, ResourceType},
+        krabka_protocol::owned::list_groups_response,
         std::sync::Arc,
     };
 
-    const VERSION: i16 = krabka_protocol::owned::list_groups_response::MAX_VERSION;
+    const VERSION: i16 = list_groups_response::MAX_VERSION;
 
     krabka_macros::wire_codec_helpers! {
         test_context ["admin-client"];
@@ -381,9 +382,10 @@ mod tests {
                 broker: broker_handle,
                 dir: _dir,
             } = start_broker_no_audit_with(|cfg| {
-                cfg.authorizer = Arc::new(SimpleAclAuthorizer::new(HashSet::from([
-                    "admin".to_string()
-                ])));
+                cfg.authorizer =
+                    Arc::new(SimpleAclAuthorizer::new(HashSet::from(
+                        ["admin".to_owned()],
+                    )));
             })
             .await;
             let broker = broker_handle.broker_arc_for_test();

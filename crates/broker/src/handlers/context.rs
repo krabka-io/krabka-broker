@@ -13,13 +13,17 @@ use {
         },
     },
     krabka_security::Principal,
-    std::net::SocketAddr,
+    std::{
+        net::SocketAddr,
+        sync::{atomic, atomic::AtomicBool},
+        time::Duration,
+    },
 };
 
 /// Per-request connection metadata. Constructed once per frame in
 /// `network::dispatch` from the authenticated `ConnectionAuth`, the
 /// accept-time peer `SocketAddr`, and the frame's `client_id` header.
-pub(crate) struct RequestContext<'a> {
+pub struct RequestContext<'a> {
     pub principal: &'a Principal,
     pub peer: &'a SocketAddr,
     /// Frame's `client_id` header: `None` when the wire field is null (`-1`
@@ -65,7 +69,7 @@ pub(crate) struct RequestContext<'a> {
     /// only signal such a producer gets; the dispatch loop drains this with
     /// [`RequestContext::take_close_after_response`] once the (empty) response
     /// has been written and closes the connection instead of muting it.
-    close_after_response: std::sync::atomic::AtomicBool,
+    close_after_response: AtomicBool,
     /// Size of the request as Kafka's `Request.sizeInBytes` counts it: the
     /// header and the body, without the four-byte length prefix. `Produce`
     /// charges it to `producer_byte_rate`. It is zero unless the dispatch loop
@@ -84,17 +88,17 @@ pub(crate) struct RequestContext<'a> {
 
 /// Connection attributes a KIP-714 telemetry handler needs to match a
 /// client to a subscription and authorize telemetry ingestion.
-pub(crate) struct TelemetryContext<'a> {
+pub struct TelemetryContext<'a> {
     pub principal: &'a Principal,
     pub connection_id: &'a str,
     pub client_id: &'a str,
-    pub peer: &'a std::net::SocketAddr,
+    pub peer: &'a SocketAddr,
     pub software_name: &'a str,
     pub software_version: &'a str,
 }
 
 impl<'a> RequestContext<'a> {
-    pub(crate) fn new(
+    pub fn new(
         principal: &'a Principal,
         peer: &'a SocketAddr,
         client_id: impl Into<Option<&'a str>>,
@@ -111,7 +115,7 @@ impl<'a> RequestContext<'a> {
             sendfile_capable,
             connection_listener_name,
             throttle: ThrottleSlot::default(),
-            close_after_response: std::sync::atomic::AtomicBool::new(false),
+            close_after_response: AtomicBool::new(false),
             request_size: 0,
             pre_authentication: false,
             forwarded: false,
@@ -120,7 +124,7 @@ impl<'a> RequestContext<'a> {
 
     /// Records the correlation id of the request this context serves.
     #[must_use]
-    pub(crate) fn with_correlation_id(mut self, correlation_id: CorrelationId) -> Self {
+    pub fn with_correlation_id(mut self, correlation_id: CorrelationId) -> Self {
         self.correlation_id = correlation_id;
         self
     }
@@ -128,7 +132,7 @@ impl<'a> RequestContext<'a> {
     /// Marks the request as one that arrived before the connection finished
     /// authenticating.
     #[must_use]
-    pub(crate) fn with_pre_authentication(mut self, pre_authentication: bool) -> Self {
+    pub fn with_pre_authentication(mut self, pre_authentication: bool) -> Self {
         self.pre_authentication = pre_authentication;
         self
     }
@@ -136,13 +140,13 @@ impl<'a> RequestContext<'a> {
     /// Records the size of the request frame this context serves, header and
     /// body, as Kafka's `Request.sizeInBytes` counts it.
     #[must_use]
-    pub(crate) fn with_request_size(mut self, frame_len: usize) -> Self {
+    pub fn with_request_size(mut self, frame_len: usize) -> Self {
         self.request_size = u64::try_from(frame_len).unwrap_or(u64::MAX);
         self
     }
 
     /// Opens this caller's controller-mutation quota with the API version's strictness.
-    pub(crate) fn controller_mutation_quota(
+    pub fn controller_mutation_quota(
         &self,
         broker: &Broker,
         image: &krabka_metadata::MetadataImage,
@@ -160,14 +164,13 @@ impl<'a> RequestContext<'a> {
 
     /// Charges `handler_time`, the time the request held the handler, against
     /// its request quota.
-    pub(crate) fn charge_request_quota(
+    pub fn charge_request_quota(
         &self,
         broker: &Broker,
         image: &krabka_metadata::MetadataImage,
-        handler_time: std::time::Duration,
+        handler_time: Duration,
     ) -> QuotaDelay {
-        let elapsed_micros = u64::try_from(handler_time.as_micros().min(u128::from(u64::MAX)))
-            .expect("elapsed microseconds clamped to u64");
+        let elapsed_micros = u64::try_from(handler_time.as_micros()).unwrap_or(u64::MAX);
         consume_request_quota(
             image,
             &broker.quota_buckets,
@@ -182,12 +185,12 @@ impl<'a> RequestContext<'a> {
     /// `handler_time` to the request quota alone, records the KIP-219 window
     /// for the dispatch loop to mute the connection by, and returns the
     /// throttle the `api_key` response reports.
-    pub(crate) fn throttle_on_request_quota(
+    pub fn throttle_on_request_quota(
         &self,
         broker: &Broker,
         image: &krabka_metadata::MetadataImage,
         api_key: ApiKeyCode,
-        handler_time: std::time::Duration,
+        handler_time: Duration,
     ) -> i32 {
         let request_delay = self.charge_request_quota(broker, image, handler_time);
         let delay =
@@ -203,37 +206,35 @@ impl<'a> RequestContext<'a> {
     /// Records the KIP-219 window this request must be throttled for. The
     /// response still goes out immediately; the connection loop applies the
     /// window afterwards by muting the connection.
-    pub(crate) fn record_throttle(&self, window: krabka_units::Time) {
-        self.throttle.record(window);
-    }
+    pub fn record_throttle(&self, window: krabka_units::Time) { self.throttle.record(window); }
 
     /// Leaves a quota charge for the dispatch loop to resolve with the request
     /// quota in one metrics call, and records its window. See
     /// [`crate::quota::ThrottleSlot::defer`].
-    pub(crate) fn defer_quota_charge(&self, charge: QuotaCharge) { self.throttle.defer(charge); }
+    pub fn defer_quota_charge(&self, charge: QuotaCharge) { self.throttle.defer(charge); }
 
     /// Drains the recorded KIP-219 window. It returns a zero extent when no
     /// quota charged this request.
-    pub(crate) fn take_throttle(&self) -> krabka_units::Time { self.throttle.take() }
+    pub fn take_throttle(&self) -> krabka_units::Time { self.throttle.take() }
 
     /// Marks this request's connection to be closed once its (suppressed)
     /// response has been written. Only an `acks=0` `Produce` whose response
     /// carries an error on any partition calls this.
-    pub(crate) fn mark_close_after_response(&self) {
+    pub fn mark_close_after_response(&self) {
         self.close_after_response
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+            .store(true, atomic::Ordering::Relaxed);
     }
 
     /// Drains the close-after-response flag [`Self::mark_close_after_response`]
     /// set. `false` unless that call happened.
-    pub(crate) fn take_close_after_response(&self) -> bool {
+    pub fn take_close_after_response(&self) -> bool {
         self.close_after_response
-            .swap(false, std::sync::atomic::Ordering::Relaxed)
+            .swap(false, atomic::Ordering::Relaxed)
     }
 
     /// Kafka's group coordinator stores `InetAddress::toString()`, which is
     /// the peer IP prefixed with `/` and does not include the connection port.
-    pub(crate) fn client_host(&self) -> String {
+    pub fn client_host(&self) -> String {
         match self.peer {
             SocketAddr::V4(peer) => format!("/{}", peer.ip()),
             SocketAddr::V6(peer) => {
@@ -253,7 +254,7 @@ impl<'a> RequestContext<'a> {
 }
 
 impl<'a> TelemetryContext<'a> {
-    pub(crate) fn new(
+    pub fn new(
         principal: &'a Principal,
         connection_id: &'a str,
         peer: &'a SocketAddr,
@@ -272,13 +273,13 @@ impl<'a> TelemetryContext<'a> {
     }
 
     /// The subscription identity and source fields shared by both telemetry APIs.
-    pub(crate) fn client_attributes(&self, instance: uuid::Uuid) -> ClientAttributes {
+    pub fn client_attributes(&self, instance: uuid::Uuid) -> ClientAttributes {
         ClientAttributes {
-            connection_id: self.connection_id.to_string(),
+            connection_id: self.connection_id.to_owned(),
             client_instance_id: instance,
-            client_id: self.client_id.to_string(),
-            software_name: self.software_name.to_string(),
-            software_version: self.software_version.to_string(),
+            client_id: self.client_id.to_owned(),
+            software_name: self.software_name.to_owned(),
+            software_version: self.software_version.to_owned(),
             source_address: self.source_address(),
             source_port: self.peer.port(),
         }
@@ -290,7 +291,7 @@ impl<'a> TelemetryContext<'a> {
     /// `%scope` suffix when the address carries a scope, and the dotted form of
     /// an IPv4-mapped peer, which the JDK's socket layer hands out as an
     /// `Inet4Address`.
-    pub(crate) fn source_address(&self) -> String {
+    pub fn source_address(&self) -> String {
         let host = krabka_authz::jdk_host_address(self.peer.ip());
         match self.peer {
             SocketAddr::V6(peer)
@@ -309,6 +310,7 @@ mod tests {
         super::*,
         crate::{handlers::test_support::operators_principal as principal, test_support::peer},
         assert2::assert,
+        std::net,
     };
 
     #[test]
@@ -356,12 +358,7 @@ mod tests {
     #[test]
     fn request_context_client_host_uses_java_ipv6_format() {
         let principal = principal();
-        let peer = SocketAddr::V6(std::net::SocketAddrV6::new(
-            std::net::Ipv6Addr::LOCALHOST,
-            9092,
-            0,
-            4,
-        ));
+        let peer = SocketAddr::V6(net::SocketAddrV6::new(net::Ipv6Addr::LOCALHOST, 9092, 0, 4));
 
         let ctx = RequestContext::new(
             &principal,

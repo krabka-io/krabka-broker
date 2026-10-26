@@ -23,20 +23,22 @@ use {
         TimerFuture,
     },
     std::{
+        future,
         sync::Arc,
         time::{Duration, SystemTime, UNIX_EPOCH},
     },
+    tokio::time::{self, Instant},
 };
 
 /// Initial and subsequent delays for a maintenance sweep.
-pub(crate) struct SweepCadence {
+pub struct SweepCadence {
     pub(crate) first: Duration,
     pub(crate) later: Duration,
 }
 
 /// Cadence and metadata authority shared by local log-maintenance sweeps.
 #[derive(Clone)]
-pub(crate) struct MetadataSweepConfig {
+pub struct MetadataSweepConfig {
     pub interval: krabka_units::Time,
     /// Production uses a real-time timer; tests may inject a manual timeline.
     pub timer: Arc<dyn Timer>,
@@ -73,7 +75,7 @@ impl MetadataSweepConfig {
 /// saturates to `i64::MAX` if the duration overflows `i64`, which is about
 /// 292 million years from now and therefore safe in practice.
 #[inline]
-pub(crate) fn epoch_millis(instant: SystemTime) -> i64 {
+pub fn epoch_millis(instant: SystemTime) -> i64 {
     instant
         .duration_since(UNIX_EPOCH)
         .map_or(0, duration_millis)
@@ -81,7 +83,7 @@ pub(crate) fn epoch_millis(instant: SystemTime) -> i64 {
 
 /// Whole milliseconds of `duration`, saturating at [`i64::MAX`].
 #[inline]
-pub(crate) fn duration_millis(duration: Duration) -> i64 {
+pub fn duration_millis(duration: Duration) -> i64 {
     i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
@@ -91,17 +93,17 @@ pub(crate) fn duration_millis(duration: Duration) -> i64 {
 /// [`WallClock`](qubit_clock::WallClock) so a test can drive it reads
 /// `epoch_millis(clock.now())` instead.
 #[inline]
-pub(crate) fn now_ms() -> i64 { epoch_millis(SystemTime::now()) }
+pub fn now_ms() -> i64 { epoch_millis(SystemTime::now()) }
 
 /// Sleeps until `deadline`, or never resolves when it is `None`.
 ///
 /// A `tokio::select!` arm uses it to disarm a timer that has nothing to wait
 /// for, such as a rebalance that is not open or a connection with no session
 /// expiry.
-pub(crate) async fn sleep_until_opt(deadline: Option<impl Into<tokio::time::Instant>>) {
+pub async fn sleep_until_opt(deadline: Option<impl Into<Instant>>) {
     match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
-        None => std::future::pending().await,
+        Some(deadline) => time::sleep_until(deadline.into()).await,
+        None => future::pending().await,
     }
 }
 
@@ -126,7 +128,7 @@ krabka_macros::timer_hooks! {
 /// Natively this is [`StdTimer`], whose deadlines one scheduler thread, shared
 /// by the process, watches. `wasm32-wasip1` cannot start that thread -- every
 /// registration fails there -- so on that target it is a [`RuntimeTimer`].
-pub(crate) fn system_timer() -> Arc<dyn Timer> {
+pub fn system_timer() -> Arc<dyn Timer> {
     if cfg!(target_os = "wasi") {
         Arc::new(RuntimeTimer::default())
     } else {
@@ -141,7 +143,7 @@ pub(crate) fn system_timer() -> Arc<dyn Timer> {
 /// futures can be made outside one, as the configs that hold a timer are; the
 /// deadline is still fixed when it is armed, as for any [`Timer`].
 #[derive(Debug, Default)]
-pub(crate) struct RuntimeTimer {
+pub struct RuntimeTimer {
     /// The clock the deadlines are read against, and whose domain
     /// [`Timer::at`] holds them to.
     clock: StdMonotonicClock,
@@ -154,13 +156,13 @@ impl Timer for RuntimeTimer {
         deadline.validate_domain(MonotonicClock::domain(&self.clock))?;
         // A deadline that has passed is due at once, as it is for `StdTimer`.
         let Ok(wait) = deadline.duration_since(MonotonicClock::now(&self.clock)) else {
-            return Ok(Box::pin(std::future::ready(Ok(()))));
+            return Ok(Box::pin(future::ready(Ok(()))));
         };
-        let until = tokio::time::Instant::now()
+        let until = Instant::now()
             .checked_add(wait)
             .ok_or(TimeError::InstantOverflow)?;
         Ok(Box::pin(async move {
-            tokio::time::sleep_until(until).await;
+            time::sleep_until(until).await;
             Ok(())
         }))
     }
@@ -174,6 +176,7 @@ mod tests {
         super::*,
         assert2::{assert, check},
         qubit_clock::ManualMonotonicClock,
+        tokio::{runtime::Builder, time},
     };
 
     const TASK: &str = "a test loop";
@@ -260,11 +263,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_runtime_timer_fires_when_the_runtime_clock_reaches_the_deadline() {
         let timer = RuntimeTimer::default();
-        let started = tokio::time::Instant::now();
+        let started = Instant::now();
         let mut armed = timer.after(Duration::from_secs(60)).expect("arm");
 
         check!(futures_util::poll!(&mut armed).is_pending());
-        tokio::time::advance(Duration::from_secs(59)).await;
+        time::advance(Duration::from_secs(59)).await;
         check!(futures_util::poll!(&mut armed).is_pending());
         let fired = armed.await;
 
@@ -280,7 +283,7 @@ mod tests {
         let timer = RuntimeTimer::default();
         let armed = timer.after(Duration::from_millis(5)).expect("arm");
         let due = timer.after(Duration::ZERO).expect("arm a due deadline");
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        let runtime = Builder::new_current_thread()
             .enable_time()
             .start_paused(true)
             .build()
@@ -301,22 +304,18 @@ mod tests {
     async fn sleep_until_opt_none_remains_pending() {
         // `None` never resolves; the 10ms timeout is the only timer, so virtual
         // time jumps to it and the timeout elapses -> Err.
-        let result = tokio::time::timeout(
-            Duration::from_millis(10),
-            sleep_until_opt(None::<tokio::time::Instant>),
-        )
-        .await;
+        let result =
+            time::timeout(Duration::from_millis(10), sleep_until_opt(None::<Instant>)).await;
         assert!(result.is_err());
     }
 
     #[tokio::test(start_paused = true)]
     async fn sleep_until_opt_some_waits_until_deadline() {
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(10);
+        let deadline = Instant::now() + Duration::from_millis(10);
         // The inner sleep (deadline) fires before the outer 1s timeout, so the
         // timeout resolves Ok and virtual time has advanced exactly to `deadline`.
-        let result =
-            tokio::time::timeout(Duration::from_secs(1), sleep_until_opt(Some(deadline))).await;
+        let result = time::timeout(Duration::from_secs(1), sleep_until_opt(Some(deadline))).await;
         assert!(result.is_ok());
-        assert!(tokio::time::Instant::now() >= deadline);
+        assert!(Instant::now() >= deadline);
     }
 }

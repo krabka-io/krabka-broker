@@ -8,7 +8,7 @@
 use crate::{GcsConfig, ObjectStoreError, S3Config};
 
 /// The error for a backend that this platform cannot reach.
-pub(crate) fn unavailable(backend: &str) -> ObjectStoreError {
+pub fn unavailable(backend: &str) -> ObjectStoreError {
     ObjectStoreError::InvalidConfig(format!(
         "the {backend} object store is unavailable on this platform"
     ))

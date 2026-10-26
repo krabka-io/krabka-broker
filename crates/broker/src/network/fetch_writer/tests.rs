@@ -11,11 +11,7 @@ use {
     krabka_protocol::Encode,
 };
 
-fn empty_plan_body(
-    response: &krabka_protocol::owned::fetch_response::FetchResponse,
-    version: i16,
-    context: &str,
-) -> BytesMut {
+fn empty_plan_body(response: &FetchResponse, version: i16, context: &str) -> BytesMut {
     let mut body = BytesMut::new();
     for op in fetch_response_write_plan(response, version).unwrap() {
         match op {

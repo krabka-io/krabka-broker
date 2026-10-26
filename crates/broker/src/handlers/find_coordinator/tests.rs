@@ -25,6 +25,7 @@ use {
     assert2::{assert, check},
     krabka_metadata::{AclOperation, ResourceType},
     krabka_protocol::owned::find_coordinator_response::FindCoordinatorResponse,
+    std::iter,
 };
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
@@ -131,11 +132,11 @@ async fn configured_partition_count_controls_txn_topic_and_routing() {
         user ["admin"];
         client ["admin-client"];
     };
-    let version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
+    let version = find_coordinator_response::MAX_VERSION;
     let tid = "my-tid"; // hashes to partition 43 with the old fixed count of 50
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_TRANSACTION,
-        coordinator_keys: vec![tid.to_string()],
+        coordinator_keys: vec![tid.to_owned()],
         ..Default::default()
     };
 
@@ -208,7 +209,7 @@ async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
         broker: broker_handle,
         dir: _dir,
     } = start_broker_no_audit_with(|config| {
-        config.authorizer = std::sync::Arc::new(DenyOneTransaction);
+        config.authorizer = Arc::new(DenyOneTransaction);
         config.transaction_state_replication_factor = 1;
     })
     .await;
@@ -221,7 +222,7 @@ async fn mixed_rejection_and_resolution_preserve_key_order_and_errors() {
         user ["alice"];
         client ["txn-client"];
     };
-    let version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
+    let version = find_coordinator_response::MAX_VERSION;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_TRANSACTION,
         coordinator_keys: vec![
@@ -266,7 +267,7 @@ async fn malformed_share_key_is_invalid_without_bootstrap() {
         user ["alice"];
         client ["share-client"];
     };
-    let version = krabka_protocol::owned::find_coordinator_response::MAX_VERSION;
+    let version = find_coordinator_response::MAX_VERSION;
     let request = FindCoordinatorRequest {
         key_type: KEY_TYPE_SHARE,
         coordinator_keys: vec!["malformed".into()],
@@ -296,7 +297,7 @@ async fn find(
     };
     dispatch_wire(
         broker,
-        krabka_protocol::owned::find_coordinator_request::API_KEY,
+        find_coordinator_request::API_KEY,
         version,
         request,
         &context,
@@ -341,7 +342,7 @@ async fn denied_share_request_answers_cluster_authorization_failed_on_every_key(
         broker: broker_handle,
         dir: _dir,
     } = start_broker_no_audit_with(|config| {
-        config.authorizer = std::sync::Arc::new(DenyAll);
+        config.authorizer = Arc::new(DenyAll);
         config.share_coordinator.state_topic_replication_factor = 1;
     })
     .await;
@@ -350,7 +351,7 @@ async fn denied_share_request_answers_cluster_authorization_failed_on_every_key(
 
     let response = find(&broker, &request, 6, "alice").await;
 
-    let message = Some("Cluster authorization failed.".to_string());
+    let message = Some("Cluster authorization failed.".to_owned());
     assert!(
         response
             == FindCoordinatorResponse {
@@ -379,7 +380,7 @@ async fn denied_share_request_answers_cluster_authorization_failed_on_every_key(
 /// message of the code and `Node.noNode()`.
 #[tokio::test]
 async fn denied_group_key_answers_kafka_row_shape_per_version() {
-    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker); boot [start_broker_no_audit_with(|config| config.authorizer = std::sync::Arc::new(DenyAll))]; };
+    krabka_macros::broker_test_setup! { bind(broker_handle, _dir, broker); boot [start_broker_no_audit_with(|config| config.authorizer = Arc::new(DenyAll))]; };
     let rows = vec![
         VersionedResponse {
             version: krabka_ids::ApiVersion(4),
@@ -457,9 +458,7 @@ async fn unknown_key_type_fails_the_whole_request() {
     let message = response::error_message(codes::INVALID_REQUEST);
     let rows = vec![
         VersionedResponse {
-            version: krabka_ids::ApiVersion(
-                krabka_protocol::owned::find_coordinator_response::MAX_VERSION,
-            ),
+            version: krabka_ids::ApiVersion(find_coordinator_response::MAX_VERSION),
             response: FindCoordinatorResponse {
                 coordinators: vec![
                     row("a", codes::INVALID_REQUEST, message.clone()),
@@ -591,10 +590,10 @@ fn resolve_answers_only_an_alive_leader_on_the_request_listener() {
         ("fenced remote leader", 1, vec![2], unavailable.clone()),
         ("no endpoint on listener", 2, vec![], unavailable.clone()),
         ("unregistered leader", 3, vec![], unavailable.clone()),
-        ("missing partition", 9, vec![], unavailable.clone()),
+        ("missing partition", 9, vec![], unavailable),
     ];
     for (label, partition, fenced, expected) in rows {
-        let fenced: std::collections::HashSet<u64> = fenced.into_iter().collect();
+        let fenced: HashSet<u64> = fenced.into_iter().collect();
         let target = resolve::ResolveTarget {
             image: &image,
             unavailable: &fenced,
@@ -646,6 +645,11 @@ async fn a_legacy_group_lookup_answers_in_the_top_level_fields() {
 
 /// Waits until no creation of `topic` is in flight on `broker`.
 use crate::handlers::test_support::wait_until_creation_ends;
+use {
+    futures_util::future,
+    krabka_protocol::owned::{find_coordinator_request, find_coordinator_response},
+    std::{collections::HashSet, sync::Arc},
+};
 
 /// Kafka's `KafkaApis.getCoordinator`: before the state topic exists, every
 /// lookup answers `COORDINATOR_NOT_AVAILABLE` and asks for the topic. Many
@@ -679,8 +683,8 @@ async fn the_first_lookup_creates_the_state_topic_once_and_a_later_one_names_the
             ..Default::default()
         };
 
-        let first = futures_util::future::join_all(
-            (0..LOOKUPS).map(|_| find(&broker, &request, 6, "admin")),
+        let first = future::join_all(
+            iter::repeat_with(|| find(&broker, &request, 6, "admin")).take(LOOKUPS),
         )
         .await;
 
@@ -740,7 +744,7 @@ async fn a_lookup_with_too_few_brokers_creates_nothing_until_enough_register() {
         config.offsets_topic_replication_factor = 2;
     })
     .await;
-    broker_handle.wait_until_controller_leader().await;
+    broker_handle.wait_until_controller_leader().await.unwrap();
     broker_handle.wait_until_brokers_registered(1).await;
     let broker = broker_handle.broker_arc_for_test();
     let topic = OFFSETS_TOPIC;

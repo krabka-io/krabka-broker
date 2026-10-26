@@ -1,4 +1,4 @@
-use super::*;
+use {super::*, proptest::collection, std::collections::HashSet};
 
 type Observation = (Option<u64>, i32, bool, Vec<WalCopyBatch>);
 type QuorumLedger = (i64, i64, Vec<(u64, i64)>, Vec<i64>);
@@ -29,7 +29,7 @@ fn oracle(
     current: i64,
     w: FetchWatermarks,
 ) -> Option<QuorumLedger> {
-    let unique: std::collections::HashSet<_> = voters.iter().collect();
+    let unique: HashSet<_> = voters.iter().collect();
     if voters.len() != rows.len()
         || voters.len() != placement.1
         || placement.1 == 0
@@ -99,7 +99,7 @@ fn damaged_copy(source: &[WalCopyBatch], node: u64, kind: u16, count: usize) -> 
         copy[0].0 += 1;
     }
     (
-        if kind & 1 == 0 { Some(node) } else { None },
+        (kind & 1 == 0).then_some(node),
         if kind & 16 == 0 { 7 } else { 6 },
         kind & 2 == 0,
         copy,
@@ -246,10 +246,10 @@ fn malformed_sources_are_rejected(bad: Vec<WalCopyBatch>) {
 proptest! {
     #[test]
     fn authenticated_byte_votes_match_a_sorted_prefix_oracle(
-        batches in proptest::collection::vec((0_i32..8, proptest::collection::vec(any::<u8>(), 1..8)), 0..8),
+        batches in collection::vec((0_i32..8, collection::vec(any::<u8>(), 1..8)), 0..8),
         raw_floor in 0_i64..8, raw_current in 0_i64..100, lso in any::<i64>(), deliverable in any::<i64>(),
-        raw_voters in proptest::collection::vec(1_u64..9, 0..9),
-        damage in proptest::collection::vec((0_u16..32, 0_usize..12), 0..9),
+        raw_voters in collection::vec(1_u64..9, 0..9),
+        damage in collection::vec((0_u16..32, 0_usize..12), 0..9),
         expected in 0_usize..9, exact_size in any::<bool>(),
     ) {
         let mut base = 0;

@@ -1,4 +1,4 @@
-use {super::*, crate::list_offsets::ListOffsetsSelectionDecision, std::vec};
+use {super::*, crate::list_offsets::ListOffsetsSelectionDecision, proptest::collection, std::vec};
 
 fn visible_oracle(
     record_offsets: &[u32],
@@ -41,9 +41,9 @@ fn visible_oracle(
 proptest! {
     #[test]
     fn timestamp_response_matches_a_filtered_visible_record_oracle(
-        records in proptest::collection::btree_map(any::<u32>(),
+        records in collection::btree_map(any::<u32>(),
             prop_oneof![0_i64..1_000, any::<i64>()], 0..32),
-        starts in proptest::collection::vec(any::<u32>(), 0..8),
+        starts in collection::vec(any::<u32>(), 0..8),
         base in 0_i64..i64::MAX - i64::from(u32::MAX),
         hwm in any::<u32>(),
         replica in prop_oneof![Just(-1_i32), Just(-2_i32), 0_i32..i32::MAX],

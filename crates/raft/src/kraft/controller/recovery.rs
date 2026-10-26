@@ -17,7 +17,7 @@ use {
         kraft::{log::KraftLog, types::QuorumState},
     },
     krabka_ids::Offset,
-    krabka_metadata::{MetadataImage, MetadataRecord},
+    krabka_metadata::{MetadataImage, MetadataRecord, metadata_version::METADATA_VERSION_FEATURE},
     krabka_protocol::records::{Record, RecordBatch, metadata::control::ControlRecord},
     krabka_verified::recovery::{
         ReplayCursorDecision, ReplayRecordDecision, replay_cursor_decision, replay_record_decision,
@@ -129,7 +129,7 @@ pub fn replay_committed_with_timestamp(
                         &meta,
                         MetadataRecord::V1FeatureLevel(feature)
                             if feature.name
-                                == krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
+                                == METADATA_VERSION_FEATURE
                                 && image
                                     .finalized_metadata_version()
                                     .is_some_and(|current| feature.level < current)

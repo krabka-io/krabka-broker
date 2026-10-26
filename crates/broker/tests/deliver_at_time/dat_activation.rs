@@ -15,14 +15,11 @@ use {
         support,
     },
     assert2::check,
+    krabka_protocol::primitives::uuid::Uuid,
     std::time::Instant,
 };
 
-async fn produce_due_soon(
-    client: &krabka_client_core::Client,
-    topic: &str,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
-) -> i64 {
+async fn produce_due_soon(client: &krabka_client_core::Client, topic: &str, topic_id: Uuid) -> i64 {
     let deliver_at_ms = now_ms() + ACTIVATION_DELAY_MS;
     produce(
         client,

@@ -81,4 +81,6 @@ async fn bare_majority_two_of_three_elects_with_uniform_timeouts() {
     for &id in &[NodeId(1), NodeId(2)] {
         net.get(id).unwrap().shutdown().await;
     }
+    // The data directories outlive the engines that wrote to them.
+    drop(dirs);
 }

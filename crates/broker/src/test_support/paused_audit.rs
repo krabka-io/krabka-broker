@@ -13,7 +13,7 @@ use {
 
 /// The first required write announces admission and waits for the test.
 #[derive(Debug, Default)]
-pub(crate) struct PausedAudit {
+pub struct PausedAudit {
     entered: Notify,
     release: Notify,
     records: MemorySink,
@@ -37,7 +37,7 @@ impl PausedAudit {
         let params = AuditWriterParams {
             product: Broker::audit_product(),
             chain: ChainState::new(),
-            sink: sink.clone(),
+            sink: Arc::<Self>::clone(&sink),
             timer: Arc::new(qubit_clock::StdTimer::new()),
             stats: Arc::new(AuditStats::new()),
             checkpoint_every: hours(1),

@@ -22,14 +22,16 @@ const DEFAULT_RETENTION: Time = days(7);
 
 /// Kafka's `index.interval.bytes` default: one sparse `.index`/`.timeindex`
 /// entry per 4 KiB of `.log`.
-pub(crate) const DEFAULT_INDEX_INTERVAL: ByteSize = kibibytes(4);
+pub const DEFAULT_INDEX_INTERVAL: ByteSize = kibibytes(4);
 
 /// Kafka's `segment.index.bytes` default: each sparse index of a segment
 /// holds up to 10 MiB of entries before the segment rolls.
 const DEFAULT_SEGMENT_INDEX_SIZE: ByteSize = mebibytes(10);
 
 /// Kafka's `max.message.bytes` default: 1 MiB of records plus the 12-byte
-/// `Records.LOG_OVERHEAD` that prefixes every batch on the wire. Kafka's
+/// `Records.LOG_OVERHEAD` that prefixes every batch on the wire.
+///
+/// Kafka's
 /// broker-wide `message.max.bytes` carries the same number, and a topic that
 /// sets neither inherits it.
 pub const DEFAULT_MAX_MESSAGE_SIZE: ByteSize = bytes(1_048_588);
@@ -510,7 +512,7 @@ mod tests {
 
     use {
         super::*,
-        krabka_units::prelude::{ByteSizeExt as _, TimeExt, bytes, secs},
+        krabka_units::prelude::{ByteSizeExt as _, TimeExt, bytes, millis, secs},
     };
 
     #[test]
@@ -555,7 +557,7 @@ mod tests {
                     delete_retention: secs(24 * 60 * 60),
                     delivery_policy: DeliveryPolicy::Immediate,
                     schedule_order: ScheduleOrder::Unordered,
-                    delivery_clock_uncertainty: krabka_units::prelude::millis(250),
+                    delivery_clock_uncertainty: millis(250),
                 }
         );
     }

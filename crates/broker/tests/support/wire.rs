@@ -20,10 +20,7 @@ pub async fn write_frame<S: AsyncWrite + Unpin>(
     length_context: Option<&str>,
 ) -> io::Result<()> {
     let length = u32::try_from(frame.len());
-    let length = match length_context {
-        Some(context) => length.expect(context),
-        None => length.unwrap(),
-    };
+    let length = length_context.map_or_else(|| length.unwrap(), |context| length.expect(context));
     stream.write_u32(length).await?;
     stream.write_all(frame).await?;
     stream.flush().await
@@ -169,10 +166,7 @@ pub fn request_frame(
     frame.put_i16(version.0);
     frame.put_i32(correlation.0);
     let length = i16::try_from(client_id.len());
-    frame.put_i16(match length_context {
-        Some(context) => length.expect(context),
-        None => length.unwrap(),
-    });
+    frame.put_i16(length_context.map_or_else(|| length.unwrap(), |context| length.expect(context)));
     frame.put_slice(client_id.as_bytes());
     if header == HeaderEncoding::Flexible {
         frame.put_u8(0);

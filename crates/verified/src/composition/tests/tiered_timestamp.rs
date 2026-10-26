@@ -1,4 +1,7 @@
-use {super::*, crate::list_offsets::ListOffsetsSelectionDecision, std::collections::BTreeMap};
+use {
+    super::*, crate::list_offsets::ListOffsetsSelectionDecision, proptest::collection,
+    std::collections::BTreeMap,
+};
 
 /// One tier's segments: each its largest timestamp and its records by offset.
 type Segments = Vec<(i64, BTreeMap<i64, i64>)>;
@@ -53,10 +56,10 @@ fn lookup(
 }
 
 fn segments_strategy() -> impl Strategy<Value = Segments> {
-    proptest::collection::vec(
+    collection::vec(
         (
             any::<i64>(),
-            proptest::collection::btree_map(0_i64..=i64::MAX, any::<i64>(), 0..6),
+            collection::btree_map(0_i64..=i64::MAX, any::<i64>(), 0..6),
         ),
         0..5,
     )
@@ -121,7 +124,7 @@ fn each_tier_answers_from_its_first_candidate_segment_only() {
         ),
         (
             "its only match is below the floor",
-            Vec::from([first.clone(), later.clone()]),
+            Vec::from([first, later.clone()]),
             2,
             None,
         ),

@@ -1,6 +1,6 @@
 //! Object-store connection config types shared across Krabka.
 
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 /// Default threshold above which a segment upload changes from a single PUT to
 /// a streaming multipart upload. The threshold is 100 MiB, well below AWS's
@@ -17,7 +17,9 @@ pub const DEFAULT_MULTIPART_CHUNK_SIZE: usize = 16 * 1024 * 1024;
 pub const DEFAULT_MAX_RETRIES: usize = 10;
 
 /// Default ceiling on the wall-clock time one request may spend across all of
-/// its retries. It is 3 minutes, `object_store`'s default, which stays under
+/// its retries.
+///
+/// It is 3 minutes, `object_store`'s default, which stays under
 /// the 5-minute mark past which a request's credentials may expire mid-retry.
 pub const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_mins(3);
 
@@ -38,7 +40,7 @@ pub enum ObjectStoreConfig {
     /// Native Google Cloud Storage. It supports keyless GKE Workload Identity.
     Gcs(GcsConfig),
     /// Local filesystem rooted at `root`, for development and test.
-    Local { root: std::path::PathBuf },
+    Local { root: PathBuf },
     /// In-process store, for tests.
     InMemory,
 }

@@ -19,6 +19,7 @@ use {
     krabka_raft::DelegationTokenMutation,
     krabka_units::{Time, convert::TimeExt as _},
     std::sync::Arc,
+    tokio::time,
     tokio_util::sync::CancellationToken,
     tracing::{debug, info, warn},
 };
@@ -26,24 +27,24 @@ use {
 /// Minimal controller surface for the sweep. [`crate::broker`] adapts the
 /// real [`krabka_raft::ControllerHandle`]. Tests inject a mock.
 #[async_trait]
-pub(crate) trait DelegationTokenController: Send + Sync {
+pub trait DelegationTokenController: Send + Sync {
     fn current_image(&self) -> Arc<MetadataImage>;
     async fn submit_mutations(&self, mutations: Vec<DelegationTokenMutation>)
     -> Result<(), String>;
 }
 
 /// Spawned task entry point. Returns when `shutdown` is cancelled.
-pub(crate) async fn run(
+pub async fn run(
     controller: Arc<dyn DelegationTokenController>,
     interval: Time,
     shutdown: CancellationToken,
 ) {
-    let tick = tokio::time::interval(interval.to_std());
+    let tick = time::interval(interval.to_std());
     run_every(tick, &shutdown, || sweep(&*controller)).await;
     info!("delegation-token cleanup shutting down");
 }
 
-pub(crate) async fn sweep(controller: &dyn DelegationTokenController) {
+pub async fn sweep(controller: &dyn DelegationTokenController) {
     let now = now_ms();
     let expired: Vec<DelegationTokenRecord> = controller
         .current_image()
@@ -81,7 +82,8 @@ mod tests {
         krabka_metadata::{DelegationTokenRecord, MetadataImage, MetadataRecord},
         krabka_security::KafkaPrincipal,
         krabka_units::hours,
-        std::{sync::Mutex, time::Duration},
+        std::{sync, sync::Mutex, time::Duration},
+        tokio::{task, time::timeout},
         uuid::Uuid,
     };
 
@@ -168,7 +170,7 @@ mod tests {
             })
             .collect();
         tombstone_ids.sort();
-        assert!(tombstone_ids == vec!["expired-1".to_string(), "expired-2".to_string()]);
+        assert!(tombstone_ids == vec!["expired-1".to_owned(), "expired-2".to_owned()]);
         drop(submitted);
 
         // Post-sweep image keeps only the fresh token.
@@ -203,28 +205,30 @@ mod tests {
 
         let mock = mock_controller(img);
         let shutdown = CancellationToken::new();
-        let mut task = tokio::spawn(run(mock.clone(), hours(1), shutdown.clone()));
+        let mut task = tokio::spawn(run(
+            sync::Arc::<MockController>::clone(&mock),
+            hours(1),
+            shutdown.clone(),
+        ));
 
-        tokio::time::timeout(Duration::from_secs(1), async {
+        timeout(Duration::from_secs(1), async {
             loop {
                 if !mock.submitted.lock().unwrap().is_empty() {
                     break;
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await
         .expect("cleanup run loop should sweep on its first tick");
 
         assert!(
-            tokio::time::timeout(Duration::from_millis(25), &mut task)
-                .await
-                .is_err(),
+            timeout(Duration::from_millis(25), &mut task).await.is_err(),
             "cleanup run loop exited before shutdown"
         );
 
         shutdown.cancel();
-        tokio::time::timeout(Duration::from_secs(1), task)
+        timeout(Duration::from_secs(1), task)
             .await
             .expect("cleanup task should observe shutdown")
             .expect("cleanup task should not panic");

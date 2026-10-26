@@ -21,6 +21,7 @@ use {
     },
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
     std::sync::Arc,
+    tokio::{sync::Mutex, task::JoinHandle, time},
     tokio_util::sync::CancellationToken,
 };
 
@@ -31,7 +32,7 @@ pub(super) struct RemoteStorageStartup {
     pub(super) diskless_read: Option<Arc<DisklessReadHandle>>,
     /// The remote-log-manager sweep, so shutdown can wait for a copy pass to
     /// stop before the broker reports itself stopped.
-    pub(super) remote_log_manager: Option<tokio::task::JoinHandle<()>>,
+    pub(super) remote_log_manager: Option<JoinHandle<()>>,
 }
 
 fn build_diskless_read_handle(
@@ -52,7 +53,7 @@ fn build_diskless_read_handle(
         BrokerError::Startup(format!("diskless object store builder failed: {error}"))
     })?;
     Ok(Arc::new(DisklessReadHandle::new(
-        Arc::new(tokio::sync::Mutex::new(WalIndexCache::default())),
+        Arc::new(Mutex::new(WalIndexCache::default())),
         store,
     )))
 }
@@ -125,7 +126,7 @@ pub(super) fn start_remote_storage(
             let not_ready = Arc::new(krabka_remote_storage_topic::NotReadyRlmm::new());
             let swap = Arc::new(krabka_remote_storage_topic::SwappableRlmm::new(not_ready));
             RemoteLogMetadata {
-                manager: swap.clone(),
+                manager: Arc::<krabka_remote_storage_topic::SwappableRlmm>::clone(&swap),
                 swap_target: Some(swap),
             }
         }
@@ -239,7 +240,7 @@ fn spawn_remote_reader_gauges(
     shutdown: CancellationToken,
 ) {
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(poll_interval.to_std());
+        let mut tick = time::interval(poll_interval.to_std());
         let mut reported = RemoteReaderTotals::default();
         loop {
             if !super::tick_or_shutdown(&mut tick, &shutdown).await {

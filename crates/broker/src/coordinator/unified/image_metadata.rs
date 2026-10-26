@@ -9,7 +9,11 @@ use {
     super::{actor::MetadataProvider, assignor::TopicIdPartition, reconciler},
     crate::metadata_source::MetadataSource,
     krabka_metadata::MetadataImage,
-    std::sync::{Arc, Mutex, Weak},
+    krabka_protocol::primitives::uuid::Uuid,
+    std::{
+        collections::HashMap,
+        sync::{Arc, Mutex, PoisonError, Weak},
+    },
 };
 
 /// `MetadataProvider` backed by `krabka_raft::ControllerHandle::current_image()`.
@@ -41,10 +45,7 @@ impl ImageMetadataProvider {
 impl MetadataProvider for ImageMetadataProvider {
     fn snapshot(&self) -> Arc<reconciler::ReconcileInput> {
         let image = self.controller.current_image();
-        let mut cached = self
-            .cached
-            .lock()
-            .expect("coordinator metadata cache poisoned");
+        let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(previous) = cached.as_ref()
             && previous
                 .image
@@ -61,7 +62,7 @@ impl MetadataProvider for ImageMetadataProvider {
         input
     }
 
-    fn topic_name(&self, topic_id: &krabka_protocol::primitives::uuid::Uuid) -> Option<String> {
+    fn topic_name(&self, topic_id: &Uuid) -> Option<String> {
         self.controller
             .current_image()
             .topic_name_by_id(&uuid::Uuid::from_bytes(topic_id.0))
@@ -72,10 +73,9 @@ impl MetadataProvider for ImageMetadataProvider {
 /// Project exactly one immutable controller image, preserving replica rack multiplicity.
 fn project_image(image: &MetadataImage) -> reconciler::ReconcileInput {
     use krabka_protocol::primitives::uuid::Uuid as ProtoUuid;
-    let mut topic_id_by_name = std::collections::HashMap::new();
-    let mut partitions_per_topic = std::collections::HashMap::new();
-    let mut partition_racks: std::collections::HashMap<TopicIdPartition, Vec<String>> =
-        std::collections::HashMap::new();
+    let mut topic_id_by_name = HashMap::new();
+    let mut partitions_per_topic = HashMap::new();
+    let mut partition_racks: HashMap<TopicIdPartition, Vec<String>> = HashMap::new();
     for topic in image.topics() {
         let proto_id = ProtoUuid(*topic.topic_id.as_bytes());
         topic_id_by_name.insert(topic.name.clone(), proto_id);
@@ -90,7 +90,10 @@ fn project_image(image: &MetadataImage) -> reconciler::ReconcileInput {
             let racks: Vec<String> = pr
                 .replicas
                 .iter()
-                .filter_map(|&node_id| image.broker(node_id).and_then(|b| b.rack.clone()))
+                .filter_map(|&node_id| {
+                    let b = image.broker(node_id)?;
+                    b.rack.clone()
+                })
                 .collect();
             if !racks.is_empty() {
                 partition_racks.insert(
@@ -115,10 +118,14 @@ mod tests {
     use {
         super::*,
         crate::{
-            coordinator::unified::test_support::{fixed_source, real_uuid},
+            coordinator::unified::{
+                test_support::{fixed_source, real_uuid},
+                topic_hash::image_metadata_hash,
+            },
             test_support::{FakeMetadataSource, broker_registration, in_sync_partition},
         },
         assert2::{assert, check},
+        krabka_protocol::primitives::uuid::Uuid,
     };
 
     fn projected_image(topic_id: u8, partitions: i32, racks: &[&str]) -> MetadataImage {
@@ -163,7 +170,7 @@ mod tests {
         let source = Arc::new(FakeMetadataSource::static_image(projected_image(1, 2, &[
             "rack-a",
         ])));
-        let provider = ImageMetadataProvider::new(source.clone());
+        let provider = ImageMetadataProvider::new(Arc::<FakeMetadataSource>::clone(&source));
         let image = source.current_image();
         let projection = provider.snapshot();
         let original_hash = projection.metadata_hash(["input"]);
@@ -182,13 +189,13 @@ mod tests {
     fn unchanged_image_reuses_the_projection_and_new_images_preserve_old_snapshots() {
         let image = projected_image(1, 2, &["rack-a", "rack-a", "rack-b"]);
         let source = Arc::new(FakeMetadataSource::static_image(image));
-        let provider = ImageMetadataProvider::new(source.clone());
+        let provider = ImageMetadataProvider::new(Arc::<FakeMetadataSource>::clone(&source));
         let original = provider.snapshot();
         for _ in 0..100 {
             assert!(Arc::ptr_eq(&original, &provider.snapshot()));
         }
         let original_hash = original.metadata_hash(["input"]);
-        let topic = krabka_protocol::primitives::uuid::Uuid(real_uuid(1).into_bytes());
+        let topic = Uuid(real_uuid(1).into_bytes());
         assert!(
             original.partition_racks[&TopicIdPartition {
                 topic_id: topic,
@@ -226,8 +233,8 @@ mod tests {
             },
         ));
         for (node_id, rack) in [
-            (1, Some("rack-a".to_string())),
-            (2, Some("rack-b".to_string())),
+            (1, Some("rack-a".to_owned())),
+            (2, Some("rack-b".to_owned())),
             (3, None),
         ] {
             image.apply(&krabka_metadata::MetadataRecord::V1BrokerRegistration(
@@ -265,7 +272,7 @@ mod tests {
 
         let provider = ImageMetadataProvider::new(fixed_source(image));
         let snapshot = provider.snapshot();
-        let proto_topic_id = krabka_protocol::primitives::uuid::Uuid(*topic_id.as_bytes());
+        let proto_topic_id = Uuid(*topic_id.as_bytes());
 
         check!(snapshot.topic_id_by_name.get("input") == Some(&proto_topic_id));
         check!(snapshot.partitions_per_topic.get(&proto_topic_id) == Some(&2));
@@ -273,7 +280,7 @@ mod tests {
             snapshot.partition_racks.get(&TopicIdPartition {
                 topic_id: proto_topic_id,
                 partition: 0
-            }) == Some(&vec!["rack-a".to_string(), "rack-b".to_string()])
+            }) == Some(&vec!["rack-a".to_owned(), "rack-b".to_owned()])
         );
         check!(
             snapshot.partition_racks.get(&TopicIdPartition {
@@ -329,8 +336,7 @@ mod tests {
         check!(from_image.is_some());
         check!(snapshot.topic_hash("input") == from_image);
         check!(
-            snapshot.metadata_hash(["input", "absent"])
-                == crate::coordinator::unified::topic_hash::image_metadata_hash(["input"], &image)
+            snapshot.metadata_hash(["input", "absent"]) == image_metadata_hash(["input"], &image)
         );
     }
 }

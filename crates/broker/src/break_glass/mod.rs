@@ -39,17 +39,17 @@
 //! action commits it first through [`persistence`]. Both paths prevent the
 //! action from starting while the approval remains reusable.
 
-pub(crate) mod config;
+pub mod config;
 #[cfg(test)]
 mod cross_spend_model;
-pub(crate) mod gate;
-pub(crate) mod handlers;
-pub(crate) mod metrics;
-pub(crate) mod persistence;
-pub(crate) mod signing;
+pub mod gate;
+pub mod handlers;
+pub mod metrics;
+pub mod persistence;
+pub mod signing;
 #[cfg(test)]
 mod state_model;
-pub(crate) mod sweep;
+pub mod sweep;
 
 use krabka_metadata::BreakGlassAction;
 
@@ -59,7 +59,7 @@ use krabka_metadata::BreakGlassAction;
 /// [`krabka_metadata::BreakGlassAction`]. Zero names no action, so the default
 /// request that a client builds with no action set does not decode as a real
 /// transition.
-pub(crate) fn action_to_wire(action: BreakGlassAction) -> i8 {
+pub fn action_to_wire(action: BreakGlassAction) -> i8 {
     match action {
         BreakGlassAction::ThawTopicFreeze => 1,
         BreakGlassAction::UncleanElectLeaders => 2,
@@ -72,7 +72,7 @@ pub(crate) fn action_to_wire(action: BreakGlassAction) -> i8 {
 }
 
 /// The action that a wire value names, or `None` when no action takes it.
-pub(crate) fn action_from_wire(value: i8) -> Option<BreakGlassAction> {
+pub fn action_from_wire(value: i8) -> Option<BreakGlassAction> {
     match value {
         1 => Some(BreakGlassAction::ThawTopicFreeze),
         2 => Some(BreakGlassAction::UncleanElectLeaders),
@@ -91,7 +91,7 @@ pub(crate) fn action_from_wire(value: i8) -> Option<BreakGlassAction> {
 /// event carries it, and the `break_glass_refusals` and `break_glass_bypassed`
 /// metric families label with it. One spelling keeps an operator from having to
 /// learn a second one.
-pub(crate) fn action_name(action: BreakGlassAction) -> &'static str {
+pub fn action_name(action: BreakGlassAction) -> &'static str {
     match action {
         BreakGlassAction::ThawTopicFreeze => "thaw_topic_freeze",
         BreakGlassAction::UncleanElectLeaders => "unclean_elect_leaders",
@@ -111,14 +111,14 @@ pub(crate) fn action_name(action: BreakGlassAction) -> &'static str {
 /// that names no action. A misspelled entry would otherwise match no action,
 /// and the broker would demand no signature for the action the operator meant
 /// to protect.
-pub(crate) fn action_from_name(name: &str) -> Option<BreakGlassAction> {
+pub fn action_from_name(name: &str) -> Option<BreakGlassAction> {
     ALL_ACTIONS
         .into_iter()
         .find(|action| action_name(*action) == name)
 }
 
 /// Every gated action, in the order of the wire values.
-pub(crate) const ALL_ACTIONS: [BreakGlassAction; 7] = [
+pub const ALL_ACTIONS: [BreakGlassAction; 7] = [
     BreakGlassAction::ThawTopicFreeze,
     BreakGlassAction::UncleanElectLeaders,
     BreakGlassAction::UncleanRecovery,
@@ -135,7 +135,7 @@ pub(crate) const ALL_ACTIONS: [BreakGlassAction; 7] = [
 /// action that does not target a partition takes the exact target only. Without
 /// this split a proposal to delete the topic `logs` would also cover the topic
 /// `logs-2024`, because that name reads as partition 2024 of topic `logs`.
-pub(crate) fn action_targets_partition(action: BreakGlassAction) -> bool {
+pub fn action_targets_partition(action: BreakGlassAction) -> bool {
     matches!(
         action,
         BreakGlassAction::UncleanElectLeaders

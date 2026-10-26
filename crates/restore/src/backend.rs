@@ -56,7 +56,7 @@ impl ArchiveStore {
     #[must_use]
     pub fn with_store(store: Arc<dyn object_store::ObjectStore>, prefix: Option<&str>) -> Self {
         Self {
-            client: ObjectStoreClient::new(store.clone()),
+            client: ObjectStoreClient::new(Arc::clone(&store)),
             store,
             prefix: normalize_prefix(prefix),
         }
@@ -74,7 +74,7 @@ pub fn open_archive(args: &RestoreArgs) -> Result<ArchiveStore, RestoreError> {
     let config = object_store_config(args)?;
     let store: Arc<dyn object_store::ObjectStore> = build_object_store(&config)?;
     Ok(ArchiveStore {
-        client: ObjectStoreClient::new(store.clone()),
+        client: ObjectStoreClient::new(Arc::clone(&store)),
         store,
         prefix: args.archive.location.normalized_prefix(),
     })
@@ -99,7 +99,7 @@ pub fn object_store_config(args: &RestoreArgs) -> Result<ObjectStoreConfig, Rest
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::Cli, assert2::check, clap::Parser as _};
+    use {super::*, crate::Cli, assert2::check, clap::Parser as _, object_store::memory::InMemory};
 
     fn args_from(extra: &[&str]) -> RestoreArgs {
         let mut argv = vec!["krabka-restore", "--log-dir", "/target"];
@@ -170,8 +170,8 @@ mod tests {
     /// the same prefix handling the flags get, and reads that reach it.
     #[tokio::test]
     async fn a_handle_on_a_store_built_elsewhere_reads_it_under_the_prefix() {
-        let inner = Arc::new(object_store::memory::InMemory::new());
-        let store = ArchiveStore::with_store(inner.clone(), Some("/tier/"));
+        let inner = Arc::new(InMemory::new());
+        let store = ArchiveStore::with_store(Arc::<InMemory>::clone(&inner), Some("/tier/"));
 
         check!(store.prefix() == Some("tier"));
         check!(store.root() == Some(Path::from("tier")));

@@ -1,4 +1,5 @@
 //! The endpoint derive moves owned fields and leaves wire extensions at default.
+#![cfg(test)]
 
 use krabka_macros::NodeEndpoints;
 

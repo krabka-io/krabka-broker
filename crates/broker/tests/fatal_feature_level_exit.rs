@@ -15,14 +15,20 @@
 //! The binary's stop after a fault that lands once it is running is a unit test
 //! beside `serve`, since no command line can commit an unsupported level to a
 //! started broker.
+#![cfg(test)]
 
 use {
     assert2::{assert, check},
     krabka_metadata::{MetadataRecord, TopicRecord},
     std::{
+        fs::{self, File},
+        net::TcpListener,
+        path::Path,
         process::{Command, Stdio},
+        thread,
         time::{Duration, Instant},
     },
+    tokio::runtime::Builder,
 };
 
 /// A loopback port that nothing holds at the moment, for the controller
@@ -30,7 +36,7 @@ use {
 /// a known number, and it cannot stay on the binary's default port 9093, which
 /// `cli_smoke` binds while this suite may run.
 fn free_loopback_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap().port()
 }
 
@@ -41,7 +47,7 @@ fn free_loopback_port() -> u16 {
 /// Called in process rather than spawned, as `cli_smoke` does: the formatting
 /// is setup, not the thing under test.
 fn format_standalone(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     controller_port: u16,
     flags: &[&str],
     extra: Vec<MetadataRecord>,
@@ -60,7 +66,7 @@ fn format_standalone(
     .map(str::to_owned)
     .collect();
     argv.extend(flags.iter().map(|flag| (*flag).to_owned()));
-    let code = tokio::runtime::Builder::new_current_thread()
+    let code = Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("current-thread runtime")
@@ -137,7 +143,7 @@ fn the_broker_exits_non_zero_with_kafkas_message_over_a_fatal_controller_fault()
             .arg("--metrics-listen-addr=none")
             .arg("--health-listen-addr=none")
             .stdout(Stdio::from(
-                std::fs::File::create(&stdout_path).expect("create the stdout log"),
+                File::create(&stdout_path).expect("create the stdout log"),
             ))
             .stderr(Stdio::piped())
             .spawn()
@@ -159,7 +165,7 @@ fn the_broker_exits_non_zero_with_kafkas_message_over_a_fatal_controller_fault()
             }
             // intentional: waiting on a spawned krabka-broker subprocess to
             // exit; no in-process handle exists to await instead.
-            std::thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(100));
         };
         let output = child
             .wait_with_output()
@@ -170,7 +176,7 @@ fn the_broker_exits_non_zero_with_kafkas_message_over_a_fatal_controller_fault()
             .unwrap_or_else(|| panic!("{what}: krabka-broker kept running; stderr:\n{stderr}"));
         // Kafka's `Exit.halt(1)`.
         check!(status.code() == Some(1), "{what}: exit status {status}");
-        let stdout = std::fs::read_to_string(&stdout_path).expect("read the stdout log");
+        let stdout = fs::read_to_string(&stdout_path).expect("read the stdout log");
         check!(
             stdout.contains("halting: the metadata controller met a fatal fault"),
             "{what}: stdout:\n{stdout}"

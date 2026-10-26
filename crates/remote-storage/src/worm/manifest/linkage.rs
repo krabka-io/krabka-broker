@@ -117,10 +117,10 @@ pub fn manifest_head(body: &ManifestBody) -> ChainHead {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {super::*, assert2::check, krabka_audit::chain::GENESIS_HEAD};
 
     #[test]
     fn genesis_head_is_the_audit_genesis() {
-        check!(ChainHead::GENESIS.0 == krabka_audit::chain::GENESIS_HEAD);
+        check!(ChainHead::GENESIS.0 == GENESIS_HEAD);
     }
 }

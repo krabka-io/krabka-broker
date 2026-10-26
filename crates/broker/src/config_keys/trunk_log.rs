@@ -36,7 +36,7 @@ const LOG_REMOTE_COPY_LAG_BYTES: &str = "log.remote.copy.lag.bytes";
 /// config reads: the alter paths refused it, so a string that does not parse
 /// here means a damaged metadata image and not an operator's intent.
 #[must_use]
-pub(crate) fn resolve_max_decompressed_record_bytes(
+pub fn resolve_max_decompressed_record_bytes(
     image: &MetadataImage,
     node: NodeId,
     topic: &str,
@@ -57,7 +57,7 @@ pub(crate) fn resolve_max_decompressed_record_bytes(
 /// This is the limit of the log's own decompressing reads, compaction and the
 /// by-timestamp lookups. `Produce` resolves the same value for its own check.
 #[must_use]
-pub(crate) fn log_max_decompressed_record(
+pub fn log_max_decompressed_record(
     image: &MetadataImage,
     node: NodeId,
     topic: &str,
@@ -75,7 +75,7 @@ pub(crate) fn log_max_decompressed_record(
 /// `0` and `-1`, so a topic that sets neither copies every sealed segment as
 /// soon as it is sealed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RemoteCopyLag {
+pub struct RemoteCopyLag {
     /// `remote.copy.lag.ms`.
     pub(crate) ms: i64,
     /// `remote.copy.lag.bytes`.
@@ -91,11 +91,7 @@ impl RemoteCopyLag {
 /// own `log.remote.copy.lag.*`, else the cluster-wide one, else Kafka's
 /// defaults. An unparseable value reads as the default.
 #[must_use]
-pub(crate) fn resolve_remote_copy_lag(
-    image: &MetadataImage,
-    node: NodeId,
-    topic: &str,
-) -> RemoteCopyLag {
+pub fn resolve_remote_copy_lag(image: &MetadataImage, node: NodeId, topic: &str) -> RemoteCopyLag {
     let read = |keys: ConfigSynonym<'_>, default: i64| {
         topic_node_or_cluster_synonym(image, node, topic, keys)
             .and_then(long_value)

@@ -8,6 +8,7 @@ use {
         DEV_CERT, DEV_KEY,
         support::{
             client::connect_owned,
+            listeners,
             tls::{PinnedCertVerifier, fixture_signature_schemes, ssl_config},
         },
     },
@@ -15,7 +16,13 @@ use {
     krabka_broker::{Broker, BrokerConfig},
     krabka_protocol::owned::metadata_request::MetadataRequest,
     krabka_security::{ListenerProtocol, TlsConfig},
-    std::sync::Arc,
+    rustls::crypto::aws_lc_rs,
+    std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::Arc,
+    },
+    tokio::net::TcpStream,
     tokio_rustls::{
         TlsConnector,
         rustls::{
@@ -27,15 +34,15 @@ use {
 
 /// The certificate and private key files a fixture writes.
 struct PemPaths {
-    cert: std::path::PathBuf,
-    key: std::path::PathBuf,
+    cert: PathBuf,
+    key: PathBuf,
 }
 
-fn write_dev_pem(dir: &std::path::Path) -> PemPaths {
+fn write_dev_pem(dir: &Path) -> PemPaths {
     let cp = dir.join("cert.pem");
     let kp = dir.join("key.pem");
-    std::fs::write(&cp, DEV_CERT).unwrap();
-    std::fs::write(&kp, DEV_KEY).unwrap();
+    fs::write(&cp, DEV_CERT).unwrap();
+    fs::write(&kp, DEV_KEY).unwrap();
     PemPaths { cert: cp, key: kp }
 }
 
@@ -77,7 +84,7 @@ async fn tls_listener_accepts_tls_handshake_only() {
         }))
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(client_cfg));
-    let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let tcp = TcpStream::connect(addr).await.unwrap();
     let server_name = ServerName::try_from("krabka-dev").unwrap();
     let _tls = connector
         .connect(server_name, tcp)
@@ -122,14 +129,10 @@ async fn metadata_response_carries_listener_endpoints() {
     // out from it); SSL exercises the multi-listener code path.
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.listeners = vec![
-        crate::support::listeners::listener(
-            "PLAINTEXT",
-            plaintext_bind,
-            ListenerProtocol::Plaintext,
-        ),
-        crate::support::listeners::listener("SSL", ssl_bind, ListenerProtocol::Ssl),
+        listeners::listener("PLAINTEXT", plaintext_bind, ListenerProtocol::Plaintext),
+        listeners::listener("SSL", ssl_bind, ListenerProtocol::Ssl),
     ];
-    cfg.inter_broker_listener_name = "PLAINTEXT".to_string();
+    cfg.inter_broker_listener_name = "PLAINTEXT".to_owned();
     cfg.tls_config = Some(dev_tls_config(cert_path, key_path));
 
     let handle = Broker::start(cfg).await.expect("broker must start");
@@ -194,14 +197,11 @@ async fn metadata_response_carries_listener_endpoints() {
 struct TlsFixture {
     log_dir: tempfile::TempDir,
     pem_dir: tempfile::TempDir,
-    cert_path: std::path::PathBuf,
-    key_path: std::path::PathBuf,
+    cert_path: PathBuf,
+    key_path: PathBuf,
 }
 
-fn dev_tls_config(
-    cert_chain_path: std::path::PathBuf,
-    private_key_path: std::path::PathBuf,
-) -> TlsConfig {
+fn dev_tls_config(cert_chain_path: PathBuf, private_key_path: PathBuf) -> TlsConfig {
     TlsConfig {
         cert_chain_path,
         private_key_path,
@@ -213,7 +213,7 @@ fn dev_tls_config(
 
 fn tls_fixture() -> TlsFixture {
     // Installing before broker startup also permits the first client-side TLS build.
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = aws_lc_rs::default_provider().install_default();
     let log_dir = tempfile::tempdir().unwrap();
     let pem_dir = tempfile::tempdir().unwrap();
     let PemPaths {

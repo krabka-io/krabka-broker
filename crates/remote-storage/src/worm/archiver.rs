@@ -76,12 +76,12 @@ impl WormArchiver {
             // for, and it must stay hard to reach by accident.
             (Some(_), None) => {
                 return Err(WormError::SigningKey(
-                    "signing key path is set without a key id".to_string(),
+                    "signing key path is set without a key id".to_owned(),
                 ));
             }
             (None, Some(_)) => {
                 return Err(WormError::SigningKey(
-                    "signing key id is set without a key path".to_string(),
+                    "signing key id is set without a key path".to_owned(),
                 ));
             }
         };
@@ -129,7 +129,7 @@ impl WormArchiver {
         let signature = self.signer.as_ref().map(|signer| {
             let message = manifest_signing_bytes(signer.key_id(), chain.epoch_id, chain.seq, head);
             ManifestSignature {
-                key_id: signer.key_id().to_string(),
+                key_id: signer.key_id().to_owned(),
                 public_key: HexBytes(signer.public_key()),
                 signature: HexBytes(signer.sign(&message)),
             }
@@ -164,6 +164,7 @@ mod tests {
         assert2::{assert, check},
         krabka_ids::LeaderEpoch,
         ring::{rand::SystemRandom, signature::Ed25519KeyPair},
+        std::{fs, path::PathBuf},
         tempfile::TempDir,
         uuid::Uuid,
     };
@@ -191,20 +192,22 @@ mod tests {
         )
         .unwrap();
         match stamp {
-            Some(stamp) => {
-                md.with_custom_metadata(WormChainRecord::request(stamp).to_custom_metadata())
-            }
+            Some(stamp) => md.with_custom_metadata(
+                WormChainRecord::request(stamp)
+                    .to_custom_metadata()
+                    .unwrap(),
+            ),
             None => md,
         }
     }
 
     fn objects() -> Vec<ObjectEntry> {
         vec![ObjectEntry {
-            suffix: ".log".to_string(),
-            key: "orders-0/00000000000000000000.log".to_string(),
+            suffix: ".log".to_owned(),
+            key: "orders-0/00000000000000000000.log".to_owned(),
             size_bytes: 10,
             sha256: Sha256Digest::of(b"0123456789"),
-            e_tag: Some("0".to_string()),
+            e_tag: Some("0".to_owned()),
             version_id: None,
             create_precondition: true,
         }]
@@ -213,16 +216,16 @@ mod tests {
     fn signer() -> Arc<FileEd25519Signer> {
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
         let signer =
-            FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), KEY_ID.to_string()).unwrap();
+            FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), KEY_ID.to_owned()).unwrap();
         Arc::new(signer)
     }
 
     /// Writes a throwaway PKCS#8 Ed25519 key, for the `from_config` path that
     /// only takes a path.
-    fn key_file(dir: &TempDir) -> std::path::PathBuf {
+    fn key_file(dir: &TempDir) -> PathBuf {
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
         let path = dir.path().join("worm.pk8");
-        std::fs::write(&path, pkcs8.as_ref()).unwrap();
+        fs::write(&path, pkcs8.as_ref()).unwrap();
         path
     }
 
@@ -362,8 +365,8 @@ mod tests {
             "empty config"
         );
         let both = WormConfig {
-            signing_key_path: Some(path.clone()),
-            signing_key_id: Some(KEY_ID.to_string()),
+            signing_key_path: Some(path),
+            signing_key_id: Some(KEY_ID.to_owned()),
             write_only: false,
         };
         assert!(let Ok(archiver) = WormArchiver::from_config(&both));
@@ -389,7 +392,7 @@ mod tests {
         };
         let cfg = WormConfig {
             signing_key_path: has_path.then_some(path),
-            signing_key_id: has_id.then(|| KEY_ID.to_string()),
+            signing_key_id: has_id.then(|| KEY_ID.to_owned()),
             write_only: false,
         };
         check!(matches!(

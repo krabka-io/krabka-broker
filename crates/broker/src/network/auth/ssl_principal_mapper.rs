@@ -154,17 +154,22 @@ fn escape_literal_back_references(unescaped: &str, groups: usize) -> Result<Stri
     let original: Vec<char> = unescaped.chars().collect();
     let mut value = original.clone();
     let mut at = 0;
-    while let Some(dollar) = (at..original.len()).find(|&index| original[index] == '$') {
-        let digits = original[dollar + 1..]
+    while let Some(dollar) = original
+        .iter()
+        .skip(at)
+        .position(|&character| character == '$')
+        .map(|offset| at + offset)
+    {
+        let reference: String = original
             .iter()
+            .skip(dollar + 1)
             .take_while(|character| character.is_ascii_digit())
-            .count();
-        at = dollar + 1 + digits;
-        let reference = &original[dollar + 1..at];
-        if reference.is_empty() || reference[0] == '0' {
+            .collect();
+        at = dollar + 1 + reference.len();
+        if reference.is_empty() || reference.starts_with('0') {
             continue;
         }
-        let mut index = reference.iter().collect::<String>().parse::<i32>()?;
+        let mut index = reference.parse::<i32>()?;
         while index > groups && index >= 10 {
             index /= 10;
         }
@@ -193,15 +198,21 @@ fn split_rule(body: &str) -> Option<RuleParts<'_>> {
             escaped = false;
         } else if character == '\\' {
             escaped = true;
-        } else if character == '/' && seen < 2 {
-            slashes[seen] = index;
+        } else if character == '/'
+            && let Some(slot) = slashes.get_mut(seen)
+        {
+            *slot = index;
             seen += 1;
         }
     }
-    (seen == 2).then(|| RuleParts {
-        pattern: &body[..slashes[0]],
-        replacement: &body[slashes[0] + 1..slashes[1]],
-        flag: &body[slashes[1] + 1..],
+    let [first, second] = slashes;
+    if seen != 2 {
+        return None;
+    }
+    Some(RuleParts {
+        pattern: body.get(..first)?,
+        replacement: body.get(first + 1..second)?,
+        flag: body.get(second + 1..)?,
     })
 }
 

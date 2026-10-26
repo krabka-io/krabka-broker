@@ -17,7 +17,7 @@ use {
     krabka_units::{fmt::Human as _, prelude::*, serde_units},
     serde::{Deserialize, Serialize},
     sha2::{Digest as _, Sha256},
-    std::{collections::BTreeSet, fmt, path::Path},
+    std::{collections::BTreeSet, fmt, fs, path::Path},
 };
 
 // The executor uses the broker's default liveness sweep; its config test pins this cadence.
@@ -245,8 +245,8 @@ pub enum Isolation {
 impl fmt::Display for Isolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Isolation::ReadCommitted => "read_committed",
-            Isolation::ReadUncommitted => "read_uncommitted",
+            Self::ReadCommitted => "read_committed",
+            Self::ReadUncommitted => "read_uncommitted",
         })
     }
 }
@@ -350,14 +350,12 @@ impl RecoveryCheck {
     #[must_use]
     pub fn deadline(self, deadlines: &RecoveryDeadlines) -> Time {
         match self {
-            RecoveryCheck::LeaderFailover => deadlines.leader_failover,
-            RecoveryCheck::IsrRejoin => deadlines.isr_rejoin,
-            RecoveryCheck::ControllerFailover => deadlines.controller_failover,
-            RecoveryCheck::CatchUpAfterPause => deadlines.catch_up_after_pause,
-            RecoveryCheck::CertificateServed => {
-                deadlines.certificate_rotation.unwrap_or(Time::ZERO)
-            }
-            RecoveryCheck::ReassignmentComplete => deadlines.reassignment.unwrap_or(Time::ZERO),
+            Self::LeaderFailover => deadlines.leader_failover,
+            Self::IsrRejoin => deadlines.isr_rejoin,
+            Self::ControllerFailover => deadlines.controller_failover,
+            Self::CatchUpAfterPause => deadlines.catch_up_after_pause,
+            Self::CertificateServed => deadlines.certificate_rotation.unwrap_or(Time::ZERO),
+            Self::ReassignmentComplete => deadlines.reassignment.unwrap_or(Time::ZERO),
         }
     }
 }
@@ -365,12 +363,12 @@ impl RecoveryCheck {
 impl fmt::Display for RecoveryCheck {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            RecoveryCheck::LeaderFailover => "leader_failover",
-            RecoveryCheck::IsrRejoin => "isr_rejoin",
-            RecoveryCheck::ControllerFailover => "controller_failover",
-            RecoveryCheck::CatchUpAfterPause => "catch_up_after_pause",
-            RecoveryCheck::CertificateServed => "certificate_served",
-            RecoveryCheck::ReassignmentComplete => "reassignment_complete",
+            Self::LeaderFailover => "leader_failover",
+            Self::IsrRejoin => "isr_rejoin",
+            Self::ControllerFailover => "controller_failover",
+            Self::CatchUpAfterPause => "catch_up_after_pause",
+            Self::CertificateServed => "certificate_served",
+            Self::ReassignmentComplete => "reassignment_complete",
         })
     }
 }
@@ -457,13 +455,13 @@ impl FaultKind {
     #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
-            FaultKind::DiskPressure { .. } => "disk_pressure",
-            FaultKind::SlowFollower { .. } => "slow_follower",
-            FaultKind::Pause { .. } => "pause",
-            FaultKind::Restart { .. } => "restart",
-            FaultKind::Roll { .. } => "roll",
-            FaultKind::CertificateRotation => "certificate_rotation",
-            FaultKind::Reassignment { .. } => "reassignment",
+            Self::DiskPressure { .. } => "disk_pressure",
+            Self::SlowFollower { .. } => "slow_follower",
+            Self::Pause { .. } => "pause",
+            Self::Restart { .. } => "restart",
+            Self::Roll { .. } => "roll",
+            Self::CertificateRotation => "certificate_rotation",
+            Self::Reassignment { .. } => "reassignment",
         }
     }
 
@@ -474,9 +472,9 @@ impl FaultKind {
     pub fn moves_leadership(&self) -> bool {
         matches!(
             self,
-            FaultKind::Restart { .. }
-                | FaultKind::Roll { .. }
-                | FaultKind::Pause {
+            Self::Restart { .. }
+                | Self::Roll { .. }
+                | Self::Pause {
                     intends_failover: true
                 }
         )
@@ -487,23 +485,23 @@ impl FaultKind {
     #[must_use]
     pub fn checks(&self, target: Target) -> Vec<RecoveryCheck> {
         let mut checks = match self {
-            FaultKind::Pause {
+            Self::Pause {
                 intends_failover: false,
             } => vec![RecoveryCheck::CatchUpAfterPause],
-            FaultKind::Pause {
+            Self::Pause {
                 intends_failover: true,
             } => vec![
                 RecoveryCheck::LeaderFailover,
                 RecoveryCheck::CatchUpAfterPause,
             ],
-            FaultKind::Restart { .. } | FaultKind::Roll { .. } => {
+            Self::Restart { .. } | Self::Roll { .. } => {
                 vec![RecoveryCheck::LeaderFailover, RecoveryCheck::IsrRejoin]
             }
-            FaultKind::SlowFollower { .. } | FaultKind::DiskPressure { .. } => {
+            Self::SlowFollower { .. } | Self::DiskPressure { .. } => {
                 vec![RecoveryCheck::IsrRejoin]
             }
-            FaultKind::CertificateRotation => vec![RecoveryCheck::CertificateServed],
-            FaultKind::Reassignment { .. } => vec![RecoveryCheck::ReassignmentComplete],
+            Self::CertificateRotation => vec![RecoveryCheck::CertificateServed],
+            Self::Reassignment { .. } => vec![RecoveryCheck::ReassignmentComplete],
         };
         if self.moves_leadership() && target == Target::Controller {
             checks.push(RecoveryCheck::ControllerFailover);
@@ -588,8 +586,7 @@ impl Contract {
     /// Returns why the file cannot be read or parsed, or every reason
     /// [`Self::validate`] refuses it, one per line.
     pub fn from_file(path: &Path) -> anyhow::Result<Self> {
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         let contract =
             Self::from_yaml(&text).with_context(|| format!("parse contract {}", path.display()))?;
         let errors = contract.validate();
@@ -1145,7 +1142,7 @@ pub(crate) mod fixture {
     };
 
     /// A valid self-check contract, small enough to read in a test.
-    pub(crate) const SELF_CHECK: &str = r"
+    pub const SELF_CHECK: &str = "
 name: fixture-self-check
 profile: self_check
 seed: 7
@@ -1211,7 +1208,7 @@ self_check:
   missed_deadline: { fault: leader-restart, check: isr_rejoin, deadline: 1ms }
 ";
 
-    pub(crate) fn self_check() -> Contract {
+    pub fn self_check() -> Contract {
         let contract = Contract::from_yaml(SELF_CHECK).expect("the fixture parses");
         assert2::assert!(contract.validate().is_empty(), "{:?}", contract.validate());
         contract
@@ -1219,7 +1216,7 @@ self_check:
 
     /// The self-check's cluster and load as a valid lifecycle contract: four
     /// brokers, one upgrade, one rotation and one reassignment.
-    pub(crate) fn lifecycle() -> Contract {
+    pub fn lifecycle() -> Contract {
         let mut contract = self_check();
         contract.name = "fixture-lifecycle".to_owned();
         contract.profile = Profile::Lifecycle;
@@ -1286,7 +1283,7 @@ self_check:
 
     /// A valid disaster-recovery drill: the self-check's shape, with a tiered
     /// and a diskless idempotent path, no fault and recovery objectives.
-    pub(crate) fn drill() -> Contract {
+    pub fn drill() -> Contract {
         let mut contract = self_check();
         contract.name = "fixture-drill".to_owned();
         contract.profile = Profile::DisasterRecovery;

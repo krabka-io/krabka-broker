@@ -2,11 +2,11 @@
 
 use {
     crate::args::{ControllerListener, RestoreOptions, restore_args},
-    std::path::Path,
+    std::path::{Path, PathBuf},
 };
 
 /// Restore an archive into a fresh child directory with the requested cluster id.
-pub(crate) async fn restore_fixture(
+pub async fn restore_fixture(
     archive_root: &Path,
     target_parent: &Path,
     cluster_id: uuid::Uuid,
@@ -23,14 +23,14 @@ pub(crate) async fn restore_fixture(
 }
 
 /// Own the target directory for as long as a test observes the restored archive.
-pub(crate) struct FreshRestore {
+pub struct FreshRestore {
     _target: tempfile::TempDir,
-    pub(crate) log_dir: std::path::PathBuf,
+    pub(crate) log_dir: PathBuf,
     pub(crate) cluster_id: uuid::Uuid,
     pub(crate) report: krabka_restore::RestoreReport,
 }
 
-pub(crate) async fn fresh_restore(archive_root: &Path) -> FreshRestore {
+pub async fn fresh_restore(archive_root: &Path) -> FreshRestore {
     let target = tempfile::tempdir().expect("target parent");
     let log_dir = target.path().join("restored");
     let cluster_id = uuid::Uuid::new_v4();
@@ -44,12 +44,12 @@ pub(crate) async fn fresh_restore(archive_root: &Path) -> FreshRestore {
 }
 
 /// Restore beside a bound controller listener, preserving the endpoint across startup.
-pub(crate) async fn restore_for_controller(
+pub async fn restore_for_controller(
     archive_root: &Path,
     extra: &[&str],
 ) -> (
     tempfile::TempDir,
-    std::path::PathBuf,
+    PathBuf,
     ControllerListener,
     krabka_restore::RestoreReport,
 ) {

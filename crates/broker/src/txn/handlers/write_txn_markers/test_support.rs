@@ -18,12 +18,12 @@ use {
 };
 
 #[derive(Clone, Copy)]
-pub(crate) struct PartitionAnswer {
+pub struct PartitionAnswer {
     pub(crate) partition_index: i32,
     pub(crate) error_code: i16,
 }
 
-pub(crate) fn answer(partition_index: i32, error_code: i16) -> PartitionAnswer {
+pub fn answer(partition_index: i32, error_code: i16) -> PartitionAnswer {
     PartitionAnswer {
         partition_index,
         error_code,
@@ -32,7 +32,7 @@ pub(crate) fn answer(partition_index: i32, error_code: i16) -> PartitionAnswer {
 
 /// Open `topic-partition` under `log_dir` and register it with the broker.
 /// The partition starts with no local leader role; the caller installs one.
-pub(crate) fn open_partition(
+pub fn open_partition(
     broker: &Broker,
     log_dir: &Path,
     setup: StandalonePartitionSetup<'_>,
@@ -73,7 +73,7 @@ pub(super) fn local_offsets_partition_with_index(
     broker: &Broker,
     group_id: &str,
 ) -> IndexedPartition {
-    let partition = partition_for_group(&broker.controller.current_image(), group_id);
+    let partition = partition_for_group(&broker.controller.current_image(), group_id).unwrap();
     let part = broker
         .partitions
         .get(OFFSETS_TOPIC, PartitionIndex(partition))
@@ -105,10 +105,10 @@ pub(super) fn transactional_offset_batch(
     (producer_id, producer_epoch): (krabka_log::ProducerId, i16),
     (group, topic, partition): (&str, &str, i32),
     value: &OffsetCommitValue,
-) -> krabka_protocol::records::RecordBatch {
+) -> RecordBatch {
     single_transactional_batch((producer_id, producer_epoch), Record {
         key: Some(OffsetCommitValue::encode_key(group, topic, partition).unwrap()),
-        value: Some(value.encode_value()),
+        value: Some(value.encode_value().unwrap()),
         ..Record::default()
     })
 }

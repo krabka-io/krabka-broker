@@ -85,7 +85,7 @@ fn declaration(input: &TokenStream) -> Result<Table, ParseError> {
     Ok(Table { register, entries })
 }
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let table = declaration(input)?;
     Ok(moxy::template! {
         @for entry in &table.entries {

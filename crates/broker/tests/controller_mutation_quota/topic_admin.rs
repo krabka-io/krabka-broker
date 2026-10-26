@@ -29,14 +29,14 @@ use {
 
 /// The throttle time and the first topic result's error code of a topic
 /// mutation response.
-pub(crate) struct TopicMutationResult {
+pub struct TopicMutationResult {
     pub(crate) throttle_time_ms: i32,
     pub(crate) error_code: i16,
 }
 
 /// Drive `CreateTopics` (`api_key=19`) over a SASL/PLAIN connection.
 /// Returns the throttle time and the first topic result's error code.
-pub(crate) async fn drive_create_topics_sasl(
+pub async fn drive_create_topics_sasl(
     addr: SocketAddr,
     user: &str,
     pass: &str,
@@ -87,7 +87,7 @@ pub(crate) async fn drive_create_topics_sasl(
 
 /// Drive `DeleteTopics` (`api_key=20`) over a SASL/PLAIN connection.
 /// Returns the throttle time and the first topic result's error code.
-pub(crate) async fn drive_delete_topics_sasl(
+pub async fn drive_delete_topics_sasl(
     addr: SocketAddr,
     user: &str,
     pass: &str,
@@ -99,7 +99,7 @@ pub(crate) async fn drive_delete_topics_sasl(
     const VERSION: i16 = 4;
 
     let req = DeleteTopicsRequest {
-        topic_names: vec![topic.to_string()],
+        topic_names: vec![topic.to_owned()],
         timeout_ms: 30_000,
         ..Default::default()
     };

@@ -8,11 +8,12 @@ use {
     krabka_metadata::{
         BrokerConfigRecord, DEFAULT_BROKER_CONFIG_NODE_ID, MetadataImage, MetadataRecord, NodeId,
     },
+    tokio::time,
 };
 
 /// A read that takes `took`, and the value it answers with.
 async fn read_taking(took: Duration) -> &'static str {
-    tokio::time::sleep(took).await;
+    time::sleep(took).await;
     "records"
 }
 

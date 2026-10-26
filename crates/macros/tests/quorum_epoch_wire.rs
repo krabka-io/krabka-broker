@@ -1,4 +1,5 @@
 //! Real Kafka schemas exercise shared quorum accessors and both encoder versions.
+#![cfg(test)]
 
 use {
     assert2::assert,
@@ -52,7 +53,8 @@ impl QuorumLeader {
     fn leader_id_to_wire(&self) -> i32 { self.id.unwrap_or(-1) }
 
     fn node_endpoint(&self) -> Option<NodeEndpointEntry> {
-        self.id.and_then(|_| self.endpoint.clone())
+        let _ = self.id?;
+        self.endpoint.clone()
     }
 }
 

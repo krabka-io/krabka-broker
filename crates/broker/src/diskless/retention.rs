@@ -10,6 +10,7 @@ use {
     krabka_metadata::MetadataImage,
     krabka_units::convert::{ByteSizeExt, TimeExt},
     krabka_verified::{FreezeMutationKind, diskless::DisklessRetentionPolicy},
+    std::sync::PoisonError,
 };
 
 pub(super) struct Retention<'a> {
@@ -86,7 +87,7 @@ impl Retention<'_> {
                 .handle
                 .log
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .config_snapshot();
             let retention_ms = config.retention.map(TimeExt::millis_i64_trunc);
             let retention_bytes = config.retention_size.map(ByteSizeExt::bytes_u64);

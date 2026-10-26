@@ -8,7 +8,12 @@ use {
     crate::BrokerError,
     krabka_ids::Offset,
     krabka_log::Log,
-    std::{io::Write as _, path::Path},
+    krabka_verified::wal,
+    std::{
+        fs::{self, File},
+        io::Write as _,
+        path::Path,
+    },
 };
 
 pub(super) const DURABLE_OFFSET_FILE: &str = "wal-durable-offset.checkpoint";
@@ -100,7 +105,7 @@ pub(super) fn recover_durable_offset(log: &mut Log, path: &Path) -> Result<(), B
             // The backup is read under the same rules as the primary: a backup
             // of a version this build does not read is an error, never a
             // reason to fall back to the log start.
-            let value = std::fs::read_to_string(checkpoint)?;
+            let value = fs::read_to_string(checkpoint)?;
             decode_durable_offset(&value).map_err(|error| {
                 BrokerError::Replication(format!(
                     "decode WAL durable offsets {}: {error}",
@@ -131,7 +136,7 @@ pub(super) fn recover_durable_offset(log: &mut Log, path: &Path) -> Result<(), B
             .last_offset
             .map(|offset| offset.0)
     };
-    if !krabka_verified::wal::wal_checkpoint_range_valid(
+    if !wal::wal_checkpoint_range_valid(
         start.0,
         end.0,
         durable.start.0,
@@ -157,26 +162,26 @@ pub(super) fn recover_durable_offset(log: &mut Log, path: &Path) -> Result<(), B
 pub(super) fn write_durable_offset(path: &Path, durable: DurableRange) -> Result<(), BrokerError> {
     let temporary = path.with_extension("checkpoint.tmp");
     let backup = path.with_file_name(DURABLE_OFFSET_BACKUP_FILE);
-    let mut file = std::fs::File::create(&temporary)?;
+    let mut file = File::create(&temporary)?;
     write!(file, "{}", encode_durable_offset(durable))?;
     file.sync_all()?;
     drop(file);
     if backup.exists() {
-        std::fs::remove_file(&backup)?;
+        fs::remove_file(&backup)?;
     }
     if path.exists() {
-        std::fs::rename(path, &backup)?;
+        fs::rename(path, &backup)?;
     }
-    if let Err(error) = std::fs::rename(&temporary, path) {
+    if let Err(error) = fs::rename(&temporary, path) {
         restore_durable_offset_backup(path, &backup);
         return Err(error.into());
     }
     if backup.exists() {
-        std::fs::remove_file(backup)?;
+        fs::remove_file(backup)?;
     }
     #[cfg(unix)]
     if let Some(parent) = path.parent() {
-        std::fs::File::open(parent)?.sync_all()?;
+        File::open(parent)?.sync_all()?;
     }
     Ok(())
 }
@@ -192,7 +197,7 @@ fn restore_durable_offset_backup(path: &Path, backup: &Path) {
     let (Ok(false), Ok(true)) = (path.try_exists(), backup.try_exists()) else {
         return;
     };
-    let _ = std::fs::rename(backup, path);
+    let _ = fs::rename(backup, path);
 }
 
 #[cfg(test)]
@@ -203,6 +208,7 @@ mod tests {
         assert2::assert,
         krabka_log::LogConfig,
         krabka_protocol::records::{Record, RecordBatch},
+        std::{fs, path::PathBuf},
     };
 
     /// The exact bytes a 1.x broker writes for the range `3..7`. A change
@@ -213,7 +219,7 @@ mod tests {
     /// opened in it.
     struct CheckpointLog {
         dir: tempfile::TempDir,
-        checkpoint: std::path::PathBuf,
+        checkpoint: PathBuf,
         log: Log,
     }
 
@@ -243,7 +249,7 @@ mod tests {
         }
     }
 
-    fn reopen_and_recover_checkpoint(dir: &std::path::Path, checkpoint: &std::path::Path) -> Log {
+    fn reopen_and_recover_checkpoint(dir: &Path, checkpoint: &Path) -> Log {
         let mut reopened = Log::open(dir, LogConfig::default()).unwrap();
         recover_durable_offset(&mut reopened, checkpoint).unwrap();
         reopened
@@ -260,7 +266,7 @@ mod tests {
 
         write_durable_offset(&path, range).unwrap();
 
-        assert!(std::fs::read_to_string(&path).unwrap() == GOLDEN_CHECKPOINT);
+        assert!(fs::read_to_string(&path).unwrap() == GOLDEN_CHECKPOINT);
         assert!(decode_durable_offset(GOLDEN_CHECKPOINT) == Ok(range));
     }
 
@@ -288,7 +294,7 @@ mod tests {
         for file in [DURABLE_OFFSET_FILE, DURABLE_OFFSET_BACKUP_FILE] {
             let dir = tempfile::tempdir().unwrap();
             let mut log = Log::open(dir.path(), LogConfig::default()).unwrap();
-            std::fs::write(dir.path().join(file), "1\n0 0\n").unwrap();
+            fs::write(dir.path().join(file), "1\n0 0\n").unwrap();
 
             let error = recover_durable_offset(&mut log, &dir.path().join(DURABLE_OFFSET_FILE))
                 .unwrap_err();
@@ -307,18 +313,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(DURABLE_OFFSET_FILE);
         let backup = dir.path().join(DURABLE_OFFSET_BACKUP_FILE);
-        std::fs::write(&backup, "0 4\n").unwrap();
+        fs::write(&backup, "0 4\n").unwrap();
 
         restore_durable_offset_backup(&path, &backup);
 
-        assert!(std::fs::read_to_string(&path).unwrap() == "0 4\n");
+        assert!(fs::read_to_string(&path).unwrap() == "0 4\n");
         assert!(!backup.exists());
-        std::fs::write(&backup, "0 3\n").unwrap();
+        fs::write(&backup, "0 3\n").unwrap();
 
         restore_durable_offset_backup(&path, &backup);
 
-        assert!(std::fs::read_to_string(&path).unwrap() == "0 4\n");
-        assert!(std::fs::read_to_string(&backup).unwrap() == "0 3\n");
+        assert!(fs::read_to_string(&path).unwrap() == "0 4\n");
+        assert!(fs::read_to_string(&backup).unwrap() == "0 3\n");
     }
 
     #[test]
@@ -352,7 +358,7 @@ mod tests {
         let reopened = reopen_and_recover_checkpoint(dir.path(), &checkpoint);
 
         assert2::assert!((reopened.log_end_offset()) == (Offset(1)));
-        assert2::assert!((std::fs::read_to_string(checkpoint).unwrap()) == ("0\n0 1\n"));
+        assert2::assert!((fs::read_to_string(checkpoint).unwrap()) == ("0\n0 1\n"));
     }
 
     #[yare::parameterized(
@@ -374,7 +380,7 @@ mod tests {
             mut log,
         } = checkpoint_log(RecordCount(3));
         if let Some(value) = value {
-            std::fs::write(&checkpoint, value).unwrap();
+            fs::write(&checkpoint, value).unwrap();
         } else {
             log.trim_to_offset(Offset(1)).unwrap();
         }
@@ -402,7 +408,7 @@ mod tests {
                     .bytes
                     == before
             );
-            let actual = std::fs::read_to_string(&checkpoint).unwrap();
+            let actual = fs::read_to_string(&checkpoint).unwrap();
             assert2::assert!(Some(actual.as_str()) == value);
         }
     }
@@ -425,7 +431,7 @@ mod tests {
             mut log,
         } = checkpoint_log(RecordCount(1));
         log.sync().unwrap();
-        std::fs::write(&checkpoint, checkpoint_value).unwrap();
+        fs::write(&checkpoint, checkpoint_value).unwrap();
 
         let error = recover_durable_offset(&mut log, &checkpoint).unwrap_err();
 

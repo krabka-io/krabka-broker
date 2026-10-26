@@ -5,13 +5,22 @@
 //! flag, the byte length, the last offset, the maximum timestamp, and the
 //! sparse indexes -- so they belong together rather than beside a read path.
 
+#[cfg(all(test, not(target_os = "wasi")))]
+use std::cell::Cell;
+#[cfg(not(target_os = "wasi"))]
+use std::fs::File;
 use {
     super::{Segment, io::seek_to_log_size},
     crate::{error::LogError, io::LogIo},
     krabka_ids::Offset,
     krabka_protocol::records::RecordBatch,
     krabka_units::prelude::{ByteSize, ByteSizeExt as _},
-    tracing::instrument,
+    std::{
+        io::{self, ErrorKind},
+        mem,
+        sync::{Arc, atomic::Ordering},
+    },
+    tracing::{field, instrument},
 };
 
 /// Log a block reservation, a release, or a switch to `O_DIRECT` that the
@@ -20,8 +29,8 @@ use {
 /// A filesystem without `fallocate` or `O_DIRECT` refuses every one, so that
 /// is not news worth more than a debug line; anything else, a full disk above
 /// all, is.
-pub(super) fn log_refused(operation: &'static str, base_offset: Offset, error: &std::io::Error) {
-    if error.kind() == std::io::ErrorKind::Unsupported {
+pub(super) fn log_refused(operation: &'static str, base_offset: Offset, error: &io::Error) {
+    if error.kind() == ErrorKind::Unsupported {
         tracing::debug!(operation, base_offset = base_offset.0, %error, "segment preallocation unsupported");
     } else {
         tracing::warn!(operation, base_offset = base_offset.0, %error, "segment preallocation refused");
@@ -38,7 +47,7 @@ pub(super) struct WriteSnapshot {
 
 #[cfg(all(test, not(target_os = "wasi")))]
 std::thread_local! {
-    static FAIL_FLUSH_HANDLES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_FLUSH_HANDLES: Cell<bool> = const { Cell::new(false) };
 }
 
 impl Segment {
@@ -46,23 +55,21 @@ impl Segment {
     pub(crate) fn test_fail_flush_handles(fail: bool) { FAIL_FLUSH_HANDLES.set(fail); }
 
     #[cfg(not(target_os = "wasi"))]
-    pub(crate) fn flush_handles(&self) -> std::io::Result<[std::sync::Arc<std::fs::File>; 3]> {
+    pub(crate) fn flush_handles(&self) -> io::Result<[Arc<File>; 3]> {
         #[cfg(test)]
         if FAIL_FLUSH_HANDLES.get() {
-            return Err(std::io::Error::other("injected flush handle clone failure"));
+            return Err(io::Error::other("injected flush handle clone failure"));
         }
         Ok([
-            std::sync::Arc::clone(&self.log_file),
-            std::sync::Arc::new(self.offset_index.flush_handle()?),
-            std::sync::Arc::new(self.time_index.flush_handle()?),
+            Arc::clone(&self.log_file),
+            Arc::new(self.offset_index.flush_handle()?),
+            Arc::new(self.time_index.flush_handle()?),
         ])
     }
 
     /// The `.log` file, for a background sync of its page-cache data.
     #[cfg(not(target_os = "wasi"))]
-    pub(crate) fn log_file_handle(&self) -> std::sync::Arc<std::fs::File> {
-        std::sync::Arc::clone(&self.log_file)
-    }
+    pub(crate) fn log_file_handle(&self) -> Arc<File> { Arc::clone(&self.log_file) }
 
     /// Mark this segment as sealed. No more appends.
     ///
@@ -124,7 +131,7 @@ impl Segment {
     /// asked for has to be asked for again.
     pub(super) fn renew_reservation(&mut self) {
         self.reserved_end = 0;
-        let requested = std::mem::take(&mut self.reserve_requested);
+        let requested = mem::take(&mut self.reserve_requested);
         if requested > 0 {
             self.reserve(ByteSize::from_bytes(requested));
         }
@@ -137,7 +144,7 @@ impl Segment {
     /// long as retention keeps the segment. A refused release keeps them only
     /// until then, so it is logged and not returned.
     fn release_reservation(&mut self) {
-        let reserved_end = std::mem::take(&mut self.reserved_end);
+        let reserved_end = mem::take(&mut self.reserved_end);
         if reserved_end <= self.log_size {
             return;
         }
@@ -243,15 +250,14 @@ impl Segment {
         Ok(())
     }
 
-    pub(crate) fn set_io(&mut self, io: std::sync::Arc<dyn LogIo>) {
-        self.offset_index.set_io(io.clone());
-        self.time_index.set_io(io.clone());
+    pub(crate) fn set_io(&mut self, io: Arc<dyn LogIo>) {
+        self.offset_index.set_io(Arc::clone(&io));
+        self.time_index.set_io(Arc::clone(&io));
         if let Some(mode) = self.direct.as_ref() {
-            mode.writer.set_io(io.clone());
+            mode.writer.set_io(Arc::clone(&io));
         }
         self.io = io;
-        self.cache_probe_unsupported
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.cache_probe_unsupported.store(false, Ordering::Relaxed);
     }
 
     /// Truncate the `.log` file and the indexes so that no batch at
@@ -260,7 +266,7 @@ impl Segment {
     #[instrument(
         level = "info",
         skip(self),
-        fields(base_offset = self.base_offset.0, new_last_offset = tracing::field::Empty),
+        fields(base_offset = self.base_offset.0, new_last_offset = field::Empty),
         err,
     )]
     /// # Errors
@@ -498,9 +504,9 @@ mod tests {
         assert2::assert!(
             read == vec![
                 sample_batch()
-                    .offset(crate::segment::test_support::THREE_RECORD_BATCH.offset.0)
-                    .records(crate::segment::test_support::THREE_RECORD_BATCH.records.0)
-                    .timestamp(crate::segment::test_support::THREE_RECORD_BATCH.timestamp.0)
+                    .offset(THREE_RECORD_BATCH.offset.0)
+                    .records(THREE_RECORD_BATCH.records.0)
+                    .timestamp(THREE_RECORD_BATCH.timestamp.0)
                     .call()
             ]
         );

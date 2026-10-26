@@ -1,6 +1,8 @@
 //! On-disk RLMM snapshot: a versioned envelope wrapping a
 //! [`RlmmCacheDump`] plus the per-metadata-partition committed
-//! offsets, so a restarting broker resumes the metadata consumer from
+//! offsets.
+//!
+//! The offsets let a restarting broker resume the metadata consumer from
 //! `committed + 1` instead of replaying `__remote_log_metadata` from
 //! offset 0.
 //!
@@ -16,11 +18,15 @@ use {
         error::{CodecError, SnapshotError},
         serde::{MetadataEvent, Reader, read_uvarint, write_uvarint},
     },
-    assert2::assert,
     bytes::{BufMut, BytesMut},
     krabka_remote_storage::{PartitionDump, RlmmCacheDump},
     krabka_units::prelude::{ByteSize, ByteSizeExt as _, bytes as byte_size},
-    std::{collections::BTreeMap, path::Path},
+    std::{
+        collections::BTreeMap,
+        fs::{self, File},
+        io::ErrorKind,
+        path::Path,
+    },
     tracing::instrument,
 };
 
@@ -69,22 +75,24 @@ struct OrderedDump {
 impl Snapshot {
     /// Encode this snapshot into freshly-allocated bytes.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `committed_offsets` contains more than `i32::MAX + 1` offsets,
-    /// because its partition indices must fit in the encoded `i32` field.
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        assert!(
-            self.committed_offsets.len() <= i32::MAX as usize + 1,
-            "snapshot partition index exceeds i32::MAX"
-        );
+    /// Returns [`SnapshotError::Malformed`] if `committed_offsets` contains
+    /// more than `i32::MAX + 1` offsets, because its partition indices must
+    /// fit in the encoded `i32` field, or if an entry fails to encode.
+    pub fn encode(&self) -> Result<Vec<u8>, SnapshotError> {
+        if self.committed_offsets.len() > i32::MAX as usize + 1 {
+            return Err(SnapshotError::Malformed(CodecError::LengthOverflow(
+                self.committed_offsets.len() as u64,
+            )));
+        }
         let mut buf = BytesMut::with_capacity(ENCODE_BUFFER_HINT.bytes_usize());
         buf.put_u16(SNAPSHOT_FORMAT_VERSION);
         // Committed offsets.
         write_uvarint(self.committed_offsets.len() as u64, &mut buf);
-        for (p, &off) in self.committed_offsets.iter().enumerate() {
-            buf.put_i32(i32::try_from(p).expect("partition fits in i32"));
+        // The check above leaves an `i32` index for every offset.
+        for (&off, p) in self.committed_offsets.iter().zip(0..=i32::MAX) {
+            buf.put_i32(p);
             buf.put_i64(off);
         }
         // Entries: one MetadataEvent per segment, then one per
@@ -92,7 +100,7 @@ impl Snapshot {
         let mut entries: Vec<bytes::Bytes> = Vec::new();
         for p in &self.dump.partitions {
             for seg in &p.segments {
-                entries.push(MetadataEvent::AddSegment(seg.clone()).encode());
+                entries.push(MetadataEvent::AddSegment(seg.clone()).encode()?);
             }
             if let Some(state) = p.delete_state {
                 entries.push(
@@ -104,7 +112,7 @@ impl Snapshot {
                             broker_id: 0,
                         },
                     )
-                    .encode(),
+                    .encode()?,
                 );
             }
         }
@@ -113,7 +121,7 @@ impl Snapshot {
             write_uvarint(entry.len() as u64, &mut buf);
             buf.put_slice(&entry);
         }
-        buf.to_vec()
+        Ok(buf.to_vec())
     }
 
     /// Decode a snapshot from `bytes`.
@@ -141,12 +149,12 @@ impl Snapshot {
             let p = r.read_i32()?;
             let off = r.read_i64()?;
             let idx = usize::try_from(p).map_err(|_| CodecError::LengthOverflow(u64::MAX))?;
-            if idx >= committed_offsets.len() {
+            let Some(slot) = committed_offsets.get_mut(idx) else {
                 return Err(SnapshotError::Malformed(CodecError::LengthOverflow(
                     idx as u64,
                 )));
-            }
-            committed_offsets[idx] = off;
+            };
+            *slot = off;
         }
         let n_entries = usize::try_from(read_uvarint(&mut r)?)
             .map_err(|_| CodecError::LengthOverflow(u64::MAX))?;
@@ -203,7 +211,7 @@ impl Snapshot {
                     // segment updates are folded into the dumped cache, not
                     // stored as standalone events.
                     return Err(SnapshotError::Malformed(CodecError::Domain(
-                        "snapshot must not contain an UpdateSegment event".to_string(),
+                        "snapshot must not contain an UpdateSegment event".to_owned(),
                     )));
                 }
             }
@@ -244,25 +252,25 @@ impl Snapshot {
     )]
     pub fn write_atomic(&self, path: &Path) -> Result<(), SnapshotError> {
         use std::io::Write;
-        let bytes = self.encode();
+        let bytes = self.encode()?;
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
-        std::fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)?;
         let tmp = path.with_extension("tmp");
         let write_tmp = || -> Result<(), SnapshotError> {
-            let mut f = std::fs::File::create(&tmp)?;
+            let mut f = File::create(&tmp)?;
             f.write_all(&bytes)?;
             f.sync_all()?;
-            std::fs::rename(&tmp, path)?;
+            fs::rename(&tmp, path)?;
             Ok(())
         };
         if let Err(e) = write_tmp() {
             // Don't leave a stale temp file behind on a failed write.
-            let _ = std::fs::remove_file(&tmp);
+            let _ = fs::remove_file(&tmp);
             return Err(e);
         }
         // Best-effort durable rename: fsync the parent directory so the
         // rename survives a crash. Ignore unsupported/not-a-dir cases.
-        if let Ok(dir) = std::fs::File::open(parent) {
+        if let Ok(dir) = File::open(parent) {
             let _ = dir.sync_all();
         }
         Ok(())
@@ -278,9 +286,9 @@ impl Snapshot {
     /// not-found, or a decode error for a present-but-malformed file.
     #[instrument(skip_all, fields(path = %path.display()), err)]
     pub fn load(path: &Path) -> Result<Option<Self>, SnapshotError> {
-        let bytes = match std::fs::read(path) {
+        let bytes = match fs::read(path) {
             Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(SnapshotError::Io(e)),
         };
         Ok(Some(Self::decode(&bytes)?))
@@ -300,6 +308,7 @@ mod tests {
         crate::manager::test_support::{started, tp},
         assert2::assert,
         krabka_remote_storage::RemotePartitionDeleteState,
+        std::{env, fs, process},
     };
 
     fn sample_snapshot() -> Snapshot {
@@ -319,7 +328,7 @@ mod tests {
     #[test]
     fn encode_decode_round_trip() {
         let snap = sample_snapshot();
-        let bytes = snap.encode();
+        let bytes = snap.encode().unwrap();
         let back = Snapshot::decode(&bytes).expect("decodes");
         assert!(back == snap);
     }
@@ -339,12 +348,12 @@ mod tests {
                 }
             })
             .collect();
-        assert!(Snapshot::decode(&snap.encode()).unwrap() == snap);
+        assert!(Snapshot::decode(&snap.encode().unwrap()).unwrap() == snap);
     }
 
     #[test]
     fn truncated_file_is_error_not_panic() {
-        let bytes = sample_snapshot().encode();
+        let bytes = sample_snapshot().encode().unwrap();
         let err = Snapshot::decode(&bytes[..bytes.len() - 3]).unwrap_err();
         assert!(matches!(
             err,
@@ -375,7 +384,7 @@ mod tests {
             committed_offsets: vec![-1],
             dump: RlmmCacheDump::default(),
         };
-        assert!(Snapshot::decode(&snapshot.encode()).unwrap() == snapshot);
+        assert!(Snapshot::decode(&snapshot.encode().unwrap()).unwrap() == snapshot);
     }
 
     #[test]
@@ -395,8 +404,8 @@ mod tests {
 
     #[test]
     fn write_then_load_round_trips_through_a_file() {
-        let dir = std::env::temp_dir().join(format!("krabka-snap-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = env::temp_dir().join(format!("krabka-snap-{}", process::id()));
+        fs::create_dir_all(&dir).unwrap();
         let path = dir.join("snapshot");
         let snap = sample_snapshot();
         snap.write_atomic(&path).expect("write");
@@ -404,28 +413,28 @@ mod tests {
         assert!(loaded == snap);
         // No temp file left behind.
         assert!(
-            std::fs::read_dir(&dir)
+            fs::read_dir(&dir)
                 .unwrap()
                 .filter_map(Result::ok)
                 .all(|e| e.file_name() == "snapshot")
         );
-        std::fs::remove_dir_all(&dir).ok();
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn load_absent_file_is_ok_none() {
-        let path = std::env::temp_dir().join("krabka-snap-does-not-exist-xyz");
-        let _ = std::fs::remove_file(&path);
+        let path = env::temp_dir().join("krabka-snap-does-not-exist-xyz");
+        let _ = fs::remove_file(&path);
         assert!(Snapshot::load(&path).unwrap() == None);
     }
 
     #[test]
     fn load_corrupt_file_is_err() {
-        let dir = std::env::temp_dir().join(format!("krabka-snap-corrupt-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = env::temp_dir().join(format!("krabka-snap-corrupt-{}", process::id()));
+        fs::create_dir_all(&dir).unwrap();
         let path = dir.join("snapshot");
-        std::fs::write(&path, [0xFF, 0xFF, 0x00, 0x01]).unwrap();
+        fs::write(&path, [0xFF, 0xFF, 0x00, 0x01]).unwrap();
         assert!(Snapshot::load(&path).is_err());
-        std::fs::remove_dir_all(&dir).ok();
+        let _ = fs::remove_dir_all(&dir);
     }
 }

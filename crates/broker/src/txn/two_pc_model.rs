@@ -211,7 +211,7 @@ fn st(id: i8) -> TxnState { TxnState::from_kafka_status(id).expect("valid TxnSta
 /// in a live run. Partitions do not change these decisions.
 fn rebuild(s: &TwoPcProj) -> TxnEntry {
     let mut e = TxnEntry::new_empty(
-        "tid".to_string(),
+        "tid".to_owned(),
         ProducerId(s.pid),
         s.epoch,
         s.timeout_ms,
@@ -410,7 +410,7 @@ impl Model for TwoPcModel {
         // A tid that completed its first, classic InitProducerId at time 0.
         let timeout_ms = resolve_txn_timeout(false, FIRST_TIMEOUT_MS, MAX_TIMEOUT_MS)
             .expect("the first timeout is valid");
-        let entry = TxnEntry::new_empty("tid".to_string(), PID, 0, timeout_ms, CLOCK[0]);
+        let entry = TxnEntry::new_empty("tid".to_owned(), PID, 0, timeout_ms, CLOCK[0]);
         let mut s = TwoPcProj {
             pid: 0,
             epoch: 0,

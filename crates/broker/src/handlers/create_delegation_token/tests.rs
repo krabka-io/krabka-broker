@@ -17,11 +17,14 @@ use {
             DELEGATION_TOKEN_REQUEST_NOT_ALLOWED, INVALID_PRINCIPAL_TYPE, INVALID_REQUEST, NONE,
             UNKNOWN_SERVER_ERROR,
         },
-        handlers::delegation_token_test_support::{
-            DAY_MS as RENEW_24H_MS, SecretProvision, TokenFixture, anonymous, authed,
-            test_controller, token_authed,
+        handlers::{
+            delegation_token_test_support::{
+                DAY_MS as RENEW_24H_MS, SecretProvision, TokenFixture, anonymous, authed,
+                test_controller, token_authed,
+            },
+            test_support::metadata_version_gated,
         },
-        test_support::{KafkaErrorCode, UnixMillis},
+        test_support::{KafkaErrorCode, UnixMillis, allow_acl},
     },
     assert2::assert,
     krabka_protocol::owned::{
@@ -75,7 +78,7 @@ struct TokenRefusalSetup {
     owner: KafkaPrincipal,
     #[default(user("alice"))]
     requester: KafkaPrincipal,
-    #[default(crate::test_support::UnixMillis(-1))]
+    #[default(UnixMillis(-1))]
     timestamp: UnixMillis,
 }
 
@@ -84,7 +87,7 @@ fn refusal(
     #[builder(into, default)] code: KafkaErrorCode,
     #[builder(default = user ("alice"))] owner: KafkaPrincipal,
     #[builder(default = user ("alice"))] requester: KafkaPrincipal,
-    #[builder(into, default = crate :: test_support :: UnixMillis (- 1))] timestamp: UnixMillis,
+    #[builder(into, default = UnixMillis (- 1))] timestamp: UnixMillis,
 ) -> CreateDelegationTokenResponse {
     let setup = TokenRefusalSetup {
         code,
@@ -464,7 +467,7 @@ async fn create_tokens_acl_admits_minting_for_that_owner_only() {
     let controller = test_controller(dir.path().into()).await;
     controller
         .submit_change(vec![krabka_metadata::MetadataRecord::V1AccessControlEntry(
-            crate::test_support::allow_acl()
+            allow_acl()
                 .resource_type(krabka_metadata::ResourceType::User)
                 .resource_name("User:alice")
                 .principal("User:bob")
@@ -497,13 +500,11 @@ async fn create_tokens_acl_admits_minting_for_that_owner_only() {
     let for_alice = mint("alice").await;
     let for_carol = mint("carol").await;
 
-    assert!(
-        (for_alice.error_code, for_alice.principal_name.as_str()) == (crate::codes::NONE, "alice")
-    );
+    assert!((for_alice.error_code, for_alice.principal_name.as_str()) == (NONE, "alice"));
     assert!(
         for_carol
             == refusal()
-                .code(crate::codes::DELEGATION_TOKEN_AUTHORIZATION_FAILED)
+                .code(DELEGATION_TOKEN_AUTHORIZATION_FAILED)
                 .owner(user("carol"))
                 .requester(user("bob"))
                 .call()
@@ -538,7 +539,7 @@ async fn lifetime_past_i64_max_saturates() {
             resp.error_code,
             resp.expiry_timestamp_ms,
             resp.max_timestamp_ms
-        ) == (crate::codes::NONE, resp.issue_timestamp_ms + 1, i64::MAX)
+        ) == (NONE, resp.issue_timestamp_ms + 1, i64::MAX)
     );
     controller.cancel().await;
 }
@@ -580,10 +581,7 @@ fn token_gate_uses_delegation_token_level() {
     let cases = [(None, false), (Some(13), true), (Some(14), false)];
     for (level, want_gated) in cases {
         assert!(
-            crate::handlers::test_support::metadata_version_gated(
-                level,
-                DELEGATION_TOKEN_MIN_LEVEL
-            ) == want_gated,
+            metadata_version_gated(level, DELEGATION_TOKEN_MIN_LEVEL) == want_gated,
             "level {level:?}"
         );
     }

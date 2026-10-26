@@ -139,6 +139,7 @@ impl SharePartitionLeaderManager {
         let _ = self
             .persist_if_dirty(group, *topic_id, *partition, Some(cell), &mut state)
             .await;
+        drop(state);
     }
 }
 
@@ -166,16 +167,24 @@ mod tests {
         assert2::assert,
         async_trait::async_trait,
         krabka_log::Offset,
-        std::sync::Arc,
+        std::{
+            ops::RangeInclusive,
+            sync::{
+                self, Arc,
+                atomic::{AtomicUsize, Ordering},
+            },
+            time::Duration,
+        },
+        tokio::{sync::Mutex, task::yield_now, time::timeout},
     };
 
     /// A sink that keeps each write in flight for a few polls, and remembers
     /// how many were in flight at once and what it was asked to write.
     #[derive(Default)]
     struct GaugeDlq {
-        in_flight: std::sync::atomic::AtomicUsize,
-        peak: std::sync::atomic::AtomicUsize,
-        written: std::sync::Mutex<Vec<DlqRequest>>,
+        in_flight: AtomicUsize,
+        peak: AtomicUsize,
+        written: sync::Mutex<Vec<DlqRequest>>,
     }
 
     #[async_trait]
@@ -185,7 +194,7 @@ mod tests {
             let now = self.in_flight.fetch_add(1, SeqCst) + 1;
             self.peak.fetch_max(now, SeqCst);
             for _ in 0..10 {
-                tokio::task::yield_now().await;
+                yield_now().await;
             }
             self.in_flight.fetch_sub(1, SeqCst);
             self.written.lock().expect("written lock").push(request);
@@ -199,7 +208,7 @@ mod tests {
         mgr: &Arc<super::SharePartitionLeaderManager>,
         tid: uuid::Uuid,
         records: RecordCount,
-    ) -> Arc<tokio::sync::Mutex<AcquisitionState>> {
+    ) -> Arc<Mutex<AcquisitionState>> {
         let cell = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
         {
             let mut state = cell.lock().await;
@@ -218,7 +227,7 @@ mod tests {
         dlq: Arc<D>,
         mgr: Arc<super::SharePartitionLeaderManager>,
         tid: uuid::Uuid,
-        cell: Arc<tokio::sync::Mutex<AcquisitionState>>,
+        cell: Arc<Mutex<AcquisitionState>>,
     }
 
     /// A sink, manager and acquired cell with no additional retained ownership.
@@ -226,7 +235,7 @@ mod tests {
         records: RecordCount,
     ) -> AcquiredManager<D> {
         let dlq = Arc::new(D::default());
-        let mgr = manager_with_dlq(dlq.clone());
+        let mgr = manager_with_dlq(Arc::<D>::clone(&dlq));
         let tid = uuid::Uuid::from_bytes([61; 16]);
         let cell = acquired_cell(&mgr, tid, records).await;
         AcquiredManager {
@@ -241,18 +250,18 @@ mod tests {
     async fn dispatch_and_wait(
         mgr: &super::SharePartitionLeaderManager,
         key: &super::LeaderKey,
-        cell: &Arc<tokio::sync::Mutex<AcquisitionState>>,
+        cell: &Arc<Mutex<AcquisitionState>>,
         ranges: Vec<DlqRange>,
         done: impl Fn(&[(i64, RecordState)]) -> bool,
     ) -> Vec<(i64, RecordState)> {
         mgr.dispatch_dead_letters(key, cell, ranges);
-        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        timeout(Duration::from_secs(60), async {
             loop {
                 let states = cell.lock().await.record_states();
                 if done(&states) {
                     return states;
                 }
-                tokio::task::yield_now().await;
+                yield_now().await;
             }
         })
         .await
@@ -262,7 +271,7 @@ mod tests {
     #[derive(krabka_macros::FieldDefaults)]
     struct ExpectedDlqRequestSetup {
         #[default(Offset(0)..=Offset(1))]
-        bounds: std::ops::RangeInclusive<Offset>,
+        bounds: RangeInclusive<Offset>,
         #[default(DeliveryCount(1))]
         delivery_count: DeliveryCount,
         #[default(DlqCause::ClientReject)]
@@ -271,7 +280,7 @@ mod tests {
 
     #[bon::builder]
     fn request(
-        #[builder(default = Offset (0) ..= Offset (1))] bounds: std::ops::RangeInclusive<Offset>,
+        #[builder(default = Offset (0) ..= Offset (1))] bounds: RangeInclusive<Offset>,
         #[builder(into, default = DeliveryCount (1))] delivery_count: DeliveryCount,
         #[builder(default = DlqCause :: ClientReject)] cause: DlqCause,
     ) -> DlqRequest {
@@ -320,7 +329,7 @@ mod tests {
             .await;
         let states = state.record_states();
         drop(state);
-        tokio::task::yield_now().await;
+        yield_now().await;
 
         assert!(
             (code, states, dlq.requests())
@@ -525,12 +534,12 @@ mod tests {
             if dlq.written.lock().expect("written lock").len() == 20 {
                 break;
             }
-            tokio::task::yield_now().await;
+            yield_now().await;
         }
 
         assert!(
             (
-                dlq.peak.load(std::sync::atomic::Ordering::SeqCst),
+                dlq.peak.load(Ordering::SeqCst),
                 dlq.written.lock().expect("written lock").len(),
             ) == (MAX_CONCURRENT_DEAD_LETTER_WRITES, 20)
         );
@@ -543,7 +552,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_failed_write_still_archives_and_a_restored_cause_is_inferred() {
         let dlq = Arc::new(RecordingDlq::failing(DlqError::Write("boom".into())));
-        let mgr = manager_with_dlq(dlq.clone());
+        let mgr = manager_with_dlq(Arc::<RecordingDlq>::clone(&dlq));
         let tid = uuid::Uuid::from_bytes([61; 16]);
         let cell = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
         let key = ("g1".to_owned(), tid, 0);

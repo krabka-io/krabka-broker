@@ -33,6 +33,7 @@
 //!   SSPI_KDC_URL=tcp://localhost:88 \
 //!   cargo test -p krabka-broker --test gssapi_e2e -- --ignored
 //! ```
+#![cfg(test)]
 
 mod support;
 
@@ -41,9 +42,10 @@ use {
     krabka_broker::{Broker, BrokerConfig, BrokerHandle, config::ListenerSpec},
     krabka_security::{ListenerProtocol, SaslMechanism},
     std::{
+        env,
         io::Write,
         path::PathBuf,
-        process::{Command, Stdio},
+        process::{Command, Output, Stdio},
     },
 };
 
@@ -79,8 +81,7 @@ struct HostGssapiBroker {
 async fn start_host_gssapi_broker() -> HostGssapiBroker {
     init_tracing_with("krabka_broker=debug,info");
 
-    let kdc_url =
-        std::env::var("SSPI_KDC_URL").unwrap_or_else(|_| "tcp://localhost:88".to_string());
+    let kdc_url = env::var("SSPI_KDC_URL").unwrap_or_else(|_| "tcp://localhost:88".to_owned());
     let dir = tempfile::tempdir().expect("tempdir");
 
     let mut cfg = BrokerConfig::for_tests(dir.path().to_path_buf());
@@ -93,16 +94,16 @@ async fn start_host_gssapi_broker() -> HostGssapiBroker {
     let internal = format!("127.0.0.1:{}", free_port());
     cfg.listeners = vec![
         ListenerSpec {
-            name: "SASL_PLAINTEXT".to_string(),
+            name: "SASL_PLAINTEXT".to_owned(),
             bind_addr: LISTEN.parse().expect("static addr"),
-            advertised: BOOTSTRAP.to_string(),
+            advertised: BOOTSTRAP.to_owned(),
             protocol: ListenerProtocol::SaslPlaintext,
             tls_config: None,
             sasl_mechanisms: Some(vec![SaslMechanism::Gssapi]),
             principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         },
         ListenerSpec {
-            name: "INTERNAL".to_string(),
+            name: "INTERNAL".to_owned(),
             bind_addr: internal.parse().expect("internal addr"),
             advertised: internal,
             protocol: ListenerProtocol::Plaintext,
@@ -111,7 +112,7 @@ async fn start_host_gssapi_broker() -> HostGssapiBroker {
             principal_mapper: krabka_broker::SslPrincipalMapper::default(),
         },
     ];
-    cfg.inter_broker_listener_name = "INTERNAL".to_string();
+    cfg.inter_broker_listener_name = "INTERNAL".to_owned();
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Gssapi];
     cfg.gssapi = Some(support::gssapi::broker_config(
         kdc_fixtures().join("kafka.keytab"),
@@ -140,27 +141,27 @@ fn gssapi_docker_prefix() -> Vec<String> {
         .canonicalize()
         .expect("canonicalize gssapi dir");
     vec![
-        "run".to_string(),
-        "--rm".to_string(),
-        "--user".to_string(),
-        "0".to_string(),
-        "--add-host=host.docker.internal:host-gateway".to_string(),
-        "-v".to_string(),
+        "run".to_owned(),
+        "--rm".to_owned(),
+        "--user".to_owned(),
+        "0".to_owned(),
+        "--add-host=host.docker.internal:host-gateway".to_owned(),
+        "-v".to_owned(),
         format!("{}:/fixtures", kdc.display()),
-        "-v".to_string(),
+        "-v".to_owned(),
         format!("{}:/gssapi", gss.display()),
-        "-e".to_string(),
+        "-e".to_owned(),
         "KAFKA_OPTS=-Djava.security.auth.login.config=/gssapi/client_jaas.conf \
          -Djava.security.krb5.conf=/gssapi/krb5.conf -Dsun.security.krb5.debug=true"
-            .to_string(),
+            .to_owned(),
     ]
 }
 
 /// Run a cp-kafka GSSAPI tool to completion and assert that it succeeds.
-fn run_gssapi_tool(tool_args: &[&str]) -> std::process::Output {
+fn run_gssapi_tool(tool_args: &[&str]) -> Output {
     let mut args = gssapi_docker_prefix();
-    args.push(KAFKA_IMAGE.to_string());
-    args.extend(tool_args.iter().map(|s| (*s).to_string()));
+    args.push(KAFKA_IMAGE.to_owned());
+    args.extend(tool_args.iter().map(|s| (*s).to_owned()));
     let out = Command::new("docker")
         .args(&args)
         .stdout(Stdio::piped())
@@ -212,7 +213,7 @@ async fn cp_kafka_gssapi_client_round_trip() {
     // 2. Produce 3 records via a GSSAPI-authenticated producer (stdin).
     let mut prefix = gssapi_docker_prefix();
     // Need an interactive stdin for the producer.
-    prefix.insert(2, "-i".to_string());
+    prefix.insert(2, "-i".to_owned());
     let mut child = Command::new("docker")
         .args(&prefix)
         .args([

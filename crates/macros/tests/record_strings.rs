@@ -1,4 +1,5 @@
 //! Record traversal keeps required, optional and native nested strings in order.
+#![cfg(test)]
 
 use {
     assert2::assert,

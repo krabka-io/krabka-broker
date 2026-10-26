@@ -10,15 +10,16 @@ use {
     },
     krabka_broker::BrokerHandle,
     krabka_metadata::PartitionRecord,
+    std::collections::HashSet,
 };
 
-pub(crate) fn free_replica(record: &PartitionRecord) -> u64 {
+pub fn free_replica(record: &PartitionRecord) -> u64 {
     (1u64..=3)
         .find(|node| !record.replicas.contains(&krabka_metadata::NodeId(*node)))
         .expect("free broker")
 }
 
-pub(crate) fn plan_file(topic: &str, staying: u64, new_node: u64) -> TempFileMount {
+pub fn plan_file(topic: &str, staying: u64, new_node: u64) -> TempFileMount {
     let json = format!(
         r#"{{"version":1,"partitions":[{{"topic":"{topic}","partition":0,"replicas":[{staying},{new_node}]}}]}}"#
     );
@@ -27,12 +28,12 @@ pub(crate) fn plan_file(topic: &str, staying: u64, new_node: u64) -> TempFileMou
 
 /// The node whose broker was stopped, and the three broker slots with that one
 /// emptied.
-pub(crate) struct OfflineTarget {
+pub struct OfflineTarget {
     pub(crate) target: u64,
     pub(crate) handles: [Option<BrokerHandle>; 3],
 }
 
-pub(crate) async fn offline_target(
+pub async fn offline_target(
     brokers: [BrokerHandle; 3],
     current: &PartitionRecord,
     controller_leader: u64,
@@ -51,12 +52,12 @@ pub(crate) async fn offline_target(
     OfflineTarget { target, handles }
 }
 
-pub(crate) fn assert_reassigned(broker: &BrokerHandle, topic: &str, staying: u64, new_node: u64) {
+pub fn assert_reassigned(broker: &BrokerHandle, topic: &str, staying: u64, new_node: u64) {
     let pr = broker
         .partition_record_for_test(topic, 0)
         .expect("partition record after reassignment");
-    let got: std::collections::HashSet<u64> = pr.replicas.iter().map(|n| n.0).collect();
-    let want: std::collections::HashSet<u64> = maplit::hashset! {staying, new_node};
+    let got: HashSet<u64> = pr.replicas.iter().map(|n| n.0).collect();
+    let want: HashSet<u64> = maplit::hashset! {staying, new_node};
     assert2::assert!(
         got == want,
         "reassignment completed but replicas mismatch: got={got:?} want={want:?}"
@@ -64,7 +65,7 @@ pub(crate) fn assert_reassigned(broker: &BrokerHandle, topic: &str, staying: u64
 }
 
 /// The replica removed by this move, including the legacy empty-list fallback.
-pub(crate) fn removed_replica(
+pub fn removed_replica(
     after: &PartitionRecord,
     initial: &[krabka_metadata::NodeId],
 ) -> krabka_metadata::NodeId {
@@ -77,7 +78,7 @@ pub(crate) fn removed_replica(
 }
 
 /// Capture the current assignment before stopping its non-controller free target.
-pub(crate) async fn offline_for_partition(
+pub async fn offline_for_partition(
     brokers: [BrokerHandle; 3],
     topic: &str,
     context: &str,
@@ -85,20 +86,20 @@ pub(crate) async fn offline_for_partition(
     let current = brokers[0]
         .partition_record_for_test(topic, 0)
         .expect(context);
-    let controller = brokers[0].wait_until_controller_leader().await.0;
+    let controller = brokers[0].wait_until_controller_leader().await.unwrap().0;
     let OfflineTarget { target, handles } = offline_target(brokers, &current, controller).await;
     (target, handles, current)
 }
 
 /// Election fixture with caller-supplied leader, replica ordering and ISR ordering.
-pub(crate) fn election_partition(
+pub fn election_partition(
     topic: &str,
     leader: krabka_metadata::NodeId,
     replicas: Vec<krabka_metadata::NodeId>,
     isr: Vec<krabka_metadata::NodeId>,
 ) -> PartitionRecord {
     PartitionRecord {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         partition: 0,
         leader,
         replicas,
@@ -112,7 +113,7 @@ pub(crate) fn election_partition(
 }
 
 /// Voters and their guards, stored in the original local-variable teardown order.
-pub(crate) struct RegisteredCluster {
+pub struct RegisteredCluster {
     pub(crate) d3: tempfile::TempDir,
     pub(crate) d2: tempfile::TempDir,
     pub(crate) d1: tempfile::TempDir,
@@ -145,15 +146,13 @@ async fn registered_admin() -> RegisteredCluster {
 }
 
 /// Registered default-admin cluster and its mounted client configuration.
-pub(crate) async fn admin_cluster() -> (RegisteredCluster, ClientPropsFile) {
+pub async fn admin_cluster() -> (RegisteredCluster, ClientPropsFile) {
     let cluster = Box::pin(registered_admin()).await;
     let props = write_plain_props(ADMIN, ADMIN_PASS);
     (cluster, props)
 }
 
-pub(crate) async fn reassignment_cluster(
-    topic: &str,
-) -> (RegisteredCluster, ClientPropsFile, String) {
+pub async fn reassignment_cluster(topic: &str) -> (RegisteredCluster, ClientPropsFile, String) {
     let (cluster, props) = Box::pin(admin_cluster()).await;
     let mount = props.mount_str();
     prepare_topic(&cluster.h1, &mount, topic).await;
@@ -161,7 +160,7 @@ pub(crate) async fn reassignment_cluster(
 }
 
 /// Registered voters and caller-owned properties/advertised address for oracle-mounted admin files.
-pub(crate) async fn admin_text_cluster() -> (RegisteredCluster, String, String) {
+pub async fn admin_text_cluster() -> (RegisteredCluster, String, String) {
     let brokers = Box::pin(registered_admin()).await;
     let props = plain_client_properties(ADMIN, ADMIN_PASS);
     let advertised = broker0_advertised().to_owned();
@@ -169,13 +168,13 @@ pub(crate) async fn admin_text_cluster() -> (RegisteredCluster, String, String) 
 }
 
 /// Install the rf=2 reassignment topic on the first registered broker.
-pub(crate) async fn prepare_topic(broker: &BrokerHandle, admin_mount: &str, topic: &str) {
+pub async fn prepare_topic(broker: &BrokerHandle, admin_mount: &str, topic: &str) {
     create_console_topic(KAFKA_IMAGE_TXN, &[admin_mount], topic, 1, 2);
     broker.wait_until_partition_present(topic, 0).await;
 }
 
 /// Inspect the assignment and select a free replica, with each scenario's staying-replica rule.
-pub(crate) fn assignment(
+pub fn assignment(
     broker: &BrokerHandle,
     topic: &str,
     keep_leader: bool,
@@ -195,7 +194,7 @@ pub(crate) fn assignment(
 }
 
 /// Execute a held reassignment document with the scenario's optional throttle.
-pub(crate) fn execute_plan(
+pub fn execute_plan(
     admin_mount: &str,
     topic: &str,
     staying: u64,

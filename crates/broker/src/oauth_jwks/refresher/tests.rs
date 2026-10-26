@@ -12,15 +12,23 @@ use {
         test_support::{BrokenTimer, TimerFailure},
     },
     assert2::{assert, check},
+    axum::{http::StatusCode, routing},
     krabka_units::{millis, minutes},
     qubit_clock::{ManualMonotonicClock, MonotonicClock as _, StdTimer},
+    std::{fs, net::SocketAddr},
+    tokio::{
+        net::TcpListener,
+        sync::mpsc::Sender,
+        task::{self, JoinHandle},
+        time,
+    },
 };
 
 async fn check_first_fetch_and_stop(
     label: &str,
     handle: &JwksHandle,
     shutdown: &CancellationToken,
-    task: tokio::task::JoinHandle<()>,
+    task: JoinHandle<()>,
     server_shutdown: &CancellationToken,
 ) {
     await_until(label, || !handle.load().is_empty()).await;
@@ -31,7 +39,7 @@ async fn check_first_fetch_and_stop(
 }
 
 async fn send_signal_until(
-    signal_tx: &tokio::sync::mpsc::Sender<()>,
+    signal_tx: &Sender<()>,
     description: &str,
     condition: impl Fn() -> bool,
 ) {
@@ -99,11 +107,11 @@ async fn refresher_https_fetch_fails_when_custom_trust_doesnt_match_server_cert(
     let (addr, srv_shutdown, _server_cert_path) = serve_jwks_https(JWKS_BODY).await;
 
     let dir = tempfile::tempdir().unwrap();
-    let params = rcgen::CertificateParams::new(vec!["unrelated.example".to_string()]).unwrap();
+    let params = rcgen::CertificateParams::new(vec!["unrelated.example".to_owned()]).unwrap();
     let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
     let cert = params.self_signed(&key).unwrap();
     let bogus_ca = dir.path().join("bogus-ca.pem");
-    std::fs::write(&bogus_ca, cert.pem()).unwrap();
+    fs::write(&bogus_ca, cert.pem()).unwrap();
 
     let handle = JwksHandle::default();
     let shutdown = CancellationToken::new();
@@ -129,7 +137,7 @@ async fn refresher_https_fetch_fails_when_custom_trust_doesnt_match_server_cert(
     // refresher's HTTPS attempt.
     for _ in 0..3 {
         let armed = Arc::clone(&clock);
-        let advanced = tokio::task::spawn_blocking(move || {
+        let advanced = task::spawn_blocking(move || {
             armed.advance_to_next_deadline_after_waiters(1, Duration::from_secs(5))
         })
         .await
@@ -223,7 +231,7 @@ async fn refresher_signal_dropped_when_within_min_pause_window() {
         if count.load(Ordering::Relaxed) >= 2 {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
     }
     let first_ts = last_on_demand.load(Ordering::Relaxed);
     assert!(first_ts > 0, "first signal must have fired a refresh");
@@ -234,8 +242,8 @@ async fn refresher_signal_dropped_when_within_min_pause_window() {
     signal_tx.send(()).await.unwrap();
     // Yield the runtime a few times to let the select! arm process.
     for _ in 0..10 {
-        tokio::task::yield_now().await;
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        task::yield_now().await;
+        time::sleep(Duration::from_millis(20)).await;
     }
     let actual = (
         last_on_demand.load(Ordering::Relaxed),
@@ -294,13 +302,13 @@ async fn refresher_successful_refresh_updates_last_successful_fetch_timestamp() 
 async fn refresher_failed_refresh_does_not_advance_last_successful_fetch() {
     // Endpoint that always returns 500 ⇒ fetch fails, timestamp must stay
     // at the sentinel 0.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let srv_shutdown = CancellationToken::new();
     let srv_token = srv_shutdown.clone();
     let app = axum::Router::new().route(
         "/jwks",
-        axum::routing::get(|| async { (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "boom") }),
+        routing::get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "boom") }),
     );
     tokio::spawn(async move {
         axum::serve(listener, app)
@@ -427,7 +435,7 @@ async fn refresher_stops_without_fetching_when_first_deadline_fails(failure: Tim
 }
 
 fn dead_timer_refresher(
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
     handle: &JwksHandle,
     timer: &Arc<BrokenTimer>,
 ) -> JwksRefresher {

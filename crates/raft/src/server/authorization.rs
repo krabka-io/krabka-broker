@@ -89,7 +89,7 @@ pub(super) const fn required_operation(api_key: i16) -> Option<ClusterOperation>
 /// response does not encode at `version`.
 pub(super) fn refusal(api_key: i16, version: i16, body: &[u8]) -> Result<Bytes, RaftError> {
     let mut out = BytesMut::new();
-    let message = || Some(CLUSTER_AUTHORIZATION_FAILED_MESSAGE.to_string());
+    let message = || Some(CLUSTER_AUTHORIZATION_FAILED_MESSAGE.to_owned());
     match api_key {
         api_key::FETCH => fetch_refusal(version, body)?.encode(&mut out, version)?,
         api_key::VOTE => krabka_macros::authorization_refusal!(
@@ -219,10 +219,12 @@ fn fetch_refusal(version: i16, body: &[u8]) -> Result<FetchResponse, RaftError> 
     ))
 }
 
-/// Kafka's `FetchRequest.getErrorResponse`: `error_code` and the session id
-/// of `request` at the top level. Before v13 every requested partition also
-/// carries the code, as `FetchResponse.partitionResponse` builds it: an
-/// invalid high watermark and empty, non-null records.
+/// Kafka's `FetchRequest.getErrorResponse`: `error_code` and the session id of
+/// `request` at the top level.
+///
+/// Before v13 every requested partition also carries the code, as
+/// `FetchResponse.partitionResponse` builds it: an invalid high watermark and
+/// empty, non-null records.
 #[must_use]
 pub fn fetch_error_response(
     request: &FetchRequest,

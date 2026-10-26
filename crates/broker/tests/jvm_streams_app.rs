@@ -43,6 +43,7 @@
 //!
 //! Gated `#[ignore = "requires Docker"]`; the Bazel `docker` lane runs it with
 //! `--ignored --test-threads=1`.
+#![cfg(test)]
 
 mod jvm_acceptance;
 mod support;
@@ -60,7 +61,7 @@ use {
     std::{
         io::Write,
         path::Path,
-        process::{Command, Stdio},
+        process::{Command, Output, Stdio},
     },
 };
 
@@ -163,12 +164,7 @@ fn compile_streams_app(dest: &Path) {
 /// only place a Streams failure -- a refused internal topic, a transaction
 /// that never initialised, an assignment that never arrived -- is written
 /// down, and the caller decides what to make of it.
-fn run_streams_app(
-    image: &str,
-    classes: &Path,
-    classpath: &str,
-    args: &[&str],
-) -> std::process::Output {
+fn run_streams_app(image: &str, classes: &Path, classpath: &str, args: &[&str]) -> Output {
     let mut cmd = Command::new("docker");
     cmd.args([
         "run",

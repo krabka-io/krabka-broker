@@ -5,7 +5,7 @@
 //! Several sibling modules assert against the same fixtures, so they live in
 //! one module rather than being rebuilt per test file.
 
-pub(crate) use super::{
+pub use super::{
     actor::MetadataProvider, config::NextGenConfig, group_coordinator::GroupCoordinator,
     offsets_log::fake::InMemoryOffsetsLog, reconciler::ReconcileInput,
     share::config::ShareGroupConfig, streams::config::StreamsGroupConfig,
@@ -13,7 +13,7 @@ pub(crate) use super::{
 use {
     super::{persistence_next_gen, reconciler, share, streams},
     crate::{
-        codes::{COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR},
+        codes::{self, COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR},
         error::BrokerError,
         metadata_source::MetadataSource,
         network::client::InterBrokerClient,
@@ -25,12 +25,27 @@ use {
         test_support::{FakeMetadataSource, KafkaErrorCode, UnixMillis, string_pairs},
     },
     bytes::Bytes,
-    std::{collections::BTreeMap, sync::Arc},
+    krabka_protocol::{
+        owned::{
+            consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+            consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
+            share_group_heartbeat_response::ShareGroupHeartbeatResponse,
+            streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
+        },
+        primitives::uuid::Uuid,
+    },
+    std::{
+        collections::BTreeMap,
+        fmt::Debug,
+        sync::{Arc, Mutex},
+        time::{Duration, Instant},
+    },
+    tokio::{sync::oneshot, time::sleep},
 };
 
-pub(crate) type AppendedRecords = Vec<(Option<Bytes>, Option<Bytes>)>;
+pub type AppendedRecords = Vec<(Option<Bytes>, Option<Bytes>)>;
 
-pub(crate) fn assert_group_epoch_exhaustion<State>(
+pub fn assert_group_epoch_exhaustion<State>(
     mut state: State,
     exhaust: impl FnOnce(&mut State),
     bump_epoch: impl FnOnce(&mut State) -> bool,
@@ -41,7 +56,7 @@ pub(crate) fn assert_group_epoch_exhaustion<State>(
     ::assert2::assert!(epoch(&state) == i32::MAX);
 }
 
-pub(crate) async fn appended_offsets_records(log: &InMemoryOffsetsLog) -> AppendedRecords {
+pub async fn appended_offsets_records(log: &InMemoryOffsetsLog) -> AppendedRecords {
     log.batches()
         .await
         .into_iter()
@@ -62,10 +77,10 @@ pub(crate) async fn appended_offsets_records(log: &InMemoryOffsetsLog) -> Append
     PartialOrd,
     Ord,
 )]
-pub(crate) struct MemberEpoch(pub i32);
+pub struct MemberEpoch(pub i32);
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct MemberEpochs {
+pub struct MemberEpochs {
     #[default(MemberEpoch(6))]
     pub current: MemberEpoch,
     #[default(MemberEpoch(5))]
@@ -73,7 +88,7 @@ pub(crate) struct MemberEpochs {
 }
 
 /// An active-only stable streams seed, with no standby, warmup or revocations.
-pub(crate) fn stable_streams_assignment(
+pub fn stable_streams_assignment(
     epochs: (i32, i32),
     active: BTreeMap<String, Vec<i32>>,
 ) -> streams::persistence::StreamsGroupCurrentMemberAssignmentValue {
@@ -85,9 +100,9 @@ pub(crate) fn stable_streams_assignment(
     }
 }
 
-pub(crate) fn make_coord() -> Arc<GroupCoordinator> { make_coord_with_log().0 }
+pub fn make_coord() -> Arc<GroupCoordinator> { make_coord_with_log().0 }
 
-pub(crate) fn make_coord_with_log() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
+pub fn make_coord_with_log() -> (Arc<GroupCoordinator>, Arc<InMemoryOffsetsLog>) {
     use crate::coordinator::unified::offsets_log::fake::InMemoryOffsetsLog;
     let metadata: Arc<dyn MetadataProvider> = Arc::new(ImageMetadatalessProvider);
     let offsets_log = Arc::new(InMemoryOffsetsLog::default());
@@ -96,7 +111,7 @@ pub(crate) fn make_coord_with_log() -> (Arc<GroupCoordinator>, Arc<InMemoryOffse
             NextGenConfig::assigning_at_once(),
             ShareGroupConfig::assigning_at_once(),
             metadata,
-            offsets_log.clone(),
+            Arc::<InMemoryOffsetsLog>::clone(&offsets_log),
             StreamsGroupConfig::default(),
         )
         .expect("valid test assignor configuration"),
@@ -107,19 +122,19 @@ pub(crate) fn make_coord_with_log() -> (Arc<GroupCoordinator>, Arc<InMemoryOffse
 #[derive(Debug)]
 pub(super) struct ImageMetadatalessProvider;
 impl MetadataProvider for ImageMetadatalessProvider {
-    fn snapshot(&self) -> std::sync::Arc<reconciler::ReconcileInput> {
-        std::sync::Arc::new(reconciler::ReconcileInput::default())
+    fn snapshot(&self) -> Arc<reconciler::ReconcileInput> {
+        Arc::new(reconciler::ReconcileInput::default())
     }
 }
 
 /// A metadata provider whose snapshot a test replaces, as the controller
 /// replaces the metadata image.
 #[derive(Debug, Default)]
-pub(crate) struct SwitchableMetadata(std::sync::Mutex<reconciler::ReconcileInput>);
+pub struct SwitchableMetadata(Mutex<reconciler::ReconcileInput>);
 
 impl SwitchableMetadata {
     pub(crate) fn new(input: reconciler::ReconcileInput) -> Arc<Self> {
-        Arc::new(Self(std::sync::Mutex::new(input)))
+        Arc::new(Self(Mutex::new(input)))
     }
 
     pub(crate) fn set(&self, input: reconciler::ReconcileInput) {
@@ -128,18 +143,18 @@ impl SwitchableMetadata {
 }
 
 impl MetadataProvider for SwitchableMetadata {
-    fn snapshot(&self) -> std::sync::Arc<reconciler::ReconcileInput> {
-        std::sync::Arc::new(self.0.lock().expect("metadata lock").clone())
+    fn snapshot(&self) -> Arc<reconciler::ReconcileInput> {
+        Arc::new(self.0.lock().expect("metadata lock").clone())
     }
 }
 
 /// A snapshot of `topics`, each a name, the byte its topic id repeats and a
 /// partition count.
-pub(crate) fn snapshot_of(topics: &[(&str, u8, i32)]) -> reconciler::ReconcileInput {
+pub fn snapshot_of(topics: &[(&str, u8, i32)]) -> reconciler::ReconcileInput {
     reconciler::ReconcileInput {
         topic_id_by_name: topics
             .iter()
-            .map(|(name, id, _)| ((*name).to_string(), proto_uuid(*id)))
+            .map(|(name, id, _)| ((*name).to_owned(), proto_uuid(*id)))
             .collect(),
         partitions_per_topic: topics
             .iter()
@@ -150,9 +165,7 @@ pub(crate) fn snapshot_of(topics: &[(&str, u8, i32)]) -> reconciler::ReconcileIn
 }
 
 /// A coordinator whose group actors read `metadata`.
-pub(crate) fn make_coord_with_metadata(
-    metadata: Arc<dyn MetadataProvider>,
-) -> Arc<GroupCoordinator> {
+pub fn make_coord_with_metadata(metadata: Arc<dyn MetadataProvider>) -> Arc<GroupCoordinator> {
     Arc::new(
         GroupCoordinator::new(
             NextGenConfig::assigning_at_once(),
@@ -193,9 +206,7 @@ pub(super) fn make_share_persister(source: Arc<dyn MetadataSource>) -> Arc<Share
     ))
 }
 
-pub(super) fn proto_uuid(byte: u8) -> krabka_protocol::primitives::uuid::Uuid {
-    krabka_protocol::primitives::uuid::Uuid([byte; 16])
-}
+pub(super) fn proto_uuid(byte: u8) -> Uuid { Uuid([byte; 16]) }
 
 pub(super) fn real_uuid(byte: u8) -> uuid::Uuid { uuid::Uuid::from_bytes([byte; 16]) }
 
@@ -256,9 +267,7 @@ pub(super) fn streams_member(
 }
 
 /// A metadata image with the requested per-group config records.
-pub(crate) fn group_config_image(
-    overrides: &[(&str, &[(&str, &str)])],
-) -> krabka_metadata::MetadataImage {
+pub fn group_config_image(overrides: &[(&str, &[(&str, &str)])]) -> krabka_metadata::MetadataImage {
     let mut image = krabka_metadata::MetadataImage::new(uuid::Uuid::nil());
     for (group_id, entries) in overrides {
         image.apply(&krabka_metadata::MetadataRecord::V1GroupConfig(
@@ -274,14 +283,14 @@ pub(crate) fn group_config_image(
 /// One dynamic broker config value: of a node, or of the cluster when `node`
 /// is [`krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID`].
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct BrokerValue {
+pub struct BrokerValue {
     pub node: krabka_metadata::NodeId,
     pub key: &'static str,
     pub value: &'static str,
 }
 
 /// `image` with each dynamic broker config of `values` applied on top.
-pub(crate) fn with_broker_values(
+pub fn with_broker_values(
     mut image: krabka_metadata::MetadataImage,
     values: &[BrokerValue],
 ) -> krabka_metadata::MetadataImage {
@@ -298,7 +307,7 @@ pub(crate) fn with_broker_values(
 }
 
 /// The response fields observed by the capacity and timing contracts.
-pub(crate) struct HeartbeatReply {
+pub struct HeartbeatReply {
     pub error_code: i16,
     pub member_epoch: i32,
 }
@@ -322,18 +331,18 @@ struct GroupStatus {
 }
 
 /// The fields every heartbeat capacity/timing contract observes.
-pub(crate) trait HeartbeatStatus {
+pub trait HeartbeatStatus {
     fn status(self) -> HeartbeatReply;
 }
 
 krabka_macros::heartbeat_status!(
-    krabka_protocol::owned::consumer_group_heartbeat_response::ConsumerGroupHeartbeatResponse,
-    krabka_protocol::owned::share_group_heartbeat_response::ShareGroupHeartbeatResponse,
-    krabka_protocol::owned::streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
+    ConsumerGroupHeartbeatResponse,
+    ShareGroupHeartbeatResponse,
+    StreamsGroupHeartbeatResponse,
 );
 
 /// Exercise one-member capacity through each protocol's heartbeat RPC.
-pub(crate) async fn assert_single_member_limit<H, Q, R: HeartbeatStatus>(
+pub async fn assert_single_member_limit<H, Q, R: HeartbeatStatus>(
     handle: &Arc<H>,
     request: impl Fn(&str, i32) -> Q,
     heartbeat: impl AsyncFn(&H, Q) -> R,
@@ -344,15 +353,15 @@ pub(crate) async fn assert_single_member_limit<H, Q, R: HeartbeatStatus>(
     };
 
     let first = status("m1", 0).await;
-    assert2::check!(first.error_code == crate::codes::NONE);
-    assert2::check!(status("m2", 0).await.error_code == crate::codes::GROUP_MAX_SIZE_REACHED);
+    assert2::check!(first.error_code == codes::NONE);
+    assert2::check!(status("m2", 0).await.error_code == codes::GROUP_MAX_SIZE_REACHED);
     let existing = status("m1", first.member_epoch).await;
-    assert2::check!(existing.error_code == crate::codes::NONE);
+    assert2::check!(existing.error_code == codes::NONE);
     assert2::check!(existing.member_epoch == first.member_epoch);
 }
 
 /// Build a one-member coordinator fixture and exercise its heartbeat limit.
-pub(crate) async fn assert_single_member_limit_with_log<H, Q, R: HeartbeatStatus>(
+pub async fn assert_single_member_limit_with_log<H, Q, R: HeartbeatStatus>(
     make_handle: impl FnOnce(Arc<InMemoryOffsetsLog>) -> Arc<H>,
     request: impl Fn(&str, i32) -> Q,
     heartbeat: impl AsyncFn(&H, Q) -> R,
@@ -363,7 +372,7 @@ pub(crate) async fn assert_single_member_limit_with_log<H, Q, R: HeartbeatStatus
 }
 
 /// Run the shared session-timeout contract after protocol-specific setup.
-pub(crate) async fn check_group_session_timeout<H, R: HeartbeatStatus>(
+pub async fn check_group_session_timeout<H, R: HeartbeatStatus>(
     create: impl Fn(&str) -> Arc<H>,
     heartbeat: impl AsyncFn(&H, &str, i32) -> R,
 ) {
@@ -372,14 +381,14 @@ pub(crate) async fn check_group_session_timeout<H, R: HeartbeatStatus>(
     for group_id in ["brief", "plain"] {
         let handle = create(group_id);
         let reply = heartbeat(&handle, "m1", 0).await.status();
-        check!(reply.error_code == crate::codes::NONE, "{group_id}");
+        check!(reply.error_code == codes::NONE, "{group_id}");
         epochs.push(JoinedGroup {
             id: group_id,
             handle,
             epoch: reply.member_epoch,
         });
     }
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    sleep(Duration::from_millis(300)).await;
     let mut answers = Vec::new();
     for group in &epochs {
         answers.push(GroupStatus {
@@ -395,11 +404,11 @@ pub(crate) async fn check_group_session_timeout<H, R: HeartbeatStatus>(
             == [
                 GroupStatus {
                     id: "brief",
-                    code: crate::codes::UNKNOWN_MEMBER_ID
+                    code: codes::UNKNOWN_MEMBER_ID
                 },
                 GroupStatus {
                     id: "plain",
-                    code: crate::codes::NONE
+                    code: codes::NONE
                 }
             ]
     );
@@ -407,7 +416,7 @@ pub(crate) async fn check_group_session_timeout<H, R: HeartbeatStatus>(
 
 /// Join two members in each configured group, then heartbeat after the paced
 /// interval. Each protocol checks the first paced response with its own oracle.
-pub(crate) async fn check_group_assignment_timing<H, R: HeartbeatStatus>(
+pub async fn check_group_assignment_timing<H, R: HeartbeatStatus>(
     create: impl AsyncFn(&str) -> Arc<H>,
     heartbeat: impl AsyncFn(&H, &str, i32) -> R,
     check_first: impl Fn(HeartbeatReply),
@@ -449,7 +458,7 @@ pub(crate) async fn check_group_assignment_timing<H, R: HeartbeatStatus>(
                 }
             ]
     );
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    sleep(Duration::from_millis(400)).await;
     let paced = &handles[2].handle;
     check_first(heartbeat(paced, "m1", 2).await.status());
     check!(heartbeat(paced, "m2", 2).await.status().member_epoch == 3);
@@ -460,29 +469,29 @@ pub(crate) async fn check_group_assignment_timing<H, R: HeartbeatStatus>(
 
 /// Split a freshly encoded key into its leading version and body, mirroring
 /// the broker's `__consumer_offsets` dispatch.
-pub(crate) fn peek_version(mut buf: &[u8]) -> (i16, &[u8]) {
+pub fn peek_version(mut buf: &[u8]) -> (i16, &[u8]) {
     let version = bytes::Buf::get_i16(&mut buf);
     (version, buf)
 }
 
 /// Literal wire fields, decoded independently of the record codecs. Each field
 /// must contain complete hexadecimal byte pairs; malformed literals fail the test.
-pub(crate) fn wire_bytes(fields: &[&str]) -> Vec<u8> {
+pub fn wire_bytes(fields: &[&str]) -> Vec<u8> {
     fields
         .iter()
         .flat_map(|field| hex::decode(field).expect("valid literal wire bytes"))
         .collect()
 }
 
-pub(crate) struct HeartbeatWriteFailure {
+pub struct HeartbeatWriteFailure {
     label: &'static str,
     failure: Option<BrokerError>,
     expected: KafkaErrorCode,
 }
 
-pub(crate) struct FailedHeartbeatFixture {
-    pub coordinator: std::sync::Arc<super::GroupCoordinator>,
-    pub log: std::sync::Arc<super::offsets_log::fake::InMemoryOffsetsLog>,
+pub struct FailedHeartbeatFixture {
+    pub coordinator: Arc<super::GroupCoordinator>,
+    pub log: Arc<super::offsets_log::fake::InMemoryOffsetsLog>,
     pub expected: KafkaErrorCode,
     pub label: &'static str,
 }
@@ -495,7 +504,7 @@ impl FailedHeartbeatFixture {
     /// Checks that a heartbeat whose write failed answered the whole
     /// response that `refused` builds from the expected error code, and that
     /// the failed write published no batch.
-    pub async fn check_refused<R: PartialEq + std::fmt::Debug>(
+    pub async fn check_refused<R: PartialEq + Debug>(
         &self,
         response: &R,
         refused: impl FnOnce(i16) -> R,
@@ -510,8 +519,8 @@ impl HeartbeatWriteFailure {
     pub fn coordinator(
         self,
         factory: impl FnOnce() -> (
-            std::sync::Arc<super::GroupCoordinator>,
-            std::sync::Arc<super::offsets_log::fake::InMemoryOffsetsLog>,
+            Arc<super::GroupCoordinator>,
+            Arc<super::offsets_log::fake::InMemoryOffsetsLog>,
         ),
     ) -> FailedHeartbeatFixture {
         let (coordinator, log) = factory();
@@ -526,7 +535,7 @@ impl HeartbeatWriteFailure {
 }
 
 /// The three independent failure expectations for a heartbeat's durable write.
-pub(crate) fn heartbeat_write_failures() -> [HeartbeatWriteFailure; 3] {
+pub fn heartbeat_write_failures() -> [HeartbeatWriteFailure; 3] {
     let uncommitted = |code| Some(BrokerError::CoordinatorWriteUncommitted { partition: 0, code });
     [
         HeartbeatWriteFailure {
@@ -548,7 +557,7 @@ pub(crate) fn heartbeat_write_failures() -> [HeartbeatWriteFailure; 3] {
 }
 
 /// A successful leave appends exactly one batch containing a tombstone.
-pub(crate) async fn assert_next_tombstone_batch(log: &InMemoryOffsetsLog, pre_leave: usize) {
+pub async fn assert_next_tombstone_batch(log: &InMemoryOffsetsLog, pre_leave: usize) {
     let batches = log.batches().await;
     assert2::assert!(batches.len() == pre_leave + 1);
     let leave_batch = &batches[batches.len() - 1];
@@ -558,18 +567,17 @@ pub(crate) async fn assert_next_tombstone_batch(log: &InMemoryOffsetsLog, pre_le
     );
 }
 
-pub(crate) type AssignmentIntervalRow = (&'static str, Option<i64>, (i32, bool));
+pub type AssignmentIntervalRow = (&'static str, Option<i64>, (i32, bool));
 
 /// Replayed assignment timestamps outside, inside and beyond the assignment interval.
-pub(crate) const ASSIGNMENT_INTERVAL_CASES: [AssignmentIntervalRow; 3] = [
+pub const ASSIGNMENT_INTERVAL_CASES: [AssignmentIntervalRow; 3] = [
     ("no stored time", None, (3, true)),
     ("an assignment a second ago", Some(1_000), (2, false)),
     ("an assignment two minutes ago", Some(120_000), (3, true)),
 ];
 
 /// Fresh independent result rows for the assignment-interval replay scenarios.
-pub(crate) fn assignment_interval_fixture()
--> ([AssignmentIntervalRow; 3], AssignmentIntervalResults) {
+pub fn assignment_interval_fixture() -> ([AssignmentIntervalRow; 3], AssignmentIntervalResults) {
     (
         ASSIGNMENT_INTERVAL_CASES,
         AssignmentIntervalResults::default(),
@@ -577,7 +585,7 @@ pub(crate) fn assignment_interval_fixture()
 }
 
 /// Both next-generation protocols fence two expired members without changing the target epoch.
-pub(crate) fn check_two_members_expired(actual: (usize, i32, i32)) {
+pub fn check_two_members_expired(actual: (usize, i32, i32)) {
     assert2::check!(actual == (0, 4, 2));
 }
 
@@ -591,7 +599,7 @@ struct AssignmentAnswer {
 
 /// Compare each assignment epoch and its timestamp window with an independent expected row.
 #[derive(Default)]
-pub(crate) struct AssignmentIntervalResults {
+pub struct AssignmentIntervalResults {
     observed: Vec<AssignmentAnswer>,
     expected: Vec<AssignmentAnswer>,
 }
@@ -623,27 +631,25 @@ impl AssignmentIntervalResults {
 }
 
 /// The recovered seed, absence, or failure reported by a replay case.
-pub(crate) type ReplayOutcome<S> = Result<Option<S>, String>;
+pub type ReplayOutcome<S> = Result<Option<S>, String>;
 
 /// The explicit mutations a case applies to its expected seed.
-pub(crate) type SeedUpdate<'a, S> = &'a dyn Fn(&mut S);
+pub type SeedUpdate<'a, S> = &'a dyn Fn(&mut S);
 
 /// Expected successful replay, built only from the fixture's explicitly supplied changes.
-pub(crate) fn expected_seed<S>(
-    seed: impl Fn() -> S,
-) -> impl Fn(SeedUpdate<'_, S>) -> ReplayOutcome<S> {
+pub fn expected_seed<S>(seed: impl Fn() -> S) -> impl Fn(SeedUpdate<'_, S>) -> ReplayOutcome<S> {
     move |update| Ok(Some(updated_seed(seed(), update)))
 }
 
 #[derive(Clone, Copy, Default)]
-pub(crate) enum AssignmentDeletionProtocol {
+pub enum AssignmentDeletionProtocol {
     #[default]
     Share,
     Streams,
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct AssignmentDeletionSetup<'a> {
+pub struct AssignmentDeletionSetup<'a> {
     #[default("m")]
     pub member: &'a str,
     pub protocol: AssignmentDeletionProtocol,
@@ -651,7 +657,7 @@ pub(crate) struct AssignmentDeletionSetup<'a> {
 
 /// Kafka removes current and target assignments before member metadata.
 #[bon::builder]
-pub(crate) fn assignment_tombstones<R>(
+pub fn assignment_tombstones<R>(
     mut tombstone: impl FnMut(&str, &str) -> R,
     #[builder(default = "m")] member: &'_ str,
     #[builder(default)] protocol: AssignmentDeletionProtocol,
@@ -675,7 +681,7 @@ pub(crate) fn assignment_tombstones<R>(
 }
 
 /// The replay oracle and ordered Kafka deletion records for one protocol.
-pub(crate) struct ReplayFixtures<Expected, Deletion> {
+pub struct ReplayFixtures<Expected, Deletion> {
     /// Builds the expected outcome of a replay from a seed update.
     pub(crate) expected_seed: Expected,
     /// Makes the records that delete a whole group, in Kafka's order.
@@ -684,7 +690,7 @@ pub(crate) struct ReplayFixtures<Expected, Deletion> {
 
 /// The replay oracle and ordered Kafka deletion records for one protocol.
 #[bon::builder]
-pub(crate) fn replay_fixtures<S, R>(
+pub fn replay_fixtures<S, R>(
     seed: impl Fn() -> S,
     tombstone: impl Fn(&str, &str) -> R,
     #[builder(default = "m")] member: &'_ str,
@@ -704,7 +710,7 @@ pub(crate) fn replay_fixtures<S, R>(
 }
 
 /// A member deletion that leaves its target assignment behind.
-pub(crate) fn undeleted_target_records<R>(
+pub fn undeleted_target_records<R>(
     member: R,
     target: R,
     mut tombstone: impl FnMut(&str, &str) -> R,
@@ -718,7 +724,7 @@ pub(crate) fn undeleted_target_records<R>(
 }
 
 /// Bind protocol-specific keys to a test record without sharing the replay implementation.
-pub(crate) fn replay_tombstone_constructor<K, R>(
+pub fn replay_tombstone_constructor<K, R>(
     key: fn(&str, &str) -> K,
     record: fn(K) -> R,
 ) -> impl Fn(&str, &str) -> R + Copy {
@@ -726,7 +732,7 @@ pub(crate) fn replay_tombstone_constructor<K, R>(
 }
 
 /// Independent rejection case when a member tombstone leaves its target assignment behind.
-pub(crate) fn member_deletion_with_target_case<R, S>(
+pub fn member_deletion_with_target_case<R, S>(
     member: R,
     target: R,
     tombstone: impl FnMut(&str, &str) -> R,
@@ -740,7 +746,7 @@ pub(crate) fn member_deletion_with_target_case<R, S>(
 }
 
 /// Independent Kafka expectation for deleting a group while its member remains.
-pub(crate) fn group_deletion_with_member_case<R, S>(
+pub fn group_deletion_with_member_case<R, S>(
     member: R,
     mut tombstone: impl FnMut(&str, &str) -> R,
 ) -> ReplayCase<'static, R, S> {
@@ -759,13 +765,13 @@ pub(crate) fn group_deletion_with_member_case<R, S>(
 }
 
 /// Build the expected seed after applying a case's changes.
-pub(crate) fn updated_seed<S>(mut seed: S, update: &dyn Fn(&mut S)) -> S {
+pub fn updated_seed<S>(mut seed: S, update: &dyn Fn(&mut S)) -> S {
     update(&mut seed);
     seed
 }
 
 /// Replay a complete case, observing the seed only after successful replay.
-pub(crate) fn replay_outcome<R, S>(
+pub fn replay_outcome<R, S>(
     records: &[R],
     replay: impl FnMut(&R) -> Result<(), BrokerError>,
     seed: impl FnOnce() -> Option<S>,
@@ -781,14 +787,14 @@ pub(crate) fn replay_outcome<R, S>(
 }
 
 /// Independently supplied records and expected replay results for one protocol.
-pub(crate) struct ReplayCase<'a, R, S> {
+pub struct ReplayCase<'a, R, S> {
     pub(crate) case: &'a str,
     pub(crate) records: Vec<R>,
     pub(crate) expected: ReplayOutcome<S>,
 }
 
 /// The independent absence expectations shared by every modern protocol's deletion replay.
-pub(crate) fn deletion_replay_cases<R: Clone, S>(
+pub fn deletion_replay_cases<R: Clone, S>(
     mut full_group: Vec<R>,
     deletion: Vec<R>,
 ) -> [ReplayCase<'static, R, S>; 2] {
@@ -808,7 +814,7 @@ pub(crate) fn deletion_replay_cases<R: Clone, S>(
 }
 
 /// Each protocol checks both its replay result and the cache populated by replay.
-pub(crate) fn check_replay_cases<R, S: PartialEq + std::fmt::Debug>(
+pub fn check_replay_cases<R, S: PartialEq + Debug>(
     rows: &[ReplayCase<'_, R, S>],
     replay: impl Fn(&GroupCoordinator, &R) -> Result<(), BrokerError>,
     seed: impl Fn(&GroupCoordinator) -> Option<S>,
@@ -837,7 +843,7 @@ pub(crate) fn check_replay_cases<R, S: PartialEq + std::fmt::Debug>(
 /// `topology` when given, the way the bootstrap replay hydrates one from
 /// `__consumer_offsets` records.
 #[bon::builder]
-pub(crate) async fn seed_streams_group(
+pub async fn seed_streams_group(
     coordinator: &Arc<GroupCoordinator>,
     group_id: &str,
     #[builder(default = 5)] member_epoch: i32,
@@ -850,9 +856,9 @@ pub(crate) async fn seed_streams_group(
         .send(streams::actor::StreamsGroupActorMessage::Seed(
             super::StreamsGroupSeed {
                 topology,
-                members: [("m1".to_string(), plain_streams_member(1))].into(),
+                members: [("m1".to_owned(), plain_streams_member(1))].into(),
                 current_per_member: [(
-                    "m1".to_string(),
+                    "m1".to_owned(),
                     streams::persistence::StreamsGroupCurrentMemberAssignmentValue {
                         member_epoch,
                         ..Default::default()
@@ -869,11 +875,11 @@ pub(crate) async fn seed_streams_group(
 /// Stops the streams actor of `group_id` and waits until its mailbox is
 /// closed, as an actor exits after a failed write. The registry keeps the
 /// closed handle.
-pub(crate) async fn stop_streams_actor(coordinator: &GroupCoordinator, group_id: &str) {
+pub async fn stop_streams_actor(coordinator: &GroupCoordinator, group_id: &str) {
     let stopped = coordinator
         .find_streams(group_id)
         .expect("a streams actor to stop");
-    let (reply, stopping) = tokio::sync::oneshot::channel();
+    let (reply, stopping) = oneshot::channel();
     stopped
         .tx
         .send(streams::actor::StreamsGroupActorMessage::Shutdown(reply))
@@ -884,7 +890,7 @@ pub(crate) async fn stop_streams_actor(coordinator: &GroupCoordinator, group_id:
 }
 
 /// Streams member without instance/rack/endpoint/tags, for persisted seeds.
-pub(crate) fn plain_streams_member(
+pub fn plain_streams_member(
     topology_epoch: i32,
 ) -> streams::persistence::StreamsGroupMemberMetadataValue {
     streams::persistence::StreamsGroupMemberMetadataValue {
@@ -902,7 +908,7 @@ pub(crate) fn plain_streams_member(
 
 /// First consumer heartbeat, with an empty owned assignment and the standard rebalance timeout.
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct ConsumerJoinSetup<'a> {
+pub struct ConsumerJoinSetup<'a> {
     #[default("g")]
     pub group_id: &'a str,
     #[default("m1")]
@@ -912,17 +918,17 @@ pub(crate) struct ConsumerJoinSetup<'a> {
 }
 
 #[bon::builder]
-pub(crate) fn consumer_join_request(
+pub fn consumer_join_request(
     #[builder(default = "g")] group_id: &'_ str,
     #[builder(default = "m1")] member_id: &'_ str,
     #[builder(default = & ["t"])] topics: &'_ [&'_ str],
-) -> krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest {
+) -> ConsumerGroupHeartbeatRequest {
     let setup = ConsumerJoinSetup {
         group_id,
         member_id,
         topics,
     };
-    krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest {
+    ConsumerGroupHeartbeatRequest {
         group_id: setup.group_id.into(),
         member_id: setup.member_id.into(),
         member_epoch: 0,
@@ -934,22 +940,22 @@ pub(crate) fn consumer_join_request(
 }
 
 /// A session seen fifty milliseconds ago, preserving each expiry fixture's clock read.
-pub(crate) fn expired_session_last_seen() -> std::time::Instant {
-    std::time::Instant::now()
-        .checked_sub(std::time::Duration::from_millis(50))
+pub fn expired_session_last_seen() -> Instant {
+    Instant::now()
+        .checked_sub(Duration::from_millis(50))
         .expect("50ms is always within Instant range")
 }
 
 /// Independent tombstone rows for a fenced member, parameterized by record family.
-pub(crate) fn member_tombstones<T>(member_id: &str) -> Vec<(String, Option<T>)> {
+pub fn member_tombstones<T>(member_id: &str) -> Vec<(String, Option<T>)> {
     vec![(member_id.into(), None)]
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct TargetAssignmentEpoch(pub i32);
+pub struct TargetAssignmentEpoch(pub i32);
 
 /// Independent Kafka bytes for the default and tagged assignment timestamps.
-pub(crate) struct AssignmentMetadataGoldenCase {
+pub struct AssignmentMetadataGoldenCase {
     pub description: &'static str,
     pub epoch: TargetAssignmentEpoch,
     pub timestamp: UnixMillis,
@@ -957,13 +963,13 @@ pub(crate) struct AssignmentMetadataGoldenCase {
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
-pub(crate) struct AssignmentMetadataGoldenSetup {
+pub struct AssignmentMetadataGoldenSetup {
     #[default("the time is unknown")]
     pub unknown_time_description: &'static str,
 }
 
 #[bon::builder]
-pub(crate) fn assignment_metadata_golden_cases(
+pub fn assignment_metadata_golden_cases(
     #[builder(default = "the time is unknown")] unknown_time_description: &'static str,
 ) -> [AssignmentMetadataGoldenCase; 2] {
     let setup = AssignmentMetadataGoldenSetup {

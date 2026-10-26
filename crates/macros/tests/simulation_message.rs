@@ -1,4 +1,5 @@
 //! The derived simulation adapter preserves endpoint filtering and equality order.
+#![cfg(test)]
 
 use {
     assert2::assert,

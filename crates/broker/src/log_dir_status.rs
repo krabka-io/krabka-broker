@@ -27,11 +27,18 @@
 use {
     dashmap::DashMap,
     std::{
+        fmt,
+        fmt::Formatter,
+        fs::{self, OpenOptions},
         path::{Path, PathBuf},
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
         },
+    },
+    tokio::sync::{
+        watch,
+        watch::{Receiver, Sender},
     },
 };
 
@@ -68,7 +75,7 @@ pub struct LogDirRegistry {
 /// The metadata log directory and the fault its failure publishes.
 struct MetadataDirWatch {
     dir: PathBuf,
-    fault: tokio::sync::watch::Sender<Option<String>>,
+    fault: Sender<Option<String>>,
 }
 
 impl LogDirRegistry {
@@ -120,20 +127,22 @@ impl LogDirRegistry {
     pub fn with_metadata_dir(mut self, dir: &Path) -> Self {
         let watch = MetadataDirWatch {
             dir: dir.to_path_buf(),
-            fault: tokio::sync::watch::channel(None).0,
+            fault: watch::channel(None).0,
         };
-        let offline = match self.inner.get(dir) {
-            Some(status) => status.value().is_some(),
-            None => probe_one(dir)
-                .inspect_err(|reason| {
-                    tracing::error!(
-                        metadata_log_dir = %dir.display(),
-                        %reason,
-                        "the metadata log directory failed its startup writability probe",
-                    );
-                })
-                .is_err(),
-        };
+        let offline = self.inner.get(dir).map_or_else(
+            || {
+                probe_one(dir)
+                    .inspect_err(|reason| {
+                        tracing::error!(
+                            metadata_log_dir = %dir.display(),
+                            %reason,
+                            "the metadata log directory failed its startup writability probe",
+                        );
+                    })
+                    .is_err()
+            },
+            |status| status.value().is_some(),
+        );
         if offline {
             watch.fault.send_replace(Some(metadata_dir_fault(dir)));
         }
@@ -145,20 +154,18 @@ impl LogDirRegistry {
     /// `None` while the directory is online or is not registered.
     #[must_use]
     pub fn metadata_dir_fault(&self) -> Option<String> {
-        self.metadata_dir
-            .as_ref()
-            .and_then(|watch| watch.fault.borrow().clone())
+        let watch = self.metadata_dir.as_ref()?;
+        watch.fault.borrow().clone()
     }
 
     /// A receiver of the fault the failure of the metadata log directory
     /// publishes. It holds `None` while the directory is online, and forever
     /// when no metadata log directory is registered.
     #[must_use]
-    pub fn watch_metadata_dir_fault(&self) -> tokio::sync::watch::Receiver<Option<String>> {
-        self.metadata_dir.as_ref().map_or_else(
-            || tokio::sync::watch::channel(None).1,
-            |watch| watch.fault.subscribe(),
-        )
+    pub fn watch_metadata_dir_fault(&self) -> Receiver<Option<String>> {
+        self.metadata_dir
+            .as_ref()
+            .map_or_else(|| watch::channel(None).1, |watch| watch.fault.subscribe())
     }
 
     /// True when the dir has been registered AND is currently marked
@@ -230,36 +237,32 @@ impl LogDirRegistry {
         // The flag goes up before the entry changes, so a reader that finds
         // it down also finds the directory online.
         self.any_offline.store(true, Ordering::SeqCst);
-        let flipped = if let Some(mut entry) = self.inner.get_mut(dir) {
+        if let Some(mut entry) = self.inner.get_mut(dir) {
             if entry.value().is_some() {
                 return false;
             }
             *entry.value_mut() = Some(reason.to_owned());
-            true
         } else {
             self.inner
                 .insert(dir.to_path_buf(), Some(reason.to_owned()));
-            true
-        };
-        if flipped {
-            tracing::error!(
-                log_dir = %dir.display(),
-                reason = %reason,
-                "log dir flipped to OFFLINE at runtime; subsequent produce/fetch on partitions \
-                 in this dir will return KAFKA_STORAGE_ERROR until broker restart",
-            );
-            if let Some(watch) = self.metadata_dir.as_ref().filter(|watch| watch.dir == dir) {
-                let fault = metadata_dir_fault(dir);
-                tracing::error!(%fault, "the metadata log directory failed");
-                watch.fault.send_replace(Some(fault));
-            }
         }
-        flipped
+        tracing::error!(
+            log_dir = %dir.display(),
+            reason = %reason,
+            "log dir flipped to OFFLINE at runtime; subsequent produce/fetch on partitions \
+             in this dir will return KAFKA_STORAGE_ERROR until broker restart",
+        );
+        if let Some(watch) = self.metadata_dir.as_ref().filter(|watch| watch.dir == dir) {
+            let fault = metadata_dir_fault(dir);
+            tracing::error!(%fault, "the metadata log directory failed");
+            watch.fault.send_replace(Some(fault));
+        }
+        true
     }
 }
 
-impl std::fmt::Debug for LogDirRegistry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for LogDirRegistry {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let offline = self.offline();
         f.debug_struct("LogDirRegistry")
             .field("offline_count", &offline.len())
@@ -283,9 +286,9 @@ fn metadata_dir_fault(dir: &Path) -> String {
 fn probe_one(dir: &Path) -> Result<(), String> {
     use std::io::Write;
 
-    std::fs::create_dir_all(dir).map_err(|e| format!("create_dir_all: {e}"))?;
+    fs::create_dir_all(dir).map_err(|e| format!("create_dir_all: {e}"))?;
     let probe_path = dir.join(PROBE_FILENAME);
-    let mut file = std::fs::OpenOptions::new()
+    let mut file = OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
@@ -299,7 +302,7 @@ fn probe_one(dir: &Path) -> Result<(), String> {
     // too late for the JBOD broker to refuse traffic gracefully.
     file.sync_data().map_err(|e| format!("sync probe: {e}"))?;
     drop(file);
-    std::fs::remove_file(&probe_path).map_err(|e| format!("remove probe: {e}"))?;
+    fs::remove_file(&probe_path).map_err(|e| format!("remove probe: {e}"))?;
     Ok(())
 }
 
@@ -308,6 +311,7 @@ mod tests {
     use {
         super::*,
         assert2::{assert, check},
+        std::slice,
         tempfile::tempdir,
     };
 
@@ -332,7 +336,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let nested = tmp.path().join("nested").join("brand-new");
         assert!(!nested.exists());
-        let reg = LogDirRegistry::probe(std::slice::from_ref(&nested));
+        let reg = LogDirRegistry::probe(slice::from_ref(&nested));
         assert!(!reg.is_offline(&nested));
         assert!(nested.is_dir(), "probe should have created the dir");
     }
@@ -356,8 +360,8 @@ mod tests {
     fn probe_path_blocked_by_file_is_offline() {
         let tmp = tempdir().unwrap();
         let blocker = tmp.path().join("blocker");
-        std::fs::write(&blocker, b"i am not a directory").unwrap();
-        let reg = LogDirRegistry::probe(std::slice::from_ref(&blocker));
+        fs::write(&blocker, b"i am not a directory").unwrap();
+        let reg = LogDirRegistry::probe(slice::from_ref(&blocker));
         assert!(reg.is_offline(&blocker));
         // The reason string is OS-dependent, so pin the path and whether the
         // reason is empty instead of the raw message.
@@ -388,7 +392,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let good = tmp.path().join("good");
         let blocker = tmp.path().join("bad");
-        std::fs::write(&blocker, b"file blocking the path").unwrap();
+        fs::write(&blocker, b"file blocking the path").unwrap();
         let reg = LogDirRegistry::probe(&[good.clone(), blocker.clone()]);
         check!(!reg.is_offline(&good));
         check!(reg.is_offline(&blocker));
@@ -406,7 +410,7 @@ mod tests {
         let other = tmp.path().join("other");
         let separate = tmp.path().join("meta");
         let unwritable = tmp.path().join("blocked");
-        std::fs::write(&unwritable, b"a file where the directory should be").unwrap();
+        fs::write(&unwritable, b"a file where the directory should be").unwrap();
         let fault = |dir: &Path| {
             Some(format!(
                 "Shutdown broker because the metadata log dir {} has failed",
@@ -474,15 +478,15 @@ mod tests {
     fn mark_offline_flips_online_dir_and_returns_true() {
         let tmp = tempdir().unwrap();
         let dir = tmp.path().to_path_buf();
-        let reg = LogDirRegistry::probe(std::slice::from_ref(&dir));
+        let reg = LogDirRegistry::probe(slice::from_ref(&dir));
         assert!(!reg.is_offline(&dir));
 
         let flipped = reg.mark_offline(&dir, "EIO from segment fsync");
         assert!(flipped, "first mark_offline must flip and return true");
 
         check!(reg.is_offline(&dir));
-        check!(reg.offline() == vec![(dir.clone(), "EIO from segment fsync".to_string())]);
-        check!(reg.online_subset(std::slice::from_ref(&dir)).is_empty());
+        check!(reg.offline() == vec![(dir.clone(), "EIO from segment fsync".to_owned())]);
+        check!(reg.online_subset(slice::from_ref(&dir)).is_empty());
     }
 
     /// `mark_offline` is idempotent: a second call returns `false` and
@@ -493,7 +497,7 @@ mod tests {
     fn mark_offline_is_idempotent() {
         let tmp = tempdir().unwrap();
         let dir = tmp.path().to_path_buf();
-        let reg = LogDirRegistry::probe(std::slice::from_ref(&dir));
+        let reg = LogDirRegistry::probe(slice::from_ref(&dir));
         let first = reg.mark_offline(&dir, "first reason");
         let second = reg.mark_offline(&dir, "second reason");
         check!(first, "first call must flip");

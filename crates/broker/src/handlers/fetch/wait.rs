@@ -49,13 +49,13 @@ impl Wait {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert, futures_util::FutureExt as _};
+    use {super::*, assert2::assert, futures_util::FutureExt as _, std::sync::Arc};
 
     #[test]
     fn broadcast_between_capture_and_first_poll_wakes_every_fetch() {
         let notify = Arc::new(Notify::new());
         let waits: Vec<_> = (0..48)
-            .map(|index| Wait::new(index, notify.clone()))
+            .map(|index| Wait::new(index, Arc::clone(&notify)))
             .collect();
         notify.notify_waiters();
         for (index, wait) in waits.into_iter().enumerate() {
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn broadcast_after_poll_and_replacement_before_poll_are_observed() {
         let notify = Arc::new(Notify::new());
-        let mut wait = Wait::new(7, notify.clone()).boxed();
+        let mut wait = Wait::new(7, Arc::clone(&notify)).boxed();
         assert!((&mut wait).now_or_never().is_none());
         notify.notify_waiters();
         let woken = wait.now_or_never().expect("registered broadcast");

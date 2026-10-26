@@ -32,7 +32,7 @@ use {
 /// The load status of a `__transaction_state` partition that this broker
 /// leads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LoadStatus {
+pub enum LoadStatus {
     /// The image names this broker as the leader, but the partition log is not
     /// open locally yet. The first refresh after the log opens starts the
     /// load.
@@ -204,7 +204,7 @@ pub(super) fn loaded_generation(
 /// `TransactionStateManager.getAndMaybeAddTransactionState` answers
 /// `COORDINATOR_LOAD_IN_PROGRESS` while the partition loads, and
 /// `NOT_COORDINATOR` when this broker has no loaded cache for it.
-pub(crate) fn coordinator_error(status: Option<LoadStatus>) -> Option<i16> {
+pub fn coordinator_error(status: Option<LoadStatus>) -> Option<i16> {
     match status {
         Some(LoadStatus::Loaded) => None,
         Some(LoadStatus::Pending | LoadStatus::Loading) => Some(COORDINATOR_LOAD_IN_PROGRESS),

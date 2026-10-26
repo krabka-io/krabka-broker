@@ -217,8 +217,10 @@ pub enum InitProducerIdIdentityDecision {
 }
 
 /// The epoch at and above which Kafka treats a producer epoch as exhausted
-/// (`TransactionMetadata.isEpochExhausted`). The coordinator keeps one epoch
-/// in hand to fence the producer with, so it never hands out `i16::MAX`.
+/// (`TransactionMetadata.isEpochExhausted`).
+///
+/// The coordinator keeps one epoch in hand to fence the producer with, so it
+/// never hands out `i16::MAX`.
 pub const EXHAUSTED_PRODUCER_EPOCH: i16 = i16::MAX - 1;
 
 mod marker;

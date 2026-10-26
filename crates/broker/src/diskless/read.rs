@@ -12,18 +12,25 @@ use {
         partition::Partition,
     },
     bytes::Bytes,
-    krabka_protocol::records::{RecordBatch, RecordsPayload},
+    krabka_protocol::{
+        primitives::uuid::Uuid as WireUuid,
+        records::{RecordBatch, RecordsPayload},
+    },
     krabka_remote_storage::{RemoteStorageError, first_record_at_or_after_timestamp},
     krabka_verified::{DisklessBatchStep, diskless_batch_step},
     object_store::{GetOptions, GetRange, ObjectStore, path::Path},
-    std::{fmt::Display, io, sync::Arc},
+    std::{
+        fmt::Display,
+        io,
+        sync::{Arc, PoisonError},
+    },
     tokio::sync::Mutex as AsyncMutex,
     uuid::Uuid,
 };
 
 /// Shared state that serves diskless offsets. The broker trimmed these offsets
 /// locally, but the committed WAL object index still covers them.
-pub(crate) struct DisklessReadHandle {
+pub struct DisklessReadHandle {
     pub(crate) index: Arc<AsyncMutex<WalIndexCache>>,
     store: Arc<dyn ObjectStore>,
     /// The index log the flusher currently owns, or `None` while the
@@ -156,7 +163,9 @@ impl DisklessReadHandle {
             .any(|range| range.entry.first_offset > range.entry.last_offset)
             || ranges
                 .windows(2)
-                .any(|pair| pair[0].entry.last_offset >= pair[1].entry.first_offset)
+                .any(|pair| {
+                    matches!(pair, [left, right] if left.entry.last_offset >= right.entry.first_offset)
+                })
         {
             return Err(wal_timestamp_error(
                 "WAL index ranges overlap or are inverted",
@@ -211,16 +220,16 @@ fn wal_timestamp_error(error: impl Display) -> RemoteStorageError {
 
 /// Tries to satisfy a local `OFFSET_OUT_OF_RANGE` fetch from the diskless WAL
 /// objects.
-pub(crate) async fn try_diskless_read(
+pub async fn try_diskless_read(
     broker: &Broker,
     p: &mut PendingRead,
     part: &Partition,
 ) -> Option<usize> {
-    if !part.diskless || p.topic_id == krabka_protocol::primitives::uuid::Uuid::ZERO {
+    if !part.diskless || p.topic_id == WireUuid::ZERO {
         return None;
     }
     let remote_storage_enable = {
-        let log = part.log.lock().expect("log mutex poisoned");
+        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
         log.config_snapshot().remote_storage_enable
     };
     if remote_storage_enable {
@@ -302,7 +311,9 @@ fn first_batch_bytes_at_or_after(
                 offset = next;
             }
             DisklessBatchStep::Stop => {
-                let start = selected.expect("proved selected batch start");
+                let start = selected.ok_or_else(|| {
+                    BrokerError::Txn("diskless WAL batch run stopped before it started".into())
+                })?;
                 return Ok(Some(run.slice(start..offset)));
             }
         }
@@ -329,9 +340,11 @@ mod tests {
             Decode, Encode,
             owned::fetch_response::{FetchResponse, FetchableTopicResponse, PartitionData},
             primitives::uuid::Uuid as WireUuid,
-            records::{Record, RecordBatch},
+            records::{Record, RecordBatch, TimestampType},
         },
-        object_store::{ObjectStoreExt, PutPayload, path::Path},
+        object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path},
+        std::{fs, slice, time::Duration},
+        tokio::sync::Notify,
     };
 
     #[bon::builder]
@@ -364,7 +377,7 @@ mod tests {
 
     async fn timestamp_handle(topic_id: Uuid, batches: &[RecordBatch]) -> DisklessReadHandle {
         let data = encode_batches(batches);
-        let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         store
             .put(&Path::from("timestamps"), PutPayload::from(data.clone()))
             .await
@@ -433,7 +446,7 @@ mod tests {
 
         records.attributes = records
             .attributes
-            .with_timestamp_type(krabka_protocol::records::TimestampType::LogAppendTime);
+            .with_timestamp_type(TimestampType::LogAppendTime);
         let append_time = timestamp_handle(id, &[records]).await;
         assert!(
             append_time
@@ -482,7 +495,7 @@ mod tests {
             krabka_remote_storage::TopicIdPartition,
         };
         let id = Uuid::from_u128(95);
-        let (partition, _dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
         let mut archived = Vec::new();
         {
             let mut log = partition.log.lock().unwrap();
@@ -499,8 +512,11 @@ mod tests {
             }
             log.delete_local_segments_through(krabka_ids::Offset(2))
                 .unwrap();
-            assert!(log.local_log_start_offset() == krabka_ids::Offset(2));
-            assert!(log.established_log_start().is_none());
+            let local_log_start = log.local_log_start_offset();
+            let unestablished = log.established_log_start().is_none();
+            drop(log);
+            assert!(local_log_start == krabka_ids::Offset(2));
+            assert!(unestablished);
         }
         let handle = timestamp_handle(id, &archived[..2]).await;
         let tp = TopicIdPartition::new(id, "orders", 0);
@@ -509,7 +525,7 @@ mod tests {
                 &partition,
                 &tp,
                 target,
-                std::time::Duration::from_secs(5),
+                Duration::from_secs(5),
                 None,
                 Some(&handle),
             )
@@ -574,7 +590,7 @@ mod tests {
     fn cold_read_returns_byte_exact_covering_batch() {
         let first = batch(0, b"a");
         let second = batch(1, b"b");
-        let run = encode_batches(&[first.clone(), second.clone()]);
+        let run = encode_batches(&[first, second.clone()]);
         let mut expected = BytesMut::new();
         second.encode(&mut expected).unwrap();
 
@@ -698,7 +714,7 @@ mod tests {
         let byte_start = u64::try_from(object.len()).unwrap();
         object.extend_from_slice(&second);
 
-        let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         store
             .put(
                 &Path::from("diskless-wal/o"),
@@ -740,7 +756,7 @@ mod tests {
         ] {
             let topic_id = Uuid::from_u128(941);
             let encoded = encode_batches(&[batch(0, b"persisted")]);
-            let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
             store
                 .put(&Path::from(object_key), PutPayload::from(encoded.clone()))
                 .await
@@ -787,7 +803,7 @@ mod tests {
         let topic_id = Uuid::from_u128(9);
         let wire_topic_id = WireUuid(topic_id.into_bytes());
         let first_batch = batch(0, b"a");
-        let first = encode_batches(std::slice::from_ref(&first_batch));
+        let first = encode_batches(slice::from_ref(&first_batch));
         let second = encode_batches(&[batch(1, b"b")]);
         let mut run = BytesMut::new();
         run.extend_from_slice(&first);
@@ -825,16 +841,17 @@ mod tests {
                 ],
             });
         let part_dir = dir.path().join("orders-0");
-        std::fs::create_dir_all(&part_dir).unwrap();
+        fs::create_dir_all(&part_dir).unwrap();
         let part = spawn_partition(
             "orders".into(),
             PartitionIndex(0),
             dir.path().to_path_buf(),
             Log::open(&part_dir, LogConfig::default()).unwrap(),
             broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
+            Arc::clone(&broker.producer_state),
             true,
-        );
+        )
+        .unwrap();
         let mut pending = PendingRead {
             topic_name: "orders".into(),
             topic_id: wire_topic_id,
@@ -847,7 +864,7 @@ mod tests {
             is_follower_fetch: false,
             fetch_only_leader: false,
             follower_position: None,
-            partition: Some(part.clone()),
+            partition: Some(Arc::clone(&part)),
             out: PartitionData {
                 error_code: codes::OFFSET_OUT_OF_RANGE,
                 high_watermark: 7,

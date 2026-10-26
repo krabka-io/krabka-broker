@@ -432,6 +432,7 @@ mod tests {
             },
         },
         assert2::check,
+        std::io::{Error, ErrorKind},
         uuid::Uuid,
     };
 
@@ -468,8 +469,8 @@ mod tests {
             id: NodeId(2),
             directory_id: Uuid::nil(),
             endpoints: vec![krabka_metadata::VoterEndpoint {
-                name: "CONTROLLER".to_string(),
-                host: host.to_string(),
+                name: "CONTROLLER".to_owned(),
+                host: host.to_owned(),
                 port: 9093,
             }],
             kraft_version: krabka_metadata::KRaftVersionRange::default(),
@@ -491,21 +492,20 @@ mod tests {
             directory_id: Uuid::nil(),
             endpoints: vec![
                 krabka_metadata::VoterEndpoint {
-                    name: "REPLICATION".to_string(),
-                    host: "replication-host".to_string(),
+                    name: "REPLICATION".to_owned(),
+                    host: "replication-host".to_owned(),
                     port: 9092,
                 },
                 krabka_metadata::VoterEndpoint {
-                    name: "CONTROLLER".to_string(),
-                    host: "controller-host".to_string(),
+                    name: "CONTROLLER".to_owned(),
+                    host: "controller-host".to_owned(),
                     port: 9093,
                 },
             ],
             kraft_version: krabka_metadata::KRaftVersionRange::default(),
         }]);
         assert2::assert!(
-            controller_endpoint_addr(&voters, NodeId(7))
-                == Some("controller-host:9093".to_string())
+            controller_endpoint_addr(&voters, NodeId(7)) == Some("controller-host:9093".to_owned())
         );
     }
 
@@ -824,8 +824,8 @@ mod tests {
         transport
             .expect_send_submit_change()
             .returning(|_, _, _, _| {
-                Err(krabka_client_core::ClientError::Io(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionRefused,
+                Err(krabka_client_core::ClientError::Io(Error::new(
+                    ErrorKind::ConnectionRefused,
                     "refused",
                 )))
             });
@@ -873,7 +873,7 @@ mod tests {
     async fn controller_handle_voter_addr_resolves_known_voter() {
         let (_dir, ctrl) = bootstrap_controller("start").await;
         let addr = ctrl.voter_addr(NodeId(1));
-        assert2::assert!(addr == Some("127.0.0.1:0".to_string()));
+        assert2::assert!(addr == Some("127.0.0.1:0".to_owned()));
         assert2::assert!(ctrl.voter_addr(NodeId(999)).is_none());
         ctrl.shutdown().await;
     }

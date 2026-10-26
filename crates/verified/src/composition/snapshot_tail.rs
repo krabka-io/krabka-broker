@@ -168,9 +168,12 @@ pub(super) fn loaded_snapshot_bounds_truncated_retry(
         match (origins@[a], origins@[b]) { (Some(x), Some(y)) => x@ < y@, _ => true })]
     #[variant(tail@.len() - i@)]
     while i < tail.len() {
-        if cursor <= tail[i].last_offset && tail[i].last_offset < end {
+        if let Some(&row) = tail.get(i)
+            && cursor <= row.last_offset
+            && row.last_offset < end
+        {
             proof_assert!(crate::producer_snapshot::snapshot_entry_valid_model(end@, tail@[i@]));
-            rows.push(tail[i]);
+            rows.push(row);
             origins.push(Some(i));
         }
         i += 1;
@@ -188,7 +191,7 @@ pub(super) fn loaded_snapshot_bounds_truncated_retry(
             Some((cursor, seed.is_some(), origins, first, decision, None)),
         );
     };
-    let source = origins[index];
+    let source = origins.get(index).copied().flatten();
     (
         end,
         Some((

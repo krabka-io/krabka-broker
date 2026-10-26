@@ -38,19 +38,23 @@ mod response;
 mod test_support;
 mod validation;
 
-use self::{
-    changes::{AssignmentPlan, plan_assignments},
-    response::not_controller_response,
-    validation::check_broker_epoch,
+use {
+    self::{
+        changes::{AssignmentPlan, plan_assignments},
+        response::not_controller_response,
+        validation::check_broker_epoch,
+    },
+    krabka_metadata::metadata_version,
+    std::sync::Arc,
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: AssignReplicasToDirsRequest,
     _version: ApiVersion,
     ctx: &RequestContext<'_>,
 ) -> Result<AssignReplicasToDirsResponse, BrokerError> {
-    let controller = broker.controller.clone();
+    let controller = Arc::clone(&broker.controller);
     let image = controller.current_image();
 
     // ── ACL preamble ────────────────────────────────────────────
@@ -85,9 +89,10 @@ pub(crate) async fn handle(
             });
         }
     };
-    if image.finalized_metadata_version().is_some_and(|level| {
-        level < krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL
-    }) {
+    if image
+        .finalized_metadata_version()
+        .is_some_and(|level| level < metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL)
+    {
         return Ok(AssignReplicasToDirsResponse {
             error_code: codes::UNSUPPORTED_VERSION,
             ..Default::default()
@@ -115,7 +120,9 @@ mod tests {
             broker::{Broker, BrokerHandle},
             handlers::{
                 assign_replicas_to_dirs::test_support::DirectoryAssignmentSetup,
-                test_support::{self as handler_fixture_support, StartedBroker},
+                test_support::{
+                    self as handler_fixture_support, StartedBroker, replicated_partition,
+                },
             },
             test_support::{
                 self as broker_fixture_support, peer, principal, request_context,
@@ -123,7 +130,9 @@ mod tests {
             },
         },
         assert2::assert,
-        krabka_metadata::{FeatureLevelRecord, MetadataRecord, PartitionRecord, TopicRecord},
+        krabka_metadata::{
+            FeatureLevelRecord, MetadataRecord, PartitionRecord, TopicRecord, metadata_version,
+        },
         krabka_protocol::{
             owned::assign_replicas_to_dirs_response::{
                 DirectoryData as RespDirData, PartitionData as RespPartData,
@@ -257,7 +266,7 @@ mod tests {
                 }),
                 MetadataRecord::V1Partition(PartitionRecord {
                     directories: vec![uuid::Uuid::nil()],
-                    ..crate::handlers::test_support::replicated_partition()
+                    ..replicated_partition()
                         .topic("t")
                         .leader(1)
                         .replicas(&[krabka_audit::NodeId(1)])
@@ -306,8 +315,8 @@ mod tests {
         broker
             .controller
             .submit_change(vec![MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
-                level: krabka_metadata::metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL - 1,
+                name: metadata_version::METADATA_VERSION_FEATURE.into(),
+                level: metadata_version::DIRECTORY_ASSIGNMENT_MIN_LEVEL - 1,
             })])
             .await
             .expect("seed downgraded metadata version");

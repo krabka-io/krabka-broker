@@ -13,10 +13,12 @@ use {
 };
 
 /// Forwards metadata writes from a broker-only node to the controller
-/// quorum. Tries the leader hint first (from the observer), then walks the
-/// voters of the image's voter set, the static voters, and the bootstrap
-/// servers, in that order. Mirrors the `API_KEY_SUBMIT_CHANGE` request the
-/// controller already serves.
+/// quorum.
+///
+/// Tries the leader hint first (from the observer), then walks the voters of
+/// the image's voter set, the static voters, and the bootstrap servers, in that
+/// order. Mirrors the `API_KEY_SUBMIT_CHANGE` request the controller already
+/// serves.
 pub struct QuorumForwarder {
     /// Static voter map `(id, "<host>:<port>")`, from
     /// `controller_quorum_voters`. The map carries the host verbatim. The
@@ -261,6 +263,7 @@ mod tests {
         super::*,
         crate::{metadata_source::test_support::topic_record, test_support::mock_request_broker},
         bytes::{Bytes, BytesMut},
+        krabka_metadata::krabka_version,
         krabka_protocol::{
             Encode,
             owned::{
@@ -269,9 +272,10 @@ mod tests {
             },
         },
         std::{
+            mem,
             net::SocketAddr,
             sync::{
-                Mutex,
+                self, Mutex,
                 atomic::{AtomicUsize, Ordering},
             },
         },
@@ -279,9 +283,9 @@ mod tests {
 
     fn voters() -> Vec<(krabka_raft::NodeId, String)> {
         vec![
-            (krabka_audit::NodeId(1), "h1:9093".to_string()),
-            (krabka_audit::NodeId(2), "h2:9093".to_string()),
-            (krabka_audit::NodeId(3), "h3:9093".to_string()),
+            (krabka_audit::NodeId(1), "h1:9093".to_owned()),
+            (krabka_audit::NodeId(2), "h2:9093".to_owned()),
+            (krabka_audit::NodeId(3), "h3:9093".to_owned()),
         ]
     }
 
@@ -382,9 +386,9 @@ mod tests {
         assert2::assert!(
             (order)
                 == (vec![
-                    (krabka_raft::NodeId(2), "h2:9093".to_string()),
-                    (krabka_raft::NodeId(1), "h1:9093".to_string()),
-                    (krabka_raft::NodeId(3), "h3:9093".to_string()),
+                    (krabka_raft::NodeId(2), "h2:9093".to_owned()),
+                    (krabka_raft::NodeId(1), "h1:9093".to_owned()),
+                    (krabka_raft::NodeId(3), "h3:9093".to_owned()),
                 ])
         );
     }
@@ -408,7 +412,7 @@ mod tests {
     #[tokio::test]
     async fn quorum_forwarder_applied_response_returns_ok_and_sends_client_id() {
         let submit_requests = Arc::new(AtomicUsize::new(0));
-        let submit_requests_for_mock = submit_requests.clone();
+        let submit_requests_for_mock = sync::Arc::clone(&submit_requests);
         let mock = mock_request_broker(
             krabka_raft::API_KEY_SUBMIT_CHANGE,
             move || {
@@ -419,7 +423,7 @@ mod tests {
         )
         .await;
         let client_ids = Arc::new(Mutex::new(Vec::new()));
-        let forwarder = forwarder(mock.addr, client_ids.clone(), Some(NodeId(1)));
+        let forwarder = forwarder(mock.addr, sync::Arc::clone(&client_ids), Some(NodeId(1)));
 
         forwarder
             .submit_change(vec![topic_record("applied")])
@@ -444,7 +448,7 @@ mod tests {
     #[tokio::test]
     async fn quorum_forwarder_sends_the_negotiated_private_version() {
         let sent = Arc::new(Mutex::new(Vec::new()));
-        let sent_for_mock = sent.clone();
+        let sent_for_mock = sync::Arc::clone(&sent);
         let mock =
             krabka_client_core::MockBroker::start(move |api_key, version, _corr_id, _body| {
                 if api_key == api_versions_request::API_KEY {
@@ -461,7 +465,7 @@ mod tests {
             if let Some(level) = level {
                 image.apply(&MetadataRecord::V1FeatureLevel(
                     krabka_metadata::FeatureLevelRecord {
-                        name: krabka_metadata::krabka_version::KRABKA_VERSION_FEATURE.into(),
+                        name: krabka_version::KRABKA_VERSION_FEATURE.into(),
                         level,
                     },
                 ));
@@ -479,7 +483,7 @@ mod tests {
                 .submit_delegation_token_mutations(vec![])
                 .await
                 .expect("applied");
-            actual.push((level, std::mem::take(&mut *sent.lock().unwrap())));
+            actual.push((level, mem::take(&mut *sent.lock().unwrap())));
             expected.push((level, vec![
                 (krabka_raft::API_KEY_SUBMIT_CHANGE, 0),
                 (krabka_raft::API_KEY_DELEGATION_TOKEN_MUTATION, 0),

@@ -32,7 +32,7 @@ use {
         VoterChangeKind::Update | VoterChangeKind::FinalizeKraftVersion => next@.len() == old@.len(),
     },
 })]
-pub(crate) fn constructed_voter_reconfiguration(
+pub fn constructed_voter_reconfiguration(
     old: &[u64],
     leadership: ReconfigurationLeadership,
     context: CurrentVoterSet,
@@ -51,7 +51,7 @@ pub(crate) fn constructed_voter_reconfiguration(
     #[variant(old@.len() - i@)]
     while i < old.len() {
         proof_assert!({ prefix_node_extend(old@, i@); true });
-        found = found || old[i] == node;
+        found = found || *old.get(i)? == node;
         i += 1;
     }
     if !matches!(request.kind, VoterChangeKind::FinalizeKraftVersion)
@@ -76,12 +76,13 @@ pub(crate) fn constructed_voter_reconfiguration(
     #[variant(old@.len() - i@)]
     while i < old.len() {
         proof_assert!({ prefix_node_extend(old@, i@); true });
-        if !remove || old[i] != node {
+        let &member = old.get(i)?;
+        if !remove || member != node {
             proof_assert!(!has_node(old@, i@, old@[i@]));
             proof_assert!(!has_node(next@, next@.len(), old@[i@]));
             #[cfg(creusot)]
             let before = snapshot!(next@);
-            next.push(old[i]);
+            next.push(member);
             proof_assert!(forall<id: u64> has_node(next@, next@.len(), id)
                 == (has_node(*before, before.len(), id) || old@[i@] == id));
         }

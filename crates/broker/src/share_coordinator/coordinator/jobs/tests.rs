@@ -15,10 +15,15 @@ use {
     },
     assert2::{assert, check},
     krabka_log::Offset,
-    krabka_metadata::{FeatureLevelRecord, MetadataRecord},
-    std::{cell::Cell, time::Duration},
+    krabka_metadata::{
+        FeatureLevelRecord, MetadataRecord, metadata_version::SHARE_VERSION_FEATURE,
+    },
+    std::{cell::Cell, path::Path, time::Duration},
     tempfile::tempdir,
-    tokio::sync::Mutex,
+    tokio::{
+        sync::Mutex,
+        time::{Instant, sleep},
+    },
 };
 
 const T1: uuid::Uuid = uuid::Uuid::from_bytes([61; 16]);
@@ -60,7 +65,9 @@ async fn job_keys_are_bucketed_once_per_sweep() {
                 check!(bucket.keys.windows(2).all(|keys| keys[0] < keys[1]));
                 for (group, topic_id, partition) in &bucket.keys {
                     check!(
-                        coord.state_partition_for(group, topic_id, *partition)
+                        coord
+                            .state_partition_for(group, topic_id, *partition)
+                            .unwrap()
                             == bucket.term.partition
                     );
                 }
@@ -93,7 +100,7 @@ async fn job_keys_are_bucketed_once_per_sweep() {
             .iter()
             .filter(|entry| {
                 let (group, topic, partition) = entry.key();
-                coord.state_partition_for(group, topic, *partition) != inactive
+                coord.state_partition_for(group, topic, *partition).unwrap() != inactive
             })
             .count();
         check!(observed == expected, "{partitions}");
@@ -107,16 +114,14 @@ async fn collected_keys_do_not_authorize_a_new_load_generation() {
     let dir = tempdir().unwrap();
     let TwoKeys { coord, .. } = two_keys(dir.path(), ShareCoordinatorConfig::default()).await;
     let bucket = populated_bucket(&coord).await;
-    {
-        let active = coord.active(bucket.term.partition).await.unwrap();
-        check!(bucket.still_active(&active));
-    }
+    let still_active = bucket.still_active(&coord.active(bucket.term.partition).await.unwrap());
+    check!(still_active);
     let removed = bucket.keys[0].clone();
     coord.state.remove(&removed);
     let fresh = (0..10_000)
         .map(|index| (format!("replayed-{index}"), T1, 0))
         .find(|(group, topic, partition)| {
-            coord.state_partition_for(group, topic, *partition) == bucket.term.partition
+            coord.state_partition_for(group, topic, *partition).unwrap() == bucket.term.partition
         })
         .unwrap();
     coord.state.insert(
@@ -133,6 +138,7 @@ async fn collected_keys_do_not_authorize_a_new_load_generation() {
     let active = coord.active(bucket.term.partition).await.unwrap();
     check!(!bucket.still_active(&active));
     let current = coord.current_partition_keys(bucket, &active, |_| true);
+    drop(active);
     check!(current.contains(&fresh));
     check!(!current.contains(&removed));
 }
@@ -147,7 +153,7 @@ async fn collected_keys_include_an_initialize_in_the_same_generation() {
     let bucket = populated_bucket(&coord).await;
     let fresh = (0..10_000)
         .map(|index| format!("initialized-{index}"))
-        .find(|group| coord.state_partition_for(group, &T1, 0) == bucket.term.partition)
+        .find(|group| coord.state_partition_for(group, &T1, 0).unwrap() == bucket.term.partition)
         .unwrap();
     let image = image_with_topics(&[(T1, 1), (T2, 1)]);
     coord
@@ -158,6 +164,7 @@ async fn collected_keys_include_an_initialize_in_the_same_generation() {
     check!(bucket.still_active(&active));
     check!(bucket.revision != coord.state_key_revision(active.term.partition));
     let current = coord.current_partition_keys(bucket, &active, |topic_id| *topic_id == T1);
+    drop(active);
     check!(current.contains(&(fresh, T1, 0)));
 }
 
@@ -179,7 +186,7 @@ async fn populated_bucket(coord: &ShareCoordinator) -> PartitionKeys {
 
 /// A coordinator with key A (`ga`, T1, 0) and key B (`gb`, T2, 0), both
 /// initialized at [`NOW_MS`].
-async fn two_keys(dir: &std::path::Path, config: ShareCoordinatorConfig) -> TwoKeys {
+async fn two_keys(dir: &Path, config: ShareCoordinatorConfig) -> TwoKeys {
     let ConfiguredCoordinator {
         coord,
         registry: _reg,
@@ -202,7 +209,10 @@ async fn two_keys(dir: &std::path::Path, config: ShareCoordinatorConfig) -> TwoK
 }
 
 fn records_of(coord: &ShareCoordinator, group: &str, topic_id: uuid::Uuid) -> Vec<LoggedRecord> {
-    logged_records(coord, coord.state_partition_for(group, &topic_id, 0))
+    logged_records(
+        coord,
+        coord.state_partition_for(group, &topic_id, 0).unwrap(),
+    )
 }
 
 fn snapshot_of_b(snapshot_epoch: i32, write_timestamp: i64) -> Logged {
@@ -240,7 +250,9 @@ async fn deleted_topic_keys_are_tombstoned() {
     check!(a_records == vec![Logged::Tombstone]);
     check!(coord.state_for_test("ga", T1, 0).await.is_none());
     check!(coord.state_for_test("gb", T2, 0).await.is_some());
-    if coord.state_partition_for("ga", &T1, 0) != coord.state_partition_for("gb", &T2, 0) {
+    if coord.state_partition_for("ga", &T1, 0).unwrap()
+        != coord.state_partition_for("gb", &T2, 0).unwrap()
+    {
         check!(records_of(&coord, "gb", T2) == b_before);
     }
 }
@@ -277,7 +289,7 @@ async fn cold_snapshot_then_prune_frees_the_log_prefix() {
     }
 
     coord.prune_state_partitions().await;
-    let state_partition = coord.state_partition_for("gb", &T2, 0);
+    let state_partition = coord.state_partition_for("gb", &T2, 0).unwrap();
     let part = coord
         .partitions
         .get(bootstrap::TOPIC, state_partition)
@@ -289,7 +301,7 @@ async fn cold_snapshot_then_prune_frees_the_log_prefix() {
 
 fn with_share_version(mut image: MetadataImage, level: i16) -> Arc<MetadataImage> {
     image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-        name: krabka_metadata::metadata_version::SHARE_VERSION_FEATURE.into(),
+        name: SHARE_VERSION_FEATURE.into(),
         level,
     }));
     Arc::new(image)
@@ -305,12 +317,12 @@ fn periodic_jobs_follow_share_version() {
 
 /// Waits until `done` holds, for at most ten seconds.
 async fn eventually(mut done: impl FnMut() -> bool) -> bool {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while tokio::time::Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
         if done() {
             return true;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
     }
     done()
 }
@@ -338,7 +350,7 @@ async fn run_loop_reacts_to_images_and_timers() {
         images
             .send(with_share_version(image_with_topics(&[(T2, 1)]), level))
             .unwrap();
-        let a_partition = coord.state_partition_for("ga", &T1, 0);
+        let a_partition = coord.state_partition_for("ga", &T1, 0).unwrap();
         check!(
             eventually(|| logged_records(&coord, a_partition)
                 .iter()
@@ -347,7 +359,7 @@ async fn run_loop_reacts_to_images_and_timers() {
             "level {level}"
         );
 
-        let b_partition = coord.state_partition_for("gb", &T2, 0);
+        let b_partition = coord.state_partition_for("gb", &T2, 0).unwrap();
         let part = coord.partitions.get(bootstrap::TOPIC, b_partition).unwrap();
         if jobs_run {
             check!(
@@ -355,7 +367,7 @@ async fn run_loop_reacts_to_images_and_timers() {
                 "level {level}"
             );
         } else {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            sleep(Duration::from_millis(200)).await;
             let snapshots = logged_records(&coord, b_partition)
                 .iter()
                 .filter(|record| matches!(record.logged, Logged::Snapshot(_)))

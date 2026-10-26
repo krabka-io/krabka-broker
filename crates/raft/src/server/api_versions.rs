@@ -37,8 +37,9 @@ const API_VERSIONS_MIN_VERSION: i16 = api_versions_request::MIN_VERSION;
 /// maximum. [`api_versions_max_version`] is what it serves.
 const API_VERSIONS_MAX_VERSION: i16 = api_versions_request::MAX_VERSION;
 
-/// Highest `ApiVersions` version a listener serves under `unstable`, the same
-/// maximum its `api_keys` table advertises for API 18: Kafka 4.3.1's v4 by
+/// Highest `ApiVersions` version a listener serves under `unstable`.
+///
+/// It is the same maximum its `api_keys` table advertises for API 18: Kafka 4.3.1's v4 by
 /// default, and trunk's KIP-1242 v5 under `unstable.api.versions.enable`.
 #[must_use]
 pub fn api_versions_max_version(unstable: UnstableApiVersions) -> i16 {
@@ -60,7 +61,7 @@ const API_VERSIONS_INVALID_REQUEST: i16 = 42;
 
 /// What one controller-listener `ApiVersions` answer is built from.
 #[derive(Clone, Copy)]
-pub(crate) struct ApiVersionsView<'a> {
+pub struct ApiVersionsView<'a> {
     /// The applied metadata image: its finalized features.
     pub(crate) image: &'a krabka_metadata::MetadataImage,
     /// The finalized-features epoch: the last contained offset of the newest
@@ -103,7 +104,7 @@ pub(crate) struct ApiVersionsView<'a> {
 /// Returns the decode error for a supported version whose body does not
 /// decode. Kafka's `RequestContext.parseRequest` also fails such a request,
 /// and the connection closes.
-pub(crate) fn api_versions_response(
+pub fn api_versions_response(
     req_version: i16,
     body: &[u8],
     view: ApiVersionsView<'_>,
@@ -126,10 +127,13 @@ pub(crate) fn api_versions_response(
 }
 
 /// Kafka's `ApiVersionsRequest.getErrorResponse` for `UNSUPPORTED_VERSION`
-/// (KIP-511): error 35 and exactly one `api_keys` entry, the range of
+/// (KIP-511).
+///
+/// It is error 35 and exactly one `api_keys` entry, the range of
 /// `ApiVersions` itself (`ApiVersionsResponse.toApiVersion(API_VERSIONS)`),
-/// which the client reads to pick the version it retries with. Every listener,
-/// broker or controller, answers with these bytes in a v0 body.
+/// which the client reads to pick the version it retries with.
+///
+/// Every listener, broker or controller, answers with these bytes in a v0 body.
 #[must_use]
 pub fn unsupported_version_response(unstable: UnstableApiVersions) -> ApiVersionsResponse {
     ApiVersionsResponse {
@@ -282,9 +286,16 @@ mod tests {
             ControllerApiVersion, LATEST_PRODUCTION_METADATA_VERSION, test_support::feature_image,
         },
         krabka_metadata::{
-            FeatureLevelRecord, MetadataRecord, metadata_version::METADATA_VERSION_MIN,
+            FeatureLevelRecord, MetadataRecord,
+            metadata_version::{
+                METADATA_VERSION_FEATURE, METADATA_VERSION_MAX, METADATA_VERSION_MIN,
+            },
         },
-        krabka_protocol::Decode,
+        krabka_protocol::{
+            Decode,
+            owned::broker_heartbeat_request::{MAX_VERSION, MIN_VERSION},
+        },
+        std::collections::BTreeSet,
         uuid::Uuid,
     };
 
@@ -311,7 +322,7 @@ mod tests {
         use krabka_protocol::{Decode, owned::api_versions_response::ApiVersionsResponse};
         let mut image = krabka_metadata::MetadataImage::new(Uuid::nil());
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+            name: METADATA_VERSION_FEATURE.into(),
             level: 24,
         }));
         let body = super::api_versions_response_body(req_v, view(&image, 41));
@@ -320,8 +331,7 @@ mod tests {
         let resp = ApiVersionsResponse::decode(&mut cur, v).expect("decode body");
         assert2::assert!(cur.is_empty());
         assert2::assert!(resp.error_code == 0);
-        let keys: std::collections::BTreeSet<i16> =
-            resp.api_keys.iter().map(|k| k.api_key).collect();
+        let keys: BTreeSet<i16> = resp.api_keys.iter().map(|k| k.api_key).collect();
         for want in [1i16, 18, 52, 53, 54, 59, 70] {
             assert2::assert!(keys.contains(&want));
         }
@@ -381,11 +391,7 @@ mod tests {
             .find(|key| key.api_key == 63)
             .expect("BrokerHeartbeat advertised through the Admin router");
         assert2::assert!(
-            (heartbeat.min_version, heartbeat.max_version)
-                == (
-                    krabka_protocol::owned::broker_heartbeat_request::MIN_VERSION,
-                    krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION,
-                )
+            (heartbeat.min_version, heartbeat.max_version) == (MIN_VERSION, MAX_VERSION,)
         );
     }
 
@@ -521,7 +527,7 @@ mod tests {
             Some(ApiVersionsRequest {
                 client_software_name: name.into(),
                 client_software_version: software_version.into(),
-                cluster_id: cluster_id.map(str::to_string),
+                cluster_id: cluster_id.map(str::to_owned),
                 node_id,
                 ..Default::default()
             })
@@ -824,7 +830,7 @@ mod tests {
         disabled = { UnstableApiVersions::Disabled, LATEST_PRODUCTION_METADATA_VERSION },
         enabled = {
             UnstableApiVersions::Enabled,
-            krabka_metadata::metadata_version::METADATA_VERSION_MAX,
+            METADATA_VERSION_MAX,
         },
     )]
     fn the_controller_listener_caps_supported_features_with_the_api_flag(

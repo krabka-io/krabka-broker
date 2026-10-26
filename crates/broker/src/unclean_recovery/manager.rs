@@ -32,6 +32,7 @@ use {
     krabka_verified::unclean_recovery_commit_admission,
     std::{collections::HashSet, sync::Arc},
     tokio::sync::{Mutex, mpsc},
+    tokio_util::sync::CancellationToken,
     tracing::warn,
 };
 
@@ -60,7 +61,7 @@ struct SelectedRecovery<'a> {
 /// partition, queries surviving replicas for their log state, and elects one
 /// of them through an image-guarded submission: an eligible leader replica if one
 /// answered, and otherwise the most complete log that did.
-pub(crate) struct UncleanRecoveryManager {
+pub struct UncleanRecoveryManager {
     controller: Arc<dyn MetadataSource>,
     liveness: Arc<ControllerLivenessState>,
     node_id: NodeId,
@@ -82,7 +83,7 @@ impl UncleanRecoveryManager {
         inter_broker_client: Arc<InterBrokerClient>,
         metrics: BrokerMetrics,
         policy: RecoveryPolicy,
-        shutdown: tokio_util::sync::CancellationToken,
+        shutdown: CancellationToken,
     ) -> UncleanRecoveryHandle {
         let (tx, mut rx) = mpsc::channel::<RecoveryJob>(policy.queue_capacity);
         let mgr = Arc::new(Self {
@@ -101,7 +102,7 @@ impl UncleanRecoveryManager {
                     () = shutdown.cancelled() => return,
                     j = rx.recv() => match j { Some(j) => j, None => return },
                 };
-                let mgr = mgr.clone();
+                let mgr = Arc::clone(&mgr);
                 tokio::spawn(async move {
                     mgr.recover_one(job).await;
                 });
@@ -202,7 +203,7 @@ impl UncleanRecoveryManager {
         for r in alive {
             let Some(reg) = image.broker(r) else { continue };
             let (host, port) = (reg.host.clone(), reg.port);
-            let client = self.inter_broker_client.clone();
+            let client = Arc::clone(&self.inter_broker_client);
             let proto = self.listener_protocol;
             let partition = job.partition;
             let server_name = self.policy.inter_broker_server_name.clone();

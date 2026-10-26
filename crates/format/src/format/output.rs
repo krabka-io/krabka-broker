@@ -13,7 +13,7 @@ use {
     krabka_metadata::MetadataRecord,
     serde::Serialize,
     serde_wincode::SerdeCompat,
-    std::{ffi::OsString, io, path::Path},
+    std::{env, ffi::OsString, fs, io, path::Path},
     wincode::Serialize as _,
 };
 
@@ -30,7 +30,7 @@ pub(super) struct Fault(Option<OsString>);
 
 impl Fault {
     /// Reads [`FAIL_AFTER_ENV`].
-    pub(super) fn from_env() -> Self { Self(std::env::var_os(FAIL_AFTER_ENV)) }
+    pub(super) fn from_env() -> Self { Self(env::var_os(FAIL_AFTER_ENV)) }
 
     /// Fails when `path` is the file the fault names.
     fn after(&self, path: &Path) -> Result<(), String> {
@@ -131,10 +131,9 @@ pub(super) fn write_dynamic_checkpoint(
     )
     .map_err(|e| format!("serialize offset-zero checkpoint: {e}"))?;
     let checkpoint_dir = krabka_raft::metadata_partition_dir(metadata_log_dir);
-    std::fs::create_dir_all(&checkpoint_dir)
-        .map_err(|e| format!("create checkpoint directory: {e}"))?;
+    fs::create_dir_all(&checkpoint_dir).map_err(|e| format!("create checkpoint directory: {e}"))?;
     let path = checkpoint_dir.join(ZERO_CHECKPOINT_NAME);
-    std::fs::write(&path, bytes).map_err(|e| format!("write offset-zero checkpoint: {e}"))?;
+    fs::write(&path, bytes).map_err(|e| format!("write offset-zero checkpoint: {e}"))?;
     fault.after(&path)
 }
 
@@ -171,7 +170,7 @@ pub(super) fn write_bootstrap_files(
         bin.extend_from_slice(blob);
     }
     let bin_path = log_dir.join("bootstrap.records.bin");
-    std::fs::write(&bin_path, &bin).map_err(|e| format!("write bootstrap.records.bin: {e}"))?;
+    fs::write(&bin_path, &bin).map_err(|e| format!("write bootstrap.records.bin: {e}"))?;
     fault.after(&bin_path)?;
 
     // 3. Manifest JSON (cluster id + base64 mirrors of each blob).
@@ -185,7 +184,7 @@ pub(super) fn write_bootstrap_files(
     let json =
         serde_json::to_string_pretty(&manifest).map_err(|e| format!("serialize manifest: {e}"))?;
     let json_path = log_dir.join("bootstrap.json");
-    std::fs::write(&json_path, json).map_err(|e| format!("write bootstrap.json: {e}"))?;
+    fs::write(&json_path, json).map_err(|e| format!("write bootstrap.json: {e}"))?;
     fault.after(&json_path)
 }
 
@@ -229,10 +228,10 @@ mod tests {
         write_bootstrap_files(dir.path(), cluster_id, &golden_records(), &Fault::default())
             .unwrap();
         assert2::assert!(
-            std::fs::read(dir.path().join("bootstrap.records.bin")).unwrap() == GOLDEN_RECORDS_BIN
+            fs::read(dir.path().join("bootstrap.records.bin")).unwrap() == GOLDEN_RECORDS_BIN
         );
         assert2::assert!(
-            std::fs::read_to_string(dir.path().join("bootstrap.json")).unwrap() == GOLDEN_MANIFEST
+            fs::read_to_string(dir.path().join("bootstrap.json")).unwrap() == GOLDEN_MANIFEST
         );
     }
 }

@@ -29,7 +29,7 @@ struct StaticMetadata {
     input: ReconcileInput,
 }
 impl MetadataProvider for StaticMetadata {
-    fn snapshot(&self) -> std::sync::Arc<ReconcileInput> { std::sync::Arc::new(self.input.clone()) }
+    fn snapshot(&self) -> Arc<ReconcileInput> { Arc::new(self.input.clone()) }
 }
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
@@ -74,7 +74,7 @@ pub(super) fn metadata_with_topic(
     let setup = TopicMetadataSetup { name, partitions };
     let id = Uuid([7; 16]);
     let input = ReconcileInput {
-        topic_id_by_name: [(setup.name.to_string(), id)].into(),
+        topic_id_by_name: [(setup.name.to_owned(), id)].into(),
         partitions_per_topic: [(id, setup.partitions.0)].into(),
         ..Default::default()
     };
@@ -140,7 +140,7 @@ pub(super) fn make_coordinator_with_config(
             next_gen,
             share,
             metadata,
-            log.clone(),
+            Arc::<InMemoryOffsetsLog>::clone(&log),
             StreamsGroupConfig::default(),
         )
         .expect("valid test assignor configuration"),

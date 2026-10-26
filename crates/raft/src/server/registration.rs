@@ -70,7 +70,16 @@ fn raft_error_code(error: &RaftError) -> i16 {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check};
+    use {
+        super::*,
+        assert2::check,
+        krabka_metadata::metadata_version::METADATA_VERSION_FEATURE,
+        krabka_protocol::{
+            owned::{broker_heartbeat_request, broker_registration_request::API_KEY},
+            primitives::uuid::Uuid,
+        },
+        std::iter,
+    };
 
     /// The controller answers the lifecycle APIs it declares and nothing else.
     #[test]
@@ -85,11 +94,11 @@ mod tests {
         // broker's handlers through the Admin router, so this table must not
         // claim them.
         check!(
-            !is_controller_api(krabka_protocol::owned::broker_registration_request::API_KEY),
+            !is_controller_api(API_KEY),
             "BrokerRegistration belongs to the Admin router"
         );
         check!(
-            !is_controller_api(krabka_protocol::owned::broker_heartbeat_request::API_KEY),
+            !is_controller_api(broker_heartbeat_request::API_KEY),
             "BrokerHeartbeat belongs to the Admin router"
         );
     }
@@ -137,9 +146,7 @@ mod tests {
         let reg_req = |id: i32| {
             let req = ControllerRegistrationRequest {
                 controller_id: id,
-                incarnation_id: krabka_protocol::primitives::uuid::Uuid(
-                    *uuid::Uuid::from_u128(1).as_bytes(),
-                ),
+                incarnation_id: Uuid(*uuid::Uuid::from_u128(1).as_bytes()),
                 zk_migration_ready: false,
                 listeners: vec![WireListener {
                     name: "CONTROLLER".into(),
@@ -157,7 +164,7 @@ mod tests {
         };
 
         // Unknown API returns protocol error
-        let (engine_non_leader, _dir1) = test_engine_with_voters(1, std::iter::empty());
+        let (engine_non_leader, _dir1) = test_engine_with_voters(1, iter::empty());
         let err_resp = super::dispatch(999, 0, &[], &engine_non_leader).await;
         assert2::assert!(err_resp.is_err());
 
@@ -181,7 +188,7 @@ mod tests {
         engine_leader
             .submit_change(vec![krabka_metadata::MetadataRecord::V1FeatureLevel(
                 krabka_metadata::FeatureLevelRecord {
-                    name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                    name: METADATA_VERSION_FEATURE.into(),
                     level: 15,
                 },
             )])

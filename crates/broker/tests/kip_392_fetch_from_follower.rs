@@ -14,9 +14,7 @@
 //! this test inlines the harness's bootstrap-then-join start loop to set a
 //! distinct `rack` and the `RackAware` selector on each broker. This is
 //! option (b) in the task plan. The change stays inside this file.
-
-// Rust 1.95 annotate-snippets ICE on `clippy::pedantic` in test files; the
-// sibling integration tests allow it wholesale for the same reason.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -41,6 +39,7 @@ use {
     },
     support::cluster_lock,
     tempfile::TempDir,
+    tokio::time,
 };
 
 mod support;
@@ -62,7 +61,7 @@ async fn start_rack_aware_cluster(racks: &[&str]) -> Vec<(BrokerHandle, BrokerCo
     // steal a just-released port — the `AddrInUse` flake). Layer the KIP-392
     // per-broker config (distinct rack + `RackAware` selector) via the
     // customizer hook.
-    let racks: Vec<String> = racks.iter().map(|r| (*r).to_string()).collect();
+    let racks: Vec<String> = racks.iter().map(|r| (*r).to_owned()).collect();
     support::start_n_node_with(u64::try_from(racks.len()).unwrap(), |i, cfg| {
         cfg.rack = Some(racks[i].clone());
         cfg.replica_selector = ReplicaSelectorKind::RackAware;
@@ -144,7 +143,7 @@ fn consumer_fetch(
         max_bytes: 10_485_760,
         session_id: 0,
         session_epoch: -1, // sessionless full fetch
-        rack_id: rack.to_string(),
+        rack_id: rack.to_owned(),
         topics: vec![fetch_topic_row(topic, topic_id, vec![FetchPartition {
             partition: 0,
             fetch_offset: offset.0,
@@ -179,7 +178,7 @@ async fn fetch_all_from_follower(client: &Client, topic_id: WireUuid) -> usize {
             Instant::now() <= deadline,
             "follower did not serve all records; last count={count}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 

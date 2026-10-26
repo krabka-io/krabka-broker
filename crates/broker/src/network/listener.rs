@@ -7,7 +7,7 @@ use {crate::config::ListenerSpec, krabka_security::SaslMechanism};
 /// 1. `spec.sasl_mechanisms`, the per-listener override
 /// 2. `broker_default`, the broker-wide
 ///    `BrokerConfig::enabled_sasl_mechanisms`
-pub(crate) fn resolve_sasl_mechanisms_for_listener<'a>(
+pub fn resolve_sasl_mechanisms_for_listener<'a>(
     spec: &'a ListenerSpec,
     broker_default: &'a [SaslMechanism],
 ) -> &'a [SaslMechanism] {

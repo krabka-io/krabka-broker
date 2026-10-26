@@ -47,7 +47,7 @@ type QuorumOverlap = Option<(
 #[ensures(match result { None => true, Some((_, next, _, _, _)) =>
     single_change_shape(old@, next@, request.kind, node),
 })]
-pub(crate) fn reconfigured_majorities_overlap(
+pub fn reconfigured_majorities_overlap(
     old: &[u64],
     leadership: ReconfigurationLeadership,
     context: CurrentVoterSet,
@@ -79,14 +79,12 @@ pub(crate) fn reconfigured_majorities_overlap(
         && votes@[j].0 && votes@[j].1 && has_node(next@, next@.len(), old@[j])))]
     #[variant(votes@.len() - i@)]
     while i < votes.len() {
-        let old_member = i < old.len();
-        let new_member = if old_member {
-            !remove || old[i] != node
-        } else {
-            add
-        };
-        let old_grant = old_member && votes[i].0;
-        let new_grant = new_member && votes[i].1;
+        let &(old_vote, new_vote) = votes.get(i)?;
+        let member = old.get(i).copied();
+        let old_member = member.is_some();
+        let new_member = member.map_or(add, |id| !remove || id != node);
+        let old_grant = old_member && old_vote;
+        let new_grant = new_member && new_vote;
         if old_grant {
             counts.0 += 1;
         }
@@ -94,7 +92,7 @@ pub(crate) fn reconfigured_majorities_overlap(
             counts.1 += 1;
         }
         if old_grant && new_grant && common.is_none() {
-            common = Some(old[i]);
+            common = member;
         }
         i += 1;
     }

@@ -17,6 +17,7 @@ use {
     krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerError, BrokerHandle, NodeId},
     std::{net::SocketAddr, time::Duration},
     tempfile::TempDir,
+    tokio::time,
 };
 
 /// Three brokers whose data listeners each sit behind a [`Relay`]: every
@@ -48,7 +49,7 @@ impl RelayedCluster {
                     last_error = Some(error);
                     // intentional: a fresh start needs the failed one's ports
                     // released, which has no awaiter.
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    time::sleep(Duration::from_secs(2)).await;
                 }
             }
         }

@@ -184,7 +184,7 @@ mod tests {
             coordinator::unified::{
                 ClientIdentity, GroupCoordinator,
                 actor::{
-                    GroupActorMessage, GroupKindTag, PendingRecords, RegexResolution,
+                    GroupActorMessage, GroupKindTag, PendingRecords, RegexResolution, SyncResult,
                     test_support::{
                         actor_services_with, completing_classic_group, empty_metadata,
                         last_classic_metadata, make_coordinator, parked_follower, rpc,
@@ -203,8 +203,16 @@ mod tests {
             },
         },
         assert2::{assert, check},
-        krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
-        std::{sync::Arc, time::Duration},
+        krabka_protocol::{
+            owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+            primitives::uuid::Uuid,
+        },
+        std::{collections::HashMap, mem, sync::Arc, time::Duration},
+        tokio::{
+            sync::oneshot,
+            task::spawn_blocking,
+            time::{sleep, timeout},
+        },
     };
 
     #[tokio::test]
@@ -258,11 +266,7 @@ mod tests {
         }
         state.group_epoch = 2;
         state.target.epoch = 2;
-        let mut group = CoordinatorGroup::seeded(
-            "g",
-            GroupKind::Consumer(state),
-            std::collections::HashMap::new(),
-        );
+        let mut group = CoordinatorGroup::seeded("g", GroupKind::Consumer(state), HashMap::new());
         let services = actor_services_with()
             .config(&config)
             .metadata(metadata.as_ref())
@@ -353,7 +357,7 @@ mod tests {
         let topic = Uuid([42; 16]);
         let metadata = StaticMetadata {
             input: ReconcileInput {
-                topic_id_by_name: HashMap::from([("t".to_string(), topic)]),
+                topic_id_by_name: HashMap::from([("t".to_owned(), topic)]),
                 partitions_per_topic: HashMap::from([(topic, 2)]),
                 ..Default::default()
             },
@@ -411,17 +415,14 @@ mod tests {
             let second = if row.revokes { kept } else { vec![0, 1] };
             heartbeat(&mut state, "m1", Some(second));
 
-            let mut group = CoordinatorGroup::seeded(
-                "g",
-                GroupKind::Consumer(state),
-                std::collections::HashMap::new(),
-            );
+            let mut group =
+                CoordinatorGroup::seeded("g", GroupKind::Consumer(state), HashMap::new());
             let services = super::super::test_support::actor_services(&coord, log.as_ref());
             handle_session_tick(&mut group, services)
                 .await
                 .expect("tick");
             let GroupKind::Consumer(mut state) =
-                std::mem::replace(group.kind_mut(), GroupKind::Consumer(GroupState::new("g")))
+                mem::replace(group.kind_mut(), GroupKind::Consumer(GroupState::new("g")))
             else {
                 panic!("the group stays a consumer group");
             };
@@ -454,7 +455,7 @@ mod tests {
             qubit_clock::{ManualMonotonicClock, MonotonicClock as _},
         };
 
-        let topic = krabka_protocol::primitives::uuid::Uuid([42; 16]);
+        let topic = Uuid([42; 16]);
         let clock = ManualMonotonicClock::new_shared();
         let coord = Arc::new(
             GroupCoordinator::new(
@@ -466,7 +467,7 @@ mod tests {
                 ShareGroupConfig::assigning_at_once(),
                 Arc::new(StaticMetadata {
                     input: ReconcileInput {
-                        topic_id_by_name: [("t".to_string(), topic)].into(),
+                        topic_id_by_name: [("t".to_owned(), topic)].into(),
                         partitions_per_topic: [(topic, 2)].into(),
                         ..Default::default()
                     },
@@ -515,9 +516,9 @@ mod tests {
         heartbeat("m2", 0, 600_000, Some(vec![])).await;
         // m1 shortens its timeout to 50 ms and keeps both partitions.
         let kept = heartbeat("m1", owned.member_epoch, 50, Some(vec![0, 1])).await;
-        check!(kept.error_code == crate::codes::NONE);
+        check!(kept.error_code == codes::NONE);
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let view = rpc::begin(&handle, |reply| GroupActorMessage::Describe { reply }).await;
             let members: Vec<String> = view
@@ -527,14 +528,14 @@ mod tests {
                 .into_iter()
                 .map(|member| member.member_id)
                 .collect();
-            if members == vec!["m2".to_string()] {
+            if members == vec!["m2".to_owned()] {
                 break;
             }
             assert!(
-                std::time::Instant::now() < deadline,
+                Instant::now() < deadline,
                 "m1 was not fenced at its rebalance deadline: {members:?}"
             );
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     }
 
@@ -563,7 +564,7 @@ mod tests {
                 },
                 ShareGroupConfig::assigning_at_once(),
                 empty_metadata(),
-                log.clone(),
+                Arc::<InMemoryOffsetsLog>::clone(&log),
                 StreamsGroupConfig::default(),
             )
             .expect("valid test assignor configuration"),
@@ -592,11 +593,9 @@ mod tests {
         // stalls the runtime driving the actor. Its five-second real-time bound
         // turns a lost tick into a failure rather than a hung test.
         let waiting = Arc::clone(&clock);
-        let parked = tokio::task::spawn_blocking(move || {
-            waiting.wait_for_waiters(1, Duration::from_secs(5))
-        })
-        .await
-        .unwrap();
+        let parked = spawn_blocking(move || waiting.wait_for_waiters(1, Duration::from_secs(5)))
+            .await
+            .unwrap();
         assert!(parked, "actor should park on the session-expiry tick sleep");
 
         clock
@@ -604,11 +603,9 @@ mod tests {
             .expect("manual time moves forward");
 
         let waiting = Arc::clone(&clock);
-        let reparked = tokio::task::spawn_blocking(move || {
-            waiting.wait_for_waiters(1, Duration::from_secs(5))
-        })
-        .await
-        .unwrap();
+        let reparked = spawn_blocking(move || waiting.wait_for_waiters(1, Duration::from_secs(5)))
+            .await
+            .unwrap();
         assert!(reparked, "actor should re-park after processing the tick");
         assert!(!handle.tx.is_closed());
     }
@@ -638,7 +635,7 @@ mod tests {
         let state = group.as_classic().unwrap();
         check!(
             rx.try_recv().expect("the follower is answered by the tick")
-                == crate::coordinator::unified::actor::SyncResult {
+                == SyncResult {
                     error_code: codes::REBALANCE_IN_PROGRESS,
                     ..Default::default()
                 }
@@ -667,7 +664,7 @@ mod tests {
             "pending".into(),
             Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
         );
-        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
         let mut parked = ParkedWaiters::default();
         parked.joiners.insert("m1".into(), tx);
         let services = super::super::test_support::actor_services(&coord, log.as_ref());
@@ -725,13 +722,13 @@ mod tests {
         coord.seed_classic("g", Box::new(group));
         let handle = coord.find("g").unwrap();
 
-        let view = tokio::time::timeout(Duration::from_secs(10), async {
+        let view = timeout(Duration::from_secs(10), async {
             loop {
                 let view = rpc::classic_inspect(&handle).await;
                 if view.state != ClassicGroupState::CompletingRebalance {
                     break view;
                 }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                sleep(Duration::from_millis(10)).await;
             }
         })
         .await

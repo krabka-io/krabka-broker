@@ -38,10 +38,11 @@ use {
     std::{
         path::PathBuf,
         sync::{
-            Arc,
+            Arc, OnceLock,
             atomic::{AtomicUsize, Ordering},
         },
     },
+    tokio::sync::watch,
     tokio_util::sync::CancellationToken,
     uuid::Uuid,
 };
@@ -152,7 +153,7 @@ pub(super) struct MaterializeSetup<'a> {
 
 impl Default for MaterializeSetup<'_> {
     fn default() -> Self {
-        static LOG_CONFIG: std::sync::OnceLock<LogConfig> = std::sync::OnceLock::new();
+        static LOG_CONFIG: OnceLock<LogConfig> = OnceLock::new();
         Self {
             topic: "t",
             log_dirs: &[],
@@ -329,13 +330,13 @@ pub(super) fn supervisor_fixture(image: MetadataImage) -> SupervisorFixture {
         node_id: NodeId(2),
         broker_id: 2,
         controller: Arc::new(static_source(image)),
-        partitions: partitions.clone(),
+        partitions: Arc::clone(&partitions),
         log_dirs: vec![dir.path().to_path_buf()],
         log_config: LogConfig::default(),
         unstable_api_versions: UnstableApiVersions::Disabled,
         client_id: "supervisor-test".into(),
         shutdown: CancellationToken::new(),
-        coordinator_ready: tokio::sync::watch::channel(None).0,
+        coordinator_ready: watch::channel(None).0,
         inter_broker_client: Arc::new(InterBrokerClient::new(None, None)),
         inter_broker_listener_protocol: krabka_security::ListenerProtocol::Plaintext,
         inter_broker_server_name: "localhost".into(),
@@ -355,6 +356,6 @@ pub(super) fn supervisor_fixture(image: MetadataImage) -> SupervisorFixture {
         hot_tail: Arc::new(HotTailCache::default()),
         wal_shards: Arc::new(WalShardRegistry::new(krabka_raft::NodeId(2))),
     });
-    supervisor.assign_dirs_reporter = reporter.clone();
+    supervisor.assign_dirs_reporter = Arc::<CountingAssignDirsReporter>::clone(&reporter);
     (supervisor, partitions, reporter, dir)
 }

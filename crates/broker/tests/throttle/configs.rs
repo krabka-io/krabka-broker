@@ -7,15 +7,26 @@
 //! resource rows they care about.
 
 use {
-    super::test_support::*,
-    crate::support::configs::{
-        ConfigOperation, incremental_config, incremental_request, incremental_resource,
+    crate::{
+        CLIENT_ID,
+        kafka_wire::{self, PlainAuthenticationSetup},
+        support::{
+            configs::{
+                ConfigOperation, incremental_config, incremental_request, incremental_resource,
+            },
+            wire::HeaderEncoding as RequestHeaderEncoding,
+        },
     },
-    krabka_protocol::owned::{
-        describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
-        describe_configs_response::DescribeConfigsResult,
+    bytes::BytesMut,
+    krabka_protocol::{
+        Decode, Encode,
+        owned::{
+            describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
+            describe_configs_response::DescribeConfigsResult,
+        },
     },
     std::net::SocketAddr,
+    tokio::net::TcpStream,
 };
 
 pub type ConfigOperations = Vec<(String, Option<String>, i8)>;

@@ -10,7 +10,7 @@ use krabka_security::Jwks;
 /// A JWKS fetch failure, reported for logging and tests. The refresher keeps
 /// the previous key set on an error.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum FetchError {
+pub enum FetchError {
     #[error("jwks http request failed: {0}")]
     Http(#[from] reqwest::Error),
     #[error("jwks document was not a valid key set")]
@@ -22,7 +22,7 @@ pub(crate) enum FetchError {
 /// The client's configured timeout bounds a hung identity provider. A non-2xx
 /// response is an error. `ignore_key_use` passes through to the JWKS parser.
 /// When it is false, the parser filters out `use=enc` keys.
-pub(crate) async fn fetch_jwks(
+pub async fn fetch_jwks(
     client: &reqwest::Client,
     endpoint: &str,
     ignore_key_use: bool,

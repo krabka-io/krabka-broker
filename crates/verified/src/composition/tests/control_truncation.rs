@@ -1,27 +1,22 @@
-use {super::whole_batch_truncation_bounds_controls, assert2::assert, proptest::prelude::*};
+use {
+    super::whole_batch_truncation_bounds_controls, assert2::assert, proptest::prelude::*,
+    std::collections::BTreeSet,
+};
 
 fn check(ends: &[i64], start: i64, cut: i64, previous: i64, history: &[i64], need: i64) {
     let retained_batches: Vec<_> = ends.iter().copied().filter(|&end| end <= cut).collect();
     let end = retained_batches.last().copied().unwrap_or(start);
     let hwm = previous.min(end);
-    let retained_history: Vec<_> = history
-        .iter()
-        .copied()
-        .filter(|&offset| offset < end)
-        .collect();
-    let committed_history: Vec<_> = history
-        .iter()
-        .copied()
-        .filter(|&offset| offset < hwm)
-        .collect();
+    let retained_history = history.iter().filter(|&&offset| offset < end).count();
+    let committed_history = history.iter().filter(|&&offset| offset < hwm).count();
     assert!(
         whole_batch_truncation_bounds_controls(ends, start, cut, previous, history, need)
             == (
                 retained_batches.len(),
                 end,
                 hwm,
-                retained_history.len(),
-                committed_history.len(),
+                retained_history,
+                committed_history,
                 need <= end,
                 need <= hwm,
             )
@@ -40,7 +35,7 @@ proptest! {
     ) {
         let mut end = start;
         let ends: Vec<_> = sizes.iter().map(|size| {end += size; end}).collect();
-        let history: Vec<_> = raw_history.into_iter().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        let history: Vec<_> = raw_history.into_iter().collect::<BTreeSet<_>>().into_iter().collect();
         check(&ends, start, raw_cut.max(start), raw_hwm.min(end), &history, need);
     }
 }

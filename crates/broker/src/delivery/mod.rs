@@ -70,16 +70,16 @@
 //! because `Log::advance_delivery_watermark` answers such a topic before it
 //! reads a single batch header.
 
-pub(crate) mod config;
-pub(crate) mod handles;
-pub(crate) mod metrics;
-pub(crate) mod scheduler;
-pub(crate) mod waker;
+pub mod config;
+pub mod handles;
+pub mod metrics;
+pub mod scheduler;
+pub mod waker;
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 
-pub(crate) use self::{handles::DeliveryHandles, waker::DeliveryWaker};
+pub use self::{handles::DeliveryHandles, waker::DeliveryWaker};
 use krabka_ids::Offset;
 
 /// One scheduled partition's delivery state, as a recompute left it.
@@ -88,7 +88,7 @@ use krabka_ids::Offset;
 /// [`DeliveryAdvance`](krabka_log::DeliveryAdvance) the log returns, plus the
 /// log end offset that the same lock acquisition read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PartitionDelivery {
+pub struct PartitionDelivery {
     /// First offset that is not visible yet. A fetch caps its limit offset at
     /// this value.
     pub(crate) watermark: Offset,

@@ -16,7 +16,7 @@ mod tests;
 
 /// Operator-triggered election type per KIP-460.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ElectionType {
+pub enum ElectionType {
     /// Move leadership back to the first replica in `replicas[]` if it's
     /// alive and in the ISR. This is safe: no data loss is possible.
     Preferred,
@@ -27,7 +27,7 @@ pub(crate) enum ElectionType {
 
 /// Reasons `select_new_leader_for_partition` may refuse to elect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ElectError {
+pub enum ElectError {
     UnknownTopicOrPartition,
     PreferredAlreadyLeader,
     ElectionNotNeeded,
@@ -63,10 +63,10 @@ pub(crate) enum ElectError {
 ///
 /// Pure: no I/O, no panics. The caller must submit the returned record
 /// through the controller.
-pub(crate) fn select_new_leader_for_partition(
+pub fn select_new_leader_for_partition(
     image: &krabka_metadata::MetadataImage,
     alive: &HashSet<u64>,
-    witnesses: &std::collections::HashSet<NodeId>,
+    witnesses: &HashSet<NodeId>,
     topic: &str,
     partition: i32,
     election: ElectionType,

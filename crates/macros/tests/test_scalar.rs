@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use assert2::assert;
 
 #[krabka_macros::test_scalar]

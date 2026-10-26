@@ -10,15 +10,20 @@ use {
         },
     },
     crate::{BrokerError, codes::INVALID_REQUEST},
-    krabka_protocol::records::RecordsPayload,
+    krabka_protocol::{
+        owned::{fetch_request::FetchRequest, fetch_response::FetchResponse},
+        records::RecordsPayload,
+    },
+    krabka_raft::kraft::transport::api_key::FETCH,
     krabka_verified::wal::{WalFetchAdmission, wal_fetch_admission},
-    std::{collections::HashMap, sync::Arc},
+    std::{collections::HashMap, sync::Arc, time::Duration},
+    tokio::{time, time::Instant},
 };
 
 /// Routes shard-addressed KIP-595 Fetch requests to the registered diskless
 /// WAL engines.
 #[derive(Debug, Clone)]
-pub(crate) struct WalShardRouter {
+pub struct WalShardRouter {
     registry: Arc<WalShardRegistry>,
     principal_node_ids: HashMap<String, krabka_raft::NodeId>,
 }
@@ -68,17 +73,17 @@ impl WalShardRouter {
     #[cfg(test)]
     pub(crate) fn route_fetch_request(
         &self,
-        request: &krabka_protocol::owned::fetch_request::FetchRequest,
+        request: &FetchRequest,
         authenticated_from: krabka_raft::NodeId,
-    ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, BrokerError>> {
+    ) -> Option<Result<FetchResponse, BrokerError>> {
         self.route_decoded_fetch(decode_fetch_request(request)?, Some(authenticated_from))
     }
 
     pub(crate) async fn route_fetch_request_wait(
         &self,
-        request: &krabka_protocol::owned::fetch_request::FetchRequest,
+        request: &FetchRequest,
         authenticated_from: krabka_raft::NodeId,
-    ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, BrokerError>> {
+    ) -> Option<Result<FetchResponse, BrokerError>> {
         self.route_decoded_fetch_wait(decode_fetch_request(request)?, Some(authenticated_from))
             .await
     }
@@ -87,12 +92,12 @@ impl WalShardRouter {
         &self,
         request: WalFetchRequest,
         authenticated_from: Option<krabka_raft::NodeId>,
-    ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, BrokerError>> {
+    ) -> Option<Result<FetchResponse, BrokerError>> {
         let Some(engine) = self.registry.get(ShardId::from_group(request.group)?) else {
             return self.route_decoded_fetch(request, authenticated_from);
         };
-        let deadline = tokio::time::Instant::now()
-            + std::time::Duration::from_millis(u64::try_from(request.max_wait_ms).unwrap_or(0));
+        let deadline =
+            Instant::now() + Duration::from_millis(u64::try_from(request.max_wait_ms).unwrap_or(0));
         loop {
             let progress = engine.fetch_progress_changed();
             tokio::pin!(progress);
@@ -101,18 +106,24 @@ impl WalShardRouter {
             let Ok(response) = response else {
                 return Some(response);
             };
-            let row = &response.responses[0].partitions[0];
+            let Some(row) = response
+                .responses
+                .first()
+                .and_then(|topic| topic.partitions.first())
+            else {
+                return Some(Ok(response));
+            };
             let bytes = row.records.as_ref().map_or(0, RecordsPayload::payload_len);
             if row.error_code != 0
                 || row.diverging_epoch.end_offset >= 0
                 || bytes >= usize::try_from(request.min_bytes).unwrap_or(0)
-                || tokio::time::Instant::now() >= deadline
+                || Instant::now() >= deadline
             {
                 return Some(Ok(response));
             }
             tokio::select! {
                 () = &mut progress => {},
-                () = tokio::time::sleep_until(deadline) => {
+                () = time::sleep_until(deadline) => {
                     return self.route_decoded_fetch(request, authenticated_from);
                 }
             }
@@ -123,7 +134,7 @@ impl WalShardRouter {
         &self,
         request: WalFetchRequest,
         authenticated_from: Option<krabka_raft::NodeId>,
-    ) -> Option<Result<krabka_protocol::owned::fetch_response::FetchResponse, BrokerError>> {
+    ) -> Option<Result<FetchResponse, BrokerError>> {
         let shard = ShardId::from_group(request.group)?;
         let (placement, engine) = self.registry.fetch_target(shard);
         let voters = placement.as_ref().map_or_else(Vec::new, |placement| {
@@ -221,7 +232,7 @@ impl krabka_raft::RaftShardRouter for WalShardRouter {
         let authenticated_from =
             principal.and_then(|principal| self.authenticated_node_id(principal, true));
         Box::pin(async move {
-            if api_key != krabka_raft::kraft::transport::api_key::FETCH {
+            if api_key != FETCH {
                 return Ok(None);
             }
             let Some(request) = decode_fetch(&body) else {

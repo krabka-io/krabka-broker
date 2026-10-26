@@ -10,6 +10,10 @@ use {
         BrokerHandle,
         broker::Broker,
         codes,
+        elr::{
+            TopicElr,
+            state::{self, PartitionElr},
+        },
         features::METADATA_VERSION,
         handlers::test_support::replicated_partition,
         test_support::{
@@ -19,7 +23,7 @@ use {
     },
     assert2::{assert, check},
     krabka_protocol::{
-        owned::broker_heartbeat_response::BrokerHeartbeatResponse,
+        owned::{broker_heartbeat_request, broker_heartbeat_response::BrokerHeartbeatResponse},
         primitives::uuid::Uuid as ProtocolUuid,
     },
     std::sync::Arc,
@@ -62,7 +66,7 @@ async fn every_heartbeat_needs_cluster_action() {
         ready controller_leader;
     };
     let peer = peer();
-    let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
+    let version = broker_heartbeat_request::MAX_VERSION;
     let broker_epoch = broker
         .controller
         .current_image()
@@ -98,7 +102,7 @@ async fn handle_leader_success_preserves_response_shape() {
         ready controller_leader;
         user ["ANONYMOUS"];
     };
-    let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
+    let version = broker_heartbeat_request::MAX_VERSION;
     let image = broker.controller.current_image();
     let broker_epoch = image
         .broker_epoch(NodeId(1))
@@ -238,7 +242,7 @@ impl Cluster {
             bind(ctx);
             user ["ANONYMOUS"];
         };
-        let version = krabka_protocol::owned::broker_heartbeat_request::MAX_VERSION;
+        let version = broker_heartbeat_request::MAX_VERSION;
         let req = BrokerHeartbeatRequest {
             broker_id,
             broker_epoch: epoch,
@@ -545,7 +549,7 @@ async fn an_unfencing_broker_takes_back_a_partition_with_no_leader() {
         .await
         .expect("seed a partition with no leader");
     let before = cluster.broker.controller.current_image();
-    check!(crate::elr::state::is_leaderless(
+    check!(state::is_leaderless(
         &before,
         before.partition("t", 1).expect("partition 1")
     ));
@@ -568,10 +572,7 @@ async fn an_unfencing_broker_takes_back_a_partition_with_no_leader() {
             }
     );
     check!(elected.partition_epoch > 0);
-    check!(
-        crate::elr::TopicElr::of_topic(&image, "t").partition(1)
-            == crate::elr::state::PartitionElr::default()
-    );
+    check!(TopicElr::of_topic(&image, "t").partition(1) == PartitionElr::default());
     check!(image.leader_recovery_state("t", 1) == krabka_metadata::LeaderRecoveryState::Recovering);
     check!(
         cluster.leader_and_isr(0)
@@ -772,7 +773,7 @@ fn each_transition_writes_kafkas_registration_change() {
             Fenced,
             Unfenced,
             vec![elect.clone()],
-            vec![change(FencingChange::Unfence, false), elect.clone()],
+            vec![change(FencingChange::Unfence, false), elect],
         ),
         (
             "fenced stays fenced",
@@ -828,7 +829,7 @@ fn each_transition_writes_kafkas_registration_change() {
             ControlledShutdown,
             ShutdownNow,
             vec![leave.clone()],
-            vec![leave.clone(), change(FencingChange::Fence, false)],
+            vec![leave, change(FencingChange::Fence, false)],
         ),
     ];
     for (what, image, current, next, leaving, want) in cases {

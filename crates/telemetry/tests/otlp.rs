@@ -1,17 +1,20 @@
 //! `init` with an OTLP configuration. It installs the process's one global
 //! subscriber, so it runs in a test binary of its own.
+#![cfg(test)]
 
 use {
     krabka_telemetry::{OtlpConfig, OtlpProtocol},
     krabka_units::prelude::{millis, secs},
-    opentelemetry::trace::TraceContextExt as _,
+    opentelemetry::{global, trace::TraceContextExt as _},
+    std::net::TcpListener,
+    tracing::dispatcher,
     tracing_opentelemetry::OpenTelemetrySpanExt as _,
 };
 
 /// A loopback address nothing listens on: the exporters connect lazily, so
 /// the batches they cannot send are dropped and nothing blocks.
 fn closed_loopback_endpoint() -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener);
     format!("http://{addr}")
@@ -32,11 +35,11 @@ async fn init_with_otlp_installs_the_span_and_log_export_and_shuts_down() {
 
     let guard = krabka_telemetry::init(Some(cfg), "info", "info", "krabka-telemetry-test");
     assert2::assert!(let Ok(guard) = guard);
-    assert2::assert!(tracing::dispatcher::has_been_set());
+    assert2::assert!(dispatcher::has_been_set());
 
     // Trace context crosses process boundaries in W3C `traceparent` and
     // `tracestate` headers.
-    let fields: Vec<String> = opentelemetry::global::get_text_map_propagator(|propagator| {
+    let fields: Vec<String> = global::get_text_map_propagator(|propagator| {
         propagator.fields().map(str::to_owned).collect()
     });
     assert2::assert!(fields == ["traceparent", "tracestate"]);

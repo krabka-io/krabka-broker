@@ -12,14 +12,14 @@ use {
     },
     krabka_raft::NodeId,
     krabka_units::{millis, secs},
-    std::{net::SocketAddr, sync::Arc},
+    std::{io, net::SocketAddr, sync::Arc},
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpStream,
     },
 };
 
-pub(super) async fn read_frame(socket: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+pub(super) async fn read_frame(socket: &mut TcpStream) -> io::Result<Vec<u8>> {
     let mut length = [0u8; 4];
     socket.read_exact(&mut length).await?;
     let mut frame = vec![0u8; u32::from_be_bytes(length) as usize];
@@ -47,7 +47,7 @@ pub(super) async fn write_response(
     response: &impl Encode,
     #[builder(into, default)] version: krabka_ids::ApiVersion,
     #[builder(default)] header: ResponseHeaderMode,
-) -> std::io::Result<()> {
+) -> io::Result<()> {
     let setup = ResponseWireSetup { version, header };
     let mut body = bytes::BytesMut::new();
     response
@@ -75,7 +75,7 @@ pub(super) struct AdvertisedApi {
 pub(super) async fn negotiate_versions(
     socket: &mut TcpStream,
     apis: &[AdvertisedApi],
-) -> std::io::Result<()> {
+) -> io::Result<()> {
     let request = read_frame(socket).await?;
     let response = ApiVersionsResponse {
         error_code: 0,
@@ -123,7 +123,7 @@ pub(super) fn params(
         bootstrap_servers,
         advertised_controller: None,
         listener_protocol: krabka_security::ListenerProtocol::Plaintext,
-        inter_broker_server_name: "broker.internal".to_string(),
+        inter_broker_server_name: "broker.internal".to_owned(),
         controller,
         inter_broker_client: Arc::new(InterBrokerClient::new(None, None)),
     }

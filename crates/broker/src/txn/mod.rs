@@ -1,11 +1,11 @@
 //! Transaction subsystem for the Krabka broker.
 
-pub(crate) mod bootstrap;
+pub mod bootstrap;
 /// The background task that completes transactions whose `Prepare*` record is
 /// durable.
-pub(crate) mod completion;
-pub(crate) mod coordinator;
-pub(crate) mod decision;
+pub mod completion;
+pub mod coordinator;
+pub mod decision;
 #[cfg(test)]
 mod decision_model_support;
 /// Compositional end-to-end model of the exactly-once read guarantee. It
@@ -16,23 +16,23 @@ mod decision_model_support;
 mod eos_composition_model;
 /// KIP-939 idle-transaction reaper. It aborts a timed-out transaction, and
 /// skips a 2PC transaction, which has no timeout.
-pub(crate) mod expiration;
-pub(crate) mod handlers;
+pub mod expiration;
+pub mod handlers;
 /// KIP-98 transactional-id expiry sweep. It tombstones a terminal or idle
 /// transactional id out of `__transaction_state`, and never touches an
 /// `Ongoing` or `Prepare*` one.
-pub(crate) mod id_expiration;
-pub(crate) mod log_record;
-pub(crate) mod marker;
-pub(crate) mod partitioner;
-pub(crate) mod state;
+pub mod id_expiration;
+pub mod log_record;
+pub mod marker;
+pub mod partitioner;
+pub mod state;
 /// KIP-939 two-phase-commit decision cores: timeout resolution and the
 /// safety-critical idle-abort predicate. They are pure, and [`two_pc_model`]
 /// model-checks them.
-pub(crate) mod two_pc;
+pub mod two_pc;
 /// Exhaustive stateright model of the KIP-939 2PC timeout-safety property.
 #[cfg(test)]
 #[path = "two_pc_model.rs"]
 mod two_pc_model;
-pub(crate) mod util;
-pub(crate) mod version;
+pub mod util;
+pub mod version;

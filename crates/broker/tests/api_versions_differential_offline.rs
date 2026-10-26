@@ -10,6 +10,7 @@
 //!
 //! Both roots name the same three module files, so either suite type-checks a
 //! change to them and this one exercises them.
+#![cfg(test)]
 
 #[path = "api_versions_differential/divergence.rs"]
 mod divergence;

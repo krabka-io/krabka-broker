@@ -7,9 +7,14 @@
 //! asserts that the second boot carried the sequence numbers on rather than
 //! resetting them to zero.
 
-use crate::support::{
-    self,
-    topics::{configured_topic_request, creatable_topic, create_topic_request},
+use {
+    crate::support::{
+        self,
+        topics::{configured_topic_request, creatable_topic, create_topic_request},
+    },
+    krabka_protocol::owned::create_topics_request::CreateTopicsRequest,
+    ring::rand::SystemRandom,
+    std::{fs, path::Path},
 };
 
 /// Verifies the checkpoint path. The broker is configured with an audit
@@ -21,11 +26,11 @@ async fn signed_checkpoints_appear_on_audit_topic() {
     use ring::signature::Ed25519KeyPair;
 
     // Generate a key, write it to a temp file, start a broker configured to use it.
-    let rng = ring::rand::SystemRandom::new();
+    let rng = SystemRandom::new();
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     let keydir = tempfile::tempdir().unwrap();
     let keypath = keydir.path().join("audit.pk8");
-    std::fs::write(&keypath, pkcs8.as_ref()).unwrap();
+    fs::write(&keypath, pkcs8.as_ref()).unwrap();
 
     // Start a broker with audit signing + a tiny checkpoint cadence (every 1 record).
     let p = support::start_with_audit_key(&keypath, "k-test", 1).await;
@@ -102,10 +107,7 @@ struct AuditedBoot {
 }
 
 /// Await the exact topic-creation audit event on each boot before shutdown or consumption.
-async fn boot_with_audited_topic(
-    directory: &std::path::Path,
-    request: krabka_protocol::owned::create_topics_request::CreateTopicsRequest,
-) -> AuditedBoot {
+async fn boot_with_audited_topic(directory: &Path, request: CreateTopicsRequest) -> AuditedBoot {
     let (broker, client) = support::start_with_dir(directory).await;
     let audit_before = broker.metrics().audit_events.get();
     let _ = support::client::send_topic_creation(&client, request).await;

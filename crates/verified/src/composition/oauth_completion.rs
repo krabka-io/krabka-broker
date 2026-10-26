@@ -64,13 +64,10 @@ pub(super) fn validated_oauth_snapshot_bounds_session(
     {
         return OAuthSessionDecision::Reject;
     }
-    let finished_cache = match cache {
-        None => None,
-        Some(mut c) => {
-            c.generation_after = completed.1;
-            Some(c)
-        }
-    };
+    let finished_cache = cache.map(|mut c| {
+        c.generation_after = completed.1;
+        c
+    });
     if !oauth_validation_admission(facts.now_ms, completed.0, finished_cache) {
         return OAuthSessionDecision::Reject;
     }

@@ -3,7 +3,7 @@
 use {
     crate::meta::{Tokens, first_missing_named_field, plain_path},
     moxy::{
-        ast::{ItemStruct, ParseError},
+        ast::{ItemStruct, ParseError, Path},
         token::TokenStream,
     },
 };
@@ -15,11 +15,11 @@ struct WireArgs {
 }
 
 struct Conversion<'a> {
-    wire: &'a moxy::ast::Path,
+    wire: &'a Path,
     from_borrowed: bool,
 }
 
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     use {
         crate::meta::named_fields,
         moxy::{ast::Attributed, token::ToTokenStream},
@@ -48,16 +48,16 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
                 "`WireStateBatch` needs `#[wire_state_batch(read = Type, write = Type)]`",
             )
         })?;
-    let mut targets = Vec::new();
-    for argument in [&args.read.tokens, &args.write.tokens] {
-        let path = plain_path(
+    let target = |argument: &TokenStream| {
+        plain_path(
             argument,
             argument.span(),
             "batch targets must be type paths without arguments",
-        )?;
-        targets.push(path);
-    }
-    if targets[0].to_token_stream().to_string() == targets[1].to_token_stream().to_string() {
+        )
+    };
+    let read = target(&args.read.tokens)?;
+    let write = target(&args.write.tokens)?;
+    if read.to_token_stream().to_string() == write.to_token_stream().to_string() {
         return Err(ParseError::new(
             item.ident.span(),
             "read and write batch types must differ",
@@ -65,11 +65,11 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     }
     let conversions = [
         Conversion {
-            wire: &targets[0],
+            wire: &read,
             from_borrowed: false,
         },
         Conversion {
-            wire: &targets[1],
+            wire: &write,
             from_borrowed: true,
         },
     ];
@@ -81,7 +81,7 @@ pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
                 .as_ref()
                 .is_some_and(|ident| ident.text() == "first_offset")
         })
-        .expect("validated first_offset")
+        .ok_or_else(|| ParseError::new(item.ident.span(), "expected a `first_offset` field"))?
         .ty
         .clone();
     let ident = item.ident;

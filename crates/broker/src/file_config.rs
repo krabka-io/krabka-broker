@@ -11,7 +11,11 @@
 //! fields in table order through their named validators.
 
 use {
-    krabka_security::ListenerProtocol, krabka_units::Time, schemars::JsonSchema, serde::Deserialize,
+    krabka_security::ListenerProtocol,
+    krabka_units::Time,
+    schemars::JsonSchema,
+    serde::Deserialize,
+    std::collections::{BTreeMap, HashMap},
 };
 
 mod apply;
@@ -99,21 +103,14 @@ pub mod schema_units {
 /// renders `docs/config-reference.md` from it. `krabka-docgen` builds the same
 /// value in process. Every `///` comment on a config field becomes the
 /// `description` of that field, so the doc comments are the reference text.
-///
-/// # Panics
-///
-/// Panics if the generated schema cannot be represented as JSON, which would
-/// be a bug in the `schemars` derive rather than in any input.
 #[must_use]
-pub fn config_schema() -> serde_json::Value {
-    let schema = schemars::schema_for!(FileConfig);
-    serde_json::to_value(schema).expect("FileConfig schema serializes")
-}
+pub fn config_schema() -> serde_json::Value { schemars::schema_for!(FileConfig).to_value() }
 
-/// Failures surfaced by configuration resolution and startup assembly. Each variant
-/// corresponds to a specific misconfiguration the broker can diagnose
-/// at startup; the variants exist (rather than a single `String`
-/// fallthrough) so the binary entry point can log structured context.
+/// Failures surfaced by configuration resolution and startup assembly.
+///
+/// Each variant corresponds to a specific misconfiguration the broker can diagnose
+/// at startup; the variants exist (rather than a single `String` fallthrough) so
+/// the binary entry point can log structured context.
 #[derive(Debug, thiserror::Error)]
 pub enum FileConfigError {
     /// A `[section]` referenced by another field is missing — e.g.
@@ -324,7 +321,7 @@ pub struct FileConfig {
     /// A key set here loses to the equivalent dedicated key, which is applied
     /// first.
     #[serde(default)]
-    pub server_properties: std::collections::BTreeMap<String, String>,
+    pub server_properties: BTreeMap<String, String>,
 
     /// Controller listener security protocol. When `Some(Ssl)`
     /// the controller listener terminates TLS using `tls_config`.
@@ -397,7 +394,7 @@ pub struct FileConfig {
 
     /// Exact authenticated principal name to broker node ID bindings for
     /// diskless WAL follower fetches.
-    pub inter_broker_principal_node_ids: Option<std::collections::HashMap<String, u64>>,
+    pub inter_broker_principal_node_ids: Option<HashMap<String, u64>>,
 
     /// `FedRAMP` 20x MLA audit subsystem configuration.
     /// Absent → secure default (enabled, standard internal topic name).

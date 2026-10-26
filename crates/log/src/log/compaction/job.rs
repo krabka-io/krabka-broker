@@ -31,6 +31,7 @@ use {
     krabka_units::prelude::ByteSize,
     std::{
         collections::HashMap,
+        mem,
         path::PathBuf,
         sync::{
             Arc, Condvar, Mutex, MutexGuard, PoisonError,
@@ -81,20 +82,20 @@ impl CompactionGate {
             return None;
         }
         state.job = true;
+        drop(state);
         Some(JobSlot(Arc::clone(self)))
     }
 
     /// Fence the gate: a build that has not started refuses to, and a running
     /// one stops at its next batch. Returns once no build is running.
     pub(in crate::log) fn fence(&self) {
-        let mut state = self.state();
+        let state = self.state();
         self.fenced.store(true, Ordering::Release);
-        while state.building {
-            state = self
-                .build_ended
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
+        drop(
+            self.build_ended
+                .wait_while(state, |state| state.building)
+                .unwrap_or_else(PoisonError::into_inner),
+        );
     }
 }
 
@@ -111,6 +112,7 @@ impl JobSlot {
             return Err(LogError::Fenced);
         }
         state.building = true;
+        drop(state);
         Ok(Building(&self.0))
     }
 }
@@ -191,7 +193,7 @@ impl CompactionJob {
         let _building = self.slot.start_building()?;
         let offset_map = build_offset_map(
             &self.inputs,
-            std::mem::take(&mut self.map_aborted),
+            mem::take(&mut self.map_aborted),
             self.record_limit,
         )?;
         // One tracker walks every group in order, as a transaction can span
@@ -200,13 +202,20 @@ impl CompactionJob {
         let mut rewrites = Vec::with_capacity(self.groups.len());
         let mut start = 0;
         for group in &mut self.groups {
-            let inputs = &self.inputs[start..start + group.len];
+            let inputs = self.inputs.get(start..start + group.len).ok_or_else(|| {
+                LogError::Corrupt(format!(
+                    "a compaction group of {} segments from input {start} reaches past the {} \
+                     inputs",
+                    group.len,
+                    self.inputs.len()
+                ))
+            })?;
             // The rewrite creates its files before it reads a batch, so a
             // fenced job must stop here.
             if inputs.iter().any(SealedInput::is_fenced) {
                 return Err(LogError::Fenced);
             }
-            txn_meta.add_aborted_transactions(std::mem::take(&mut group.aborted));
+            txn_meta.add_aborted_transactions(mem::take(&mut group.aborted));
             let rewrite = rewrite_segments(
                 Arc::clone(&self.io),
                 &self.dir,
@@ -237,7 +246,9 @@ impl CompactionJob {
     fn discard_output(&self) {
         let mut start = 0;
         for group in &self.groups {
-            let base = self.inputs[start].base_offset();
+            let Some(base) = self.inputs.get(start).map(SealedInput::base_offset) else {
+                break;
+            };
             for extension in CLEANED_EXTENSIONS {
                 let path = cleaned_path(&self.dir, base.0, extension);
                 if let Err(error) = remove_if_present(&*self.io, &path) {

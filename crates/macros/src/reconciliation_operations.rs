@@ -3,11 +3,11 @@
 use {
     crate::meta::{
         BracketedFunction, Tokens, bracketed_function, function_signature, is_plain_sync,
-        parameter_ident,
+        parameter_at, parameter_ident,
     },
     moxy::{
         ast::{FnParam, FromMeta, Meta, Parse, ParseError, Parser, Path, Signature},
-        token::{Ident, Span, Spanner, TokenStream},
+        token::{self, Ident, Span, Spanner, TokenStream},
     },
     proc_macro::{Delimiter, Group, TokenStream as NativeTokenStream, TokenTree},
 };
@@ -131,10 +131,8 @@ fn rebuild_parts(args: &TokenStream, signature: &Signature) -> Result<RebuildPar
             "group rebuilding needs fn(state: &Projection) -> GroupState",
         ));
     }
-    let state = parameter_ident(
-        &signature.params.inner.inputs[0],
-        "group projection parameter needs a name",
-    )?;
+    let message = "group projection parameter needs a name";
+    let state = parameter_ident(parameter_at(signature, 0, message)?, message)?;
     let args: Rebuild = metadata(args)?;
     let member = name(&args.member)?;
     let built = name(&args.built)?;
@@ -158,7 +156,7 @@ fn rebuild_parts(args: &TokenStream, signature: &Signature) -> Result<RebuildPar
     })
 }
 
-pub(crate) fn rebuild(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn rebuild(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let OperationDeclaration {
         mut header,
         metadata: args,
@@ -191,14 +189,10 @@ fn action_parts(args: &TokenStream, signature: &Signature) -> Result<ActionParts
             "expected the ordinary actions method without a return type",
         ));
     }
-    let state = parameter_ident(
-        &signature.params.inner.inputs[1],
-        "state parameter needs a name",
-    )?;
-    let actions = parameter_ident(
-        &signature.params.inner.inputs[2],
-        "actions parameter needs a name",
-    )?;
+    let message = "state parameter needs a name";
+    let state = parameter_ident(parameter_at(signature, 1, message)?, message)?;
+    let message = "actions parameter needs a name";
+    let actions = parameter_ident(parameter_at(signature, 2, message)?, message)?;
     let args: Actions = metadata(args)?;
     let action = path(&args.action)?;
     let lookup = path(&args.lookup)?;
@@ -229,7 +223,7 @@ fn action_parts(args: &TokenStream, signature: &Signature) -> Result<ActionParts
     })
 }
 
-pub(crate) fn actions(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn actions(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let OperationDeclaration {
         mut header,
         metadata: args,
@@ -261,7 +255,7 @@ fn validate_sections(input: &TokenStream) -> Result<(), ParseError> {
                 "transition body needs setup {}, actions {} and project {} native sections",
             )
         })?;
-        let group = moxy::token::Group::parse(&parser).map_err(|_| {
+        let group = token::Group::parse(&parser).map_err(|_| {
             ParseError::new(
                 input.span(),
                 "transition body needs setup {}, actions {} and project {} native sections",
@@ -330,14 +324,10 @@ fn transition_parts(
             "expected the ordinary next_state method returning Option<Self::State>",
         ));
     }
-    let last = parameter_ident(
-        &signature.params.inner.inputs[1],
-        "previous state parameter needs a name",
-    )?;
-    let action_value = parameter_ident(
-        &signature.params.inner.inputs[2],
-        "action parameter needs a name",
-    )?;
+    let message = "previous state parameter needs a name";
+    let last = parameter_ident(parameter_at(signature, 1, message)?, message)?;
+    let message = "action parameter needs a name";
+    let action_value = parameter_ident(parameter_at(signature, 2, message)?, message)?;
     let args: Transition = metadata(args)?;
     let action = path(&args.action)?;
     let lookup = path(&args.lookup)?;
@@ -379,7 +369,7 @@ fn transition_parts(
     })
 }
 
-pub(crate) fn next_state(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn next_state(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let OperationDeclaration {
         mut header,
         metadata: args,

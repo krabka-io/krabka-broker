@@ -14,7 +14,8 @@ use {
         support,
     },
     assert2::check,
-    std::time::Duration,
+    std::time::{Duration, Instant},
+    tokio::time,
     uuid::Uuid,
 };
 
@@ -48,12 +49,12 @@ async fn static_mixed_jvm_krabka_quorum() {
     // Success criterion 1: a single leader emerges across all three voters and
     // the two Krabka nodes agree on it. Success criterion 2: a follower's image
     // reflects the leader's committed records.
-    let deadline = std::time::Instant::now() + Duration::from_secs(50);
+    let deadline = Instant::now() + Duration::from_secs(50);
     let mut elected = false;
     let mut last_l1 = None;
     let mut last_l2 = None;
     let mut tick = 0u32;
-    while std::time::Instant::now() < deadline {
+    while Instant::now() < deadline {
         let l1 = c1.controller_leader_id();
         let l2 = c2.controller_leader_id();
         last_l1 = l1;
@@ -78,7 +79,7 @@ async fn static_mixed_jvm_krabka_quorum() {
         // intentional: paces the fixed ~50s observation window; the loop
         // deliberately never breaks so the external JVM container has time to
         // boot, join, and produce the logs/telemetry this test greps below.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
 
     // Capture JVM logs regardless of outcome — they ARE the finding.

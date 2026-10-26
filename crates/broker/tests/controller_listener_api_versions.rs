@@ -6,13 +6,14 @@
 //! authentication is the full controller-listener table with the features, and
 //! an unsupported version gets `UNSUPPORTED_VERSION` without closing the
 //! connection.
+#![cfg(test)]
 
 mod support;
 
 use {
     crate::support::{discovery::api_versions_request_for, listeners::configure_sasl_plaintext},
     assert2::{assert, check},
-    krabka_broker::{Broker, BrokerConfig},
+    krabka_broker::{Broker, BrokerConfig, config::InterBrokerCredentials},
     krabka_protocol::{
         Decode, Encode,
         owned::{
@@ -22,11 +23,15 @@ use {
         },
     },
     krabka_security::{ListenerProtocol, SaslMechanism},
-    std::net::SocketAddr,
+    std::{
+        net::SocketAddr,
+        time::{Duration, Instant},
+    },
     tempfile::TempDir,
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpStream,
+        net::{TcpListener, TcpStream},
+        time,
     },
 };
 
@@ -71,13 +76,13 @@ async fn api_versions(
 /// A data directory and the controller listener bound for it.
 struct ControllerListenerFixture {
     dir: TempDir,
-    listener: tokio::net::TcpListener,
+    listener: TcpListener,
     addr: SocketAddr,
 }
 
 async fn controller_listener_fixture() -> ControllerListenerFixture {
     let dir = TempDir::new().unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     ControllerListenerFixture {
         dir,
@@ -107,10 +112,10 @@ async fn start_sasl_controller() -> ControllerNode {
     configure_sasl_plaintext(&mut cfg, data_addr, ListenerProtocol::SaslPlaintext);
     cfg.enabled_sasl_mechanisms = vec![SaslMechanism::Plain];
     cfg.plain_credentials
-        .insert("broker".to_string(), "secret".to_string());
-    cfg.inter_broker_credentials = Some(krabka_broker::config::InterBrokerCredentials::Plain {
-        username: "broker".to_string(),
-        password: "secret".to_string(),
+        .insert("broker".to_owned(), "secret".to_owned());
+    cfg.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
+        username: "broker".to_owned(),
+        password: "secret".to_owned(),
     });
     let broker = Broker::start_with_controller_listener(cfg, Some(controller))
         .await
@@ -250,7 +255,7 @@ async fn start_plaintext_controller(customize: impl FnOnce(&mut BrokerConfig)) -
 /// an error, never a byte.
 async fn assert_closed(stream: &mut TcpStream, what: &str) {
     let mut byte = [0u8; 1];
-    let outcome = tokio::time::timeout(std::time::Duration::from_secs(15), stream.read(&mut byte))
+    let outcome = time::timeout(Duration::from_secs(15), stream.read(&mut byte))
         .await
         .unwrap_or_else(|_| panic!("{what}: the listener held the connection open"));
     check!(
@@ -293,26 +298,26 @@ async fn the_controller_listener_refuses_a_request_over_socket_request_max() {
 /// window passes, and one that keeps sending requests is not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_controller_listener_closes_an_idle_connection() {
-    let window = std::time::Duration::from_millis(800);
+    let window = Duration::from_millis(800);
     let ControllerNode {
         broker,
         controller_addr,
         dir: _dir,
     } = start_plaintext_controller(|cfg| {
         cfg.connections_max_idle_overrides
-            .insert("CONTROLLER".to_string(), krabka_units::millis(800));
+            .insert("CONTROLLER".to_owned(), krabka_units::millis(800));
     })
     .await;
 
     let mut idle = TcpStream::connect(controller_addr).await.expect("connect");
     let mut busy = TcpStream::connect(controller_addr).await.expect("connect");
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let mut correlation_id = 1;
     while started.elapsed() < window * 2 {
         let answered = api_versions(&mut busy, 0, correlation_id).await;
         check!(answered.error_code == 0);
         correlation_id += 1;
-        tokio::time::sleep(window / 4).await;
+        time::sleep(window / 4).await;
     }
     assert_closed(&mut idle, "an idle connection").await;
 

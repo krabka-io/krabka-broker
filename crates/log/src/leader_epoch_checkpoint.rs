@@ -15,7 +15,7 @@ pub use krabka_verified::{EpochEntry, epoch_and_offset_for_entries};
 use {
     crate::io::LogIo,
     krabka_ids::{LeaderEpoch, Offset},
-    std::path::PathBuf,
+    std::{path::PathBuf, sync::Arc},
 };
 
 mod file;
@@ -30,7 +30,7 @@ mod test_support;
 #[derive(Debug)]
 pub struct LeaderEpochCheckpoint {
     path: PathBuf,
-    io: std::sync::Arc<dyn LogIo>,
+    io: Arc<dyn LogIo>,
     entries: Vec<EpochEntry>,
 }
 
@@ -46,7 +46,7 @@ impl LeaderEpochCheckpoint {
     /// Only [`crate::Log::test_set_io`] calls this: the checkpoint is opened
     /// with the real filesystem and stays there unless a test replaces it.
     #[cfg(any(test, feature = "test-helpers"))]
-    pub(crate) fn set_io(&mut self, io: std::sync::Arc<dyn LogIo>) { self.io = io; }
+    pub(crate) fn set_io(&mut self, io: Arc<dyn LogIo>) { self.io = io; }
 
     #[must_use]
     pub fn latest_epoch(&self) -> Option<LeaderEpoch> { self.entries.iter().map(|e| e.epoch).max() }
@@ -55,18 +55,14 @@ impl LeaderEpochCheckpoint {
     pub fn entries(&self) -> &[EpochEntry] { &self.entries }
 }
 
-pub(crate) fn is_strict_successor(previous: &EpochEntry, next: &EpochEntry) -> bool {
+pub fn is_strict_successor(previous: &EpochEntry, next: &EpochEntry) -> bool {
     previous.epoch < next.epoch && previous.start_offset < next.start_offset
 }
 
 /// Pure core of [`LeaderEpochCheckpoint::append`]: an idempotent
 /// push-if-absent. It returns `true` when it added a new entry, so the caller
 /// knows that it must flush.
-pub(crate) fn append_to(
-    entries: &mut Vec<EpochEntry>,
-    epoch: LeaderEpoch,
-    start_offset: Offset,
-) -> bool {
+pub fn append_to(entries: &mut Vec<EpochEntry>, epoch: LeaderEpoch, start_offset: Offset) -> bool {
     if entries.iter().any(|e| e.epoch == epoch) {
         return false;
     }
@@ -79,7 +75,7 @@ pub(crate) fn append_to(
 
 /// Pure core of [`LeaderEpochCheckpoint::truncate_from_end`]: drop entries that
 /// begin at or after `end_offset`.
-pub(crate) fn truncate_to(entries: &mut Vec<EpochEntry>, end_offset: Offset) {
+pub fn truncate_to(entries: &mut Vec<EpochEntry>, end_offset: Offset) {
     entries.retain(|e| e.start_offset < end_offset);
 }
 

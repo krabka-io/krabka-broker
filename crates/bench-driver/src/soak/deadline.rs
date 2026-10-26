@@ -61,7 +61,7 @@ pub struct FaultProblem {
 }
 
 /// One latency percentile or throughput floor against its budget.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BudgetVerdict {
     pub path: String,
     /// `produce p99`, `consume p50`, `throughput`, ...

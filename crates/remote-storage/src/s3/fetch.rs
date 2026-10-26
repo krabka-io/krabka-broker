@@ -58,14 +58,12 @@ impl S3RemoteStorage {
                 "end_position {end} < start_position {start_position}"
             )));
         }
-        let range = match end_position {
-            Some(end) => {
-                // GetRange::Bounded is half-open [start, end); the trait
-                // contract is inclusive end, so add 1 and saturate.
-                GetRange::Bounded(u64::from(start_position)..u64::from(end).saturating_add(1))
-            }
-            None => GetRange::Offset(u64::from(start_position)),
-        };
+        // GetRange::Bounded is half-open [start, end); the trait contract is
+        // inclusive end, so add 1 and saturate.
+        let range = end_position.map_or_else(
+            || GetRange::Offset(u64::from(start_position)),
+            |end| GetRange::Bounded(u64::from(start_position)..u64::from(end).saturating_add(1)),
+        );
         object_bytes(Self::block_os(self.ops.get_range(&key, range)), metadata)
     }
 
@@ -100,8 +98,9 @@ mod tests {
         assert2::{assert, check},
         krabka_object_store::{ObjectOps as _, PutRequest, fault::StoreOp},
         object_store::{ObjectStore, memory::InMemory},
-        std::sync::Arc,
+        std::{sync::Arc, thread},
         tempfile::TempDir,
+        tokio::task,
     };
 
     async fn seeded_without_transaction_index(
@@ -135,7 +134,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             for index in IndexType::ALL {
                 let before = counter.attempts(StoreOp::Get);
                 let error = store.fetch_index(&md, index).unwrap_err();
@@ -161,7 +160,7 @@ mod tests {
     async fn missing_object_is_one_request() {
         let CountingRsm { store, counter } = counting_rsm();
         let md = sample_metadata(uuid::Uuid::from_u128(11));
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             let before = counter.attempts(StoreOp::Get);
             check!(matches!(
                 store.fetch_log_segment(&md, 0, None),
@@ -222,7 +221,7 @@ mod tests {
     async fn fetch_before_copy_is_not_found() {
         let store = rsm(None);
         let md = sample_metadata(uuid::Uuid::from_u128(404));
-        let err = tokio::task::spawn_blocking(move || store.fetch_log_segment(&md, 0, None))
+        let err = task::spawn_blocking(move || store.fetch_log_segment(&md, 0, None))
             .await
             .unwrap()
             .unwrap_err();
@@ -282,7 +281,7 @@ mod tests {
             .call()
             .await;
 
-        let (segment, index) = std::thread::spawn(move || {
+        let (segment, index) = thread::spawn(move || {
             (
                 write_only.fetch_log_segment(&md, 0, None),
                 write_only.fetch_index(&md, IndexType::Offset),

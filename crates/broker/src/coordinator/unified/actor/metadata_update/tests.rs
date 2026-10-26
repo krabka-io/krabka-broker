@@ -31,14 +31,14 @@ use {
         consumer_group_heartbeat_response::{Assignment, ConsumerGroupHeartbeatResponse},
         consumer_protocol_assignment::{ConsumerProtocolAssignment, TopicPartition},
     },
-    std::sync::Arc,
+    std::{sync::Arc, time::Duration},
 };
 
 async fn metadata_update(handle: &GroupActorHandle, topics: &[&str]) {
     handle
         .tx
         .send(GroupActorMessage::MetadataUpdate {
-            topics: topics.iter().map(|topic| (*topic).to_string()).collect(),
+            topics: topics.iter().map(|topic| (*topic).to_owned()).collect(),
         })
         .await
         .unwrap();
@@ -185,7 +185,7 @@ async fn the_heartbeat_after_a_metadata_update_refreshes_the_assignment() {
     let mut expected = Vec::new();
     for row in rows {
         let metadata = SwitchableMetadata::new(row.before);
-        let coordinator = make_coord_with_metadata(metadata.clone());
+        let coordinator = make_coord_with_metadata(Arc::<SwitchableMetadata>::clone(&metadata));
         let handle = coordinator.get_or_create_consumer("g");
         let joined = heartbeat(&handle, join()).await;
         acknowledge(&handle, &joined).await;
@@ -246,14 +246,14 @@ async fn a_loaded_group_refreshes_its_metadata_at_the_first_heartbeat() {
     let mut expected = Vec::new();
     for (name, at_load, after_load, wanted) in rows {
         let metadata = SwitchableMetadata::new(snapshot_of(&[("orders", 1, 2)]));
-        let previous = make_coord_with_metadata(metadata.clone());
+        let previous = make_coord_with_metadata(Arc::<SwitchableMetadata>::clone(&metadata));
         let previous_handle = previous.get_or_create_consumer("g");
         let joined = heartbeat(&previous_handle, join()).await;
         acknowledge(&previous_handle, &joined).await;
         let seed = previous.cached_seed("g").expect("the group's records");
 
         metadata.set(at_load);
-        let loaded = make_coord_with_metadata(metadata.clone());
+        let loaded = make_coord_with_metadata(Arc::<SwitchableMetadata>::clone(&metadata));
         let handle = loaded.get_or_create_consumer("g");
         handle.tx.send(GroupActorMessage::Seed(seed)).await.unwrap();
         // The actor reads the metadata when it applies the seed, so wait for
@@ -285,7 +285,7 @@ async fn a_hosted_classic_member_gets_a_created_topic_when_it_joins_again() {
                 ..NextGenConfig::assigning_at_once()
             },
             ShareGroupConfig::assigning_at_once(),
-            metadata.clone(),
+            Arc::<SwitchableMetadata>::clone(&metadata),
             Arc::new(InMemoryOffsetsLog::default()),
             StreamsGroupConfig::default(),
         )
@@ -355,7 +355,7 @@ async fn the_replayed_assignment_timestamp_holds_the_interval() {
         let coordinator = Arc::new(
             GroupCoordinator::new(
                 NextGenConfig {
-                    assignment_interval: std::time::Duration::from_mins(1),
+                    assignment_interval: Duration::from_mins(1),
                     ..NextGenConfig::assigning_at_once()
                 },
                 ShareGroupConfig::assigning_at_once(),

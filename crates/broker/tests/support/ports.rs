@@ -6,7 +6,7 @@
 //! it; [`bind_and_drop_ports`] is the older form, for callers that let
 //! `Broker::start` re-bind the address itself.
 
-use std::net::SocketAddr;
+use {std::net::SocketAddr, tokio::net::TcpListener};
 
 /// Reserve `n` pairs of ephemeral loopback ports, one client port and one
 /// controller port per broker, with the bind-and-drop trick. Bind a
@@ -21,9 +21,9 @@ pub async fn bind_and_drop_ports(n: usize) -> (Vec<SocketAddr>, Vec<SocketAddr>)
     let mut client_addrs = Vec::with_capacity(n);
     let mut controller_addrs = Vec::with_capacity(n);
     for _ in 0..n {
-        let cl = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let cl = TcpListener::bind("127.0.0.1:0").await.unwrap();
         client_addrs.push(cl.local_addr().unwrap());
-        let ct = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ct = TcpListener::bind("127.0.0.1:0").await.unwrap();
         controller_addrs.push(ct.local_addr().unwrap());
         drop((cl, ct));
     }
@@ -53,14 +53,14 @@ pub async fn bind_and_hold_ports(
 ) -> (
     Vec<SocketAddr>,
     Vec<SocketAddr>,
-    Vec<tokio::net::TcpListener>,
-    Vec<tokio::net::TcpListener>,
+    Vec<TcpListener>,
+    Vec<TcpListener>,
 ) {
     let mut client_listeners = Vec::with_capacity(n);
     let mut controller_listeners = Vec::with_capacity(n);
     for _ in 0..n {
-        client_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
-        controller_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+        client_listeners.push(TcpListener::bind("127.0.0.1:0").await.unwrap());
+        controller_listeners.push(TcpListener::bind("127.0.0.1:0").await.unwrap());
     }
     let client_addrs = client_listeners
         .iter()

@@ -12,20 +12,20 @@ pub(super) const KEY_ID: &str = "worm-key-1";
 
 pub(super) fn located_object() -> ObjectEntry {
     ObjectEntry {
-        suffix: ".log".to_string(),
-        key: "archive/orders-3/00000000000000000100.log".to_string(),
+        suffix: ".log".to_owned(),
+        key: "archive/orders-3/00000000000000000100.log".to_owned(),
         size_bytes: 4096,
         sha256: Sha256Digest::of(b"log body"),
-        e_tag: Some("\"d41d8cd98f00b204e9800998ecf8427e-3\"".to_string()),
-        version_id: Some("3HL4kqtJlcpXroDTDmjVBH40Nrjfkd".to_string()),
+        e_tag: Some("\"d41d8cd98f00b204e9800998ecf8427e-3\"".to_owned()),
+        version_id: Some("3HL4kqtJlcpXroDTDmjVBH40Nrjfkd".to_owned()),
         create_precondition: false,
     }
 }
 
 pub(super) fn bare_object() -> ObjectEntry {
     ObjectEntry {
-        suffix: ".index".to_string(),
-        key: "archive/orders-3/00000000000000000100.index".to_string(),
+        suffix: ".index".to_owned(),
+        key: "archive/orders-3/00000000000000000100.index".to_owned(),
         size_bytes: 64,
         sha256: Sha256Digest::of(b"index body"),
         e_tag: None,
@@ -36,7 +36,7 @@ pub(super) fn bare_object() -> ObjectEntry {
 
 pub(super) fn sample_segment() -> SegmentIdentity {
     SegmentIdentity {
-        topic: "orders".to_string(),
+        topic: "orders".to_owned(),
         topic_id: Uuid::from_u128(0x11),
         partition: 3,
         segment_id: Uuid::from_u128(0x22),

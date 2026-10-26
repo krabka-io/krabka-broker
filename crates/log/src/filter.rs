@@ -96,6 +96,7 @@ mod tests {
         assert2::{assert, check},
         bytes::{Bytes, BytesMut},
         krabka_protocol::records::{Attributes, RecordHeader},
+        proptest::{bool::ANY, collection},
     };
 
     const BASE_OFFSET: i64 = 1_000;
@@ -345,8 +346,8 @@ mod tests {
         // the survivors and nothing else.
         #[test]
         fn survivors_keep_their_absolute_offsets(
-            offset_deltas in proptest::collection::hash_set(0i32..64, 1..12),
-            keep_mask in proptest::collection::vec(proptest::bool::ANY, 12),
+            offset_deltas in collection::hash_set(0i32..64, 1..12),
+            keep_mask in collection::vec(ANY, 12),
         ) {
             let mut offset_deltas: Vec<i32> = offset_deltas.into_iter().collect();
             offset_deltas.sort_unstable();

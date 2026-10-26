@@ -1,8 +1,14 @@
 //! Consumer heartbeat and native routing fixtures.
 
-use krabka_protocol::owned::{
-    consumer_group_heartbeat_request::{ConsumerGroupHeartbeatRequest, TopicPartitions},
-    consumer_group_heartbeat_response::Assignment,
+use {
+    krabka_protocol::owned::{
+        consumer_group_heartbeat_request::{ConsumerGroupHeartbeatRequest, TopicPartitions},
+        consumer_group_heartbeat_response::Assignment,
+    },
+    std::{
+        collections::HashSet,
+        time::{Duration, Instant},
+    },
 };
 
 pub fn consumer_heartbeat(
@@ -61,7 +67,7 @@ pub async fn routing_consumer(
         .max_poll_interval(krabka_units::secs(2))
         .heartbeat_interval(krabka_units::secs(1))
         .auto_offset_reset(reset)
-        .subscribe([topic.to_string()])
+        .subscribe([topic.to_owned()])
         .build()
         .await
         .unwrap()
@@ -76,10 +82,10 @@ pub async fn collect_routing_values(
     consumer: &mut krabka_client_consumer::Consumer,
     count: usize,
     mut observe: impl FnMut(i32, String),
-) -> std::collections::HashSet<String> {
-    let mut seen = std::collections::HashSet::new();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while seen.len() < count && std::time::Instant::now() < deadline {
+) -> HashSet<String> {
+    let mut seen = HashSet::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while seen.len() < count && Instant::now() < deadline {
         for record in consumer.poll(krabka_units::millis(300)).await.unwrap() {
             let value =
                 String::from_utf8_lossy(record.value.as_deref().unwrap_or(&[])).into_owned();

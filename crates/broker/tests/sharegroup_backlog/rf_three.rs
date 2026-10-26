@@ -23,7 +23,8 @@ use {
     },
     assert2::assert,
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
-    krabka_broker::metrics::ShareGroupLabel,
+    krabka_broker::{BrokerConfig, BrokerHandle, NodeId, metrics::ShareGroupLabel},
+    krabka_client_core::Client,
     krabka_protocol::{
         owned::{
             fetch_request::FetchPartition, fetch_response::FetchResponse,
@@ -32,6 +33,8 @@ use {
         primitives::uuid::Uuid as WireUuid,
     },
     std::{sync::Arc, time::Duration},
+    tempfile::TempDir,
+    tokio::time,
 };
 
 const OFFSETS_TOPIC: &str = "__consumer_offsets";
@@ -61,12 +64,26 @@ fn group_for_partition(partition: i32, partition_count: i32) -> String {
         .expect("each offsets partition receives a candidate group")
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)]
-async fn rf_three_remote_leader_uses_committed_high_watermark() {
-    let _guard = test_lock().lock().await;
+type Cluster = Vec<(BrokerHandle, BrokerConfig, TempDir)>;
+
+/// The placement the probe needs: a share coordinator, a data leader on a
+/// different broker, and a third broker to stop that does not lead the
+/// share-state partition.
+#[derive(Clone, Copy)]
+struct Placement {
+    offsets_partitions: i32,
+    offsets_partition: i32,
+    coordinator_id: NodeId,
+    data_partition: i32,
+    data_leader_id: NodeId,
+    stopped_id: NodeId,
+    current_leader_epoch: i32,
+}
+
+/// Start the three-broker cluster, retrying a failed start twice.
+async fn start_cluster() -> Cluster {
     let mut attempt = 0;
-    let mut cluster = loop {
+    loop {
         attempt += 1;
         match support::start_n_node_with(3, |_, config| {
             config.metrics_listen_addr = Some("127.0.0.1:0".parse().unwrap());
@@ -104,52 +121,42 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         })
         .await
         {
-            Ok(cluster) => break cluster,
+            Ok(cluster) => return cluster,
             Err(error) if attempt < 3 => {
                 eprintln!("backlog RF=3 cluster start attempt {attempt} failed: {error}");
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                time::sleep(Duration::from_secs(2)).await;
             }
             Err(error) => panic!("backlog RF=3 cluster failed to start: {error}"),
         }
-    };
-    support::wait_for_all_brokers_registered(&cluster, 3).await;
-
-    let admin = Arc::new(
-        connect_client(
-            cluster[0].0.listen_addr().to_string(),
-            Some("backlog-rf3-admin"),
-        )
-        .await,
-    );
-    create_topic(&admin, 1, 3).await;
-    for (broker, _, _) in &cluster {
-        broker.wait_until_partition_present(TOPIC, 0).await;
     }
-    let topic_id = cluster[0]
-        .0
-        .controller_image_for_test()
-        .topic(TOPIC)
-        .expect("topic metadata")
-        .topic_id;
+}
+
+/// Wait until every broker serves the data topic and both coordinators, and
+/// the share-state partition exists everywhere.
+async fn wait_for_coordinators(cluster: &Cluster, admin: &Client, topic_id: uuid::Uuid) {
     // No broker creates `__consumer_offsets` or `__share_group_state` when it
     // starts. The candidate search below reads both topics out of the image,
     // and the group and share coordinators of every broker must serve.
-    for (broker, _, _) in &cluster {
+    for (broker, _, _) in cluster {
         broker.wait_until_group_coordinator_ready().await;
         broker.wait_until_share_coordinator_ready().await;
     }
     support::find_coordinator(
-        &admin,
+        admin,
         support::KEY_TYPE_SHARE,
         &share_coordinator_key("backlog-rf3-bootstrap", topic_id, 0),
     )
     .await;
-    for (broker, _, _) in &cluster {
+    for (broker, _, _) in cluster {
         broker
             .wait_until_partition_present(SHARE_STATE_TOPIC, 0)
             .await;
     }
+}
 
+/// Search the cluster image for a coordinator that does not lead the data
+/// partition, preferring a stopped broker that is not the controller leader.
+fn find_placement(cluster: &Cluster) -> Placement {
     let image = cluster[0].0.controller_image_for_test();
     let offsets_partitions = image.topic_partition_count(OFFSETS_TOPIC);
     let state_leader = image
@@ -157,11 +164,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         .expect("share-state partition 0")
         .leader;
     let controller_leader = cluster[0].0.controller_leader_id();
-    let nodes = [
-        krabka_broker::NodeId(1),
-        krabka_broker::NodeId(2),
-        krabka_broker::NodeId(3),
-    ];
+    let nodes = [NodeId(1), NodeId(2), NodeId(3)];
     let mut candidates = Vec::new();
     for offsets_partition in 0..offsets_partitions {
         let coordinator_id = image
@@ -202,28 +205,37 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         .partition(TOPIC, data_partition)
         .expect("data partition metadata")
         .leader_epoch;
-    drop(image);
-    let coordinator_index = cluster
+    Placement {
+        offsets_partitions,
+        offsets_partition,
+        coordinator_id,
+        data_partition,
+        data_leader_id,
+        stopped_id,
+        current_leader_epoch: leader_epoch.0,
+    }
+}
+
+/// The index in `cluster` of the broker with `node_id`.
+fn broker_index(cluster: &Cluster, node_id: NodeId) -> usize {
+    cluster
         .iter()
-        .position(|(_, config, _)| config.node_id == coordinator_id)
-        .unwrap();
-    let group_id = group_for_partition(offsets_partition, offsets_partitions);
-    let coordinator_client = Arc::new(
-        connect_client(
-            cluster[coordinator_index].0.listen_addr().to_string(),
-            Some("backlog-rf3-coordinator"),
-        )
-        .await,
-    );
-    support::find_coordinator(
-        &coordinator_client,
-        support::KEY_TYPE_SHARE,
-        &share_coordinator_key(&group_id, topic_id, data_partition),
-    )
-    .await;
+        .position(|(_, config, _)| config.node_id == node_id)
+        .unwrap()
+}
+
+/// Join `group_id` as a share member and heartbeat until some broker holds
+/// the initialized share state for the data partition.
+async fn join_until_initialized(
+    cluster: &Cluster,
+    coordinator_client: &Client,
+    group_id: &str,
+    topic_id: uuid::Uuid,
+    data_partition: i32,
+) {
     let joined = coordinator_client
         .send(ShareGroupHeartbeatRequest {
-            group_id: group_id.clone(),
+            group_id: group_id.to_owned(),
             member_id: uuid::Uuid::new_v4().to_string(),
             member_epoch: 0,
             subscribed_topic_names: Some(vec![TOPIC.into()]),
@@ -234,11 +246,11 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
     assert!(joined.error_code == 0, "{joined:?}");
     let member_id = joined.member_id.expect("the broker echoes the member id");
     let mut member_epoch = joined.member_epoch;
-    let initialized = tokio::time::timeout(Duration::from_secs(30), async {
+    let initialized = time::timeout(Duration::from_secs(30), async {
         loop {
             let heartbeat = coordinator_client
                 .send(ShareGroupHeartbeatRequest {
-                    group_id: group_id.clone(),
+                    group_id: group_id.to_owned(),
                     member_id: member_id.clone(),
                     member_epoch,
                     subscribed_topic_names: Some(vec![TOPIC.into()]),
@@ -249,55 +261,32 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
             assert!(heartbeat.error_code == 0, "{heartbeat:?}");
             member_epoch = heartbeat.member_epoch;
             let mut present = false;
-            for (broker, _, _) in &cluster {
+            for (broker, _, _) in cluster {
                 present |= broker
-                    .share_state_summary_for_test(&group_id, topic_id, data_partition)
+                    .share_state_summary_for_test(group_id, topic_id, data_partition)
                     .await
                     .is_some();
             }
             if present {
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await;
     assert!(initialized.is_ok(), "RF=3 share state did not initialize");
+}
 
-    let label = ShareGroupLabel {
-        group_id: group_id.clone(),
-        topic: TOPIC.into(),
-        partition: data_partition,
-    };
-    // `get` does not create the series: only a sample of an initialized
-    // partition does. The group coordinator records the partition as
-    // initialized only when its write to `__consumer_offsets` commits, after
-    // the share state commits. The follower stays up until that point.
-    cluster[coordinator_index]
-        .0
-        .wait_for_metrics("initial RF=3 backlog sample", |metrics| {
-            metrics
-                .share_group_backlog
-                .get(&label)
-                .is_some_and(|backlog| backlog.get() == 0)
-        })
-        .await;
-
-    let stopped_index = cluster
-        .iter()
-        .position(|(_, config, _)| config.node_id == stopped_id)
-        .unwrap();
-    let (stopped, _, _) = cluster.remove(stopped_index);
-    stopped.shutdown().await;
-
-    let data_leader_index = cluster
-        .iter()
-        .position(|(_, config, _)| config.node_id == data_leader_id)
-        .unwrap();
-    let coordinator_index = cluster
-        .iter()
-        .position(|(_, config, _)| config.node_id == coordinator_id)
-        .unwrap();
+/// Produce five records the stopped follower cannot replicate, and check that
+/// the leader's high watermark stays at 0 while its log end offset reaches 5.
+async fn produce_uncommitted(cluster: &Cluster, placement: Placement, topic_id: uuid::Uuid) {
+    let Placement {
+        data_partition,
+        data_leader_id,
+        current_leader_epoch,
+        ..
+    } = placement;
+    let data_leader_index = broker_index(cluster, data_leader_id);
     assert!(
         cluster[data_leader_index]
             .0
@@ -329,7 +318,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
                 .topic(TOPIC.into())
                 .topic_id(WireUuid(*topic_id.as_bytes()))
                 .partition(FetchPartition {
-                    current_leader_epoch: leader_epoch.0,
+                    current_leader_epoch,
                     ..fetch_partition()
                         .partition(data_partition)
                         .offset(0)
@@ -348,6 +337,119 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
     let partition = &fetched.responses[0].partitions[0];
     assert!(partition.error_code == 0, "{fetched:?}");
     assert!(partition.high_watermark == 0, "{fetched:?}");
+}
+
+/// Check that only the coordinator exports the backlog series, at 0.
+async fn assert_only_coordinator_exports(
+    cluster: &Cluster,
+    coordinator_index: usize,
+    group_id: &str,
+    data_partition: i32,
+) {
+    let expected = format!(
+        "krabka_broker_share_group_backlog{{group_id=\"{group_id}\",topic=\"{TOPIC}\",partition=\"{data_partition}\"}} 0"
+    );
+    assert!(
+        scrape(cluster[coordinator_index].0.metrics_addr().unwrap())
+            .await
+            .contains(&expected)
+    );
+    for (index, (broker, _, _)) in cluster.iter().enumerate() {
+        if index != coordinator_index {
+            assert!(
+                !scrape(broker.metrics_addr().unwrap())
+                    .await
+                    .contains(&format!("group_id=\"{group_id}\"")),
+                "non-coordinator emitted a backlog series"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rf_three_remote_leader_uses_committed_high_watermark() {
+    let _guard = test_lock().lock().await;
+    let mut cluster = start_cluster().await;
+    support::wait_for_all_brokers_registered(&cluster, 3).await;
+
+    let admin = Arc::new(
+        connect_client(
+            cluster[0].0.listen_addr().to_string(),
+            Some("backlog-rf3-admin"),
+        )
+        .await,
+    );
+    create_topic(&admin, 1, 3).await;
+    for (broker, _, _) in &cluster {
+        broker.wait_until_partition_present(TOPIC, 0).await;
+    }
+    let topic_id = cluster[0]
+        .0
+        .controller_image_for_test()
+        .topic(TOPIC)
+        .expect("topic metadata")
+        .topic_id;
+    wait_for_coordinators(&cluster, &admin, topic_id).await;
+
+    let placement = find_placement(&cluster);
+    let Placement {
+        offsets_partitions,
+        offsets_partition,
+        coordinator_id,
+        data_partition,
+        stopped_id,
+        ..
+    } = placement;
+    let coordinator_index = broker_index(&cluster, coordinator_id);
+    let group_id = group_for_partition(offsets_partition, offsets_partitions);
+    let coordinator_client = Arc::new(
+        connect_client(
+            cluster[coordinator_index].0.listen_addr().to_string(),
+            Some("backlog-rf3-coordinator"),
+        )
+        .await,
+    );
+    support::find_coordinator(
+        &coordinator_client,
+        support::KEY_TYPE_SHARE,
+        &share_coordinator_key(&group_id, topic_id, data_partition),
+    )
+    .await;
+    join_until_initialized(
+        &cluster,
+        &coordinator_client,
+        &group_id,
+        topic_id,
+        data_partition,
+    )
+    .await;
+
+    let label = ShareGroupLabel {
+        group_id: group_id.clone(),
+        topic: TOPIC.into(),
+        partition: data_partition,
+    };
+    // `get` does not create the series: only a sample of an initialized
+    // partition does. The group coordinator records the partition as
+    // initialized only when its write to `__consumer_offsets` commits, after
+    // the share state commits. The follower stays up until that point.
+    cluster[coordinator_index]
+        .0
+        .wait_for_metrics("initial RF=3 backlog sample", |metrics| {
+            metrics
+                .share_group_backlog
+                .get(&label)
+                .is_some_and(|backlog| backlog.get() == 0)
+        })
+        .await;
+
+    let stopped_index = broker_index(&cluster, stopped_id);
+    let (stopped, _, _) = cluster.remove(stopped_index);
+    stopped.shutdown().await;
+
+    let data_leader_index = broker_index(&cluster, placement.data_leader_id);
+    let coordinator_index = broker_index(&cluster, coordinator_id);
+    produce_uncommitted(&cluster, placement, topic_id).await;
 
     // A sentinel makes the poll completion observable: the next real sample
     // must replace it with HWM(0) - SPSO/log-start(0), not the leader LEO(5).
@@ -371,24 +473,7 @@ async fn rf_three_remote_leader_uses_committed_high_watermark() {
         "the committed-HWM sample must land before ISR shrink can expose LEO"
     );
 
-    let expected = format!(
-        "krabka_broker_share_group_backlog{{group_id=\"{group_id}\",topic=\"{TOPIC}\",partition=\"{data_partition}\"}} 0"
-    );
-    assert!(
-        scrape(cluster[coordinator_index].0.metrics_addr().unwrap())
-            .await
-            .contains(&expected)
-    );
-    for (index, (broker, _, _)) in cluster.iter().enumerate() {
-        if index != coordinator_index {
-            assert!(
-                !scrape(broker.metrics_addr().unwrap())
-                    .await
-                    .contains(&format!("group_id=\"{group_id}\"")),
-                "non-coordinator emitted a backlog series"
-            );
-        }
-    }
+    assert_only_coordinator_exports(&cluster, coordinator_index, &group_id, data_partition).await;
 
     shutdown_cluster(cluster).await;
 }

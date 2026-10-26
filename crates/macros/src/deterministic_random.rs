@@ -5,7 +5,7 @@ use {
     moxy::{ast::ParseError, token::TokenStream},
 };
 
-pub(crate) fn splitmix64_step(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn splitmix64_step(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(tokens)?;
     Ok(moxy::template! {
         pub(crate) fn {{ name }}(state: &mut u64) -> u64 {

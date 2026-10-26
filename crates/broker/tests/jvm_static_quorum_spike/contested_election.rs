@@ -13,7 +13,12 @@ use {
         },
         support,
     },
-    std::{process::Command, time::Duration},
+    std::{
+        fs,
+        process::Command,
+        time::{Duration, Instant},
+    },
+    tokio::time,
     uuid::Uuid,
 };
 
@@ -59,9 +64,9 @@ async fn contested_election_krabka_counts_jvm_prevote() {
     let _propdir = start_jvm_controller(CONTESTED_CONTAINER, p3, &cid_str, &props);
 
     // ── Phase 1: a Krabka node leads and the JVM joins as a follower. ───────
-    let deadline = std::time::Instant::now() + Duration::from_secs(50);
+    let deadline = Instant::now() + Duration::from_secs(50);
     let mut leader0: Option<u64> = None;
-    while std::time::Instant::now() < deadline {
+    while Instant::now() < deadline {
         let l1 = c1.controller_leader_id();
         let l2 = c2.controller_leader_id();
         if l1.is_some() && l1 == l2 && matches!(l1, Some(krabka_broker::NodeId(1 | 2))) {
@@ -72,7 +77,7 @@ async fn contested_election_krabka_counts_jvm_prevote() {
         // agreement in {1,2}; no single awaiter expresses the l1 == l2
         // convergence, and awaiting each handle separately would drop this
         // retry and could spuriously trip on a transient election disagreement.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
     let leader0 = leader0.expect("Krabka 2/3 majority did not elect a leader in {1,2}");
     let epoch0 = c1.controller_quorum_state_for_test().current_term;
@@ -86,10 +91,10 @@ async fn contested_election_krabka_counts_jvm_prevote() {
     // log showing BOTH a role transition (Follower/Leader) AND high-water-mark
     // catch-up — the same join signals the sibling `static_mixed_jvm_krabka_quorum`
     // test relies on. Generous deadline to tolerate a slow JVM boot.
-    let join_deadline = std::time::Instant::now() + Duration::from_secs(70);
+    let join_deadline = Instant::now() + Duration::from_secs(70);
     let mut jvm_joined = false;
     let mut last_jvm_log = String::new();
-    while std::time::Instant::now() < join_deadline {
+    while Instant::now() < join_deadline {
         let logs = Command::new("docker")
             .args(["logs", CONTESTED_CONTAINER])
             .output()
@@ -110,12 +115,12 @@ async fn contested_election_krabka_counts_jvm_prevote() {
         // intentional: polls the external JVM container's `docker logs` for its
         // Follower/Leader transition + HWM catch-up; no in-process krabka
         // metric reflects the JVM's internal role/replication state.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        time::sleep(Duration::from_secs(1)).await;
     }
     if !jvm_joined {
         eprintln!("==== JVM controller logs (tail) — JVM NEVER JOINED ====");
         support::print_log_tail(&last_jvm_log, 40);
-        let _ = std::fs::write("/tmp/jvm_contested.log", &last_jvm_log);
+        let _ = fs::write("/tmp/jvm_contested.log", &last_jvm_log);
         docker_rm(CONTESTED_CONTAINER);
         // Best-effort cleanup of the in-process brokers; the process is dying.
         c1.shutdown().await;
@@ -149,7 +154,7 @@ async fn contested_election_krabka_counts_jvm_prevote() {
     // submitting a TopicRecord with its own fresh Uuid::new_v4(). Until that
     // bootstrap is made idempotent on topic id, a JVM follower that replicates
     // far enough will crash and can never grant the survivor's pre-vote.
-    tokio::time::sleep(Duration::from_secs(6)).await;
+    time::sleep(Duration::from_secs(6)).await;
     eprintln!("phase 1c: JVM has had 6s of steady fetching — killing the leader now");
 
     // ── Phase 2: kill the Krabka leader; the survivor needs the JVM's grants. ─
@@ -165,10 +170,10 @@ async fn contested_election_krabka_counts_jvm_prevote() {
     // Trace the survivor's quorum state every ~2s so a stuck recovery is legible:
     // does `current_term` climb past epoch0 (the survivor IS promoting in some
     // rounds) or is it truly pinned at the old epoch (no majority reachable)?
-    let recover_deadline = std::time::Instant::now() + Duration::from_mins(1);
+    let recover_deadline = Instant::now() + Duration::from_mins(1);
     let mut recovered = false;
     let mut tick = 0u32;
-    while std::time::Instant::now() < recover_deadline {
+    while Instant::now() < recover_deadline {
         let qs = survivor.controller_quorum_state_for_test();
         if tick.is_multiple_of(4) {
             eprintln!(
@@ -188,7 +193,7 @@ async fn contested_election_krabka_counts_jvm_prevote() {
         // (current_term > epoch0); the controller quorum term is not in the
         // metadata image and has no awaiter/metric — wait_until_controller_leader
         // only observes a non-zero leader, not term advance or leader identity.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
     let final_qs = survivor.controller_quorum_state_for_test();
     eprintln!(

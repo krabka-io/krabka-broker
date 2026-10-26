@@ -11,15 +11,17 @@ use {
         test_support::{KafkaErrorCode, encode_request, start_broker_no_audit_with},
     },
     assert2::assert,
+    bytes::Bytes,
     krabka_ids::{ApiVersion, Offset, PartitionIndex},
     krabka_log::Log,
     krabka_protocol::{
         Decode,
         owned::{
-            fetch_request::{FetchPartition, FetchRequest, FetchTopic},
-            fetch_response::FetchResponse,
+            fetch_request::{self, FetchPartition, FetchRequest, FetchTopic},
+            fetch_response::{FetchResponse, PartitionData},
         },
-        records::{Record, RecordBatch},
+        primitives::uuid,
+        records::{Record, RecordBatch, RecordsPayload},
     },
 };
 
@@ -56,7 +58,7 @@ pub(super) fn append_epoch_batches(log: &mut Log, epochs: &[i32]) {
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(super) struct FetchWireSetup<'a> {
-    #[default(ApiVersion(krabka_protocol::owned::fetch_request::MAX_VERSION))]
+    #[default(ApiVersion(fetch_request::MAX_VERSION))]
     pub version: ApiVersion,
     #[default("client")]
     pub user: &'a str,
@@ -72,7 +74,7 @@ impl Default for FetchReplicaId {
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(super) struct SessionlessFetchSetup {
-    #[default(ApiVersion(krabka_protocol::owned::fetch_request::MAX_VERSION))]
+    #[default(ApiVersion(fetch_request::MAX_VERSION))]
     pub version: ApiVersion,
     pub replica: FetchReplicaId,
 }
@@ -95,8 +97,7 @@ impl TopicRepresentation {
 /// A sessionless fetch with the follower identity in the field served by this version.
 #[bon::builder]
 pub(super) fn sessionless_request(
-    #[builder(into, default = ApiVersion (krabka_protocol :: owned :: fetch_request :: MAX_VERSION))]
-    version: ApiVersion,
+    #[builder(into, default = ApiVersion (fetch_request :: MAX_VERSION))] version: ApiVersion,
     #[builder(into, default)] replica: FetchReplicaId,
 ) -> FetchRequest {
     use krabka_protocol::owned::fetch_request::ReplicaState;
@@ -128,7 +129,7 @@ pub(super) fn sessionless_request(
 /// limit, sessionless unless it names a session.
 #[bon::builder]
 pub(super) fn consumer_fetch_request(
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    topic_id: uuid::Uuid,
     #[builder(default)] max_wait_ms: i32,
     #[builder(default)] min_bytes: i32,
     #[builder(default = INVALID_SESSION_ID)] session_id: i32,
@@ -158,8 +159,7 @@ pub(super) fn consumer_fetch_request(
 pub(super) async fn fetch_wire(
     broker: &BrokerHandle,
     request: &FetchRequest,
-    #[builder(into, default = ApiVersion (krabka_protocol :: owned :: fetch_request :: MAX_VERSION))]
-    version: ApiVersion,
+    #[builder(into, default = ApiVersion (fetch_request :: MAX_VERSION))] version: ApiVersion,
     #[builder(default = "client")] user: &'_ str,
     #[builder(default = "fetch-client")] client_id: &'_ str,
 ) -> FetchResponse {
@@ -194,8 +194,8 @@ pub(super) async fn fetch_wire(
 /// Independent single-topic response model, including the version's name/id representation.
 pub(super) fn expected_single_topic(
     representation: TopicRepresentation,
-    topic: (&str, krabka_protocol::primitives::uuid::Uuid),
-    partition: krabka_protocol::owned::fetch_response::PartitionData,
+    topic: (&str, uuid::Uuid),
+    partition: PartitionData,
 ) -> FetchResponse {
     use krabka_protocol::{owned::fetch_response::FetchableTopicResponse, primitives::uuid::Uuid};
     FetchResponse {
@@ -217,30 +217,18 @@ pub(super) fn expected_single_topic(
     }
 }
 
+krabka_macros::refused_fetch_partition_fixture!(refused_partition_row);
+
 pub(super) fn expected_refused_partition(
     partition_index: PartitionIndex,
     error_code: KafkaErrorCode,
-) -> krabka_protocol::owned::fetch_response::PartitionData {
-    krabka_protocol::owned::fetch_response::PartitionData {
-        partition_index: partition_index.0,
-        error_code: error_code.0,
-        high_watermark: -1,
-        last_stable_offset: -1,
-        log_start_offset: -1,
-        aborted_transactions: Some(Vec::new()),
-        preferred_read_replica: -1,
-        records: Some(krabka_protocol::records::RecordsPayload::Legacy(
-            bytes::Bytes::new(),
-        )),
-        ..Default::default()
-    }
+) -> PartitionData {
+    refused_partition_row(partition_index.0, error_code.0)
 }
 
 /// Default partition-zero row shared by sessionless fetch fixtures.
-pub(super) fn request_partition(
-    fetch_offset: Offset,
-) -> krabka_protocol::owned::fetch_request::FetchPartition {
-    krabka_protocol::owned::fetch_request::FetchPartition {
+pub(super) fn request_partition(fetch_offset: Offset) -> FetchPartition {
+    FetchPartition {
         partition: 0,
         fetch_offset: fetch_offset.0,
         partition_max_bytes: 1_048_576,
@@ -252,18 +240,17 @@ pub(super) fn request_partition(
 #[derive(krabka_macros::FieldDefaults)]
 pub(super) struct ExpectedReadSetup {
     pub watermark: Offset,
-    #[default(krabka_protocol::records::RecordsPayload::Legacy(bytes::Bytes::new()))]
-    pub records: krabka_protocol::records::RecordsPayload,
+    #[default(RecordsPayload::Legacy(Bytes::new()))]
+    pub records: RecordsPayload,
 }
 
 #[bon::builder]
 pub(super) fn expected_read(
     #[builder(into, default)] watermark: Offset,
-    #[builder(default = krabka_protocol :: records :: RecordsPayload :: Legacy (bytes :: Bytes :: new ()))]
-    records: krabka_protocol::records::RecordsPayload,
-) -> krabka_protocol::owned::fetch_response::PartitionData {
+    #[builder(default = RecordsPayload :: Legacy (Bytes :: new ()))] records: RecordsPayload,
+) -> PartitionData {
     let setup = ExpectedReadSetup { watermark, records };
-    krabka_protocol::owned::fetch_response::PartitionData {
+    PartitionData {
         partition_index: 0,
         error_code: NONE,
         high_watermark: setup.watermark.0,

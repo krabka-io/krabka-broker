@@ -58,21 +58,21 @@ use {
         },
     },
     tokio::{
-        sync::{Mutex, OwnedMutexGuard, RwLock, RwLockReadGuard},
+        sync::{Mutex, Notify, OwnedMutexGuard, RwLock, RwLockReadGuard},
         task::JoinHandle,
     },
 };
 
-pub(crate) mod jobs;
+pub mod jobs;
 mod persist;
 mod recovery;
 mod state_machine;
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 
 use crate::{
-    codes::{COORDINATOR_LOAD_IN_PROGRESS, NOT_COORDINATOR},
+    codes::{COORDINATOR_LOAD_IN_PROGRESS, COORDINATOR_NOT_AVAILABLE, NOT_COORDINATOR},
     partition_registry::PartitionRegistry,
     share_coordinator::{
         bootstrap, config::ShareCoordinatorConfig, partitioner::partition_for_share_key,
@@ -89,54 +89,52 @@ type ShareStateKey3 = (String, uuid::Uuid, i32);
 /// The coordinator bumps this epoch on initialization and on
 /// re-initialization, for example `AlterShareGroupOffsets`. It fences a write
 /// or initialize that carries an older epoch with `FENCED_STATE_EPOCH`.
-pub(crate) type StateEpoch = i32;
+pub type StateEpoch = i32;
 
 /// Leader epoch of the share-partition leader that issued a state write.
 ///
 /// The coordinator fences a stale value with `FENCED_LEADER_EPOCH`.
-pub(crate) type LeaderEpoch = i32;
+pub type LeaderEpoch = i32;
 
 /// Per-partition Kafka wire error code for a failed state-machine operation.
 ///
 /// See [`crate::codes`].
-pub(crate) type ShareErrorCode = i16;
+pub type ShareErrorCode = i16;
 
 /// Summary tuple that [`ShareCoordinator::read_summary`] returns.
 ///
 /// The fields are `state_epoch`, `leader_epoch`, `start_offset`, and
 /// `delivery_complete_count`.
-pub(crate) type ShareStateSummary = (StateEpoch, LeaderEpoch, Offset, i32);
+pub type ShareStateSummary = (StateEpoch, LeaderEpoch, Offset, i32);
 
 /// Kafka's messages for the share-state error rows: the `Errors` default
 /// messages and the validation messages of `ShareCoordinatorShard`.
-pub(crate) mod message {
-    pub(crate) const NEGATIVE_PARTITION_ID: &str = "The partition id cannot be a negative number.";
-    pub(crate) const NEGATIVE_LEADER_EPOCH: &str = "The leader epoch cannot be a negative number.";
-    pub(crate) const NEGATIVE_STATE_EPOCH: &str = "The state epoch cannot be a negative number.";
-    pub(crate) const WRITE_UNINITIALIZED_SHARE_PARTITION: &str =
+pub mod message {
+    pub const NEGATIVE_PARTITION_ID: &str = "The partition id cannot be a negative number.";
+    pub const NEGATIVE_LEADER_EPOCH: &str = "The leader epoch cannot be a negative number.";
+    pub const NEGATIVE_STATE_EPOCH: &str = "The state epoch cannot be a negative number.";
+    pub const WRITE_UNINITIALIZED_SHARE_PARTITION: &str =
         "Write operation on uninitialized share partition not allowed.";
-    pub(crate) const READ_UNINITIALIZED_SHARE_PARTITION: &str =
+    pub const READ_UNINITIALIZED_SHARE_PARTITION: &str =
         "Read operation on uninitialized share partition not allowed.";
-    pub(crate) const UNKNOWN_SERVER_ERROR: &str =
+    pub const UNKNOWN_SERVER_ERROR: &str =
         "The server experienced an unexpected error when processing the request.";
-    pub(crate) const UNKNOWN_TOPIC_OR_PARTITION: &str =
-        "This server does not host this topic-partition.";
-    pub(crate) const COORDINATOR_LOAD_IN_PROGRESS: &str =
+    pub const UNKNOWN_TOPIC_OR_PARTITION: &str = "This server does not host this topic-partition.";
+    pub const COORDINATOR_LOAD_IN_PROGRESS: &str =
         "The coordinator is loading and hence can't process requests.";
-    pub(crate) const NOT_COORDINATOR: &str = "This is not the correct coordinator.";
-    pub(crate) const REQUEST_TIMED_OUT: &str = "The request timed out.";
-    pub(crate) const KAFKA_STORAGE_ERROR: &str =
-        "Disk error when trying to access log file on the disk.";
-    pub(crate) const FENCED_LEADER_EPOCH: &str =
+    pub const NOT_COORDINATOR: &str = "This is not the correct coordinator.";
+    pub const REQUEST_TIMED_OUT: &str = "The request timed out.";
+    pub const KAFKA_STORAGE_ERROR: &str = "Disk error when trying to access log file on the disk.";
+    pub const FENCED_LEADER_EPOCH: &str =
         "The leader epoch in the request is older than the epoch on the broker.";
-    pub(crate) const FENCED_STATE_EPOCH: &str =
+    pub const FENCED_STATE_EPOCH: &str =
         "The coordinator rejected the request because the state epoch did not match.";
 }
 
 /// A `ReadShareGroupState` or `WriteShareGroupState` that the coordinator
 /// did not apply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ShareStateError {
+pub enum ShareStateError {
     /// The shard refused the request. Kafka puts `message` on the row as it
     /// is.
     Refused {
@@ -187,7 +185,7 @@ impl ShareStateError {
 
 /// The fields of one `WriteShareGroupState` partition.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ShareWrite {
+pub struct ShareWrite {
     pub(crate) state_epoch: StateEpoch,
     pub(crate) leader_epoch: LeaderEpoch,
     pub(crate) start_offset: Offset,
@@ -200,11 +198,11 @@ pub(crate) struct ShareWrite {
 ///
 /// This value tells the share-partition leader to initialize delivery from
 /// scratch (KIP-932).
-pub(crate) const UNINITIALIZED_START_OFFSET: i64 = -1;
+pub const UNINITIALIZED_START_OFFSET: i64 = -1;
 
 /// Load status of one `__share_group_state` partition that this broker leads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LoadStatus {
+pub enum LoadStatus {
     /// The metadata image names this broker as leader, but the partition log
     /// is not open locally yet, or an indeterminate append still needs a
     /// successful writer barrier and replay. The next refresh retries load.
@@ -258,7 +256,7 @@ pub(super) struct Active<'a> {
 /// A caller that does not wait drops this value. The tasks run on.
 #[derive(Debug, Default, krabka_macros::ScheduledLoads)]
 #[scheduled_loads(failure_message = "__share_group_state load task failed")]
-pub(crate) struct ScheduledLoads {
+pub struct ScheduledLoads {
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -271,7 +269,7 @@ impl ScheduledLoads {
 ///
 /// `Broker::start` constructs the coordinator and shares it with the
 /// share-state wire handlers through an `Arc`.
-pub(crate) struct ShareCoordinator {
+pub struct ShareCoordinator {
     pub(crate) node_id: krabka_metadata::NodeId,
     pub(crate) partitions: Arc<PartitionRegistry>,
     /// Live in-memory state: `(group, topicId, partition)` → locked state.
@@ -291,7 +289,7 @@ pub(crate) struct ShareCoordinator {
     uncertain_appends: DashMap<PartitionIndex, ()>,
     /// Wakes recovery without requiring a metadata change. Failed attempts
     /// wait for the next client retry or metadata change rather than spinning.
-    recovery_needed: tokio::sync::Notify,
+    recovery_needed: Notify,
     /// Source of [`LedPartition::generation`].
     next_generation: AtomicU64,
     config: ShareCoordinatorConfig,
@@ -329,7 +327,7 @@ impl ShareCoordinator {
             leader_partitions: RwLock::new(HashMap::new()),
             operation_locks: DashMap::new(),
             uncertain_appends: DashMap::new(),
-            recovery_needed: tokio::sync::Notify::new(),
+            recovery_needed: Notify::new(),
             next_generation: AtomicU64::new(0),
             config,
             wall_clock,
@@ -381,53 +379,10 @@ impl ShareCoordinator {
         if !self.leadership_changes(&desired).await {
             return ScheduledLoads::default();
         }
-        let mut to_load = Vec::new();
-        let mut to_drop = Vec::new();
-        {
-            let mut led = self.leader_partitions.write().await;
-            led.retain(|partition, _| {
-                let keep = desired.contains_key(partition);
-                if !keep {
-                    to_drop.push(*partition);
-                }
-                keep
-            });
-            for (partition, leader_epoch) in desired {
-                let local = self.leads_locally(partition, leader_epoch);
-                let entry = led.get(&partition).copied();
-                let new_term = entry.is_none_or(|e| e.leader_epoch != leader_epoch);
-                let reload = entry
-                    .is_some_and(|e| matches!(e.status, LoadStatus::Pending | LoadStatus::Failed))
-                    && local;
-                let reload = reload
-                    || (local
-                        && entry.is_some_and(|e| e.status == LoadStatus::Active)
-                        && self.uncertain_appends.contains_key(&partition));
-                if !new_term && !reload {
-                    continue;
-                }
-                let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
-                let status = if local {
-                    LoadStatus::Loading
-                } else {
-                    LoadStatus::Pending
-                };
-                led.insert(partition, LedPartition {
-                    leader_epoch,
-                    generation,
-                    status,
-                });
-                to_drop.push(partition);
-                if local {
-                    to_load.push((partition, generation));
-                }
-            }
-            // Drop the old keys while the write guard still holds, so no
-            // operation sees a half-dropped partition.
-            for partition in &to_drop {
-                self.drop_partition_state(*partition);
-            }
-        }
+        // The write guard is held for the whole update, so no operation sees
+        // a half-dropped partition.
+        let to_load =
+            self.apply_desired_leadership(&mut *self.leader_partitions.write().await, desired);
         let handles = to_load
             .into_iter()
             .map(|(partition, generation)| {
@@ -438,6 +393,61 @@ impl ShareCoordinator {
             })
             .collect();
         ScheduledLoads { tasks: handles }
+    }
+
+    /// Applies `desired` (led partition to leader epoch) to `led`, and drops
+    /// the in-memory keys of every partition that lost or changed its term.
+    /// Returns the partitions to replay, with the generation of their term.
+    fn apply_desired_leadership(
+        &self,
+        led: &mut LeaderPartitions,
+        desired: HashMap<PartitionIndex, i32>,
+    ) -> Vec<(PartitionIndex, u64)> {
+        let mut to_load = Vec::new();
+        let mut to_drop = Vec::new();
+        led.retain(|partition, _| {
+            let keep = desired.contains_key(partition);
+            if !keep {
+                to_drop.push(*partition);
+            }
+            keep
+        });
+        for (partition, leader_epoch) in desired {
+            let local = self.leads_locally(partition, leader_epoch);
+            let entry = led.get(&partition).copied();
+            let new_term = entry.is_none_or(|e| e.leader_epoch != leader_epoch);
+            let reload = entry
+                .is_some_and(|e| matches!(e.status, LoadStatus::Pending | LoadStatus::Failed))
+                && local;
+            let reload = reload
+                || (local
+                    && entry.is_some_and(|e| e.status == LoadStatus::Active)
+                    && self.uncertain_appends.contains_key(&partition));
+            if !new_term && !reload {
+                continue;
+            }
+            let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+            let status = if local {
+                LoadStatus::Loading
+            } else {
+                LoadStatus::Pending
+            };
+            led.insert(partition, LedPartition {
+                leader_epoch,
+                generation,
+                status,
+            });
+            to_drop.push(partition);
+            if local {
+                to_load.push((partition, generation));
+            }
+        }
+        // Drop the old keys while the write guard still holds, so no
+        // operation sees a half-dropped partition.
+        for partition in &to_drop {
+            self.drop_partition_state(*partition);
+        }
+        to_load
     }
 
     /// Whether `desired` (led partition to leader epoch) differs from the led
@@ -479,7 +489,7 @@ impl ShareCoordinator {
     /// Removes every in-memory key that maps to `state_partition`.
     fn drop_partition_state(&self, state_partition: PartitionIndex) {
         self.state.retain(|(group, topic_id, partition), _| {
-            self.state_partition_for(group, topic_id, *partition) != state_partition
+            self.state_partition_for(group, topic_id, *partition) != Some(state_partition)
         });
     }
 
@@ -499,6 +509,26 @@ impl ShareCoordinator {
                     led.status
                 }
             })
+    }
+
+    /// [`Self::active`] for the state partition of the share key
+    /// `(group, topic_id, partition)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `COORDINATOR_NOT_AVAILABLE` when the configured partition count
+    /// is not positive, so the key maps to no state partition, and otherwise
+    /// the errors of [`Self::active`].
+    pub(super) async fn active_for_key(
+        &self,
+        group: &str,
+        topic_id: &uuid::Uuid,
+        partition: i32,
+    ) -> Result<Active<'_>, ShareErrorCode> {
+        let state_partition = self
+            .state_partition_for(group, topic_id, partition)
+            .ok_or(COORDINATOR_NOT_AVAILABLE)?;
+        self.active(state_partition).await
     }
 
     /// Returns a read guard on the leadership map, and the term of
@@ -579,6 +609,24 @@ impl ShareCoordinator {
         }
     }
 
+    /// Test-only: marks every partition `Loading` in a new term and drops its
+    /// keys, under the caller's write guard. Returns the terms to load.
+    #[cfg(test)]
+    fn start_loading_all_for_test(&self, led: &mut LeaderPartitions) -> Vec<(PartitionIndex, u64)> {
+        let mut terms = Vec::new();
+        for p in 0..self.config.state_topic_num_partitions {
+            let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+            led.insert(PartitionIndex(p), LedPartition {
+                leader_epoch: 0,
+                generation,
+                status: LoadStatus::Loading,
+            });
+            self.drop_partition_state(PartitionIndex(p));
+            terms.push((PartitionIndex(p), generation));
+        }
+        terms
+    }
+
     /// Test-only: installs this broker as the leader of every local state
     /// partition at leader epoch 0, as the metadata reconcile does before the
     /// coordinator loads a partition.
@@ -596,39 +644,28 @@ impl ShareCoordinator {
     #[cfg(test)]
     pub(crate) async fn reload_all_partitions_for_test(&self) {
         self.lead_local_partitions_for_test().await;
-        let mut terms = Vec::new();
-        {
-            let mut led = self.leader_partitions.write().await;
-            for p in 0..self.config.state_topic_num_partitions {
-                let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
-                led.insert(PartitionIndex(p), LedPartition {
-                    leader_epoch: 0,
-                    generation,
-                    status: LoadStatus::Loading,
-                });
-                self.drop_partition_state(PartitionIndex(p));
-                terms.push((PartitionIndex(p), generation));
-            }
-        }
+        let terms = self.start_loading_all_for_test(&mut *self.leader_partitions.write().await);
         for (partition, generation) in terms {
             self.load_partition(partition, generation).await;
         }
     }
 
     /// Returns the `__share_group_state` partition index responsible for the
-    /// share key `(group, topic_id, partition)`.
+    /// share key `(group, topic_id, partition)`, or `None` when the configured
+    /// partition count is not positive.
     #[must_use]
     pub(crate) fn state_partition_for(
         &self,
         group: &str,
         topic_id: &uuid::Uuid,
         partition: i32,
-    ) -> PartitionIndex {
-        PartitionIndex(partition_for_share_key(
+    ) -> Option<PartitionIndex> {
+        partition_for_share_key(
             group,
             topic_id,
             partition,
             self.config.state_topic_num_partitions,
-        ))
+        )
+        .map(PartitionIndex)
     }
 }

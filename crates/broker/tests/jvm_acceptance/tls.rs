@@ -10,7 +10,7 @@ use {
     crate::support::{fixture_cache_dir, manifest_dir},
     assert2::assert,
     krabka_broker::BrokerConfig,
-    std::process::Command,
+    std::{fs, path::PathBuf, process::Command},
 };
 
 /// Spawn the broker with a single `SSL` listener on an allocated port
@@ -18,7 +18,7 @@ use {
 /// `crates/broker/tests/fixtures/security/`. No SASL. Mirrors
 /// [`start_host_broker`] otherwise, but flips the protocol to `Ssl` and
 /// supplies a [`TlsConfig`].
-pub(crate) async fn start_ssl_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
+pub async fn start_ssl_broker() -> (krabka_broker::BrokerHandle, tempfile::TempDir) {
     super::broker::start_host_broker_with(|config| {
         configure_tls(config, krabka_security::ListenerProtocol::Ssl);
         let tls = config.tls_config.as_ref().expect("TLS config");
@@ -49,9 +49,9 @@ pub(crate) async fn start_ssl_broker() -> (krabka_broker::BrokerHandle, tempfile
 /// function reuses them with `--entrypoint keytool` instead of pulling
 /// `openjdk:17`. The image is always on disk, because the SSL test itself
 /// runs `kafka-broker-api-versions` from the same image.
-pub(crate) fn prepare_jks_truststore() -> std::path::PathBuf {
+pub fn prepare_jks_truststore() -> PathBuf {
     let cache_dir = fixture_cache_dir("krabka-jvm-truststore", &["dev_cert.pem"]);
-    std::fs::create_dir_all(&cache_dir).expect("mkdir truststore cache");
+    fs::create_dir_all(&cache_dir).expect("mkdir truststore cache");
     let ts_path = cache_dir.join("ts.jks");
 
     // Stage the cert in the cache dir so the bind mount is a directory we
@@ -63,7 +63,7 @@ pub(crate) fn prepare_jks_truststore() -> std::path::PathBuf {
         .join("security")
         .join("dev_cert.pem");
     let cert_staged = cache_dir.join("dev_cert.pem");
-    std::fs::copy(&cert_src, &cert_staged).expect("copy dev_cert.pem to cache");
+    fs::copy(&cert_src, &cert_staged).expect("copy dev_cert.pem to cache");
 
     if !ts_path.exists() {
         let mount = format!("{}:/work", cache_dir.display());
@@ -118,10 +118,10 @@ pub(crate) fn prepare_jks_truststore() -> std::path::PathBuf {
 /// This is the dual-mech broker from [`start_dual_mech_broker`] flipped
 /// from `SaslPlaintext` to `SaslSsl` with a `TlsConfig` attached. That is
 /// the production-shape listener configuration.
-pub(crate) fn start_sasl_ssl_broker(
+pub fn start_sasl_ssl_broker(
     admin: &str,
     admin_pass: &str,
-) -> impl std::future::Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir)> {
+) -> impl Future<Output = (krabka_broker::BrokerHandle, tempfile::TempDir)> {
     super::broker::start_host_broker_with(|config| {
         super::sasl::configure_sasl(config, &[(admin, admin_pass)], Some(admin));
         config

@@ -21,13 +21,15 @@ use {
         convert::{ByteSizeExt as _, TimeExt},
         fmt::Human as _,
     },
+    std::fmt,
+    tokio::time,
     tokio_util::sync::CancellationToken,
     tracing::warn,
 };
 
 pub(super) fn connection_options(client_id: &str) -> ConnectionOptions {
     ConnectionOptions {
-        client_id: client_id.to_string(),
+        client_id: client_id.to_owned(),
         ..ConnectionOptions::default()
     }
 }
@@ -36,7 +38,7 @@ pub(super) fn connection_options(client_id: &str) -> ConnectionOptions {
 ///
 /// Both the partition fetcher and the diskless WAL follower build one, so the
 /// two share a reconnect schedule and a shutdown race.
-pub(crate) struct LeaderDial<'a> {
+pub struct LeaderDial<'a> {
     /// Names the caller in the retry warning.
     pub(crate) label: &'static str,
     pub(crate) client: &'a InterBrokerClient,
@@ -110,9 +112,7 @@ async fn open_link(dial: &LeaderDial<'_>) -> Result<FollowerLink, String> {
 /// The connection routes through the shared [`InterBrokerClient`], which runs
 /// TLS and SASL when the inter-broker listener needs them. It falls back to
 /// plain TCP for `ListenerProtocol::Plaintext`.
-pub(crate) async fn connect_leader_with_backoff(
-    dial: &LeaderDial<'_>,
-) -> Result<Connection, String> {
+pub async fn connect_leader_with_backoff(dial: &LeaderDial<'_>) -> Result<Connection, String> {
     with_backoff(dial, || {
         dial.client.connect_as_connection(
             dial.host,
@@ -128,7 +128,7 @@ pub(crate) async fn connect_leader_with_backoff(
 /// Runs `attempt` until it succeeds, backing off between failures as the
 /// reconnect policy says. Returns `Err` only if a shutdown starts during an
 /// attempt or the wait.
-async fn with_backoff<T, E: std::fmt::Display, F: Future<Output = Result<T, E>>>(
+async fn with_backoff<T, E: fmt::Display, F: Future<Output = Result<T, E>>>(
     dial: &LeaderDial<'_>,
     mut attempt: impl FnMut() -> F,
 ) -> Result<T, String> {
@@ -152,13 +152,10 @@ async fn with_backoff<T, E: std::fmt::Display, F: Future<Output = Result<T, E>>>
     }
 }
 
-pub(crate) async fn sleep_or_cancel(
-    shutdown: &CancellationToken,
-    delay: Time,
-) -> Result<(), String> {
+pub async fn sleep_or_cancel(shutdown: &CancellationToken, delay: Time) -> Result<(), String> {
     tokio::select! {
         () = shutdown.cancelled() => Err("cancelled".into()),
-        () = tokio::time::sleep(delay.to_std()) => Ok(()),
+        () = time::sleep(delay.to_std()) => Ok(()),
     }
 }
 

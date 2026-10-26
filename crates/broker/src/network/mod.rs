@@ -3,8 +3,10 @@
 use {crate::handlers::ApiKeyCode, krabka_protocol::api_key::ApiKey};
 
 pub(crate) mod auth;
-/// Outbound inter-broker client, with TLS and SASL. It is public so peer
-/// crates inside this workspace can `use krabka_broker::network::client::*`.
+/// Outbound inter-broker client, with TLS and SASL.
+///
+/// It is public so peer crates inside this workspace can
+/// `use krabka_broker::network::client::*`.
 pub mod client;
 pub(crate) mod codec;
 pub(crate) mod dispatch;

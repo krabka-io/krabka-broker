@@ -29,9 +29,10 @@ use {
             Arc,
             atomic::{AtomicI64, AtomicU64},
         },
+        time::Duration,
     },
     tokio::sync::OnceCell,
-    tokio_rustls::TlsAcceptor,
+    tokio_rustls::{TlsAcceptor, server::TlsStream},
 };
 
 mod authorization;
@@ -101,7 +102,7 @@ pub struct BrokerRaftHandshake {
     pub sasl_max_receive_bytes: usize,
     /// Kafka's `connection.failed.authentication.delay.ms`: how long a failed
     /// SASL exchange holds its answer and the close that follows.
-    pub failed_authentication_delay: std::time::Duration,
+    pub failed_authentication_delay: Duration,
     /// Authorizer that the controller listener asks for each request.
     ///
     /// Authentication proves *who* the peer is: the SASL principal, the mTLS
@@ -151,16 +152,13 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
         // 2. SASL termination (if the listener protocol requires it). The
         //    SASL principal replaces the certificate principal, as Kafka's
         //    `SaslServerAuthenticator` does on `SASL_SSL`.
-        let mut principal = certificate_principal;
-        let mut authenticated_via_token = false;
-        let mut expires_at_ms = None;
-        if self.protocol.requires_sasl() {
+        let (principal, authenticated_via_token, expires_at_ms) = if self.protocol.requires_sasl() {
             let (authenticated, via_token, deadline) =
                 run_inbound_sasl(&mut *stream, self, &peer, api_versions).await?;
-            principal = Some(authenticated);
-            authenticated_via_token = via_token;
-            expires_at_ms = deadline;
-        }
+            (Some(authenticated), via_token, deadline)
+        } else {
+            (certificate_principal, false, None)
+        };
 
         // 3. Authorization runs for each request, not here. A principal
         //    without `ClusterAction` keeps its connection and can still run
@@ -185,7 +183,7 @@ impl RaftListenerHandshake for BrokerRaftHandshake {
 /// `KafkaPrincipal.ANONYMOUS`.
 fn anonymous() -> krabka_security::Principal {
     krabka_security::Principal {
-        name: "ANONYMOUS".to_string(),
+        name: "ANONYMOUS".to_owned(),
         auth_method: krabka_security::AuthMethod::Anonymous,
         groups: Vec::new(),
     }
@@ -194,7 +192,7 @@ fn anonymous() -> krabka_security::Principal {
 /// The mTLS principal of a controller-listener connection, or `None` when the
 /// peer presented no certificate.
 fn peer_certificate_principal<S>(
-    stream: &tokio_rustls::server::TlsStream<S>,
+    stream: &TlsStream<S>,
     mapper: &SslPrincipalMapper,
 ) -> Result<Option<krabka_security::Principal>, RaftHandshakeError> {
     let (_, server_connection) = stream.get_ref();

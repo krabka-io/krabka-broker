@@ -1,8 +1,13 @@
 //! Wire construction preserves explicit fields, expressions and evaluation order.
+#![cfg(test)]
 
 extern crate self as krabka_protocol;
 
-use {assert2::assert, std::cell::Cell};
+use {
+    self::model::Empty,
+    assert2::assert,
+    std::{cell::Cell, iter},
+};
 
 pub type UnknownTaggedFields = Vec<(u32, Vec<u8>)>;
 
@@ -25,11 +30,11 @@ struct Response {
 mod model {
     use crate::UnknownTaggedFields;
 
-    pub(crate) struct Empty {
+    pub struct Empty {
         pub(crate) unknown_tagged_fields: UnknownTaggedFields,
     }
 
-    pub(crate) struct Generic<T> {
+    pub struct Generic<T> {
         pub(crate) value: T,
         pub(crate) unknown_tagged_fields: UnknownTaggedFields,
     }
@@ -64,7 +69,7 @@ fn nested_constructors_preserve_shorthand_paths_versions_and_error_codes() {
             }]
     );
 
-    let empty = krabka_macros::tagged_wire!(crate::model::Empty {});
+    let empty = krabka_macros::tagged_wire!(Empty {});
     assert!(empty.unknown_tagged_fields.is_empty());
     let generic = krabka_macros::tagged_wire!(model::Generic::<i32> { value: 19 });
     assert!(generic.value == 19);
@@ -98,7 +103,7 @@ fn multiline_if_else_blocks_retain_their_original_delimiter_locations(enabled: b
             version: if enabled {
                 [1, 1, 1, 1].into_iter().sum()
             } else {
-                [0_i16].into_iter().sum()
+                iter::once(0_i16).sum()
             },
             error_code: 0,
             values: pair(

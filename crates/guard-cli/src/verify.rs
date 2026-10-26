@@ -38,7 +38,10 @@ use {
     crate::signing::{freeze_signing_bytes, freeze_signing_input},
     krabka_audit::operator_keys::{OperatorKeyEntry, OperatorKeys},
     krabka_protocol::krabka::freeze::DescribedTopicFreeze,
-    std::path::{Path, PathBuf},
+    std::{
+        fs,
+        path::{Path, PathBuf},
+    },
 };
 
 /// Why one registry entry is not proved.
@@ -61,11 +64,11 @@ impl Unproved {
     #[must_use]
     pub fn reason(self) -> &'static str {
         match self {
-            Unproved::Unsigned => "unsigned, so the broker's word is all that stands behind it",
-            Unproved::UnknownKeyId => {
+            Self::Unsigned => "unsigned, so the broker's word is all that stands behind it",
+            Self::UnknownKeyId => {
                 "no local operator key carries that key_id, so this entry cannot be checked here"
             }
-            Unproved::SignatureDidNotVerify => {
+            Self::SignatureDidNotVerify => {
                 "the signature does not verify against the local operator key"
             }
         }
@@ -186,7 +189,7 @@ fn check_entry(
 /// declares no `[[operator_keys]]` array, and when an entry names a public key
 /// file that is missing or does not hold a raw 32-byte Ed25519 public key.
 pub fn load_trust_set(path: &Path) -> Result<OperatorKeys, String> {
-    let text = std::fs::read_to_string(path)
+    let text = fs::read_to_string(path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let file: TrustFile = toml::from_str(&text)
         .map_err(|error| format!("cannot read {} as operator keys: {error}", path.display()))?;
@@ -231,8 +234,12 @@ struct TrustFileKey {
 #[cfg(test)]
 mod tests {
     use {
-        super::*, assert2::check, krabka_audit::FileEd25519Signer,
-        krabka_protocol::primitives::uuid::Uuid, ring::signature::Ed25519KeyPair,
+        super::*,
+        assert2::check,
+        krabka_audit::{FileEd25519Signer, operator_keys::OperatorKey},
+        krabka_protocol::primitives::uuid::Uuid,
+        ring::{rand::SystemRandom, signature::Ed25519KeyPair},
+        std::slice,
         tempfile::TempDir,
     };
 
@@ -264,7 +271,7 @@ mod tests {
     }
 
     fn fresh_signer(key_id: &str) -> TestSigner {
-        let rng = ring::rand::SystemRandom::new();
+        let rng = SystemRandom::new();
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("generate pkcs8");
         let signer = FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), key_id.to_owned())
             .expect("parse pkcs8");
@@ -275,7 +282,7 @@ mod tests {
     /// A trust set holding one key bound to one principal.
     fn trust_set(dir: &TempDir, key_id: &str, principal: &str, public: &[u8]) -> OperatorKeys {
         let path = dir.path().join(format!("{key_id}.pub"));
-        std::fs::write(&path, public).expect("write public key");
+        fs::write(&path, public).expect("write public key");
         OperatorKeys::load(&[OperatorKeyEntry {
             key_id: key_id.to_owned(),
             principal: principal.to_owned(),
@@ -329,7 +336,7 @@ mod tests {
             entry,
         } = signed_fixture();
 
-        let outcome = verify_registry(CLUSTER, &keys, std::slice::from_ref(&entry));
+        let outcome = verify_registry(CLUSTER, &keys, slice::from_ref(&entry));
 
         check!(
             outcome
@@ -419,11 +426,11 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let TestSigner { public, .. } = fresh_signer("alice-yubi");
         let public_path = dir.path().join("alice.pub");
-        std::fs::write(&public_path, &public).expect("write public key");
+        fs::write(&public_path, &public).expect("write public key");
         let file = dir.path().join("broker.toml");
         let encoded_public_path =
             toml::Value::String(public_path.display().to_string()).to_string();
-        std::fs::write(
+        fs::write(
             &file,
             format!(
                 "node_id = 1\n\n[[operator_keys]]\nkey_id = \"alice-yubi\"\nprincipal = \
@@ -435,11 +442,7 @@ mod tests {
         let keys = load_trust_set(&file).expect("load trust set");
 
         check!(keys.len() == 1);
-        check!(
-            keys.get("alice-yubi")
-                .map(krabka_audit::operator_keys::OperatorKey::principal)
-                == Some(ALICE)
-        );
+        check!(keys.get("alice-yubi").map(OperatorKey::principal) == Some(ALICE));
     }
 
     /// Each of these would otherwise leave the tool checking against an empty
@@ -455,13 +458,13 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let missing = dir.path().join("absent.toml");
         let not_toml = dir.path().join("not-toml.toml");
-        std::fs::write(&not_toml, "this is not toml").expect("write file");
+        fs::write(&not_toml, "this is not toml").expect("write file");
         let no_block = dir.path().join("no-block.toml");
-        std::fs::write(&no_block, "node_id = 1\n").expect("write file");
+        fs::write(&no_block, "node_id = 1\n").expect("write file");
         let empty_block = dir.path().join("empty-block.toml");
-        std::fs::write(&empty_block, "operator_keys = []\n").expect("write file");
+        fs::write(&empty_block, "operator_keys = []\n").expect("write file");
         let bad_key = dir.path().join("bad-key.toml");
-        std::fs::write(
+        fs::write(
             &bad_key,
             "[[operator_keys]]\nkey_id = \"k\"\nprincipal = \"User:k\"\npublic_key_path = \
              \"/nonexistent/k.pub\"\n",

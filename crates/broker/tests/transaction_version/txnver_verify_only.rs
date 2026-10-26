@@ -21,7 +21,8 @@ use {
     assert2::assert,
     krabka_client_core::Client,
     krabka_protocol::owned::common::add_partitions_to_txn_request::add_partitions_to_txn_topic::AddPartitionsToTxnTopic,
-    std::time::Duration,
+    std::time::{Duration, Instant},
+    tokio::time,
 };
 
 const VERIFY_TID: &str = "verify-tid";
@@ -42,7 +43,7 @@ async fn await_transaction_coordinator(client: &Client) -> ProducerIdentity {
         "FindCoordinator: {coordinator:?}"
     );
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let response = client
             .send(
@@ -60,10 +61,10 @@ async fn await_transaction_coordinator(client: &Client) -> ProducerIdentity {
             "InitProducerId: {response:?}"
         );
         assert!(
-            std::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "transaction coordinator did not become ready"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 

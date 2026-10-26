@@ -13,8 +13,8 @@ use {
     },
     crate::coordinator::unified::classic_state::{ClassicGroup, GroupState},
     bytes::Bytes,
-    proptest::prelude::*,
-    std::time::Duration,
+    proptest::{collection, prelude::*},
+    std::{collections::HashSet, time::Duration},
 };
 
 #[derive(Clone, Debug)]
@@ -45,7 +45,7 @@ proptest! {
     /// the handler fence guards and the leave retrigger. The membership
     /// invariants hold after every step.
     #[test]
-    fn classic_invariants_hold(ops in proptest::collection::vec(op_strategy(), 0..300)) {
+    fn classic_invariants_hold(ops in collection::vec(op_strategy(), 0..300)) {
         let mids = ["a", "b", "c"];
         let iids = ["x", "y"];
         let mut g = ClassicGroup::new("g");
@@ -107,7 +107,7 @@ proptest! {
                 Op::Expire => {
                     clock += 1;
                     let now = at(clock);
-                    let expired: std::collections::HashSet<String> = g
+                    let expired: HashSet<String> = g
                         .members
                         .iter()
                         .filter(|(id, m)| {
@@ -123,7 +123,7 @@ proptest! {
                     // that waits in `JoinGroup` cannot heartbeat and stays, as
                     // Kafka's `hasSatisfiedHeartbeat` keeps it.
                     prop_assert_eq!(
-                        dropped.into_iter().collect::<std::collections::HashSet<_>>(),
+                        dropped.into_iter().collect::<HashSet<_>>(),
                         expired,
                         "expiry disagrees with the session timeouts"
                     );

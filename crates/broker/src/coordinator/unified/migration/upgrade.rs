@@ -46,14 +46,12 @@ use {
 /// This function returns `None` where Kafka throws a `SchemaException`: a blob
 /// too short to hold a version, a negative version, or a body that does not
 /// decode.
-pub(crate) fn decode_consumer_subscription(
-    metadata: &[u8],
-) -> Option<ConsumerProtocolSubscription> {
+pub fn decode_consumer_subscription(metadata: &[u8]) -> Option<ConsumerProtocolSubscription> {
     let version = embedded_protocol_version(metadata)?;
     if version < 0 {
         return None;
     }
-    let mut cur = &metadata[2..];
+    let mut cur = metadata.get(2..)?;
     ConsumerProtocolSubscription::decode(&mut cur, version.min(SUBSCRIPTION_MAX_VERSION)).ok()
 }
 
@@ -63,7 +61,7 @@ pub(crate) fn decode_consumer_subscription(
 /// An empty classic group never reaches this: Kafka's
 /// `maybeDeleteEmptyClassicGroup` replaces it whatever the policy and the
 /// protocol type. The error is the `GROUP_ID_NOT_FOUND` message Kafka sends.
-pub(crate) fn validate_online_upgrade(
+pub fn validate_online_upgrade(
     state: &ClassicState,
     upgrade_enabled: bool,
     consumer_max_size: usize,
@@ -118,7 +116,7 @@ fn decode_consumer_assignment(
     let version = embedded_protocol_version(blob)
         .filter(|version| *version >= 0)
         .ok_or(UnconvertibleMember::Malformed)?;
-    let mut cur = &blob[2..];
+    let mut cur = blob.get(2..).ok_or(UnconvertibleMember::Malformed)?;
     let assignment =
         ConsumerProtocolAssignment::decode(&mut cur, version.min(ASSIGNMENT_MAX_VERSION))
             .map_err(|_| UnconvertibleMember::Malformed)?;
@@ -163,7 +161,7 @@ fn decode_consumer_assignment(
 /// The caller has run [`validate_online_upgrade`]. Committed offsets live on
 /// the kind-agnostic `Group` container, and this function does not change
 /// them.
-pub(crate) fn convert_classic_to_consumer(
+pub fn convert_classic_to_consumer(
     classic: &ClassicState,
     image: &ReconcileInput,
 ) -> Result<ConsumerState, String> {
@@ -258,7 +256,7 @@ pub(crate) fn convert_classic_to_consumer(
 /// The atomic record batch for an upgrade. It tombstones the classic k2
 /// `GroupMetadata` and writes the full next-gen record set for the converted
 /// group. Both go into one batch, so the flip is all-or-nothing.
-pub(crate) fn upgrade_pending_records(state: &ConsumerState) -> PendingRecords {
+pub fn upgrade_pending_records(state: &ConsumerState) -> PendingRecords {
     let plan = group_migration_record_plan(GroupMigrationDirection::Upgrade, state.members.len());
     let mut pending = full_pending_records(state);
     pending.classic_group_metadata_tombstone =
@@ -279,7 +277,7 @@ mod tests {
         },
         assert2::{assert, check},
         bytes::{BufMut, Bytes, BytesMut},
-        krabka_protocol::Encode,
+        krabka_protocol::{Encode, owned::consumer_protocol_assignment::TopicPartition},
         std::time::Duration,
     };
 
@@ -322,13 +320,11 @@ mod tests {
     /// `t1`, with `user_data`.
     fn assignment_blob(version: i16, user_data: Option<&'static [u8]>) -> Bytes {
         let assignment = ConsumerProtocolAssignment {
-            assigned_partitions: vec![
-                krabka_protocol::owned::consumer_protocol_assignment::TopicPartition {
-                    topic: "t1".into(),
-                    partitions: vec![0],
-                    ..Default::default()
-                },
-            ],
+            assigned_partitions: vec![TopicPartition {
+                topic: "t1".into(),
+                partitions: vec![0],
+                ..Default::default()
+            }],
             user_data: user_data.map(Bytes::from_static),
             ..Default::default()
         };
@@ -425,7 +421,7 @@ mod tests {
                 label: "user data before a malformed subscription of a later member",
                 members: vec![
                     MemberBlobs {
-                        subscription: valid.clone(),
+                        subscription: valid,
                         assignment: Some(assignment_blob(0, Some(b"sticky"))),
                     },
                     MemberBlobs {

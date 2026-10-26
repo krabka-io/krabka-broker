@@ -9,7 +9,7 @@
 use crate::handlers::test_support::{ShareRefusalCase, ShareRefusalPolicy};
 use {
     super::*,
-    crate::test_support::ShareApiSupport,
+    crate::{authorizer::AllowAllAuthorizer, test_support::ShareApiSupport},
     krabka_protocol::{
         owned::{
             describe_share_group_offsets_request::{
@@ -117,7 +117,7 @@ async fn handle_error_scenarios_preserve_expected_rows() {
             ),
         ShareRefusalCase {
             name: "an unknown topic has no data and no error",
-            authorizer: Arc::new(crate::authorizer::AllowAllAuthorizer),
+            authorizer: Arc::new(AllowAllAuthorizer),
             enabled: ShareApiSupport::Enabled,
             input: vec![RequestGroup {
                 group_id: "g1",

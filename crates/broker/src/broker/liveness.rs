@@ -23,6 +23,7 @@ use {
     },
     krabka_units::{Time, convert::TimeExt as _},
     std::sync::Arc,
+    tokio::{sync::watch, time},
     tokio_util::sync::CancellationToken,
 };
 
@@ -44,7 +45,7 @@ fn spawn_liveness_ticker(
     shutdown: CancellationToken,
 ) {
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(tick_interval.to_std());
+        let mut tick = time::interval(tick_interval.to_std());
         let mut state = LivenessTickState::default();
         loop {
             if !super::tick_or_shutdown(&mut tick, &shutdown).await {
@@ -130,19 +131,19 @@ fn spawn_leadership_watcher(
 /// fault that fired before this task started is still seen, since a `watch`
 /// channel keeps its last value.
 fn spawn_fatal_fault_watcher(
-    mut faults: tokio::sync::watch::Receiver<Option<String>>,
-    should_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
+    mut faults: watch::Receiver<Option<String>>,
+    should_shutdown: Arc<watch::Sender<bool>>,
     shutdown: CancellationToken,
 ) {
     tokio::spawn(async move {
         let fault = tokio::select! {
             () = shutdown.cancelled() => return,
             fault = async {
-                faults
+                let fault = faults
                     .wait_for(Option::is_some)
                     .await
-                    .ok()
-                    .and_then(|fault| fault.clone())
+                    .ok()?;
+                fault.clone()
             } => fault,
         };
         // No fault: the source closed the channel, as a controller does when it
@@ -161,11 +162,11 @@ fn spawn_fatal_fault_watcher(
 
 pub(super) struct LivenessStartup {
     pub(super) liveness: Arc<ControllerLivenessState>,
-    pub(super) want_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
-    pub(super) should_shutdown: Arc<tokio::sync::watch::Sender<bool>>,
+    pub(super) want_shutdown: Arc<watch::Sender<bool>>,
+    pub(super) should_shutdown: Arc<watch::Sender<bool>>,
     pub(super) unclean_recovery: UncleanRecoveryHandle,
     /// Where this broker's first unfencing stands.
-    pub(super) initial_unfence: tokio::sync::watch::Receiver<InitialUnfence>,
+    pub(super) initial_unfence: watch::Receiver<InitialUnfence>,
 }
 
 /// The two places the liveness subsystem reports to: the metric families, and
@@ -197,11 +198,11 @@ pub(super) fn start_liveness_services(
 ) -> LivenessStartup {
     let LivenessReporting { metrics, audit_log } = observability;
     let liveness = Arc::new(ControllerLivenessState::new(config.heartbeat_timeout));
-    let (want_shutdown, want_shutdown_rx) = tokio::sync::watch::channel(false);
-    let (should_shutdown, _) = tokio::sync::watch::channel(false);
+    let (want_shutdown, want_shutdown_rx) = watch::channel(false);
+    let (should_shutdown, _) = watch::channel(false);
     let want_shutdown = Arc::new(want_shutdown);
     let should_shutdown = Arc::new(should_shutdown);
-    let (unfenced, initial_unfence) = tokio::sync::watch::channel(InitialUnfence::Pending);
+    let (unfenced, initial_unfence) = watch::channel(InitialUnfence::Pending);
     tokio::spawn(run(Config {
         broker_id: config.broker_id,
         broker_epoch: config.broker_epoch,
@@ -281,10 +282,13 @@ mod tests {
     use {
         super::*,
         crate::{
-            broker::test_support::fake_source, metadata_source::MetadataSource,
-            test_support::broker_registration,
+            broker::test_support::fake_source,
+            metadata_source::MetadataSource,
+            test_support::{FakeMetadataSource, broker_registration},
         },
         assert2::assert,
+        std::time::{Duration, Instant},
+        tokio::{sync::watch, time},
     };
 
     fn image_with_registered_broker(node_id: u64) -> krabka_metadata::MetadataImage {
@@ -307,13 +311,12 @@ mod tests {
         let controller: Arc<dyn MetadataSource> =
             Arc::new(fake_source(image_with_registered_broker(1), Some(me)));
         let clock = TestClock::new();
-        let liveness =
-            ControllerLivenessState::with_test_clock(std::time::Duration::from_millis(10), &clock);
+        let liveness = ControllerLivenessState::with_test_clock(Duration::from_millis(10), &clock);
         let metrics = BrokerMetrics::new();
 
         // Broker 1 dies while this node leads.
         liveness.record_heartbeat(1).await;
-        clock.advance(std::time::Duration::from_millis(11));
+        clock.advance(Duration::from_millis(11));
         assert!(liveness.tick().await == vec![LivenessTransition::AliveToDead(1)]);
         let mut previous = Some(me);
 
@@ -368,13 +371,13 @@ mod tests {
         use crate::heartbeat::controller_state::ControllerLivenessState;
         let me = krabka_raft::NodeId(7);
         let mock = Arc::new(fake_source(image_with_registered_broker(1), None));
-        let controller: Arc<dyn MetadataSource> = mock.clone();
+        let controller: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(&mock);
         let liveness = Arc::new(ControllerLivenessState::new(krabka_units::secs(60)));
         let metrics = BrokerMetrics::new();
         let shutdown = CancellationToken::new();
         spawn_leadership_watcher(
             controller,
-            liveness.clone(),
+            Arc::clone(&liveness),
             me,
             metrics.clone(),
             shutdown.clone(),
@@ -384,13 +387,13 @@ mod tests {
         mock.leader_tx()
             .send(Some(me))
             .expect("watcher holds a receiver");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(5);
         while !liveness.is_alive(1).await {
             assert!(
-                std::time::Instant::now() < deadline,
+                Instant::now() < deadline,
                 "leadership watcher did not seed the registered broker"
             );
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         }
         assert!(metrics.controller_leader_changes_total.get() == 1);
         shutdown.cancel();
@@ -414,8 +417,8 @@ mod tests {
                 krabka_metadata::MetadataImage::new(uuid::Uuid::nil()),
                 None,
             ));
-            let controller: Arc<dyn MetadataSource> = mock.clone();
-            let latch = Arc::new(tokio::sync::watch::channel(false).0);
+            let controller: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(&mock);
+            let latch = Arc::new(watch::channel(false).0);
             let shutdown = CancellationToken::new();
             if published_before_the_watcher {
                 mock.set_fatal("the controller faulted");
@@ -432,13 +435,13 @@ mod tests {
                 );
                 mock.set_fatal("the controller faulted");
             }
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let deadline = Instant::now() + Duration::from_secs(30);
             while Arc::strong_count(&latch) > 1 {
                 assert!(
-                    std::time::Instant::now() < deadline,
+                    Instant::now() < deadline,
                     "{name}: the watcher never finished"
                 );
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                time::sleep(Duration::from_millis(10)).await;
             }
             assert!(
                 *latch.subscribe().borrow(),

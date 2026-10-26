@@ -8,8 +8,9 @@
 //! reworked consumer delivers exactly the assigned records, and never the
 //! unassigned partition. A second test publishes one interleaved keyed group
 //! and checks that each partition lands it in the order given.
+#![cfg(test)]
 
-use assert2::assert;
+use {assert2::assert, tokio::time};
 mod support;
 
 use {
@@ -119,7 +120,7 @@ async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
     let mut got: Vec<Received> = Vec::with_capacity(4);
     let deadline = Instant::now() + Duration::from_secs(15);
     while got.len() < 4 {
-        let next = tokio::time::timeout(Duration::from_millis(500), stream.next()).await;
+        let next = time::timeout(Duration::from_millis(500), stream.next()).await;
         match next {
             Ok(Some(r)) => {
                 assert!(r.partition != 2, "partition 2 was not assigned");
@@ -163,7 +164,7 @@ async fn subscribe_subset_from_nonzero_offset_yields_exact_records() {
     assert!(got == expected);
 
     // Brief grace: ensure no stray partition-2 record sneaks in.
-    if let Ok(Some(extra)) = tokio::time::timeout(Duration::from_millis(500), stream.next()).await {
+    if let Ok(Some(extra)) = time::timeout(Duration::from_millis(500), stream.next()).await {
         assert!(extra.partition != 2, "partition 2 leaked: {extra:?}");
     }
 
@@ -215,7 +216,7 @@ async fn keyed_group_lands_each_partition_in_order() {
     let mut got = Vec::with_capacity(group.len());
     let deadline = Instant::now() + Duration::from_secs(15);
     while got.len() < group.len() {
-        if let Ok(Some(r)) = tokio::time::timeout(Duration::from_millis(500), stream.next()).await {
+        if let Ok(Some(r)) = time::timeout(Duration::from_millis(500), stream.next()).await {
             got.push(KeyedReceived {
                 partition: r.partition,
                 offset: r.offset,

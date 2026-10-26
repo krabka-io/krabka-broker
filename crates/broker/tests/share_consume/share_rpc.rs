@@ -17,7 +17,10 @@ use {
     },
     assert2::assert,
     krabka_client_core::Client,
-    krabka_protocol::owned::share_acknowledge_response::ShareAcknowledgeResponse,
+    krabka_protocol::owned::{
+        share_acknowledge_response, share_acknowledge_response::ShareAcknowledgeResponse,
+        share_fetch_response,
+    },
 };
 
 /// `ShareFetch`. This helper retries while the share-state leadership and
@@ -28,7 +31,7 @@ use {
 pub async fn share_fetch(
     client: &Client,
     setup: ShareFetchSetup<'_>,
-) -> krabka_protocol::owned::share_fetch_response::PartitionData {
+) -> share_fetch_response::PartitionData {
     fetch_row(
         client,
         share_fetch_req()
@@ -48,7 +51,7 @@ pub async fn fetch_count(
     client: &Client,
     setup: ShareFetchSetup<'_>,
     expected: AcquiredRecordCount,
-) -> krabka_protocol::owned::share_fetch_response::PartitionData {
+) -> share_fetch_response::PartitionData {
     let row = share_fetch(client, setup).await;
     assert!(
         acquired_count(&row) == expected.0,
@@ -61,7 +64,7 @@ pub async fn acquire_count(
     client: &Client,
     session: ShareSessionSetup<'_>,
     expected: AcquiredRecordCount,
-) -> krabka_protocol::owned::share_fetch_response::PartitionData {
+) -> share_fetch_response::PartitionData {
     let row = fetch_until_acquired(client, session.with_epoch(ShareSessionEpoch(0))).await;
     assert!(
         acquired_count(&row) == expected.0,
@@ -82,7 +85,7 @@ pub async fn acquire_three_and_acknowledge<'a>(
 pub async fn fetch_empty(
     client: &Client,
     setup: ShareFetchSetup<'_>,
-) -> krabka_protocol::owned::share_fetch_response::PartitionData {
+) -> share_fetch_response::PartitionData {
     fetch_count(client, setup, AcquiredRecordCount(0)).await
 }
 
@@ -110,7 +113,7 @@ pub async fn share_renew(
     #[builder(default)] session: ShareSessionSetup<'_>,
     #[builder(into, default)] first: krabka_ids::Offset,
     #[builder(into, default)] last: krabka_ids::Offset,
-) -> krabka_protocol::owned::share_acknowledge_response::PartitionData {
+) -> share_acknowledge_response::PartitionData {
     let setup = ShareRenewSetup {
         session,
         first,

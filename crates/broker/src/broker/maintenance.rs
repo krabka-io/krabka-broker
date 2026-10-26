@@ -12,6 +12,7 @@ use {
         config::BrokerConfig,
         controller_endpoint::ControllerDialer,
         disk_scanner::DiskScanner,
+        error::BrokerError,
         heartbeat::controller_state::ControllerLivenessState,
         isr_maintenance::{Config, run as run_isr_maintenance},
         leader_rebalance::{AutoRebalanceConfig, ControllerLike, run as run_leader_rebalance},
@@ -27,8 +28,11 @@ use {
     },
     krabka_metadata::NodeId,
     krabka_units::{Time, convert::TimeExt},
-    std::sync::Arc,
-    tokio::task::JoinHandle,
+    std::sync::{Arc, PoisonError},
+    tokio::{
+        task::JoinHandle,
+        time::{self, Instant},
+    },
     tokio_util::sync::CancellationToken,
 };
 
@@ -39,7 +43,7 @@ pub(super) fn spawn_storage_security_maintenance(
     inter_broker_client: &Arc<InterBrokerClient>,
     metrics: &BrokerMetrics,
     shutdown: &CancellationToken,
-) -> Option<JoinHandle<()>> {
+) -> Result<Option<JoinHandle<()>>, BrokerError> {
     tokio::spawn(run_isr_maintenance(Config {
         // Kafka sends `AlterPartition` to the active controller on its
         // CONTROLLER listener, as it sends `BrokerHeartbeat`. An isolated
@@ -66,6 +70,12 @@ pub(super) fn spawn_storage_security_maintenance(
     });
     // `BrokerConfig::validate` refuses a JWKS endpoint on wasm32-wasip1, which
     // has no HTTP client stack.
+    #[cfg(target_family = "wasm")]
+    if config.oauthbearer_jwks_endpoint.is_some() {
+        return Err(BrokerError::Startup(
+            "JWKS refresh is unavailable on this platform".to_owned(),
+        ));
+    }
     #[cfg(not(target_family = "wasm"))]
     if let Some(endpoint) = config.oauthbearer_jwks_endpoint.clone()
         && let Some(handle) = config.oauthbearer_validator.jwks_handle()
@@ -75,9 +85,13 @@ pub(super) fn spawn_storage_security_maintenance(
         let signal_rx = config
             .oauthbearer_jwks_signal_rx
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .take()
-            .expect("signed validator must park its JWKS signal receiver");
+            .ok_or_else(|| {
+                BrokerError::Startup(
+                    "signed validator must park its JWKS signal receiver".to_owned(),
+                )
+            })?;
         let refresher = JwksRefresher {
             endpoint,
             handle,
@@ -97,7 +111,7 @@ pub(super) fn spawn_storage_security_maintenance(
         };
         tokio::spawn(refresher.run());
     }
-    disk_scanner
+    Ok(disk_scanner)
 }
 
 /// What the producer-expiry sweep reads on each tick.
@@ -118,7 +132,7 @@ fn spawn_producer_expiry(expiry: ProducerExpiry, scan_interval: Time, shutdown: 
         // delay and the period, so the first sweep runs one interval after
         // start, not at start.
         let period = scan_interval.to_std();
-        let tick = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        let tick = time::interval_at(Instant::now() + period, period);
         let expiry = &expiry;
         run_every(tick, &shutdown, move || async move {
             let now_ms = now_ms();
@@ -157,7 +171,7 @@ async fn expire_log_producers(partitions: &PartitionRegistry, now_ms: i64, expir
             partition
                 .log
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .remove_expired_producers(now_ms, expiration_ms);
         }
     });
@@ -167,17 +181,11 @@ async fn expire_log_producers(partitions: &PartitionRegistry, now_ms: i64, expir
 }
 
 fn cleaner_config(config: &BrokerConfig) -> CleanerConfig {
-    let interval = config.cleaner_interval;
     #[cfg(any(test, feature = "test-helpers"))]
-    {
-        use crate::cleaner::CleanerConfig;
-
-        CleanerConfig::system(config.cleaner_interval_override.unwrap_or(interval))
+    if let Some(interval) = config.cleaner_interval_override {
+        return CleanerConfig::system(interval);
     }
-    #[cfg(not(any(test, feature = "test-helpers")))]
-    {
-        CleanerConfig::system(interval)
-    }
+    CleanerConfig::system(config.cleaner_interval)
 }
 
 pub(super) fn spawn_cluster_data_maintenance(
@@ -295,19 +303,22 @@ mod tests {
     async fn the_producer_expiry_sweeps_the_log_of_every_hosted_partition() {
         const TOPICS: [&str; 2] = ["first", "second"];
         let partitions = PartitionRegistry::new();
-        let mut dirs = Vec::new();
-        for topic in TOPICS {
-            let (partition, dir) = test_partition(Arc::new(Notify::new()));
-            {
-                let mut log = partition.log.lock().expect("log lock");
-                log.append(&mut idempotent_batch(1, 1_000))
-                    .expect("append the idle producer");
-                log.append(&mut idempotent_batch(2, 9_500))
-                    .expect("append the recent producer");
-            }
-            partitions.insert(Arc::from(topic), PartitionIndex(0), Arc::new(partition));
-            dirs.push(dir);
-        }
+        // The directories live until the end of the test.
+        let _dirs: Vec<_> = TOPICS
+            .into_iter()
+            .map(|topic| {
+                let (partition, dir) = test_partition(Arc::new(Notify::new()));
+                {
+                    let mut log = partition.log.lock().expect("log lock");
+                    log.append(&mut idempotent_batch(1, 1_000))
+                        .expect("append the idle producer");
+                    log.append(&mut idempotent_batch(2, 9_500))
+                        .expect("append the recent producer");
+                }
+                partitions.insert(Arc::from(topic), PartitionIndex(0), Arc::new(partition));
+                dir
+            })
+            .collect();
 
         expire_log_producers(&partitions, 10_000, krabka_units::millis(1_000)).await;
 

@@ -111,7 +111,14 @@ pub(super) fn walk_log(
         }
 
         let total_len = validated.total_len;
-        cursor = &cursor[total_len..];
+        cursor = cursor.get(total_len..).ok_or_else(|| {
+            truncated_at(
+                key,
+                position,
+                cursor.len(),
+                total_len.saturating_sub(cursor.len()),
+            )
+        })?;
         position = position.saturating_add(u64::try_from(total_len).unwrap_or(u64::MAX));
     }
 

@@ -5,7 +5,7 @@ use {
     moxy::{ast::ParseError, token::TokenStream},
 };
 
-pub(crate) fn policy(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn policy(input: TokenStream) -> Result<TokenStream, ParseError> {
     let (name, root) = named_root(input)?;
     Ok(moxy::template! {
         fn {{ name }}() -> ::bytes::BytesMut {

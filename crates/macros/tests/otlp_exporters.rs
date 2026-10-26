@@ -1,4 +1,5 @@
 //! Both exporter types retain transport selection, configuration and build errors.
+#![cfg(test)]
 
 use std::marker::PhantomData;
 

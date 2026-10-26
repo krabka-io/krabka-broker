@@ -12,7 +12,10 @@
 use {
     crate::manifest::CAPTURE_ROOT,
     krabka_metadata::MetadataRecord,
-    std::path::{Path, PathBuf},
+    std::{
+        fs,
+        path::{Path, PathBuf},
+    },
     uuid::Uuid,
 };
 
@@ -24,9 +27,10 @@ pub const RLMM_SNAPSHOT_RELATIVE: &str = "remote-log-metadata/snapshot";
 pub const CONTROLLER_CHECKPOINT_DIR: &str = "__cluster_metadata-0";
 
 /// Where a broker-only node keeps the checkpoints its metadata observer wrote,
-/// under the metadata log directory. They sit in a subdirectory of
-/// `__cluster_metadata-0` and never directly in it, because a controller must
-/// not load one.
+/// under the metadata log directory.
+///
+/// They sit in a subdirectory of `__cluster_metadata-0` and never directly in
+/// it, because a controller must not load one.
 pub const OBSERVER_CHECKPOINT_DIR: &str = "__cluster_metadata-0/observer";
 
 /// Suffix of a KIP-630 checkpoint artifact.
@@ -87,7 +91,7 @@ pub fn newest_checkpoint(names: &[String]) -> Option<String> {
 /// a failure.
 #[must_use]
 pub fn file_names(dir: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
     entries
@@ -138,21 +142,17 @@ pub struct MetadataCheckpoint {
 /// A node that runs a controller has both; the controller's is authoritative
 /// and is preferred at an equal id, because the observer records a placeholder
 /// epoch in a checkpoint it wrote itself.
-///
-/// # Panics
-///
-/// Panics if [`newest_checkpoint`] returns a name that [`checkpoint_id`] then
-/// rejects, which the two functions cannot do: the first selects only names the
-/// second parsed.
 #[must_use]
 pub fn newest_metadata_checkpoint(log_dir: &Path) -> Option<MetadataCheckpoint> {
     let mut best: Option<MetadataCheckpoint> = None;
     for subdir in [CONTROLLER_CHECKPOINT_DIR, OBSERVER_CHECKPOINT_DIR] {
         let dir = log_dir.join(subdir);
-        let Some(name) = newest_checkpoint(&file_names(&dir)) else {
+        // `newest_checkpoint` selects only names that `checkpoint_id` parsed.
+        let Some((id, name)) = newest_checkpoint(&file_names(&dir))
+            .and_then(|name| Some((checkpoint_id(&name)?, name)))
+        else {
             continue;
         };
-        let id = checkpoint_id(&name).expect("newest_checkpoint returns a parseable name");
         if best.as_ref().is_none_or(|seen| id > seen.id) {
             best = Some(MetadataCheckpoint {
                 id,
@@ -184,6 +184,7 @@ mod tests {
             newest_checkpoint, newest_metadata_checkpoint,
         },
         assert2::check,
+        std::fs,
     };
 
     #[yare::parameterized(
@@ -246,10 +247,10 @@ mod tests {
     fn an_observer_checkpoint_is_found_when_there_is_no_controller_directory() {
         let log_dir = tempfile::tempdir().expect("log dir");
         let observer = log_dir.path().join("__cluster_metadata-0/observer");
-        std::fs::create_dir_all(&observer).expect("create the observer dir");
+        fs::create_dir_all(&observer).expect("create the observer dir");
         let newest = observer.join("00000000000000000042-0000000000.checkpoint");
-        std::fs::write(&newest, b"bytes").expect("write a checkpoint");
-        std::fs::write(
+        fs::write(&newest, b"bytes").expect("write a checkpoint");
+        fs::write(
             observer.join("00000000000000000009-0000000000.checkpoint"),
             b"older",
         )
@@ -273,10 +274,10 @@ mod tests {
         let name = "00000000000000000042-0000000000.checkpoint";
         let controller = log_dir.path().join("__cluster_metadata-0");
         let observer = controller.join("observer");
-        std::fs::create_dir_all(&controller).expect("create the controller checkpoint dir");
-        std::fs::create_dir_all(&observer).expect("create the observer checkpoint dir");
-        std::fs::write(controller.join(name), b"bytes").expect("write a checkpoint");
-        std::fs::write(observer.join(name), b"bytes").expect("write a checkpoint");
+        fs::create_dir_all(&controller).expect("create the controller checkpoint dir");
+        fs::create_dir_all(&observer).expect("create the observer checkpoint dir");
+        fs::write(controller.join(name), b"bytes").expect("write a checkpoint");
+        fs::write(observer.join(name), b"bytes").expect("write a checkpoint");
 
         check!(
             newest_metadata_checkpoint(log_dir.path())

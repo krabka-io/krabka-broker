@@ -24,7 +24,8 @@ use {
     krabka_broker::BrokerHandle,
     krabka_client_producer::Producer,
     krabka_metadata::{GroupConfigRecord, MetadataRecord},
-    std::{collections::BTreeSet, time::Duration},
+    std::{collections::BTreeSet, sync::Arc, time::Duration},
+    tokio::{sync::OwnedSemaphorePermit, time},
 };
 
 /// Kafka's `GroupConfig.SHARE_ISOLATION_LEVEL_CONFIG` values.
@@ -53,9 +54,9 @@ async fn set_isolation_level(broker: &BrokerHandle, group: &str, level: &str) {
 
 /// A transaction-ready broker and the owners that keep it running.
 struct IsolationFixture {
-    permit: tokio::sync::OwnedSemaphorePermit,
+    permit: OwnedSemaphorePermit,
     broker: BrokerHandle,
-    client: std::sync::Arc<krabka_client_core::Client>,
+    client: Arc<krabka_client_core::Client>,
     dir: tempfile::TempDir,
     tid: uuid::Uuid,
     bootstrap: String,
@@ -102,62 +103,65 @@ async fn read_committed_skips_open_txn_then_sees_committed() {
     } = isolation_fixture(Some(READ_COMMITTED)).await;
 
     // Open a transaction and send 3 records WITHOUT committing: HWM=3, LSO=0.
-    let producer = transactional_producer(bootstrap.clone(), "share-rc-tid").await;
-    let txn = producer.begin_transaction().await.unwrap();
-    enqueue_transaction_values(&producer).await;
-    // Flush the records to the log (advances HWM) but keep the txn OPEN (LSO=0).
-    producer.flush().await.unwrap();
+    {
+        let producer = transactional_producer(bootstrap.clone(), "share-rc-tid").await;
+        let txn = producer.begin_transaction().await.unwrap();
+        enqueue_transaction_values(&producer).await;
+        // Flush the records to the log (advances HWM) but keep the txn OPEN (LSO=0).
+        producer.flush().await.unwrap();
 
-    let MemberSession { member, .. } = join_consume_member(&broker, &client, tid).await;
+        let MemberSession { member, .. } = join_consume_member(&broker, &client, tid).await;
 
-    // A read_committed share fetch must acquire NOTHING: every record is past
-    // the LSO (still 0). Poll a few times to be sure it never spuriously acquires.
-    for epoch in 0..6 {
-        fetch_empty(
-            &client,
-            ShareFetchSetup::at_epoch(&member, tid, ShareSessionEpoch(epoch)),
-        )
-        .await;
-        // intentional: deliberately observe that nothing is acquired across a
-        // window while the txn stays open (behavior under test, not a
-        // state-settle guess).
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-
-    // Commit the transaction → the LSO advances past the records (a commit
-    // control marker is appended, so HWM == LSO). The same group now acquires
-    // the committed records (proving they were deferred, not dropped). The
-    // acquired window also covers the control-marker offset, whose bytes the
-    // read path filters out — so we assert on the surfaced record VALUES.
-    txn.commit().await.unwrap();
-    let mut values: Vec<String> = Vec::new();
-    for epoch in 6..30 {
-        let row = share_fetch(
-            &client,
-            ShareFetchSetup::at_epoch(&member, tid, ShareSessionEpoch(epoch)),
-        )
-        .await;
-        if acquired_count(&row) > 0
-            && let Some(batches) = row.records.as_ref().and_then(|r| r.as_v2())
-        {
-            values = record_values(batches);
-            values.sort();
-            if values == vec!["a", "b", "c"] {
-                break;
-            }
+        // A read_committed share fetch must acquire NOTHING: every record is past
+        // the LSO (still 0). Poll a few times to be sure it never spuriously acquires.
+        for epoch in 0..6 {
+            fetch_empty(
+                &client,
+                ShareFetchSetup::at_epoch(&member, tid, ShareSessionEpoch(epoch)),
+            )
+            .await;
+            // intentional: deliberately observe that nothing is acquired across a
+            // window while the txn stays open (behavior under test, not a
+            // state-settle guess).
+            time::sleep(Duration::from_millis(100)).await;
         }
-        // intentional: bounded RPC poll for the post-commit LSO advance
-        // (transaction-coordinator state, not in the metadata image) to surface
-        // via ShareFetch.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        values == vec!["a", "b", "c"],
-        "after commit the read_committed fetch must surface the 3 committed \
-         records, got {values:?}"
-    );
 
-    producer.close().await.unwrap();
+        // Commit the transaction → the LSO advances past the records (a commit
+        // control marker is appended, so HWM == LSO). The same group now acquires
+        // the committed records (proving they were deferred, not dropped). The
+        // acquired window also covers the control-marker offset, whose bytes the
+        // read path filters out — so we assert on the surfaced record VALUES.
+        txn.commit().await.unwrap();
+        let mut values: Vec<String> = Vec::new();
+        for epoch in 6..30 {
+            let row = share_fetch(
+                &client,
+                ShareFetchSetup::at_epoch(&member, tid, ShareSessionEpoch(epoch)),
+            )
+            .await;
+            if acquired_count(&row) > 0
+                && let Some(batches) = row.records.as_ref().and_then(|r| r.as_v2())
+            {
+                values = record_values(batches);
+                values.sort();
+                if values == vec!["a", "b", "c"] {
+                    break;
+                }
+            }
+            // intentional: bounded RPC poll for the post-commit LSO advance
+            // (transaction-coordinator state, not in the metadata image) to surface
+            // via ShareFetch.
+            time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            values == vec!["a", "b", "c"],
+            "after commit the read_committed fetch must surface the 3 committed \
+         records, got {values:?}"
+        );
+
+        producer.close().await
+    }
+    .unwrap();
 }
 
 /// What a share group sees of one transaction followed by one plain record:
@@ -172,7 +176,7 @@ impl Seen {
     fn expected(offsets: &[i64], values: &[&str]) -> Self {
         Self {
             acquired: offsets.iter().copied().collect(),
-            values: values.iter().map(|value| (*value).to_string()).collect(),
+            values: values.iter().map(|value| (*value).to_owned()).collect(),
         }
     }
 }
@@ -238,59 +242,62 @@ async fn transaction_then_record(isolation_level: Option<&str>, commit: bool) ->
         bootstrap,
     } = isolation_fixture(isolation_level).await;
 
-    let producer = transactional_producer(bootstrap.clone(), "share-aborted-tid").await;
-    let txn = producer.begin_transaction().await.unwrap();
-    enqueue_transaction_values(&producer).await;
-    producer.flush().await.unwrap();
-    if commit {
-        txn.commit().await.unwrap();
-    } else {
-        txn.abort().await.unwrap();
-    }
-    produce_n().client(&client).topic_id(tid).call().await;
+    let seen = {
+        let producer = transactional_producer(bootstrap.clone(), "share-aborted-tid").await;
+        let txn = producer.begin_transaction().await.unwrap();
+        enqueue_transaction_values(&producer).await;
+        producer.flush().await.unwrap();
+        if commit {
+            txn.commit().await.unwrap();
+        } else {
+            txn.abort().await.unwrap();
+        }
+        produce_n().client(&client).topic_id(tid).call().await;
 
-    let MemberSession { member, .. } = join_consume_member(&broker, &client, tid).await;
+        let MemberSession { member, .. } = join_consume_member(&broker, &client, tid).await;
 
-    // The member never acknowledges, so each offset is acquired at most once
-    // while its lock holds. Fetch until the plain record at offset 4 arrives.
-    let mut seen = Seen {
-        acquired: BTreeSet::new(),
-        values: BTreeSet::new(),
-    };
-    for epoch in 0..30 {
-        let row = share_fetch(
-            &client,
-            ShareFetchSetup::at_epoch(&member, tid, ShareSessionEpoch(epoch)),
-        )
-        .await;
-        let row_acquired: BTreeSet<i64> = row
-            .acquired_records
-            .iter()
-            .flat_map(|range| range.first_offset..=range.last_offset)
-            .collect();
-        if let Some(batches) = row.records.as_ref().and_then(|r| r.as_v2()) {
-            for batch in batches {
-                for record in &batch.records {
-                    let offset = batch.base_offset + i64::from(record.offset_delta);
-                    if let Some(value) = record.value.as_ref()
-                        && row_acquired.contains(&offset)
-                    {
-                        seen.values
-                            .insert(String::from_utf8_lossy(value).into_owned());
+        // The member never acknowledges, so each offset is acquired at most once
+        // while its lock holds. Fetch until the plain record at offset 4 arrives.
+        let mut seen = Seen {
+            acquired: BTreeSet::new(),
+            values: BTreeSet::new(),
+        };
+        for epoch in 0..30 {
+            let row = share_fetch(
+                &client,
+                ShareFetchSetup::at_epoch(&member, tid, ShareSessionEpoch(epoch)),
+            )
+            .await;
+            let row_acquired: BTreeSet<i64> = row
+                .acquired_records
+                .iter()
+                .flat_map(|range| range.first_offset..=range.last_offset)
+                .collect();
+            if let Some(batches) = row.records.as_ref().and_then(|r| r.as_v2()) {
+                for batch in batches {
+                    for record in &batch.records {
+                        let offset = batch.base_offset + i64::from(record.offset_delta);
+                        if let Some(value) = record.value.as_ref()
+                            && row_acquired.contains(&offset)
+                        {
+                            seen.values
+                                .insert(String::from_utf8_lossy(value).into_owned());
+                        }
                     }
                 }
             }
+            seen.acquired.extend(row_acquired);
+            if seen.acquired.contains(&4) {
+                break;
+            }
+            // intentional: bounded RPC poll for the LSO to pass the marker and the
+            // plain record to become acquirable; no image or metric signals it.
+            time::sleep(Duration::from_millis(100)).await;
         }
-        seen.acquired.extend(row_acquired);
-        if seen.acquired.contains(&4) {
-            break;
-        }
-        // intentional: bounded RPC poll for the LSO to pass the marker and the
-        // plain record to become acquirable; no image or metric signals it.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
 
-    producer.close().await.unwrap();
+        producer.close().await.map(|()| seen)
+    }
+    .unwrap();
     broker.shutdown().await;
     seen
 }
@@ -302,7 +309,7 @@ async fn enqueue_transaction_values(producer: &Producer) {
                 .enqueue(
                     producer_record()
                         .topic(("t").into())
-                        .maybe_value(Some(Some(bytes::Bytes::from(v.to_string()))))
+                        .maybe_value(Some(Some(bytes::Bytes::from(v.to_owned()))))
                         .call(),
                 )
                 .await

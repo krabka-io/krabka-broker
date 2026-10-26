@@ -7,11 +7,12 @@ use {
         IpQuotaPrecedence, QuotaCandidatePresence, UserClientQuotaFacts, UserClientQuotaPrecedence,
         ip_quota_precedence, user_client_quota_precedence,
     },
+    std::net::IpAddr,
 };
 
 /// The value of the `name` entity type (`"user"`, `"client-id"`) in `key`, or
 /// `None` when `key` has no such entry or names its default entity.
-pub(crate) fn entity_field(key: &EntityKey, name: &str) -> Option<String> {
+pub fn entity_field(key: &EntityKey, name: &str) -> Option<String> {
     key.iter()
         .find(|(k, _)| k == name)
         .and_then(|(_, v)| v.clone())
@@ -245,10 +246,10 @@ fn resolve_levels(
         &[("client-id", None)],
     ];
     let mut values: [Option<f64>; 8] = [None; 8];
-    for (index, key) in candidates.into_iter().enumerate() {
-        if levels.0[index] {
-            values[index] = quota_for_candidate(image, key, quota_key);
-            if values[index].is_some() {
+    for ((key, enabled), value) in candidates.into_iter().zip(levels.0).zip(&mut values) {
+        if enabled {
+            *value = quota_for_candidate(image, key, quota_key);
+            if value.is_some() {
                 // Every remaining candidate has lower priority. Keep using
                 // the verified selector with just the winning presence set.
                 break;
@@ -256,7 +257,7 @@ fn resolve_levels(
         }
     }
     let present = |index: usize| {
-        if values[index].is_some() {
+        if values.get(index).is_some_and(Option::is_some) {
             QuotaCandidatePresence::Present
         } else {
             QuotaCandidatePresence::Absent
@@ -283,7 +284,7 @@ fn resolve_levels(
         UserClientQuotaPrecedence::DefaultClient => 7,
         UserClientQuotaPrecedence::None => return None,
     };
-    values[index].map(|rate| LevelRate {
+    values.get(index).copied().flatten().map(|rate| LevelRate {
         precedence: selected,
         rate,
     })
@@ -327,20 +328,22 @@ fn bucket_key(selected: UserClientQuotaPrecedence, principal: &str, client_id: &
 pub fn lookup_ip_quota(
     image: &MetadataImage,
     names: &IpNames,
-    peer_ip: std::net::IpAddr,
+    peer_ip: IpAddr,
     quota_key: &str,
 ) -> Option<f64> {
     lookup_ip_quota_with_key(image, names, peer_ip, quota_key).map(|(_, v)| v)
 }
 
-/// Like [`lookup_ip_quota`], and it also returns the bucket key: the peer's
-/// canonical address, whichever entity name matched, because Kafka's
-/// per-address rate sensor belongs to the address and not to the name.
+/// Like [`lookup_ip_quota`], and it also returns the bucket key.
+///
+/// The key is the peer's canonical address, whichever entity name matched,
+/// because Kafka's per-address rate sensor belongs to the address and not to
+/// the name.
 #[must_use]
 pub fn lookup_ip_quota_with_key(
     image: &MetadataImage,
     names: &IpNames,
-    peer_ip: std::net::IpAddr,
+    peer_ip: IpAddr,
     quota_key: &str,
 ) -> Option<(EntityKey, f64)> {
     let peer = peer_ip.to_canonical();
@@ -382,6 +385,8 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_metadata::{ClientQuotaRecord, MetadataImage},
+        proptest::{bool::ANY, collection},
+        std::net::IpAddr,
     };
 
     fn img_with(records: Vec<ClientQuotaRecord>) -> MetadataImage { image_with_quotas(records) }
@@ -920,7 +925,7 @@ mod tests {
         ];
         for (records, address, expected) in cases {
             let image = img_with_ip(records);
-            let ip: std::net::IpAddr = address.parse().unwrap();
+            let ip: IpAddr = address.parse().unwrap();
             assert!(
                 lookup_ip_quota(&image, &IpNames::default(), ip, "connection_creation_rate")
                     == expected,
@@ -932,7 +937,7 @@ mod tests {
     #[test]
     fn ip_no_match_returns_none() {
         let img = img_with_ip(vec![]);
-        let ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
         assert!(
             lookup_ip_quota(&img, &IpNames::default(), ip, "connection_creation_rate").is_none()
         );
@@ -984,7 +989,7 @@ mod tests {
             let img = img_with_ip(vec![rec_ip().maybe_ip(Some(entity)).value(7.0).call()]);
             let names = IpNames::default();
             let _ = names.update(&img);
-            let peer: std::net::IpAddr = peer.parse().unwrap();
+            let peer: IpAddr = peer.parse().unwrap();
 
             let got = lookup_ip_quota_with_key(&img, &names, peer, "connection_creation_rate");
 
@@ -1007,8 +1012,8 @@ mod tests {
             rec_ip().value(2.0).call(),
         ]);
         let names = IpNames::default();
-        let db: std::net::IpAddr = "10.0.0.9".parse().unwrap();
-        let other: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        let db: IpAddr = "10.0.0.9".parse().unwrap();
+        let other: IpAddr = "10.0.0.1".parse().unwrap();
         let rate =
             |names: &IpNames, peer| lookup_ip_quota(&img, names, peer, "connection_creation_rate");
 
@@ -1026,7 +1031,7 @@ mod tests {
         // KIP-612: the connection-creation-rate quota must resolve for an
         // IPv6 peer keyed by its canonical string form, not just IPv4.
         let img = img_with_ip(vec![rec_ip().maybe_ip(Some("::1")).value(3.0).call()]);
-        let ip: std::net::IpAddr = "::1".parse().unwrap();
+        let ip: IpAddr = "::1".parse().unwrap();
         assert!(
             lookup_ip_quota(&img, &IpNames::default(), ip, "connection_creation_rate") == Some(3.0)
         );
@@ -1037,7 +1042,7 @@ mod tests {
         // An IPv6 peer with no specific entry falls back to the (ip=None)
         // default, proving IPv6 is no longer skipped by the quota path.
         let img = img_with_ip(vec![rec_ip().value(5.0).call()]);
-        let ip: std::net::IpAddr = "2001:db8::42".parse().unwrap();
+        let ip: IpAddr = "2001:db8::42".parse().unwrap();
         assert!(
             lookup_ip_quota(&img, &IpNames::default(), ip, "connection_creation_rate") == Some(5.0)
         );
@@ -1263,7 +1268,7 @@ mod tests {
     /// Exhaustive test of the 2-priority IP order. Specific beats default.
     #[test]
     fn ip_quota_precedence_exhaustive() {
-        let ip: std::net::IpAddr = "10.1.2.3".parse().unwrap();
+        let ip: IpAddr = "10.1.2.3".parse().unwrap();
         let cands = [vec![QuotaEntityInput::ip(Some("10.1.2.3"))], vec![
             QuotaEntityInput::ip(None),
         ]];
@@ -1294,8 +1299,8 @@ mod tests {
             principal in "[uv][12]",
             client_id in "[cd][12]",
             qkey_idx in 0usize..2,
-            present in proptest::collection::vec(proptest::bool::ANY, 8),
-            decoy in proptest::bool::ANY,
+            present in collection::vec(ANY, 8),
+            decoy in ANY,
         ) {
             let qkey = ["producer_byte_rate", "consumer_byte_rate"][qkey_idx];
             let cands = uc_candidates(&principal, &client_id);
@@ -1343,8 +1348,8 @@ mod tests {
         /// Random IP precedence. Specific beats default, and the IP path never
         /// returns a user/client entity.
         #[test]
-        fn ip_precedence_random(specific in proptest::bool::ANY, default in proptest::bool::ANY) {
-            let ip: std::net::IpAddr = "10.9.8.7".parse().unwrap();
+        fn ip_precedence_random(specific in ANY, default in ANY) {
+            let ip: IpAddr = "10.9.8.7".parse().unwrap();
             let mut records = vec![];
             if specific {
                 records.push(

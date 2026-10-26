@@ -40,7 +40,7 @@ async fn an_approved_proposal_survives_a_controller_failover() {
     let mut cluster = start_gated_cluster(3, BackgroundUncleanRecovery::Off).await;
     support::wait_for_all_brokers_registered(&cluster, 3).await;
 
-    let leader = cluster[0].0.wait_until_controller_leader().await;
+    let leader = cluster[0].0.wait_until_controller_leader().await.unwrap();
     let leader_index = index_of(&cluster, leader);
     let follower_index = (0..cluster.len())
         .find(|index| *index != leader_index)

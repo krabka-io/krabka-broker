@@ -4,6 +4,7 @@
 //! logic they constrain.
 
 use {
+    krabka_metadata::voters::{KRaftVersionRange, Voter, VoterSet},
     krabka_raft::kraft::types::{Epoch, NodeId},
     krabka_units::prelude::{Time, TimeExt as _},
 };
@@ -130,14 +131,12 @@ impl ConsensusModel {
         Time::from_millis(i64::try_from(1000 + id.0 * 50).unwrap_or(i64::MAX))
     }
 
-    pub(super) fn voter_set(&self) -> krabka_metadata::voters::VoterSet {
-        krabka_metadata::voters::VoterSet::from_voters(self.voter_ids.iter().map(|&id| {
-            krabka_metadata::voters::Voter {
-                id,
-                directory_id: uuid::Uuid::nil(),
-                endpoints: Vec::new(),
-                kraft_version: krabka_metadata::voters::KRaftVersionRange::default(),
-            }
+    pub(super) fn voter_set(&self) -> VoterSet {
+        VoterSet::from_voters(self.voter_ids.iter().map(|&id| Voter {
+            id,
+            directory_id: uuid::Uuid::nil(),
+            endpoints: Vec::new(),
+            kraft_version: KRaftVersionRange::default(),
         }))
     }
 }

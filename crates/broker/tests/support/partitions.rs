@@ -15,6 +15,7 @@ use {
         time::{Duration, Instant},
     },
     tempfile::TempDir,
+    tokio::time,
 };
 
 /// Waits until `handle` sees `(topic, partition)` in its image.
@@ -46,7 +47,7 @@ pub async fn wait_for_local_replica(broker: &BrokerHandle, topic: &str, partitio
         );
         // This gates on the LOCAL writer actor, which lags the metadata image.
         // The image awaiter cannot observe local-registry materialization.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -135,7 +136,7 @@ pub async fn wait_for_compression(
         // the writer"; waiting on the image alone would fire strictly earlier
         // and reintroduce the produce-before-override race this helper exists to
         // prevent. The loop is bounded by the 10s deadline asserted above.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 

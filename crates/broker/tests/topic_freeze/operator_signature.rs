@@ -21,10 +21,15 @@ use {
         },
     },
     assert2::check,
-    krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle, codes},
+    krabka_broker::{
+        BootstrapMode, Broker, BrokerConfig, BrokerHandle, codes, operator_keys::OperatorKeys,
+    },
     krabka_client_core::Client,
     krabka_protocol::{
-        krabka::freeze::{DescribedTopicFreeze, PATTERN_TYPE_LITERAL, SetTopicFreezeRequest},
+        krabka::freeze::{
+            DescribedTopicFreeze, PATTERN_TYPE_LITERAL, SetTopicFreezeRequest,
+            SetTopicFreezeResponse,
+        },
         primitives::uuid::Uuid as WireUuid,
     },
     std::path::Path,
@@ -52,8 +57,7 @@ async fn check_frozen_then_shutdown(
 /// single-approver break-glass set, the same plaintext listener.
 async fn start_requiring_signatures(dir: &Path, key: &OperatorKey) -> BrokerWithClient {
     let mut config = BrokerConfig::for_tests(dir.to_path_buf());
-    config.operator_keys = krabka_broker::operator_keys::OperatorKeys::load(&[key.entry()])
-        .expect("load the operator trust set");
+    config.operator_keys = OperatorKeys::load(&[key.entry()]).expect("load the operator trust set");
     config.break_glass.approvers = vec![support::ANONYMOUS.to_owned()];
     config.freeze.require_signature = true;
     let broker = Broker::start(config).await.expect("broker start");
@@ -423,7 +427,7 @@ async fn operator_case(require_signature: bool) -> OperatorCase {
 /// The cluster id and the answer to a signed freeze of `orders`.
 struct SignedIncident {
     cluster: String,
-    response: krabka_protocol::krabka::freeze::SetTopicFreezeResponse,
+    response: SetTopicFreezeResponse,
 }
 
 async fn sign_incident(client: &Client, key: &OperatorKey) -> SignedIncident {

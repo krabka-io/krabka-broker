@@ -10,6 +10,7 @@ use {
         txn::{state::TxnEntry, version::TxnVersion},
     },
     krabka_log::ProducerId,
+    krabka_verified::transaction,
 };
 
 /// KIP-890: the `(producer_id, producer_epoch)` a producer continues with after
@@ -22,7 +23,7 @@ use {
 ///   reserved for the transaction marker, so a *new* `producer_id` is allocated
 ///   at epoch 0 before the client can receive the reserved epoch. The caller
 ///   records the old id as `prev_producer_id`; `EndTxn` v5 returns the new pair.
-pub(crate) async fn next_producer_identity(
+pub async fn next_producer_identity(
     txnv: TxnVersion,
     pid: ProducerId,
     epoch: i16,
@@ -33,10 +34,14 @@ pub(crate) async fn next_producer_identity(
     } else {
         None
     };
-    Ok(
-        next_identity_with_fresh(txnv.verified(), false, pid, epoch, fresh)
-            .expect("fresh producer ID supplied at the rotation boundary"),
-    )
+    next_identity_with_fresh(txnv.verified(), false, pid, epoch, fresh)
+        .ok_or_else(missing_fresh_producer_id)
+}
+
+/// The error for a rotation that found no fresh producer ID, which the
+/// callers allocate before they rotate.
+fn missing_fresh_producer_id() -> BrokerError {
+    BrokerError::Txn("no fresh producer ID at the producer ID rotation boundary".to_owned())
 }
 
 fn next_identity_with_fresh(
@@ -46,7 +51,7 @@ fn next_identity_with_fresh(
     epoch: i16,
     fresh: Option<ProducerId>,
 ) -> Option<(ProducerId, i16)> {
-    krabka_verified::transaction::next_producer_identity(
+    transaction::next_producer_identity(
         verified,
         recovery,
         pid.0,
@@ -60,7 +65,7 @@ fn next_identity_with_fresh(
 /// identity that must retain `i16::MAX` for its transaction marker. A staged
 /// recovery identity can therefore advance through `i16::MAX`; only a later
 /// recovery or completion rotates it to a fresh producer ID.
-pub(crate) async fn next_recovery_producer_identity(
+pub async fn next_recovery_producer_identity(
     pid: ProducerId,
     epoch: i16,
     ids: &ProducerIdManager,
@@ -70,11 +75,10 @@ pub(crate) async fn next_recovery_producer_identity(
     } else {
         None
     };
-    Ok(next_identity_with_fresh(true, true, pid, epoch, fresh)
-        .expect("fresh producer ID supplied at the recovery rotation boundary"))
+    next_identity_with_fresh(true, true, pid, epoch, fresh).ok_or_else(missing_fresh_producer_id)
 }
 
-pub(crate) fn client_producer_identity(entry: &TxnEntry) -> (ProducerId, i16) {
+pub fn client_producer_identity(entry: &TxnEntry) -> (ProducerId, i16) {
     if entry.has_staged_producer_identity() {
         (entry.next_producer_id, entry.next_producer_epoch)
     } else {
@@ -82,7 +86,7 @@ pub(crate) fn client_producer_identity(entry: &TxnEntry) -> (ProducerId, i16) {
     }
 }
 
-pub(crate) fn completion_producer_identity(entry: &TxnEntry) -> (ProducerId, i16) {
+pub fn completion_producer_identity(entry: &TxnEntry) -> (ProducerId, i16) {
     client_producer_identity(entry)
 }
 
@@ -98,7 +102,7 @@ fn completion_needs_fresh_producer_id(entry: &TxnEntry, txnv: TxnVersion) -> boo
     txnv.verified() && at_rotation_boundary
 }
 
-pub(crate) async fn prepare_completion_identities(
+pub async fn prepare_completion_identities(
     entry: &mut TxnEntry,
     txnv: TxnVersion,
     ids: &ProducerIdManager,
@@ -109,15 +113,14 @@ pub(crate) async fn prepare_completion_identities(
         None
     };
     prepare_completion_identities_with_fresh(entry, txnv, fresh)
-        .expect("fresh producer ID supplied at the rotation boundary");
-    Ok(())
+        .ok_or_else(missing_fresh_producer_id)
 }
 
 /// Prepares the abort that the coordinator itself runs on an `Ongoing`
 /// transaction: the timeout reaper, and the fence `InitProducerId` runs for a
 /// producer that re-initialises. See
 /// [`prepare_server_abort_identities_with_fresh`].
-pub(crate) async fn prepare_server_abort_identities(
+pub async fn prepare_server_abort_identities(
     entry: &mut TxnEntry,
     server_version: TxnVersion,
     ids: &ProducerIdManager,
@@ -128,8 +131,7 @@ pub(crate) async fn prepare_server_abort_identities(
         None
     };
     prepare_server_abort_identities_with_fresh(entry, server_version, fresh)
-        .expect("fresh producer ID supplied at the rotation boundary");
-    Ok(())
+        .ok_or_else(missing_fresh_producer_id)
 }
 
 /// The server abort of [`prepare_server_abort_identities`], with the fresh
@@ -151,7 +153,7 @@ pub(crate) async fn prepare_server_abort_identities(
 ///   the epoch is `i16::MAX`, and no last epoch is kept. The timed-out producer
 ///   is then fenced at its partitions. `endTransactionWithTV1` always stamps
 ///   `TV_0` on the record, also on a `TV_1` cluster.
-pub(crate) fn prepare_server_abort_identities_with_fresh(
+pub fn prepare_server_abort_identities_with_fresh(
     entry: &mut TxnEntry,
     server_version: TxnVersion,
     fresh: Option<ProducerId>,
@@ -171,7 +173,7 @@ pub(crate) fn prepare_server_abort_identities_with_fresh(
     prepare_completion_identities_with_fresh(entry, server_version, fresh)
 }
 
-pub(crate) fn prepare_completion_identities_with_fresh(
+pub fn prepare_completion_identities_with_fresh(
     entry: &mut TxnEntry,
     txnv: TxnVersion,
     fresh: Option<ProducerId>,
@@ -362,7 +364,7 @@ mod tests {
 
         // Below `TV_2` the fence takes the epoch to the reserved one, and the
         // producer id stays.
-        let mut fenced = ongoing.clone();
+        let mut fenced = ongoing;
         assert!(
             prepare_server_abort_identities_with_fresh(&mut fenced, TxnVersion::Classic, None)
                 .is_some()

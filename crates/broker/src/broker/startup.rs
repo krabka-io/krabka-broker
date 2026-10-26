@@ -44,7 +44,12 @@ use {
     },
     futures_util::future::BoxFuture,
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
-    std::{future::Future, sync::Arc},
+    std::{future::Future, sync::Arc, time::Duration},
+    tokio::{
+        net::TcpListener,
+        sync::{watch, watch::error::RecvError},
+        time,
+    },
 };
 
 impl Broker {
@@ -87,7 +92,7 @@ impl Broker {
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub async fn start_with_controller_listener(
         config: BrokerConfig,
-        controller_listener: Option<tokio::net::TcpListener>,
+        controller_listener: Option<TcpListener>,
     ) -> Result<BrokerHandle, BrokerError> {
         Self::start_with_listeners(config, controller_listener, None).await
     }
@@ -123,8 +128,8 @@ impl Broker {
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
     pub async fn start_with_listeners(
         config: BrokerConfig,
-        controller_listener: Option<tokio::net::TcpListener>,
-        data_plane_listeners: impl IntoIterator<Item = tokio::net::TcpListener>,
+        controller_listener: Option<TcpListener>,
+        data_plane_listeners: impl IntoIterator<Item = TcpListener>,
     ) -> Result<BrokerHandle, BrokerError> {
         Self::start_with_listeners_boxed(
             config,
@@ -137,8 +142,8 @@ impl Broker {
 
     fn start_with_listeners_boxed(
         config: BrokerConfig,
-        controller_listener: Option<tokio::net::TcpListener>,
-        data_plane_listeners: Vec<tokio::net::TcpListener>,
+        controller_listener: Option<TcpListener>,
+        data_plane_listeners: Vec<TcpListener>,
         health: HealthState,
     ) -> BoxFuture<'static, Result<BrokerHandle, BrokerError>> {
         Box::pin(Self::start_with_listeners_inner(
@@ -156,8 +161,8 @@ impl Broker {
     /// fault end the start.
     async fn start_with_listeners_inner<Tail, TailFuture>(
         mut config: BrokerConfig,
-        controller_listener: Option<tokio::net::TcpListener>,
-        mut data_plane_listeners: Vec<tokio::net::TcpListener>,
+        controller_listener: Option<TcpListener>,
+        mut data_plane_listeners: Vec<TcpListener>,
         health: HealthState,
         after_quorum_join: Tail,
     ) -> Result<BrokerHandle, BrokerError>
@@ -538,7 +543,7 @@ impl Broker {
 /// to [`Broker::start_after_quorum_join`].
 struct JoinedQuorum {
     config: BrokerConfig,
-    data_plane_listeners: Vec<tokio::net::TcpListener>,
+    data_plane_listeners: Vec<TcpListener>,
     health: HealthState,
     transport: StartupTransport,
     metrics: BrokerMetrics,
@@ -565,10 +570,10 @@ struct JoinedQuorum {
 /// image carries the unfenced registration. A broker-only node places replicas
 /// against that image, and it trails the controller's.
 async fn wait_for_initial_unfence(
-    mut initial_unfence: tokio::sync::watch::Receiver<InitialUnfence>,
-    mut images: tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
+    mut initial_unfence: watch::Receiver<InitialUnfence>,
+    mut images: watch::Receiver<Arc<krabka_metadata::MetadataImage>>,
     node_id: krabka_raft::NodeId,
-    timeout: std::time::Duration,
+    timeout: Duration,
 ) {
     use crate::heartbeat::client::InitialUnfence;
     let settled = async {
@@ -580,9 +585,9 @@ async fn wait_for_initial_unfence(
                 .wait_for(|image| image.broker(node_id).is_some_and(|broker| !broker.fenced))
                 .await?;
         }
-        Ok::<_, tokio::sync::watch::error::RecvError>(state)
+        Ok::<_, RecvError>(state)
     };
-    match tokio::time::timeout(timeout, settled).await {
+    match time::timeout(timeout, settled).await {
         Ok(Ok(InitialUnfence::Refused)) => tracing::error!(
             "the controller refused this broker's heartbeat with \
              CLUSTER_AUTHORIZATION_FAILED; it stays fenced"
@@ -604,32 +609,28 @@ mod tests {
         super::*,
         crate::test_support::{UNSUPPORTED_LEVEL_FAULT, finalize_unstable_metadata_version},
         assert2::assert,
+        std::{fs, future, mem, path::PathBuf, time::Duration},
         tempfile::tempdir,
+        tokio::time,
     };
 
     #[test]
     fn public_startup_futures_are_unboxed() {
-        let boxed_size =
-            std::mem::size_of::<BoxFuture<'static, Result<BrokerHandle, BrokerError>>>();
-        let start = Broker::start(BrokerConfig::for_tests(std::path::PathBuf::new()));
-        let start_with_controller_listener = Broker::start_with_controller_listener(
-            BrokerConfig::for_tests(std::path::PathBuf::new()),
-            None,
-        );
-        let start_with_listeners = Broker::start_with_listeners(
-            BrokerConfig::for_tests(std::path::PathBuf::new()),
-            None,
-            None,
-        );
+        let boxed_size = mem::size_of::<BoxFuture<'static, Result<BrokerHandle, BrokerError>>>();
+        let start = Broker::start(BrokerConfig::for_tests(PathBuf::new()));
+        let start_with_controller_listener =
+            Broker::start_with_controller_listener(BrokerConfig::for_tests(PathBuf::new()), None);
+        let start_with_listeners =
+            Broker::start_with_listeners(BrokerConfig::for_tests(PathBuf::new()), None, None);
         let start_with_health = Broker::start_with_health(
-            BrokerConfig::for_tests(std::path::PathBuf::new()),
+            BrokerConfig::for_tests(PathBuf::new()),
             HealthState::new(DEFAULT_READINESS_MAX_METADATA_LAG),
         );
 
-        assert!(std::mem::size_of_val(&start) > boxed_size);
-        assert!(std::mem::size_of_val(&start_with_controller_listener) > boxed_size);
-        assert!(std::mem::size_of_val(&start_with_listeners) > boxed_size);
-        assert!(std::mem::size_of_val(&start_with_health) > boxed_size);
+        assert!(mem::size_of_val(&start) > boxed_size);
+        assert!(mem::size_of_val(&start_with_controller_listener) > boxed_size);
+        assert!(mem::size_of_val(&start_with_listeners) > boxed_size);
+        assert!(mem::size_of_val(&start_with_health) > boxed_size);
     }
 
     // A fault that lands after this node has joined the quorum ends a start
@@ -655,11 +656,11 @@ mod tests {
                     .controller
                     .submit_change(vec![finalize_unstable_metadata_version()])
                     .await;
-                std::future::pending::<Result<BrokerHandle, BrokerError>>().await
+                future::pending::<Result<BrokerHandle, BrokerError>>().await
             },
         );
 
-        let started = tokio::time::timeout(std::time::Duration::from_secs(60), start)
+        let started = time::timeout(Duration::from_secs(60), start)
             .await
             .expect("the fault did not end a start that was still in its tail");
 
@@ -677,7 +678,7 @@ mod tests {
         let dir = tempdir().unwrap();
         // Create a partition dir with a log inside.
         let part_dir = dir.path().join("foo-0");
-        std::fs::create_dir(&part_dir).unwrap();
+        fs::create_dir(&part_dir).unwrap();
         {
             let _log = krabka_log::Log::open(&part_dir, krabka_log::LogConfig::default()).unwrap();
         }

@@ -39,7 +39,7 @@ use {
 
 fn begin_metadata_topic(partition: bqe_req::PartitionData) -> bqe_req::TopicData {
     bqe_req::TopicData {
-        topic_name: METADATA_TOPIC.to_string(),
+        topic_name: METADATA_TOPIC.to_owned(),
         partitions: vec![partition],
         ..Default::default()
     }
@@ -47,7 +47,7 @@ fn begin_metadata_topic(partition: bqe_req::PartitionData) -> bqe_req::TopicData
 
 fn end_metadata_topic(partition: eqe_req::PartitionData) -> eqe_req::TopicData {
     eqe_req::TopicData {
-        topic_name: METADATA_TOPIC.to_string(),
+        topic_name: METADATA_TOPIC.to_owned(),
         partitions: vec![partition],
         ..Default::default()
     }
@@ -145,10 +145,13 @@ pub struct PreferredCandidate {
 impl PeerRequest {
     /// Encode a request whose Vote fields have already passed host validation.
     ///
+    /// Test-only: production sends use [`Self::try_encode`] and fail closed on
+    /// a Vote identity or epoch past Kafka's signed `int32` range.
+    ///
     /// # Panics
     ///
-    /// Panics if a Vote identity or epoch exceeds Kafka's signed `int32`
-    /// range. Production Vote sends use [`Self::try_encode`] and fail closed.
+    /// Panics on a Vote whose identity or epoch does not fit `int32`.
+    #[cfg(test)]
     #[must_use]
     pub fn encode(&self) -> Bytes {
         self.try_encode()
@@ -159,7 +162,7 @@ impl PeerRequest {
     #[must_use]
     pub fn try_encode(&self) -> Option<Bytes> {
         match *self {
-            PeerRequest::Vote {
+            Self::Vote {
                 cluster_id,
                 voter_id,
                 voter_directory_id,
@@ -179,7 +182,7 @@ impl PeerRequest {
                     cluster_id: cluster_id_to_wire(cluster_id),
                     voter_id: i32::try_from(voter_id.0).ok()?,
                     topics: vec![vote_req::TopicData {
-                        topic_name: METADATA_TOPIC.to_string(),
+                        topic_name: METADATA_TOPIC.to_owned(),
                         partitions: vec![vote_req::PartitionData {
                             partition_index: METADATA_PARTITION,
                             replica_epoch: i32::try_from(candidate_epoch).ok()?,
@@ -197,7 +200,7 @@ impl PeerRequest {
                 };
                 Some(encode_body(&req, VOTE_VERSION))
             }
-            PeerRequest::BeginQuorumEpoch {
+            Self::BeginQuorumEpoch {
                 cluster_id,
                 voter_id,
                 voter_directory_id,
@@ -229,7 +232,7 @@ impl PeerRequest {
                 };
                 Some(encode_body(&req, QUORUM_EPOCH_VERSION))
             }
-            PeerRequest::EndQuorumEpoch {
+            Self::EndQuorumEpoch {
                 cluster_id,
                 leader_id,
                 leader_epoch,
@@ -262,7 +265,7 @@ impl PeerRequest {
                 };
                 Some(encode_body(&req, QUORUM_EPOCH_VERSION))
             }
-            PeerRequest::Fetch {
+            Self::Fetch {
                 cluster_id,
                 from,
                 max_wait_ms,
@@ -284,7 +287,7 @@ impl PeerRequest {
                         ..Default::default()
                     },
                     topics: vec![fetch_req::FetchTopic {
-                        topic: METADATA_TOPIC.to_string(),
+                        topic: METADATA_TOPIC.to_owned(),
                         topic_id: METADATA_TOPIC_ID,
                         partitions: vec![fetch_req::FetchPartition {
                             partition: METADATA_PARTITION,
@@ -301,7 +304,7 @@ impl PeerRequest {
                 };
                 Some(encode_body(&req, FETCH_VERSION))
             }
-            PeerRequest::FetchSnapshot {
+            Self::FetchSnapshot {
                 cluster_id,
                 from,
                 current_leader_epoch,
@@ -331,7 +334,7 @@ impl PeerRequest {
 /// body that does not decode gives `None`. Kafka's
 /// `RequestContext.parseRequest` fails such a request, and the connection
 /// closes. Like that parser, this ignores bytes after the message.
-pub(crate) fn decode_request<T>(buf: &[u8], version: i16) -> Option<T>
+pub fn decode_request<T>(buf: &[u8], version: i16) -> Option<T>
 where
     T: for<'de> Decode<'de>,
 {
@@ -393,7 +396,7 @@ fn request_cluster_id(value: Option<&str>) -> Result<Option<uuid::Uuid>, ()> {
 }
 
 /// Parses a request `ClusterId`: Kafka's base64 form, or the hyphenated form.
-pub(crate) fn parse_cluster_id(value: &str) -> Option<uuid::Uuid> {
+pub fn parse_cluster_id(value: &str) -> Option<uuid::Uuid> {
     uuid::Uuid::parse_str(value).ok().or_else(|| {
         let bytes: [u8; 16] = URL_SAFE_NO_PAD.decode(value).ok()?.try_into().ok()?;
         Some(uuid::Uuid::from_bytes(bytes))
@@ -482,7 +485,7 @@ fn encode_fetch_snapshot_request(
         replica_id: node_to_wire(from),
         max_bytes,
         topics: vec![fs_req::TopicSnapshot {
-            name: METADATA_TOPIC.to_string(),
+            name: METADATA_TOPIC.to_owned(),
             partitions: vec![fs_req::PartitionSnapshot {
                 partition: METADATA_PARTITION,
                 current_leader_epoch,

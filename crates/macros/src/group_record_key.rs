@@ -46,7 +46,7 @@ struct Record {
     fields: Vec<Ident>,
 }
 
-pub(crate) fn expand(item: ItemEnum) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemEnum) -> Result<TokenStream, ParseError> {
     if !item.generics.params.is_empty() || item.variants.inner.is_empty() {
         return Err(ParseError::new(
             item.ident.span(),
@@ -78,7 +78,12 @@ pub(crate) fn expand(item: ItemEnum) -> Result<TokenStream, ParseError> {
         }
         let mut names = Vec::new();
         for (index, field) in fields.iter().enumerate() {
-            let name = field.ident.as_ref().expect("named variant field");
+            let Some(name) = field.ident.as_ref() else {
+                return Err(ParseError::new(
+                    variant.ident.span(),
+                    "record keys need named fields",
+                ));
+            };
             let expected_name = if index == 0 {
                 name.text() == "group_id"
             } else {

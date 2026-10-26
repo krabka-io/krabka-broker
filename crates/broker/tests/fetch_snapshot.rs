@@ -6,6 +6,7 @@
 //! broker serves the page. The broker listener answers as Kafka's
 //! `KafkaRaftClient.handleFetchSnapshotRequest` does, so a request names the
 //! snapshot it wants and the leader epoch it believes in.
+#![cfg(test)]
 
 use {
     crate::support::topics::{creatable_topic, create_topic_request},
@@ -14,9 +15,11 @@ use {
         FetchSnapshotRequest, PartitionSnapshot, SnapshotId, TopicSnapshot,
     },
     std::{
+        fs,
         path::Path,
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 mod support;
@@ -62,7 +65,7 @@ fn fetch(snapshot: CheckpointId, leader_epoch: i32, position: i64) -> FetchSnaps
 /// under `dir`, which is how the controller names the snapshots it wrote.
 fn checkpoint_ids(dir: &Path) -> Vec<CheckpointId> {
     let mut ids = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = fs::read_dir(dir) else {
         return ids;
     };
     for entry in entries.flatten() {
@@ -141,7 +144,7 @@ async fn fetch_snapshot_serves_the_named_metadata_snapshot() {
         // non-empty after CreateTopics, so it does not change when the
         // snapshot is written). The only observable is the checkpoint file,
         // so we poll for it under a bounded deadline.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     };
 
     let out = client.send(fetch(snapshot, leader_epoch, 0)).await.unwrap();

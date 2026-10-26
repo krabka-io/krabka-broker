@@ -17,6 +17,9 @@ use {
     krabka_ids::{LeaderEpoch, Offset},
     krabka_units::{Time, millis},
     std::{
+        fs,
+        io::{self, ErrorKind},
+        path::Path,
         sync::Arc,
         time::{Duration, SystemTime},
     },
@@ -156,8 +159,8 @@ fn repeated_replacement_of_one_base_keeps_each_retired_generation() {
 #[derive(Debug)]
 struct FailUnlink;
 impl LogIo for FailUnlink {
-    fn remove_file(&self, _: IoTarget, _: &std::path::Path) -> std::io::Result<()> {
-        Err(std::io::Error::other("injected deletion failure"))
+    fn remove_file(&self, _: IoTarget, _: &Path) -> io::Result<()> {
+        Err(io::Error::other("injected deletion failure"))
     }
 }
 
@@ -280,8 +283,8 @@ fn compaction_keeps_retired_files_until_the_deadline() {
 }
 
 /// The base offsets of the files in `dir` named `<base><suffix>`.
-fn bases_with_suffix(dir: &std::path::Path, suffix: &str) -> Vec<i64> {
-    let mut bases: Vec<i64> = std::fs::read_dir(dir)
+fn bases_with_suffix(dir: &Path, suffix: &str) -> Vec<i64> {
+    let mut bases: Vec<i64> = fs::read_dir(dir)
         .unwrap()
         .flatten()
         .filter_map(|entry| {
@@ -331,7 +334,7 @@ fn compaction_deletes_the_producer_snapshots_of_the_segments_it_replaces() {
 
         // The pass groups by `segment.bytes`; widen it so that one pass
         // merges both sealed segments into a survivor at 0.
-        set_segment_size(&mut log, krabka_units::mebibytes(1));
+        set_segment_size(&log, krabka_units::mebibytes(1));
         log.compact(&compaction_ctx()).unwrap();
         if restart {
             drop(log);
@@ -345,7 +348,7 @@ fn compaction_deletes_the_producer_snapshots_of_the_segments_it_replaces() {
             log.maintain(deadline).unwrap();
         }
 
-        let tombstones = std::fs::read_dir(dir.path())
+        let tombstones = fs::read_dir(dir.path())
             .unwrap()
             .flatten()
             .filter(|entry| entry.file_name().to_string_lossy().ends_with(".deleted"))
@@ -418,26 +421,21 @@ struct RejectRetirement {
 }
 
 impl LogIo for RejectRetirement {
-    fn rename(
-        &self,
-        target: IoTarget,
-        from: &std::path::Path,
-        to: &std::path::Path,
-    ) -> std::io::Result<()> {
+    fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> io::Result<()> {
         if matches!(self.fault, RetirementFault::IndexRename)
             && target == IoTarget::SegmentDeletion
             && from
                 .extension()
                 .is_some_and(|extension| extension == "index")
         {
-            return Err(std::io::ErrorKind::PermissionDenied.into());
+            return Err(ErrorKind::PermissionDenied.into());
         }
-        std::fs::rename(from, to)
+        fs::rename(from, to)
     }
 
-    fn sync_dir(&self, dir: &std::path::Path) -> std::io::Result<()> {
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         if matches!(self.fault, RetirementFault::DirectorySync) {
-            Err(std::io::ErrorKind::StorageFull.into())
+            Err(ErrorKind::StorageFull.into())
         } else {
             FileIo.sync_dir(dir)
         }

@@ -10,7 +10,10 @@
 use {
     serde::{Deserialize, Serialize},
     sha2::{Digest, Sha256},
-    std::collections::{BTreeMap, BTreeSet},
+    std::{
+        collections::{BTreeMap, BTreeSet},
+        io,
+    },
     thiserror::Error,
 };
 
@@ -67,7 +70,7 @@ pub enum BudgetError {
 
     /// Underlying I/O error.
     #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// Underlying JSON error.
     #[error("JSON error: {0}")]
@@ -89,8 +92,8 @@ impl Mode {
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
-            Mode::BeforeAfter => "before_after",
-            Mode::PinnedKafka => "pinned_kafka",
+            Self::BeforeAfter => "before_after",
+            Self::PinnedKafka => "pinned_kafka",
         }
     }
 }
@@ -124,25 +127,25 @@ pub enum Metric {
 
 impl Metric {
     /// Every metric, in report order.
-    pub const ALL: [Metric; 6] = [
-        Metric::RecordsPerSecond,
-        Metric::LatencyMsP50,
-        Metric::LatencyMsP95,
-        Metric::LatencyMsP99,
-        Metric::CpuMicrosPerRecord,
-        Metric::PeakRssMib,
+    pub const ALL: [Self; 6] = [
+        Self::RecordsPerSecond,
+        Self::LatencyMsP50,
+        Self::LatencyMsP95,
+        Self::LatencyMsP99,
+        Self::CpuMicrosPerRecord,
+        Self::PeakRssMib,
     ];
 
     /// Which way this metric gets better.
     #[must_use]
     pub fn direction(self) -> Direction {
         match self {
-            Metric::RecordsPerSecond => Direction::HigherIsBetter,
-            Metric::LatencyMsP50
-            | Metric::LatencyMsP95
-            | Metric::LatencyMsP99
-            | Metric::CpuMicrosPerRecord
-            | Metric::PeakRssMib => Direction::LowerIsBetter,
+            Self::RecordsPerSecond => Direction::HigherIsBetter,
+            Self::LatencyMsP50
+            | Self::LatencyMsP95
+            | Self::LatencyMsP99
+            | Self::CpuMicrosPerRecord
+            | Self::PeakRssMib => Direction::LowerIsBetter,
         }
     }
 
@@ -150,12 +153,12 @@ impl Metric {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Metric::RecordsPerSecond => "records/s",
-            Metric::LatencyMsP50 => "p50 ms",
-            Metric::LatencyMsP95 => "p95 ms",
-            Metric::LatencyMsP99 => "p99 ms",
-            Metric::CpuMicrosPerRecord => "CPU µs/record",
-            Metric::PeakRssMib => "peak RSS MiB",
+            Self::RecordsPerSecond => "records/s",
+            Self::LatencyMsP50 => "p50 ms",
+            Self::LatencyMsP95 => "p95 ms",
+            Self::LatencyMsP99 => "p99 ms",
+            Self::CpuMicrosPerRecord => "CPU µs/record",
+            Self::PeakRssMib => "peak RSS MiB",
         }
     }
 }
@@ -175,14 +178,14 @@ impl Payload {
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
-            Payload::Random => "random",
-            Payload::Zeros => "zeros",
+            Self::Random => "random",
+            Self::Zeros => "zeros",
         }
     }
 }
 
 /// One workload in the matrix.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Cell {
     /// Stable identifier, also the trial directory name: `[a-z0-9-]+`.
@@ -279,7 +282,7 @@ impl Contract {
     /// Returns [`BudgetError`] when the bytes are not a contract or the
     /// contract fails [`Contract::validate`].
     pub fn from_json(bytes: &[u8]) -> Result<Self, BudgetError> {
-        let contract: Contract = serde_json::from_slice(bytes)?;
+        let contract: Self = serde_json::from_slice(bytes)?;
         contract.validate()?;
         Ok(contract)
     }

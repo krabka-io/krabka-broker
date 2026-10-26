@@ -18,8 +18,12 @@
 //! it from local disk, reads it again from the tier alone, and requires both
 //! reads to see exactly the committed records. It then commits the open
 //! transaction and reads on past the old last stable offset.
+#![cfg(test)]
 
-use assert2::{assert, check};
+use {
+    assert2::{assert, check},
+    tokio::time,
+};
 mod support;
 
 #[path = "tiered_read_committed/reads.rs"]
@@ -58,7 +62,7 @@ async fn await_committed_read(tiered: &TieredPartition, from: i64, want: &Commit
             Instant::now() <= deadline,
             "the read from {from} stayed {read:?}, not {want:?}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
 }
 

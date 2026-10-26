@@ -31,13 +31,18 @@ use {
         time_util::system_timer,
         wal::quorum::{registry::WalShardRegistry, router::WalShardRouter},
     },
+    krabka_raft::kraft::snapshot_fetch::MetadataSnapshotFetchMax,
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
-    std::sync::Arc,
-    tokio::net::TcpListener,
+    std::{
+        net::SocketAddr,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
+    tokio::{net::TcpListener, sync::OnceCell, time},
 };
 
 struct RaftTransport {
-    controller_cell: Arc<tokio::sync::OnceCell<Arc<krabka_raft::ControllerHandle>>>,
+    controller_cell: Arc<OnceCell<Arc<krabka_raft::ControllerHandle>>>,
     /// Filled by `Broker::start` once the audit pipeline exists, so the
     /// controller listener's SASL logins reach the audit trail.
     audit_cell: AuditLogArc,
@@ -51,8 +56,8 @@ fn prepare_raft_transport(
     tls_dynamic: Option<&Arc<krabka_security::DynamicServerConfig>>,
     inter_broker_client: &Arc<InterBrokerClient>,
 ) -> RaftTransport {
-    let controller_cell = Arc::new(tokio::sync::OnceCell::new());
-    let audit_cell: AuditLogArc = Arc::new(tokio::sync::OnceCell::new());
+    let controller_cell = Arc::new(OnceCell::new());
+    let audit_cell: AuditLogArc = Arc::new(OnceCell::new());
     // Only a controller binds the controller listener. A broker-only node
     // reads the quorum as an observer and has no such listener to warn about.
     if config.is_controller()
@@ -167,11 +172,8 @@ fn controller_bootstrap_records(
 /// deployment may lower the 1 GiB ceiling but cannot raise it.
 fn observer_snapshot_fetch_max(
     config: &BrokerConfig,
-) -> Result<krabka_raft::kraft::snapshot_fetch::MetadataSnapshotFetchMax, BrokerError> {
-    krabka_raft::kraft::snapshot_fetch::MetadataSnapshotFetchMax::new(
-        config.metadata_snapshot_fetch_max,
-    )
-    .map_err(BrokerError::Startup)
+) -> Result<MetadataSnapshotFetchMax, BrokerError> {
+    MetadataSnapshotFetchMax::new(config.metadata_snapshot_fetch_max).map_err(BrokerError::Startup)
 }
 
 /// Metadata publication and its optional controller administration endpoint.
@@ -189,17 +191,17 @@ pub(super) struct MetadataPhase {
 async fn start_metadata_source(
     config: &BrokerConfig,
     bootstrap_records: Vec<krabka_metadata::MetadataRecord>,
-    controller_listener: Option<tokio::net::TcpListener>,
+    controller_listener: Option<TcpListener>,
     transport: RaftTransport,
     wal_shards: Arc<WalShardRegistry>,
     metrics: &BrokerMetrics,
 ) -> Result<MetadataControlPlane, BrokerError> {
     let RaftTransport {
         controller_cell,
-        audit_cell: _,
         handshake,
         dialer,
         admin_router,
+        ..
     } = transport;
     if config.is_controller() {
         let controller_config = krabka_raft::ControllerConfig {
@@ -296,7 +298,8 @@ async fn start_metadata_source(
     }
 
     drop(controller_listener);
-    let dialer = dialer.expect("broker-only node requires a raft dialer");
+    let dialer = dialer
+        .ok_or_else(|| BrokerError::Startup("broker-only node requires a raft dialer".into()))?;
     let observer = MetadataObserver::start(ObserverConfig {
         client_dispatch_queue_capacity: config.client_dispatch_queue_capacity,
         client_frame_max: config.client_frame_max,
@@ -371,18 +374,17 @@ fn spawn_auto_join(
 
 async fn wait_for_metadata_leader(
     controller: &dyn MetadataSource,
-    timeout: std::time::Duration,
+    timeout: Duration,
 ) -> Result<(), BrokerError> {
     let mut leaders = controller.watch_leader();
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     while leaders.borrow().is_none() {
-        if std::time::Instant::now() > deadline {
+        if Instant::now() > deadline {
             return Err(BrokerError::Startup(format!(
                 "no leader elected within {timeout:?}"
             )));
         }
-        let _ =
-            tokio::time::timeout(std::time::Duration::from_millis(100), leaders.changed()).await;
+        let _ = time::timeout(Duration::from_millis(100), leaders.changed()).await;
     }
     Ok(())
 }
@@ -399,10 +401,10 @@ async fn wait_for_metadata_leader(
 /// before it does.
 async fn wait_for_metadata_version(
     controller: &dyn MetadataSource,
-    timeout: std::time::Duration,
+    timeout: Duration,
 ) -> Result<(), BrokerError> {
     let mut images = controller.watch_image();
-    match tokio::time::timeout(
+    match time::timeout(
         timeout,
         images.wait_for(|image| image.finalized_metadata_version().is_some()),
     )
@@ -461,7 +463,7 @@ async fn bind_ephemeral_controller_listener(
 /// Writes `bound` into `controller_listen_addr` and into this node's own voter
 /// entry when that entry asks for port 0. The entry keeps its host. Entries of
 /// other nodes, and an entry with a concrete port, stay as configured.
-fn publish_bound_controller_addr(config: &mut BrokerConfig, bound: std::net::SocketAddr) {
+fn publish_bound_controller_addr(config: &mut BrokerConfig, bound: SocketAddr) {
     config.controller_listen_addr = bound;
     let node_id = config.node_id;
     for (voter, endpoint) in &mut config.controller_quorum_voters {
@@ -568,7 +570,9 @@ mod tests {
         assert2::assert,
         krabka_raft::NodeId,
         krabka_security::ListenerProtocol,
-        tracing::Level,
+        std::{net::SocketAddr, path::PathBuf, time::Duration},
+        tokio::time,
+        tracing::{Level, dispatcher},
     };
 
     /// A captured log event at warning level or above.
@@ -587,7 +591,7 @@ mod tests {
             level: Level::WARN,
             message: "controller listener is PLAINTEXT: every peer is ANONYMOUS, and each \
                       controller RPC is authorized for that principal"
-                .to_string(),
+                .to_owned(),
         };
         let combined = vec![NodeRole::Broker, NodeRole::Controller];
         let cases = [
@@ -605,11 +609,11 @@ mod tests {
         let mut warned_rows = Vec::new();
         let mut expected_rows = Vec::new();
         for (roles, protocol, expected) in cases {
-            let mut config = BrokerConfig::for_tests(std::path::PathBuf::new());
+            let mut config = BrokerConfig::for_tests(PathBuf::new());
             config.roles.clone_from(&roles);
             config.controller_listener_protocol = protocol;
             let capture = LogCapture::default();
-            tracing::dispatcher::with_default(&capture.dispatch(), || {
+            dispatcher::with_default(&capture.dispatch(), || {
                 LogCapture::span().in_scope(|| prepare_raft_transport(&config, None, &client));
             });
             let warned: Vec<Warning> = capture
@@ -683,7 +687,7 @@ mod tests {
                 level: 1,
             })
         };
-        let timeout = std::time::Duration::from_secs(5);
+        let timeout = Duration::from_secs(5);
         let refusal = "startup failed: the metadata image did not finalize metadata.version \
                        within 5s"
             .to_owned();
@@ -711,7 +715,7 @@ mod tests {
                         .map_err(|error| error.to_string())
                 }
             });
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            time::sleep(Duration::from_secs(1)).await;
             assert!(!waiting.is_finished(), "{what}");
             source.set_records(&records);
             assert!(waiting.await.expect("the wait") == outcome, "{what}");
@@ -720,7 +724,7 @@ mod tests {
 
     #[test]
     fn the_bound_port_replaces_only_this_nodes_port_zero_endpoint() {
-        let bound: std::net::SocketAddr = "127.0.0.1:40123".parse().expect("static");
+        let bound: SocketAddr = "127.0.0.1:40123".parse().expect("static");
         let cases = [
             (
                 "own ip endpoint",
@@ -745,7 +749,7 @@ mod tests {
             ("no own entry", vec![(2, "peer:0")], vec![(2, "peer:0")]),
         ];
         for (name, configured, published) in cases {
-            let mut config = BrokerConfig::for_tests(std::path::PathBuf::new());
+            let mut config = BrokerConfig::for_tests(PathBuf::new());
             config.node_id = NodeId(1);
             config.controller_quorum_voters = configured
                 .iter()

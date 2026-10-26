@@ -8,26 +8,26 @@
 //! scenario.
 
 use {
-    base64::Engine as _,
+    base64::{Engine as _, engine::general_purpose},
     krabka_broker::BrokerConfig,
-    std::{net::SocketAddr, process::Command},
+    std::{array, fs, net::SocketAddr, path::Path, process::Command},
     uuid::Uuid,
 };
 
-pub(crate) const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.0.0";
+pub const KAFKA_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.0.0";
 
 /// Kafka encodes a 16-byte UUID as URL-safe base64 with no padding. The JVM
 /// `--cluster-id` string and Krabka's `uuid::Uuid` must wrap the *same* 16
 /// bytes. Otherwise the two sides reject each other on a cluster-id
 /// mismatch.
-pub(crate) fn kafka_cluster_id_string(id: Uuid) -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(id.as_bytes())
+pub fn kafka_cluster_id_string(id: Uuid) -> String {
+    general_purpose::URL_SAFE_NO_PAD.encode(id.as_bytes())
 }
 
 /// Builds a Krabka controller `BrokerConfig` for voter `i` in the shared static
 /// 3-voter set, with the shared cluster id. `i` is 0-indexed, and the id is
 /// `i+1`.
-pub(crate) use crate::support::jvm_static_voter_config as krabka_controller_config;
+pub use crate::support::jvm_static_voter_config as krabka_controller_config;
 use crate::support::{JvmBrokerSetup, bind_and_drop_ports, controller_voters, format_jvm_voter};
 
 /// Formats a Krabka voter's log directory at Kafka 4.0's `metadata.version`.
@@ -38,17 +38,15 @@ use crate::support::{JvmBrokerSetup, bind_and_drop_ports, controller_voters, for
 /// release the oldest voter runs, as a Kafka operator mixing in a 4.0 node
 /// would. The formatter runs in process because a Bazel test sandbox has no
 /// Cargo working tree to spawn it from.
-pub(crate) async fn format_at_kafka_4_0(log_dir: &std::path::Path, node: &BrokerConfig) {
+pub async fn format_at_kafka_4_0(log_dir: &Path, node: &BrokerConfig) {
     let cluster_id = node.cluster_id.expect("the spikes name their cluster id");
     format_jvm_voter(log_dir, &kafka_cluster_id_string(cluster_id), node).await;
 }
 
-pub(crate) fn docker_rm(name: &str) {
-    let _ = Command::new("docker").args(["rm", "-f", name]).output();
-}
+pub fn docker_rm(name: &str) { let _ = Command::new("docker").args(["rm", "-f", name]).output(); }
 
 /// Publish the JVM voter, keeping its configuration directory alive for the run.
-pub(crate) fn start_jvm_controller(
+pub fn start_jvm_controller(
     name: &str,
     port: u16,
     cluster_id: &str,
@@ -56,7 +54,7 @@ pub(crate) fn start_jvm_controller(
 ) -> tempfile::TempDir {
     let propdir = tempfile::TempDir::new().unwrap();
     let proppath = propdir.path().join("controller.properties");
-    std::fs::write(&proppath, props).unwrap();
+    fs::write(&proppath, props).unwrap();
     let entry = format!(
         "/opt/kafka/bin/kafka-storage.sh format -t {cluster_id} --config /tmp/c.properties --ignore-formatted && exec /opt/kafka/bin/kafka-server-start.sh /tmp/c.properties"
     );
@@ -84,14 +82,14 @@ pub(crate) fn start_jvm_controller(
 }
 
 /// Endpoints for two host voters and one published JVM voter.
-pub(crate) struct MixedQuorum {
+pub struct MixedQuorum {
     pub(crate) ports: [u16; 3],
     clients: Vec<SocketAddr>,
     controllers: Vec<SocketAddr>,
 }
 
 /// The two started Krabka voters and the directories that back them.
-pub(crate) struct StartedPair {
+pub struct StartedPair {
     brokers: [krabka_broker::BrokerHandle; 2],
     dirs: [tempfile::TempDir; 2],
 }
@@ -113,7 +111,7 @@ impl MixedQuorum {
     pub(crate) async fn allocate() -> Self {
         let (clients, controllers) = bind_and_drop_ports(3).await;
         Self {
-            ports: std::array::from_fn(|index| controllers[index].port()),
+            ports: array::from_fn(|index| controllers[index].port()),
             clients,
             controllers,
         }
@@ -124,14 +122,14 @@ impl MixedQuorum {
         cluster_id: Uuid,
         fetch_timeout: Option<krabka_units::Time>,
     ) -> StartedPair {
-        let dirs: [tempfile::TempDir; 2] = std::array::from_fn(|_| tempfile::tempdir().unwrap());
+        let dirs: [tempfile::TempDir; 2] = array::from_fn(|_| tempfile::tempdir().unwrap());
         let voters: Vec<_> = self
             .controllers
             .iter()
             .enumerate()
             .map(|(index, address)| (u64::try_from(index + 1).unwrap(), *address))
             .collect();
-        let configs: [BrokerConfig; 2] = std::array::from_fn(|index| {
+        let configs: [BrokerConfig; 2] = array::from_fn(|index| {
             let bind = SocketAddr::from(([0, 0, 0, 0], self.ports[index]));
             let mut config = krabka_controller_config()
                 .log_dir(dirs[index].path())
@@ -165,7 +163,7 @@ impl MixedQuorum {
 }
 
 /// The common JVM controller voter properties, followed by scenario-specific timeouts.
-pub(crate) fn jvm_controller_properties([p1, p2, p3]: [u16; 3], overrides: &str) -> String {
+pub fn jvm_controller_properties([p1, p2, p3]: [u16; 3], overrides: &str) -> String {
     format!(
         "process.roles=controller\nnode.id=3\ncontroller.quorum.voters=1@host.docker.internal:{p1},2@host.docker.internal:{p2},3@localhost:{p3}\ncontroller.listener.names=CONTROLLER\nlisteners=CONTROLLER://0.0.0.0:{p3}\nlistener.security.protocol.map=CONTROLLER:PLAINTEXT\n{overrides}log.dirs=/tmp/kraft-controller-logs\n"
     )

@@ -4,6 +4,7 @@
 //! which carries only the topic id. Kafka's `KafkaApis.handleProduceRequest`
 //! answers `UNKNOWN_TOPIC_ID` on every partition row of a topic whose id does
 //! not resolve to a name. The zero id is such an id.
+#![cfg(test)]
 use {
     crate::support::topics::{creatable_topic, create_topic_request},
     assert2::assert,

@@ -11,7 +11,7 @@ use crate::kafka_hash::murmur2_partition;
 /// The function applies the JVM `Utils.abs(int)` semantics, which return 0 for
 /// `Integer.MIN_VALUE` to avoid arithmetic overflow.
 #[must_use]
-pub(crate) fn partition_for_group(group: &str, num_partitions: i32) -> i32 {
+pub fn partition_for_group(group: &str, num_partitions: i32) -> i32 {
     murmur2_partition(group.as_bytes(), num_partitions)
 }
 

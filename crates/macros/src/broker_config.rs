@@ -1,14 +1,14 @@
 //! Construct the flat broker configuration declaration in one expansion.
 
 use {
-    crate::meta::{ItemBody, named_body, named_fields},
+    crate::meta::{ItemBody, body_group, named_body, named_fields},
     moxy::{
         ast::{ItemStruct, ParseError, Visibility},
         token::{Span, TokenStream, TokenTree},
     },
 };
 
-pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
     let ItemBody {
         tokens: mut header,
         body_index: body,
@@ -25,9 +25,7 @@ pub(crate) fn expand(input: &TokenStream) -> Result<TokenStream, ParseError> {
             "expected one named-field struct",
         ));
     }
-    let TokenTree::Group(placeholder) = &mut header[body] else {
-        unreachable!()
-    };
+    let placeholder = body_group(&mut header, body)?;
     // Rust validates field types; parsing only the header avoids Moxy's qualified-type gaps.
     placeholder.tokens = TokenStream::new();
     let mut declaration: ItemStruct = moxy::parse!({ TokenStream::from(header) })?;

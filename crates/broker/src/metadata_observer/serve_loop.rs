@@ -59,7 +59,8 @@ struct Cursor {
 }
 
 impl Cursor {
-    /// The controller to fetch from next, out of a non-empty `targets`.
+    /// The controller to fetch from next, out of `targets`, or `None` when
+    /// `targets` is empty.
     ///
     /// Any controller serves the fetch, but only the leader records an
     /// observer's progress for `DescribeQuorum`, so the loop goes to the leader
@@ -69,13 +70,13 @@ impl Cursor {
     /// second poll, for as long as a follower keeps naming it. Short of the
     /// leader, the loop stays on the controller it is on, and short of that it
     /// takes the first target.
-    fn pick<'a>(&self, targets: &'a [(NodeId, String)]) -> &'a (NodeId, String) {
+    fn pick<'a>(&self, targets: &'a [(NodeId, String)]) -> Option<&'a (NodeId, String)> {
         let leader = self.leader.filter(|leader| Some(*leader) != self.failed);
         [leader, self.current]
             .into_iter()
             .flatten()
             .find_map(|id| targets.iter().find(|(target, _)| *target == id))
-            .unwrap_or(&targets[0])
+            .or_else(|| targets.first())
     }
 
     /// `target`, one of `targets`, answered and named `leader`.
@@ -179,7 +180,7 @@ pub(super) async fn run_loop(
     shutdown: CancellationToken,
 ) {
     let mut store = ObserverStore::open(&config.data_dir, config.snapshot_interval_records);
-    let mut fetch_offset: u64 = resume(&config, &mut store, &observer);
+    let mut fetch_offset = resume(&config, &mut store, &observer);
     let mut cursor = Cursor::default();
     let mut empty_image = EmptyImageWatch::default();
     loop {
@@ -191,13 +192,12 @@ pub(super) async fn run_loop(
             &config.voters,
             &config.bootstrap_servers,
         );
-        if targets.is_empty() {
+        let Some((target, addr)) = cursor.pick(&targets).cloned() else {
             if !park(&config).await {
                 return;
             }
             continue;
-        }
-        let (target, addr) = cursor.pick(&targets).clone();
+        };
         let result = tokio::select! {
             () = shutdown.cancelled() => return,
             r = fetch_once(&config, &addr, target, fetch_offset, &observer.image, &mut store) => r,
@@ -304,7 +304,12 @@ mod tests {
         krabka_raft::OutboundDialer,
         krabka_units::millis,
         qubit_clock::{ManualMonotonicClock, MonotonicClock as _, Timer},
-        std::{sync::atomic::AtomicUsize, time::Duration},
+        std::{
+            path::Path,
+            sync::{self, atomic::AtomicUsize},
+            time::Duration,
+        },
+        tokio::{runtime::Builder, task, time},
         uuid::Uuid,
     };
 
@@ -546,7 +551,7 @@ mod tests {
                 cursor.answered(next_targets, node(target), leader.map(node));
                 Picked {
                     label,
-                    node: cursor.pick(next_targets).0,
+                    node: cursor.pick(next_targets).unwrap().0,
                 }
             })
             .collect();
@@ -563,7 +568,7 @@ mod tests {
     #[tokio::test]
     async fn run_loop_sleeps_after_empty_fetch() {
         let fetches = Arc::new(AtomicUsize::new(0));
-        let fetches_for_mock = fetches.clone();
+        let fetches_for_mock = sync::Arc::clone(&fetches);
         let mock = mock_request_broker(
             krabka_raft::API_KEY_METADATA_FETCH,
             move || {
@@ -579,7 +584,7 @@ mod tests {
         let observer = MetadataObserver::start(ObserverConfig {
             voters: vec![(krabka_raft::NodeId(1), mock.addr.to_string())],
             dialer: Arc::new(CountingDialer {
-                dial_count: dial_count.clone(),
+                dial_count: sync::Arc::clone(&dial_count),
             }),
             client_id: "sleep-test".into(),
             poll_interval: millis(250),
@@ -596,7 +601,7 @@ mod tests {
                 saw_first_fetch = true;
                 break;
             }
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
         assert!(saw_first_fetch, "observer should issue the first fetch");
         let after_first_fetch = fetches.load(Ordering::SeqCst);
@@ -608,12 +613,11 @@ mod tests {
         // drives the observer to its park). Parked on a manual timeline that we
         // never advance, the observer cannot re-fetch, so the counts are
         // deterministically frozen at their first-fetch values.
-        let waiters = clock.clone();
-        let parked = tokio::task::spawn_blocking(move || {
-            waiters.wait_for_waiters(1, Duration::from_secs(5))
-        })
-        .await
-        .unwrap();
+        let waiters = sync::Arc::clone(&clock);
+        let parked =
+            task::spawn_blocking(move || waiters.wait_for_waiters(1, Duration::from_secs(5)))
+                .await
+                .unwrap();
         assert!(
             parked,
             "observer should park on the poll-interval timer after an empty fetch",
@@ -635,7 +639,7 @@ mod tests {
     async fn run_until_it_stops(config: ObserverConfig) -> Arc<MetadataObserver> {
         let shutdown = CancellationToken::new();
         let observer = MetadataObserver::new(config.cluster_id, shutdown.clone());
-        tokio::time::timeout(
+        time::timeout(
             Duration::from_secs(10),
             run_loop(config, Arc::clone(&observer), shutdown),
         )
@@ -649,7 +653,7 @@ mod tests {
     fn config_on(
         voters: Vec<(NodeId, String)>,
         timer: Arc<dyn Timer>,
-        data_dir: &std::path::Path,
+        data_dir: &Path,
     ) -> ObserverConfig {
         ObserverConfig {
             voters,
@@ -706,7 +710,7 @@ mod tests {
         voterless_registration_fails = { vec![], TimerFailure::Registration },
         voterless_completion_fails = { vec![], TimerFailure::Completion },
         unreachable_voter_registration_fails = {
-            vec![(NodeId(1), UNREACHABLE.to_string())],
+            vec![(NodeId(1), UNREACHABLE.to_owned())],
             TimerFailure::Registration
         },
     )]
@@ -714,7 +718,7 @@ mod tests {
         targets: Vec<(NodeId, String)>,
         failure: TimerFailure,
     ) {
-        tokio::runtime::Builder::new_current_thread()
+        Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
@@ -976,7 +980,7 @@ mod tests {
             if !leader_seen.lock().unwrap().is_empty() {
                 break;
             }
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
         observer.cancel().await;
         follower.stop();
@@ -1037,7 +1041,7 @@ mod tests {
             if recorded != -1 {
                 break;
             }
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
         // 10 000 committed records is offsets 0..=9_999.
         assert!(recorded == 9_999);
@@ -1048,7 +1052,10 @@ mod tests {
         // differ -- so it is where the mapping is pinned. Swapped, or both
         // taken from one side, a node 10 000 records behind would report no
         // lag at all and `/readyz` would answer 200 for it.
-        let source = Arc::new(ObserverSource::new(observer.clone(), Arc::new(NoWrites)));
+        let source = Arc::new(ObserverSource::new(
+            sync::Arc::clone(&observer),
+            Arc::new(NoWrites),
+        ));
         let progress = metadata_progress(source);
         assert!(progress.node_metadata_offset() == -1);
         assert!(progress.quorum_committed_offset() == 9_999);

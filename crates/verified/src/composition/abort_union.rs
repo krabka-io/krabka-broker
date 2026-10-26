@@ -54,7 +54,8 @@ pub(super) fn restored_abort_sources_cover_committed_fetch(
         ==> rows@[j] == (remote@[remote_indices@[j]@].producer_id, remote@[remote_indices@[j]@].start_offset))]
     #[variant(remote_indices@.len() - i@)]
     while i < remote_indices.len() {
-        let entry = remote[remote_indices[i]];
+        let &index = remote_indices.get(i)?;
+        let &entry = remote.get(index)?;
         if matches!(
             remote_txn_overlap_decision(entry.start_offset, entry.last_offset, from, query_last),
             RemoteTxnOverlapDecision::Overlap
@@ -71,7 +72,8 @@ pub(super) fn restored_abort_sources_cover_committed_fetch(
         ==> rows@[remote_indices@.len() + j] == (local@[local_indices@[j]@].producer_id, local@[local_indices@[j]@].start_offset))]
     #[variant(local_indices@.len() - i@)]
     while i < local_indices.len() {
-        let entry = local[local_indices[i]];
+        let &index = local_indices.get(i)?;
+        let &entry = local.get(index)?;
         rows.push((entry.producer_id, entry.start_offset));
         i += 1;
     }

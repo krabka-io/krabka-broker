@@ -25,6 +25,7 @@ use {
     assert2::assert,
     krabka_broker::BrokerHandle,
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 /// In-process multi-broker tiered metadata-sharing proof.
@@ -98,7 +99,7 @@ async fn tiered_storage_metadata_sharing_via_survivor() {
     // wait a fixed propagation window before killing the leader.
     eprintln!("ITEST: waiting 8s for RLMM metadata propagation to follower");
     // real-time wait (not a progress poll): RLMM propagates CopySegment metadata to the follower over the broker's own 1s interval ticks; no in-process observable to poll.
-    tokio::time::sleep(Duration::from_secs(8)).await;
+    time::sleep(Duration::from_secs(8)).await;
 
     // Shut down the partition leader.  The surviving 2/3 quorum (broker 2 + 3)
     // can still commit the partition-leader-election record.
@@ -146,7 +147,7 @@ async fn tiered_storage_metadata_sharing_via_survivor() {
     // Give the survivor's RLMM 3 more reconcile ticks to settle on the
     // now-led partition's metadata (RLMM interval=1s → 3 extra ticks).
     // intentional: RLMM reconcile settling has no image/metric signal to await.
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    time::sleep(Duration::from_secs(3)).await;
 
     // Consume ALL produced records from the survivor at offset 0.
     // These can only come from the shared remote tier (local log evicted by

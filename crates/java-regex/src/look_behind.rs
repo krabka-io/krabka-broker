@@ -47,6 +47,7 @@ use {
     super::backtrack::deterministic,
     fancy_regex::{Assertion, Expr, LookAround},
     regex::{Error as RegexError, RegexBuilder},
+    std::iter,
 };
 
 /// Java's `Pattern.MAX_REPS`, the count of an unbounded repeat.
@@ -58,7 +59,7 @@ const LEAST_INPUT_LIMIT: i32 = 1 << 30;
 
 /// Why [`check_look_behinds`] refuses a pattern.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Refusal {
+pub enum Refusal {
     /// Java's own refusal: the study finds no maximum length.
     NoObviousMaximum,
     /// The maximum length wraps in Java's `int`, and Java's window then
@@ -132,10 +133,7 @@ impl TreeInfo {
 /// [`Refusal::NoObviousMaximum`] where Java refuses a look-behind, and
 /// [`Refusal::MaximumOverflows`] where its maximum wraps and krabka would
 /// match at a start Java does not try.
-pub(super) fn check_look_behinds(
-    expr: &Expr,
-    code_points: &[bool],
-) -> Result<LookBehinds, Refusal> {
+pub fn check_look_behinds(expr: &Expr, code_points: &[bool]) -> Result<LookBehinds, Refusal> {
     let mut bodies = Vec::new();
     look_behind_bodies(expr, &mut bodies);
     let studied: Vec<(&Expr, TreeInfo)> = bodies
@@ -176,7 +174,7 @@ pub(super) fn check_look_behinds(
 /// and `max` are its `TreeInfo` lengths. In UTF-16 units, or with
 /// `code_points` in code points.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct JavaWindow {
+pub struct JavaWindow {
     pub(crate) min: i32,
     pub(crate) max: i32,
     pub(crate) code_points: bool,
@@ -184,7 +182,7 @@ pub(crate) struct JavaWindow {
 
 /// What [`check_look_behinds`] finds in a pattern Java reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct LookBehinds {
+pub struct LookBehinds {
     /// Java's window of each look-behind, in the order `fancy_regex` parses
     /// them, outer ones first.
     pub(super) windows: Vec<JavaWindow>,
@@ -352,8 +350,8 @@ fn study(chain: &[&Expr], info: &mut TreeInfo) {
     };
     match first {
         Expr::Concat(children) => return inline(children.iter(), rest, info),
-        Expr::Group(child) => return inline(std::iter::once(&**child), rest, info),
-        Expr::AtomicGroup(child) => return inline(std::iter::once(&**child), rest, info),
+        Expr::Group(child) => return inline(iter::once(&**child), rest, info),
+        Expr::AtomicGroup(child) => return inline(iter::once(&**child), rest, info),
         Expr::Alt(children) => return branch(children.iter(), rest, info),
         Expr::Repeat {
             child,

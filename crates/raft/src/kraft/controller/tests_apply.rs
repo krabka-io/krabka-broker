@@ -14,6 +14,7 @@ use {
     },
     assert2::{assert, check},
     krabka_metadata::metadata_version::METADATA_VERSION_FEATURE,
+    krabka_protocol::records::Record,
 };
 
 #[test]
@@ -125,12 +126,12 @@ fn metadata_fetch_slice_excludes_negative_hwm_and_uncommitted_batches() {
         partition_leader_epoch: 1,
         last_offset_delta: 1,
         records: vec![
-            krabka_protocol::records::Record {
+            Record {
                 value: Some(bytes::Bytes::from_static(b"a")),
                 offset_delta: 0,
                 ..Default::default()
             },
-            krabka_protocol::records::Record {
+            Record {
                 value: Some(bytes::Bytes::from_static(b"b")),
                 offset_delta: 1,
                 ..Default::default()

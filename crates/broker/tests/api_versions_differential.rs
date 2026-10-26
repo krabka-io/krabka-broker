@@ -42,6 +42,7 @@
 //! file. Each child therefore carries an explicit `#[path]` onto the sibling
 //! `api_versions_differential/` directory; `support` is a `tests/<name>/mod.rs`
 //! helper, which the crate-root rule already resolves.
+#![cfg(test)]
 
 #[path = "api_versions_differential/cases.rs"]
 mod cases;

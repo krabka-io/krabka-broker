@@ -15,6 +15,7 @@
 //! platform — which is exactly why they cannot tell the paths apart. The
 //! `fetch_response_drain_total` assertion can, and it is the one that fails if
 //! a regression quietly routes every plaintext fetch onto the copy path.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -26,6 +27,7 @@ use {
         records::value_record,
     },
     assert2::assert,
+    krabka_protocol::records::RecordsPayload,
 };
 mod support;
 
@@ -159,7 +161,7 @@ async fn large_message_fetch_round_trips_byte_exact() {
     let batches = r.responses[0].partitions[0]
         .records
         .as_ref()
-        .and_then(krabka_protocol::records::RecordsPayload::as_v2)
+        .and_then(RecordsPayload::as_v2)
         .expect("v2 records decoded from the fetch response");
 
     // Flatten all returned records and compare their values byte-for-byte to

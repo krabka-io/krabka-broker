@@ -46,7 +46,7 @@ const READ_COMMITTED: i8 = 1;
 /// rather than against two offsets in sequence, which is what makes "they
 /// disagree here and agree there" a single readable claim.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct EndOfPartition {
+pub struct EndOfPartition {
     pub(super) read_uncommitted: ListOffsetsPartitionResponse,
     pub(super) read_committed: ListOffsetsPartitionResponse,
 }
@@ -59,7 +59,7 @@ pub(super) struct EndOfPartition {
 /// Kafka's `Unknown` selection outcome) reports the unknown-epoch sentinel
 /// instead, regardless of the live epoch: Kafka never fills the epoch for an
 /// answer it did not resolve.
-pub(super) fn matched_row(offset: i64, timestamp: i64) -> ListOffsetsPartitionResponse {
+pub fn matched_row(offset: i64, timestamp: i64) -> ListOffsetsPartitionResponse {
     ListOffsetsPartitionResponse {
         partition_index: 0,
         error_code: codes::NONE,
@@ -79,7 +79,7 @@ pub(super) fn matched_row(offset: i64, timestamp: i64) -> ListOffsetsPartitionRe
 /// partition is unavailable. Asserting the error code is `NONE` here is what
 /// keeps a future implementation from turning a fence into a retryable failure
 /// that would spin a consumer forever.
-pub(super) fn refused_row() -> ListOffsetsPartitionResponse { matched_row(-1, -1) }
+pub fn refused_row() -> ListOffsetsPartitionResponse { matched_row(-1, -1) }
 
 /// The whole `LATEST` row a healthy partition 0 answers with.
 ///
@@ -88,9 +88,9 @@ pub(super) fn refused_row() -> ListOffsetsPartitionResponse { matched_row(-1, -1
 /// epoch: Kafka fills it from `Partition.getLeaderEpoch` rather than leaving
 /// it unknown. Spelling the full row out is what makes an isolation level
 /// that quietly changed the error code or the timestamp fail here too.
-pub(super) fn latest_row(offset: i64) -> ListOffsetsPartitionResponse { matched_row(offset, -1) }
+pub fn latest_row(offset: i64) -> ListOffsetsPartitionResponse { matched_row(offset, -1) }
 
-pub(super) async fn create_topic(client: &Client, name: &str) {
+pub async fn create_topic(client: &Client, name: &str) {
     let response = client
         .send(create_topic_request(
             creatable_topic().name((name).into()).call(),
@@ -124,7 +124,7 @@ async fn list_offset(
 }
 
 /// Ask one sentinel of `topic` at both isolation levels.
-pub(super) async fn both_levels(client: &Client, topic: &str, timestamp: i64) -> EndOfPartition {
+pub async fn both_levels(client: &Client, topic: &str, timestamp: i64) -> EndOfPartition {
     EndOfPartition {
         read_uncommitted: list_offset(client, topic, timestamp, READ_UNCOMMITTED).await,
         read_committed: list_offset(client, topic, timestamp, READ_COMMITTED).await,
@@ -132,7 +132,7 @@ pub(super) async fn both_levels(client: &Client, topic: &str, timestamp: i64) ->
 }
 
 /// Ask for the end of `topic` at both isolation levels.
-pub(super) async fn end_of_partition(client: &Client, topic: &str) -> EndOfPartition {
+pub async fn end_of_partition(client: &Client, topic: &str) -> EndOfPartition {
     both_levels(client, topic, LATEST_TIMESTAMP).await
 }
 
@@ -144,7 +144,7 @@ pub(super) async fn end_of_partition(client: &Client, topic: &str) -> EndOfParti
 /// `read_committed` client is answered with is capped at the high watermark, so
 /// a reading taken before the watermark caught up would measure the wrong
 /// thing.
-pub(super) async fn wait_for_settled_log(broker: &BrokerHandle, topic: &str, offset: i64) {
+pub async fn wait_for_settled_log(broker: &BrokerHandle, topic: &str, offset: i64) {
     broker
         .wait_until_local_log_end_offset(topic, 0, offset)
         .await;
@@ -158,7 +158,7 @@ fn record(topic: &str, value: &'static str) -> ProducerRecord {
         .call()
 }
 
-pub(super) async fn send_ok(producer: &Producer, topic: &str, value: &'static str) {
+pub async fn send_ok(producer: &Producer, topic: &str, value: &'static str) {
     producer
         .send(record(topic, value))
         .await
@@ -171,12 +171,7 @@ pub(super) async fn send_ok(producer: &Producer, topic: &str, value: &'static st
 /// to the producer's wall clock cannot be named in an assertion. Fixed
 /// timestamps also keep the ordinary records far below the transactional ones,
 /// so a lookup can aim either side of the bound on purpose.
-pub(super) async fn send_at(
-    producer: &Producer,
-    topic: &str,
-    value: &'static str,
-    timestamp_ms: i64,
-) {
+pub async fn send_at(producer: &Producer, topic: &str, value: &'static str, timestamp_ms: i64) {
     producer
         .send(ProducerRecord {
             timestamp_ms: Some(timestamp_ms),

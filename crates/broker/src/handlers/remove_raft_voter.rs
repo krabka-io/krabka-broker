@@ -38,7 +38,7 @@ use {
     gate = cluster_alter_denied,
     refusals = Refusals::<RemoveRaftVoterResponse>::leader_only("remove-raft-voter denied"),
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     version: ApiVersion,
     req_bytes: &[u8],
@@ -129,7 +129,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_denies_cluster_alter_without_calling_reconfig() {
-        let version = krabka_protocol::owned::remove_raft_voter_response::MAX_VERSION;
+        let version = remove_raft_voter_response::MAX_VERSION;
         check_voter_case(
             VoterCase::Denied,
             81,
@@ -146,7 +146,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_rejects_negative_voter_id_before_reconfig() {
-        let version = krabka_protocol::owned::remove_raft_voter_response::MAX_VERSION;
+        let version = remove_raft_voter_response::MAX_VERSION;
         check_voter_case(
             VoterCase::Invalid,
             81,

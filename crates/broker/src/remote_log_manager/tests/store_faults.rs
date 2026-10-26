@@ -36,15 +36,22 @@ use {
     },
     assert2::{assert, check},
     krabka_ids::PartitionIndex,
-    krabka_object_store::fault::{FaultInjectingStore, FaultKind, FaultPolicy, OpFault, StoreOp},
+    krabka_object_store::{
+        fault,
+        fault::{FaultInjectingStore, FaultKind, FaultPolicy, OpFault, StoreOp},
+    },
     krabka_remote_storage::{RemoteLogSegmentState, RemoteStorageManager, S3RemoteStorage},
-    std::sync::Arc,
+    std::{
+        path::Path,
+        sync::{Arc, PoisonError},
+        time::{Duration, Instant},
+    },
 };
 
 /// How long a stalled store holds a call. Long enough that a copy under the
 /// deadline below can only end at that deadline, short enough that the
 /// abandoned blocking task drains while the test tears down.
-const STALL: std::time::Duration = std::time::Duration::from_secs(2);
+const STALL: Duration = Duration::from_secs(2);
 
 /// The copy deadline the stall cases run under.
 const SHORT_COPY_DEADLINE: Time = millis(150);
@@ -96,11 +103,8 @@ fn backend(store: Arc<FaultInjectingStore>) -> Arc<dyn RemoteStorageManager> {
 
 /// An in-memory store wrapped in `policy`.
 fn faulty_store(policy: FaultPolicy) -> Arc<FaultInjectingStore> {
-    krabka_object_store::fault::build_faulty_object_store(
-        &krabka_object_store::ObjectStoreConfig::InMemory,
-        policy,
-    )
-    .expect("the in-memory store always builds")
+    fault::build_faulty_object_store(&krabka_object_store::ObjectStoreConfig::InMemory, policy)
+        .expect("the in-memory store always builds")
 }
 
 /// A store that answers every upload with `503 SlowDown`.
@@ -122,7 +126,7 @@ struct TieredPartition {
 
 /// A tiered `orders-0` with segments already sealed on disk, plus its
 /// exports and log config.
-fn tiered_partition(log_dir: &std::path::Path) -> TieredPartition {
+fn tiered_partition(log_dir: &Path) -> TieredPartition {
     let partition = rolled_tiered_partition_with_config(log_dir, LogConfig {
         segment_size: bytes(256),
         remote_storage_enable: true,
@@ -255,7 +259,7 @@ async fn a_stalled_copy_is_abandoned_at_its_deadline() {
         index_cache,
     } = fixtures::owned_tier_resources();
 
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let copied = copy_exports(
         &fixtures::configured_tier()
             .rsm(&rsm)
@@ -311,7 +315,7 @@ async fn a_stalled_partition_does_not_stop_the_sweep_reaching_the_next() {
     let controller: Arc<dyn MetadataSource> =
         Arc::new(fixed_source(image_with_orders_partitions(2)));
 
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     tick_all(
         &partitions,
         &*controller,
@@ -414,12 +418,13 @@ async fn local_retention_keeps_segments_whose_copy_never_finished() {
         .await;
 
         check!(removed == 0, "{name}");
-        let log = partition.log.lock().expect("partition log mutex poisoned");
+        let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
         check!(
             log.local_log_start_offset() == exports[0].base_offset,
             "{name}"
         );
         check!(log.tierable_segments().len() == exports.len(), "{name}");
+        drop(log);
     }
 }
 

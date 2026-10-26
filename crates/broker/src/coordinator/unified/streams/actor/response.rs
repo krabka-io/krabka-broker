@@ -30,7 +30,10 @@ use {
         streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
         streams_group_heartbeat_response::{EndpointToPartitions, StreamsGroupHeartbeatResponse},
     },
-    std::collections::{BTreeMap, BTreeSet, HashMap},
+    std::{
+        collections::{BTreeMap, BTreeSet, HashMap},
+        time::Duration,
+    },
 };
 
 /// Renders a `subtopology -> partitions` task map as a response
@@ -81,10 +84,7 @@ pub(super) fn base_resp(
 /// The response to a refused heartbeat: the error code and message, with every
 /// other field at the default of Kafka's generated
 /// `StreamsGroupHeartbeatResponseData`, where the status list is empty.
-pub(crate) fn error_resp(
-    error_code: i16,
-    error_message: Option<String>,
-) -> StreamsGroupHeartbeatResponse {
+pub fn error_resp(error_code: i16, error_message: Option<String>) -> StreamsGroupHeartbeatResponse {
     StreamsGroupHeartbeatResponse {
         error_code,
         error_message,
@@ -112,10 +112,9 @@ pub(super) fn build_assignment_resp(
     config: &StreamsGroupConfig,
     delta: ResponseDelta,
 ) -> StreamsGroupHeartbeatResponse {
-    let m = state
-        .members
-        .get(member_id)
-        .expect("member exists at build_assignment_resp");
+    let Some(m) = state.members.get(member_id) else {
+        return error_resp(codes::UNKNOWN_MEMBER_ID, None);
+    };
     // Kafka builds the list on every heartbeat, in this order, and sends it
     // also when it is empty: the Streams client keeps the last list it saw
     // when the list is null.
@@ -153,7 +152,7 @@ pub(super) fn build_assignment_resp(
         ));
     }
     StreamsGroupHeartbeatResponse {
-        member_id: member_id.to_string(),
+        member_id: member_id.to_owned(),
         status: Some(status),
         active_tasks: delta.send_tasks.then(|| map_to_task_ids(&m.active)),
         standby_tasks: delta.send_tasks.then(|| map_to_task_ids(&m.standby)),
@@ -307,7 +306,7 @@ fn topic_partitions(
                 }
             }
             out.push(TopicPartition {
-                topic: topic.to_string(),
+                topic: topic.to_owned(),
                 partitions,
                 ..Default::default()
             });
@@ -360,7 +359,7 @@ pub(super) fn build_describe(
         group_epoch: state.group_epoch,
         assignment_epoch: state.target.epoch,
         topology_epoch: state.topology_epoch,
-        group_state: state.phase.as_str().to_string(),
+        group_state: state.phase.as_str().to_owned(),
         topology: topology.cloned(),
         configured_topology: configured_topology.cloned(),
         members,
@@ -368,6 +367,6 @@ pub(super) fn build_describe(
     }
 }
 
-fn duration_ms(d: std::time::Duration, fallback: i32) -> i32 {
+fn duration_ms(d: Duration, fallback: i32) -> i32 {
     i32::try_from(d.as_millis()).unwrap_or(fallback)
 }

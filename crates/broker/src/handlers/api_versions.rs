@@ -46,7 +46,7 @@ mod feature_keys;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use krabka_raft::is_valid_client_info;
+pub use krabka_raft::is_valid_client_info;
 use {
     self::feature_keys::{finalized_feature_keys, supported_feature_keys},
     crate::{
@@ -57,6 +57,8 @@ use {
         error::BrokerError,
         handlers::{RequestContext, decode_request, encode_response},
     },
+    krabka_protocol::api_key::ApiKey,
+    std::time::Instant,
 };
 
 /// First `ApiVersions` request version that carries the KIP-511
@@ -74,20 +76,18 @@ const ROUTING_IDENTITY_MIN_VERSION: i16 = 5;
 /// (KIP-511), on every listener: the client reads it to pick the version it
 /// retries with, and nothing else. The controller listener answers with the
 /// same bytes, from the same `krabka_raft::unsupported_version_response`.
-pub(crate) fn unsupported_version_response(
-    unstable: UnstableApiVersions,
-) -> Result<Bytes, BrokerError> {
+pub fn unsupported_version_response(unstable: UnstableApiVersions) -> Result<Bytes, BrokerError> {
     let response = krabka_raft::unsupported_version_response(unstable);
     encode_response(&response, 0)
 }
 
-pub(crate) fn handle<'a>(
+pub fn handle<'a>(
     broker: &'a Broker,
     version: i16,
     req_bytes: &'a [u8],
     context: &'a RequestContext<'a>,
 ) -> BoxFuture<'a, Result<Bytes, BrokerError>> {
-    let handler_start = std::time::Instant::now();
+    let handler_start = Instant::now();
     let listener_kind = broker
         .config
         .listener_kind(context.connection_listener_name);
@@ -130,7 +130,7 @@ pub(crate) fn handle<'a>(
                 context.throttle_on_request_quota(
                     broker,
                     &image,
-                    krabka_protocol::api_key::ApiKey::ApiVersions as i16,
+                    ApiKey::ApiVersions as i16,
                     handler_start.elapsed(),
                 )
             }
@@ -190,7 +190,7 @@ pub(crate) fn handle<'a>(
 ///
 /// Before the handshake, a valid request moves Kafka's `SaslServerAuthenticator`
 /// on to `HANDSHAKE_REQUEST`; an invalid one leaves it where it was.
-pub(crate) fn is_valid_request_body(version: i16, mut body: &[u8]) -> bool {
+pub fn is_valid_request_body(version: i16, mut body: &[u8]) -> bool {
     ApiVersionsRequest::decode(&mut body, version)
         .is_ok_and(|request| krabka_raft::is_valid_api_versions_request(&request, version))
 }

@@ -12,6 +12,7 @@ use {
     crate::handlers::ApiKeyCode,
     krabka_protocol::owned::sasl_authenticate_response::SaslAuthenticateResponse,
     krabka_security::{AuthMethod, Principal, SaslMechanism, ScramServerExchange},
+    krabka_units::convert::TimeExt,
     krabka_verified::{
         authz::{
             RequestAuthState, request_auth_admission, sasl_session_expiry,
@@ -19,6 +20,7 @@ use {
         },
         delegation_token::{TokenApi, TokenApiAdmission, token_api_admission},
     },
+    std::mem,
 };
 
 // Several variants and the `principal` accessor are exercised by the PLAIN,
@@ -150,7 +152,7 @@ pub(super) fn session_expiry(
     let (expires_at_ms, session_lifetime_ms) = sasl_session_expiry(
         now_ms,
         credential_expires_at_ms,
-        max_reauth.map(krabka_units::convert::TimeExt::millis_i64),
+        max_reauth.map(TimeExt::millis_i64),
     );
     SessionExpiry {
         expires_at_ms,
@@ -183,7 +185,7 @@ pub(super) fn begin_reauth(auth: &mut ConnectionAuth) -> Option<AuthenticatedSna
         previous,
         exchange,
         pending_token_expiry_ms,
-    } = std::mem::replace(auth, ConnectionAuth::Anonymous)
+    } = mem::replace(auth, ConnectionAuth::Anonymous)
     else {
         unreachable!("matched Reauthenticating above");
     };
@@ -222,7 +224,7 @@ pub(super) fn finish_reauth(
                     exchange,
                     pending_token_expiry_ms,
                     ..
-                } = std::mem::replace(auth, ConnectionAuth::Anonymous)
+                } = mem::replace(auth, ConnectionAuth::Anonymous)
                 else {
                     unreachable!("matched Negotiating above");
                 };
@@ -470,6 +472,7 @@ mod tests {
             test_support::{principal, sasl_principal},
         },
         assert2::{assert, check},
+        std::mem,
     };
 
     /// The request gate follows Kafka's `SaslServerAuthenticator`: before a
@@ -677,7 +680,7 @@ mod tests {
                 principal,
                 mechanism,
                 expires_at_ms,
-                authenticated_via_token: _,
+                ..
             } => {
                 check!(principal.name.as_str() == "alice");
                 check!(mechanism == SaslMechanism::OAuthBearer);
@@ -1079,9 +1082,9 @@ mod tests {
             }),
         ];
         for (case, mut auth) in cases {
-            let before = std::mem::discriminant(&auth);
+            let before = mem::discriminant(&auth);
             check!(begin_reauth(&mut auth).is_none(), "{case}");
-            check!(std::mem::discriminant(&auth) == before, "{case}");
+            check!(mem::discriminant(&auth) == before, "{case}");
         }
     }
 
@@ -1201,7 +1204,7 @@ mod tests {
                 error_message: Some(
                     "Cannot change principals during re-authentication from User.alice: \
                      User.mallory"
-                        .to_string()
+                        .to_owned()
                 ),
                 auth_bytes: bytes::Bytes::new(),
                 session_lifetime_ms: 0,
@@ -1220,7 +1223,7 @@ mod tests {
         let mut auth = ConnectionAuth::Anonymous;
         let failure = SaslAuthenticateResponse {
             error_code: SASL_AUTHENTICATION_FAILED,
-            error_message: Some("authentication failed".to_string()),
+            error_message: Some("authentication failed".to_owned()),
             auth_bytes: bytes::Bytes::new(),
             session_lifetime_ms: 0,
             ..Default::default()

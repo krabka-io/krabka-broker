@@ -21,11 +21,14 @@ use {
     },
     assert2::{assert, check},
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
-    std::time::Duration as StdDuration,
+    krabka_metadata::{metadata_version::METADATA_VERSION_FEATURE, voters},
+    krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord,
+    std::{fs, path::Path, time::Duration as StdDuration},
+    tokio::time,
 };
 
-fn quorum_state_json(directory: &std::path::Path) -> String {
-    std::fs::read_to_string(directory.join(QUORUM_STATE_FILE)).unwrap()
+fn quorum_state_json(directory: &Path) -> String {
+    fs::read_to_string(directory.join(QUORUM_STATE_FILE)).unwrap()
 }
 
 /// The voter sets that a recovery test replays control records against.
@@ -162,7 +165,7 @@ fn replay_committed_captures_metadata_downgrade_snapshot() {
     let (reply, mut rx) = oneshot::channel();
     engine.on_submit_change(
         &[MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+            name: METADATA_VERSION_FEATURE.into(),
             level: 25,
         })],
         reply,
@@ -173,7 +176,7 @@ fn replay_committed_captures_metadata_downgrade_snapshot() {
     engine.downgrade_snapshot_failures_remaining = 1;
     engine.on_submit_change(
         &[MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+            name: METADATA_VERSION_FEATURE.into(),
             level: 16,
         })],
         reply,
@@ -201,7 +204,7 @@ fn downgrade_snapshot_failures_remaining_decrements_and_eventually_succeeds() {
     engine.on_submit_change(
         &[MetadataRecord::V1FeatureLevel(
             krabka_metadata::FeatureLevelRecord {
-                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                name: METADATA_VERSION_FEATURE.into(),
                 level: 25,
             },
         )],
@@ -212,7 +215,7 @@ fn downgrade_snapshot_failures_remaining_decrements_and_eventually_succeeds() {
     engine.on_submit_change(
         &[MetadataRecord::V1FeatureLevel(
             krabka_metadata::FeatureLevelRecord {
-                name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+                name: METADATA_VERSION_FEATURE.into(),
                 level: 16,
             },
         )],
@@ -235,14 +238,13 @@ fn control_state_at_replays_version_and_voters_at_boundary_offsets() {
 
     {
         let mut log = KraftLog::open(dir.path(), &MetadataLogConfig::default()).expect("open log");
-        let mut batch0 = typed_control_batch(1, &[ControlRecord::KRaftVersion(
-            krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord {
+        let mut batch0 =
+            typed_control_batch(1, &[ControlRecord::KRaftVersion(KRaftVersionRecord {
                 version: 0,
                 k_raft_version: 1,
                 ..Default::default()
-            },
-        )])
-        .expect("batch 0");
+            })])
+            .expect("batch 0");
         log.append(&mut batch0, 0).expect("append 0");
         log.advance_hwm(log.log_end_offset());
 
@@ -252,14 +254,13 @@ fn control_state_at_replays_version_and_voters_at_boundary_offsets() {
         log.append(&mut batch1, 0).expect("append 1");
         log.advance_hwm(log.log_end_offset());
 
-        let mut batch2 = typed_control_batch(1, &[ControlRecord::KRaftVersion(
-            krabka_protocol::owned::k_raft_version_record::KRaftVersionRecord {
+        let mut batch2 =
+            typed_control_batch(1, &[ControlRecord::KRaftVersion(KRaftVersionRecord {
                 version: 0,
                 k_raft_version: -1,
                 ..Default::default()
-            },
-        )])
-        .expect("batch 2");
+            })])
+            .expect("batch 2");
         log.append(&mut batch2, 0).expect("append 2");
         log.advance_hwm(log.log_end_offset());
     }
@@ -297,7 +298,7 @@ fn control_state_at_replays_version_and_voters_at_boundary_offsets() {
 
 /// A single-voter controller over `data_dir`, elected leader.
 async fn elected_controller(
-    data_dir: &std::path::Path,
+    data_dir: &Path,
     cluster_id: uuid::Uuid,
     voters: &VoterSet,
 ) -> KraftController {
@@ -310,7 +311,8 @@ async fn elected_controller(
         ),
         log,
         data_dir.to_path_buf(),
-    );
+    )
+    .expect("spawn controller");
     ctrl.inject_event(Event::ElectionTimeout).await.unwrap();
     await_leader(&ctrl, Some(NodeId(1))).await;
     ctrl
@@ -320,7 +322,7 @@ async fn elected_controller(
 async fn snapshot_and_shut_down(ctrl: KraftController) {
     ctrl.trigger_snapshot().await.unwrap();
     ctrl.shutdown().await;
-    tokio::time::sleep(StdDuration::from_millis(50)).await;
+    time::sleep(StdDuration::from_millis(50)).await;
 }
 
 #[tokio::test]
@@ -352,7 +354,7 @@ async fn restart_keeps_the_checkpoint_finalized_features_epoch() {
     let cluster_id = uuid::Uuid::from_u128(7);
     let voters = voter_set(&[NodeId(1)]);
     let feature = MetadataRecord::V1FeatureLevel(krabka_metadata::FeatureLevelRecord {
-        name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE.into(),
+        name: METADATA_VERSION_FEATURE.into(),
         level: 25,
     });
 
@@ -429,7 +431,7 @@ async fn quorum_state_file_round_trips() {
 
 /// A `kraft.version` 1 state and the voters it was built over.
 struct LevelOneState {
-    voters: krabka_metadata::voters::VoterSet,
+    voters: voters::VoterSet,
     state: QuorumState,
 }
 
@@ -450,7 +452,7 @@ fn quorum_state_level_one_uses_voted_directory_and_omits_static_voters() {
     });
     save_quorum_state(dir.path(), &state).unwrap();
 
-    let json = std::fs::read_to_string(dir.path().join(QUORUM_STATE_FILE)).unwrap();
+    let json = fs::read_to_string(dir.path().join(QUORUM_STATE_FILE)).unwrap();
     assert2::assert!(json.contains("\"data_version\":1"));
     assert2::assert!(json.contains("\"votedDirectoryId\""));
     assert2::assert!(!json.contains("currentVoters"));
@@ -531,7 +533,7 @@ fn load_quorum_state_refuses_malformed_or_version_mismatched_fields() {
     ];
 
     for json in cases {
-        std::fs::write(&path, &json).expect("write malformed state");
+        fs::write(&path, &json).expect("write malformed state");
         check!(
             matches!(
                 load_quorum_state(dir.path(), cluster_id, &voters),
@@ -586,7 +588,7 @@ fn save_quorum_state_rejects_overflow_without_clamping() {
 fn save_quorum_state_can_retry_after_an_atomic_rename_failure() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join(QUORUM_STATE_FILE);
-    std::fs::create_dir(&path).expect("block final rename with a directory");
+    fs::create_dir(&path).expect("block final rename with a directory");
     let voters = voter_set(&[NodeId(1)]);
     let mut state = QuorumState::bootstrap(uuid::Uuid::from_u128(9), voters.clone());
     state.leader_epoch = 17;
@@ -599,7 +601,7 @@ fn save_quorum_state_can_retry_after_an_atomic_rename_failure() {
         save_quorum_state(dir.path(), &state),
         Err(RaftError::Storage(krabka_log::LogError::Io(_)))
     ));
-    std::fs::remove_dir(&path).expect("remove rename blocker");
+    fs::remove_dir(&path).expect("remove rename blocker");
     save_quorum_state(dir.path(), &state).expect("retry save");
     let loaded = load_quorum_state(dir.path(), state.cluster_id, &voters)
         .expect("load retried state")
@@ -610,7 +612,7 @@ fn save_quorum_state_can_retry_after_an_atomic_rename_failure() {
 #[test]
 fn load_quorum_state_reports_unreadable_non_missing_file_errors() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::create_dir(dir.path().join(QUORUM_STATE_FILE)).expect("mkdir quorum-state path");
+    fs::create_dir(dir.path().join(QUORUM_STATE_FILE)).expect("mkdir quorum-state path");
 
     let loaded = load_quorum_state(dir.path(), uuid::Uuid::nil(), &voter_set(&[NodeId(1)]));
 
@@ -635,7 +637,7 @@ fn quorum_state_v1_matches_the_fixture_and_decodes_back() {
     });
 
     save_quorum_state(dir.path(), &state).expect("save");
-    let written = std::fs::read_to_string(dir.path().join(QUORUM_STATE_FILE)).expect("read");
+    let written = fs::read_to_string(dir.path().join(QUORUM_STATE_FILE)).expect("read");
     check!(written == QUORUM_STATE_V1_FIXTURE);
 
     let loaded = load_quorum_state(dir.path(), state.cluster_id, &voters)
@@ -685,7 +687,7 @@ fn load_quorum_state_refuses_an_unknown_or_missing_data_version() {
     for (case, json, want) in cases {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(QUORUM_STATE_FILE);
-        std::fs::write(&path, json).expect("write quorum-state");
+        fs::write(&path, json).expect("write quorum-state");
 
         let loaded = load_quorum_state(
             dir.path(),
@@ -720,7 +722,7 @@ fn load_quorum_state_refuses_an_unknown_or_missing_data_version() {
 )]
 fn load_quorum_state_refuses_a_file_that_is_not_json(contents: &[u8]) {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join(QUORUM_STATE_FILE), contents).expect("write state");
+    fs::write(dir.path().join(QUORUM_STATE_FILE), contents).expect("write state");
 
     let loaded = load_quorum_state(dir.path(), uuid::Uuid::nil(), &voter_set(&[NodeId(1)]));
 

@@ -11,7 +11,7 @@
 //!
 //! [`observe_remote_reader`]: super::BrokerMetrics::observe_remote_reader
 
-use super::BrokerMetrics;
+use {super::BrokerMetrics, std::time::Duration};
 
 /// The reader's monotonic totals since startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -87,7 +87,7 @@ impl BrokerMetrics {
     }
 
     /// Records how long one cold-tier read held its reader slot.
-    pub fn observe_remote_reader_fetch(&self, elapsed: std::time::Duration) {
+    pub fn observe_remote_reader_fetch(&self, elapsed: Duration) {
         self.remote_log_reader_fetch_duration_seconds
             .observe(elapsed.as_secs_f64());
     }

@@ -1,6 +1,6 @@
 use {
     super::{producer_snapshot_stray, producer_snapshot_strays, take_classifier_visits},
-    proptest::prelude::*,
+    proptest::{collection, prelude::*},
 };
 
 #[yare::parameterized(
@@ -35,8 +35,8 @@ fn sorted_unordered_fixtures_match_the_order_independent_oracle() {
 proptest! {
     #[test]
     fn bulk_classifier_is_equivalent_to_the_order_independent_oracle(
-        mut snapshots in proptest::collection::vec(any::<i64>(), 0..128),
-        mut bases in proptest::collection::vec(any::<i64>(), 0..128),
+        mut snapshots in collection::vec(any::<i64>(), 0..128),
+        mut bases in collection::vec(any::<i64>(), 0..128),
     ) {
         snapshots.sort_unstable();
         bases.sort_unstable();

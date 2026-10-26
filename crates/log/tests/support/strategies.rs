@@ -3,7 +3,7 @@
 use {
     bytes::Bytes,
     krabka_protocol::records::{Record, RecordBatch},
-    proptest::prelude::*,
+    proptest::{collection, option, prelude::*},
 };
 
 /// Arbitrary [`RecordBatch`] with the given record-count range and bounded key
@@ -18,7 +18,7 @@ pub fn arb_batch(records_min: usize, records_max: usize) -> impl Strategy<Value 
         any::<i64>().prop_map(i64::saturating_abs),
     )
         .prop_flat_map(|(n, ts)| {
-            let records = proptest::collection::vec(arb_record(), n..=n);
+            let records = collection::vec(arb_record(), n..=n);
             (Just(n), Just(ts), records).prop_map(|(n, ts, records)| {
                 let n_i32 = i32::try_from(n).unwrap_or(i32::MAX);
                 let mut b = RecordBatch {
@@ -43,8 +43,8 @@ pub fn arb_batch(records_min: usize, records_max: usize) -> impl Strategy<Value 
 
 fn arb_record() -> impl Strategy<Value = Record> {
     (
-        proptest::option::of(proptest::collection::vec(any::<u8>(), 0..=128).prop_map(Bytes::from)),
-        proptest::option::of(proptest::collection::vec(any::<u8>(), 0..=512).prop_map(Bytes::from)),
+        option::of(collection::vec(any::<u8>(), 0..=128).prop_map(Bytes::from)),
+        option::of(collection::vec(any::<u8>(), 0..=512).prop_map(Bytes::from)),
     )
         .prop_map(|(key, value)| Record {
             key,
@@ -55,5 +55,5 @@ fn arb_record() -> impl Strategy<Value = Record> {
 
 /// A vector of arbitrary batches. Each batch holds 1..=4 records.
 pub fn arb_batches(count_min: usize, count_max: usize) -> impl Strategy<Value = Vec<RecordBatch>> {
-    proptest::collection::vec(arb_batch(1, 4), count_min..=count_max)
+    collection::vec(arb_batch(1, 4), count_min..=count_max)
 }

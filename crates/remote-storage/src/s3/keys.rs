@@ -53,14 +53,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn prefix_isolates_clusters() {
         let store_a =
-            S3RemoteStorage::with_store(Arc::new(InMemory::new()), Some("cluster-a".to_string()));
+            S3RemoteStorage::with_store(Arc::new(InMemory::new()), Some("cluster-a".to_owned()));
         let _ = store_a;
         // Single cluster keys live under the prefix; we verify the key
         // construction at the unit level (no cross-cluster fixture
         // available without sharing the InMemory backend, which we don't
         // because each cluster gets its own bucket in practice).
         let md = sample_metadata(uuid::Uuid::from_u128(30));
-        let store = S3RemoteStorage::with_store(Arc::new(InMemory::new()), Some("c".to_string()));
+        let store = S3RemoteStorage::with_store(Arc::new(InMemory::new()), Some("c".to_owned()));
         let key = store.log_key(&md);
         let expected = concat!(
             "c/orders-0-AAAAAAAAAAAAAAAAAAAAAQ/",

@@ -3,7 +3,7 @@
 use {
     moxy::{
         ast::{Expr, ExprMatch, MatchArm, Parse as _, ParseError, Parser, Pattern},
-        token::{Spanner as _, ToTokenStream as _, TokenStream, TokenTree},
+        token::{Span, Spanner as _, ToTokenStream as _, TokenStream, TokenTree},
     },
     proc_macro::{TokenStream as NativeTokenStream, TokenTree as NativeTokenTree},
     std::ops::Range,
@@ -23,22 +23,20 @@ struct ArmRange {
 }
 
 #[cfg(test)]
-pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
     expand_parsed(input, MatchKind::WriteOp)
 }
 
 #[cfg(test)]
-pub(crate) fn records_payload(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn records_payload(input: TokenStream) -> Result<TokenStream, ParseError> {
     expand_parsed(input, MatchKind::RecordsPayload)
 }
 
-pub(crate) fn expand_native(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand_native(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     expand_original(input, MatchKind::WriteOp)
 }
 
-pub(crate) fn records_payload_native(
-    input: NativeTokenStream,
-) -> Result<NativeTokenStream, ParseError> {
+pub fn records_payload_native(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     expand_original(input, MatchKind::RecordsPayload)
 }
 
@@ -64,7 +62,7 @@ fn expand_original(
                 .into_iter()
                 .collect()
         },
-    );
+    )?;
     let mut replacement = proc_macro::Group::new(group.delimiter(), arms.into_iter().collect());
     replacement.set_span(group.span());
     original.push(NativeTokenTree::Group(replacement));
@@ -86,7 +84,7 @@ fn expand_parsed(input: TokenStream, kind: MatchKind) -> Result<TokenStream, Par
             gated: arm.gated,
         }),
         || platform_cfg().into_iter().collect(),
-    )
+    )?
     .into_iter()
     .collect();
     original.push(TokenTree::Group(group));
@@ -162,15 +160,18 @@ fn render_arms<'a, T: Clone>(
     source: &[T],
     ranges: impl Iterator<Item = ArmSlice<'a>>,
     cfg: impl Fn() -> Vec<T>,
-) -> Vec<T> {
+) -> Result<Vec<T>, ParseError> {
     let mut output = Vec::new();
     for ArmSlice { range, gated } in ranges {
         if gated {
             output.extend(cfg());
         }
-        output.extend_from_slice(&source[range.clone()]);
+        let arm = source.get(range.clone()).ok_or_else(|| {
+            ParseError::new(Span::call_site(), "match arm outside the match body")
+        })?;
+        output.extend_from_slice(arm);
     }
-    output
+    Ok(output)
 }
 
 fn native_width(token: &TokenTree) -> usize {
@@ -269,7 +270,7 @@ fn combine_kinds<'a>(patterns: impl Iterator<Item = &'a Pattern>) -> RecordKinds
     )
 }
 
-pub(crate) fn platform_cfg() -> TokenStream {
+pub fn platform_cfg() -> TokenStream {
     moxy::template! {
         #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios",
             target_os = "tvos", target_os = "watchos", target_os = "freebsd", target_os = "dragonfly"))]

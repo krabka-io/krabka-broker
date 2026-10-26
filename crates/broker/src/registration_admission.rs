@@ -49,6 +49,7 @@ use {
     krabka_metadata::{BrokerRegistrationRecord, MetadataImage, MetadataRecord, NodeId},
     krabka_raft::{RaftError, RegistrationAdmission, RegistrationAdmissionFuture},
     std::{collections::HashSet, sync::Arc, time::Duration},
+    tokio::{sync::watch::Receiver, task::JoinHandle, time::timeout},
     uuid::Uuid,
 };
 
@@ -58,7 +59,7 @@ const RECOVERY_HANDOFF_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What admitting one batch decided.
 #[derive(Debug, Default, PartialEq)]
-pub(crate) struct Admitted {
+pub struct Admitted {
     /// The batch to append: the submitted records, with the changes that retire
     /// each previous incarnation ahead of the registration that replaces it.
     pub(crate) records: Vec<MetadataRecord>,
@@ -105,7 +106,7 @@ fn new_incarnation<'a>(
 /// adds nothing, as Kafka's amend does not.
 ///
 /// `alive` is the set of brokers an election may pick.
-pub(crate) fn admit(
+pub fn admit(
     image: &MetadataImage,
     records: Vec<MetadataRecord>,
     alive: &HashSet<NodeId>,
@@ -163,12 +164,12 @@ fn active_on_activation(image: &MetadataImage, returning: NodeId) -> HashSet<Nod
 /// the heartbeat registry and the election ladder the admission decides with.
 /// It reaches the broker through the controller listener's
 /// [`BrokerControllerAdminRouter`], which the broker binds once it is built.
-pub(crate) struct BrokerRegistrationAdmission {
+pub struct BrokerRegistrationAdmission {
     /// This controller's own node id.
     node_id: NodeId,
     /// The controller's published image, which the answer before the broker
     /// binds reads, and the recovery hand-off waits on.
-    images: tokio::sync::watch::Receiver<Arc<MetadataImage>>,
+    images: Receiver<Arc<MetadataImage>>,
     router: Arc<BrokerControllerAdminRouter>,
     /// The metrics the unclean elections a retirement makes are counted in.
     metrics: BrokerMetrics,
@@ -177,7 +178,7 @@ pub(crate) struct BrokerRegistrationAdmission {
 impl BrokerRegistrationAdmission {
     pub(crate) const fn new(
         node_id: NodeId,
-        images: tokio::sync::watch::Receiver<Arc<MetadataImage>>,
+        images: Receiver<Arc<MetadataImage>>,
         router: Arc<BrokerControllerAdminRouter>,
         metrics: BrokerMetrics,
     ) -> Self {
@@ -240,16 +241,16 @@ fn retires_another_broker(
 /// this node's broker has bound. The returned task ends once it has handed
 /// them over, or given them up.
 fn hand_off_recoveries(
-    mut images: tokio::sync::watch::Receiver<Arc<MetadataImage>>,
+    mut images: Receiver<Arc<MetadataImage>>,
     recovery: impl Future<Output = Option<UncleanRecoveryHandle>> + Send + 'static,
     (node, incarnation): (NodeId, Uuid),
     recoveries: Vec<(String, i32, RecoveryStrategy)>,
-) -> Option<tokio::task::JoinHandle<()>> {
+) -> Option<JoinHandle<()>> {
     if recoveries.is_empty() {
         return None;
     }
     Some(tokio::spawn(async move {
-        let committed = tokio::time::timeout(RECOVERY_HANDOFF_TIMEOUT, async {
+        let committed = timeout(RECOVERY_HANDOFF_TIMEOUT, async {
             loop {
                 if images
                     .borrow_and_update()

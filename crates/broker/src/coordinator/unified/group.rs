@@ -15,7 +15,7 @@
 // The state machines are reused verbatim, relocated under `unified/`. These
 // aliases give the unified surface its types without renaming the moved code
 // (the classic file keeps its internal `Group`/`GroupState` names).
-pub(crate) use crate::coordinator::unified::{
+pub use crate::coordinator::unified::{
     classic_state::{ClassicGroup as ClassicState, OffsetEntry},
     consumer_state::GroupState as ConsumerState,
 };
@@ -740,22 +740,19 @@ mod tests {
         let mut g = CoordinatorGroup::new_classic("g");
         check!(g.offsets().pending_txn.is_empty());
 
-        g.add_pending_txn_offsets(7, 10, [
-            ("orders".to_string(), 0),
-            ("orders".to_string(), 1),
-        ]);
-        g.add_pending_txn_offsets(9, 11, [("payments".to_string(), 3)]);
+        g.add_pending_txn_offsets(7, 10, [("orders".to_owned(), 0), ("orders".to_owned(), 1)]);
+        g.add_pending_txn_offsets(9, 11, [("payments".to_owned(), 3)]);
         check!(
             g.offsets().pending_txn
                 == HashSet::from([
-                    ("orders".to_string(), 0),
-                    ("orders".to_string(), 1),
-                    ("payments".to_string(), 3),
+                    ("orders".to_owned(), 0),
+                    ("orders".to_owned(), 1),
+                    ("payments".to_owned(), 3),
                 ])
         );
 
         g.resolve_pending_txn_offsets(7, 12);
-        check!(g.offsets().pending_txn == HashSet::from([("payments".to_string(), 3)]));
+        check!(g.offsets().pending_txn == HashSet::from([("payments".to_owned(), 3)]));
 
         g.resolve_pending_txn_offsets(9, 13);
         check!(g.offsets().pending_txn.is_empty());
@@ -765,12 +762,12 @@ mod tests {
     fn selected_offsets_exclude_unrequested_committed_and_transactional_state() {
         let mut group = CoordinatorGroup::new_classic("g");
         group.committed_offsets.extend([
-            (("wanted".to_string(), 1), offset_entry(11)),
-            (("other".to_string(), 2), offset_entry(22)),
+            (("wanted".to_owned(), 1), offset_entry(11)),
+            (("other".to_owned(), 2), offset_entry(22)),
         ]);
-        group.add_pending_txn_offsets(7, 1, [("wanted".to_string(), 1)]);
-        group.add_pending_txn_offsets(9, 1, [("wanted".to_string(), 1)]);
-        group.add_pending_txn_offsets(8, 1, [("other".to_string(), 2)]);
+        group.add_pending_txn_offsets(7, 1, [("wanted".to_owned(), 1)]);
+        group.add_pending_txn_offsets(9, 1, [("wanted".to_owned(), 1)]);
+        group.add_pending_txn_offsets(8, 1, [("other".to_owned(), 2)]);
         let member = OffsetFetchMember {
             member_id: None,
             member_epoch: -1,
@@ -780,25 +777,25 @@ mod tests {
             .offsets_for_member(
                 &member,
                 &OffsetFetchSelection::Keys(HashSet::from([
-                    ("wanted".to_string(), 1),
-                    ("missing".to_string(), 3),
+                    ("wanted".to_owned(), 1),
+                    ("missing".to_owned(), 3),
                 ])),
             )
             .unwrap();
         check!(
             selected.committed.keys().cloned().collect::<HashSet<_>>()
-                == HashSet::from([("wanted".to_string(), 1)])
+                == HashSet::from([("wanted".to_owned(), 1)])
         );
-        check!(selected.pending_txn == HashSet::from([("wanted".to_string(), 1)]));
+        check!(selected.pending_txn == HashSet::from([("wanted".to_owned(), 1)]));
 
         group.resolve_pending_txn_offsets(7, 2);
         let still_pending = group
             .offsets_for_member(
                 &member,
-                &OffsetFetchSelection::Keys(HashSet::from([("wanted".to_string(), 1)])),
+                &OffsetFetchSelection::Keys(HashSet::from([("wanted".to_owned(), 1)])),
             )
             .unwrap();
-        check!(still_pending.pending_txn == HashSet::from([("wanted".to_string(), 1)]));
+        check!(still_pending.pending_txn == HashSet::from([("wanted".to_owned(), 1)]));
 
         let all = group
             .offsets_for_member(&member, &OffsetFetchSelection::All)
@@ -821,20 +818,20 @@ mod tests {
         // The abort marker for the producer's records at offset 40 lands at
         // offset 55 while its `TxnOffsetCommit` is still in flight.
         g.resolve_pending_txn_offsets(7, 55);
-        g.add_pending_txn_offsets(7, 40, [("orders".to_string(), 0)]);
+        g.add_pending_txn_offsets(7, 40, [("orders".to_owned(), 0)]);
         check!(g.offsets().pending_txn.is_empty());
 
         // The producer's next transaction writes above the marker and is
         // pending as usual.
-        g.add_pending_txn_offsets(7, 60, [("orders".to_string(), 1)]);
-        check!(g.offsets().pending_txn == HashSet::from([("orders".to_string(), 1)]));
+        g.add_pending_txn_offsets(7, 60, [("orders".to_owned(), 1)]);
+        check!(g.offsets().pending_txn == HashSet::from([("orders".to_owned(), 1)]));
 
         // Another producer's marker cannot resolve it.
         g.resolve_pending_txn_offsets(9, 70);
-        check!(g.offsets().pending_txn == HashSet::from([("orders".to_string(), 1)]));
+        check!(g.offsets().pending_txn == HashSet::from([("orders".to_owned(), 1)]));
     }
 
-    fn key(partition: i32) -> (String, i32) { ("t".to_string(), partition) }
+    fn key(partition: i32) -> (String, i32) { ("t".to_owned(), partition) }
 
     fn commits(entries: &[(i32, i64)]) -> Vec<((String, i32), OffsetEntry)> {
         entries

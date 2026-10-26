@@ -11,7 +11,7 @@ pub(crate) fn now_millis,
 
 /// A producer's id and the epoch it holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ProducerIdentity {
+pub struct ProducerIdentity {
     pub(crate) producer_id: ProducerId,
     pub(crate) producer_epoch: i16,
 }
@@ -20,12 +20,12 @@ pub(crate) struct ProducerIdentity {
 /// and `EndTxn` carry `PRODUCER_FENCED` (90, KIP-360). Below it, Kafka's
 /// `KafkaApis` downgrades that answer to the legacy `INVALID_PRODUCER_EPOCH`
 /// (47).
-pub(crate) const PRODUCER_FENCED_MIN_VERSION: i16 = 2;
+pub const PRODUCER_FENCED_MIN_VERSION: i16 = 2;
 
 /// Kafka `KafkaApis.handleAddOffsetsToTxnRequest` and `handleEndTxnRequest`:
 /// a client below version 2 does not know `PRODUCER_FENCED`, so it gets
 /// `INVALID_PRODUCER_EPOCH`. Every other code passes through.
-pub(crate) fn producer_fenced_wire_code(version: i16, code: i16) -> i16 {
+pub fn producer_fenced_wire_code(version: i16, code: i16) -> i16 {
     if version < PRODUCER_FENCED_MIN_VERSION && code == PRODUCER_FENCED {
         INVALID_PRODUCER_EPOCH
     } else {
@@ -40,7 +40,7 @@ use {
 
 /// Independent expected wire codes shared by the utility and response tests.
 #[cfg(test)]
-pub(crate) fn producer_fenced_cases(other_code_version: i16) -> [(i16, i16, i16); 5] {
+pub fn producer_fenced_cases(other_code_version: i16) -> [(i16, i16, i16); 5] {
     use crate::codes::{CONCURRENT_TRANSACTIONS, INVALID_PRODUCER_EPOCH, PRODUCER_FENCED};
 
     [

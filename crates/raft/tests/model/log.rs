@@ -2,9 +2,12 @@
 //! state types because it is the one component that must satisfy the core's
 //! `LogView` query trait as well as `Eq + Hash` fingerprinting.
 
-use krabka_raft::kraft::{
-    event::LogEnd,
-    types::{Epoch, LogView},
+use {
+    krabka_kraft_core::simulation_support,
+    krabka_raft::kraft::{
+        event::LogEnd,
+        types::{Epoch, LogView},
+    },
 };
 
 /// In-memory replicated log, where `epochs[i]` is the leader epoch of offset
@@ -17,16 +20,16 @@ pub struct ModelLog {
 
 impl ModelLog {
     pub(super) fn append_in_epoch(&mut self, epoch: Epoch, count: usize) {
-        krabka_kraft_core::simulation_support::append_epochs(&mut self.epochs, epoch, count);
+        simulation_support::append_epochs(&mut self.epochs, epoch, count);
     }
 
     pub(super) fn truncate_to(&mut self, offset: i64) {
-        krabka_kraft_core::simulation_support::truncate_epochs(&mut self.epochs, offset);
+        simulation_support::truncate_epochs(&mut self.epochs, offset);
     }
 
     /// Whether every entry of this log is the leader's entry at the same
     /// offset, so that the leader's log extends this one.
-    pub(super) fn is_prefix_of(&self, leader: &ModelLog) -> bool {
+    pub(super) fn is_prefix_of(&self, leader: &Self) -> bool {
         leader.epochs.starts_with(&self.epochs)
     }
 
@@ -38,7 +41,7 @@ impl ModelLog {
     /// leader answers its fetch with a diverging epoch and the production
     /// core's `TruncateTo` cuts it back first. Overwriting it here would heal
     /// the divergence without the truncation path ever running.
-    pub(super) fn extend_from(&mut self, leader: &ModelLog) -> bool {
+    pub(super) fn extend_from(&mut self, leader: &Self) -> bool {
         if !self.is_prefix_of(leader) {
             return false;
         }
@@ -50,9 +53,8 @@ impl ModelLog {
     /// The leader epoch stamped on `offset`, or `None` when the log is shorter
     /// than that.
     pub(super) fn epoch_at(&self, offset: i64) -> Option<Epoch> {
-        usize::try_from(offset)
-            .ok()
-            .and_then(|offset| self.epochs.get(offset).copied())
+        let offset = usize::try_from(offset).ok()?;
+        self.epochs.get(offset).copied()
     }
 
     pub(super) fn log_end(&self) -> LogEnd {

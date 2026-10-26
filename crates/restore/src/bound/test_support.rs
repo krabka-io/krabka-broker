@@ -13,7 +13,9 @@ use {
     krabka_ids::ProducerId,
     krabka_protocol::{
         DecodeBorrow as _,
-        records::{Attributes, Record, RecordBatch, RecordBatchBorrowed, RecordHeader},
+        records::{
+            Attributes, Record, RecordBatch, RecordBatchBorrowed, RecordHeader, RecordsError,
+        },
     },
 };
 
@@ -173,6 +175,6 @@ pub(super) fn check_record_parse_error(
     let error = try_decide(predicates, partition, owned).unwrap_err();
     assert2::check!(matches!(
         error,
-        RestoreError::Records(krabka_protocol::records::RecordsError::RecordParse(_))
+        RestoreError::Records(RecordsError::RecordParse(_))
     ));
 }

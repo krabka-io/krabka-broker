@@ -16,6 +16,7 @@ use {
         validation::{parse_cleanup_policy, parse_compression_type},
     },
     krabka_log::LogConfig,
+    krabka_protocol::records::TimestampType,
     krabka_units::{
         ByteSize, Time,
         convert::{
@@ -32,10 +33,7 @@ use {
 /// before the record reached the metadata image. This function is the
 /// applier and treats the input as already-validated.
 #[must_use]
-pub(crate) fn apply_to_log_config(
-    overrides: &BTreeMap<String, String>,
-    base: &LogConfig,
-) -> LogConfig {
+pub fn apply_to_log_config(overrides: &BTreeMap<String, String>, base: &LogConfig) -> LogConfig {
     let mut out = base.clone();
     for (k, v) in overrides {
         match k.as_str() {
@@ -125,9 +123,9 @@ pub(crate) fn apply_to_log_config(
             MESSAGE_TIMESTAMP_TYPE => {
                 out.message_timestamp_type =
                     if parse::java_trim(v) == MESSAGE_TIMESTAMP_TYPE_LOG_APPEND {
-                        krabka_protocol::records::TimestampType::LogAppendTime
+                        TimestampType::LogAppendTime
                     } else {
-                        krabka_protocol::records::TimestampType::CreateTime
+                        TimestampType::CreateTime
                     };
             }
             SEGMENT_JITTER_MS | FILE_DELETE_DELAY_MS | FLUSH_MS => {
@@ -141,8 +139,9 @@ pub(crate) fn apply_to_log_config(
             }
             FLUSH_MESSAGES => {
                 if let Some(messages) = long_value(v).filter(|messages| *messages >= 1) {
-                    out.flush_messages =
-                        (messages != i64::MAX).then(|| u64::try_from(messages).unwrap());
+                    out.flush_messages = u64::try_from(messages)
+                        .ok()
+                        .filter(|_| messages != i64::MAX);
                 }
             }
             COMPRESSION_GZIP_LEVEL | COMPRESSION_LZ4_LEVEL | COMPRESSION_ZSTD_LEVEL => {
@@ -225,7 +224,9 @@ mod tests {
     use {
         super::*,
         assert2::assert,
+        krabka_protocol::records::TimestampType,
         krabka_units::{bytes, mebibytes, millis, minutes},
+        std::collections::BTreeMap,
     };
 
     #[test]
@@ -420,8 +421,8 @@ mod tests {
 
     #[test]
     fn apply_cleanup_policy_compact_propagates() {
-        let mut overrides = std::collections::BTreeMap::new();
-        overrides.insert(CLEANUP_POLICY.to_string(), "compact".to_string());
+        let mut overrides = BTreeMap::new();
+        overrides.insert(CLEANUP_POLICY.to_owned(), "compact".to_owned());
         let out = apply_to_log_config(&overrides, &krabka_log::LogConfig::default());
         assert!(out.cleanup_policy == krabka_log::CleanupPolicy::Compact);
     }
@@ -432,7 +433,7 @@ mod tests {
     )]
     fn apply_cleanup_policy_compact_and_delete_propagates(value: &str) {
         let mut overrides = BTreeMap::new();
-        overrides.insert(CLEANUP_POLICY.to_string(), value.to_string());
+        overrides.insert(CLEANUP_POLICY.to_owned(), value.to_owned());
         let out = apply_to_log_config(&overrides, &LogConfig::default());
         assert2::assert!(
             out.cleanup_policy == krabka_log::CleanupPolicy::CompactAndDelete,
@@ -445,13 +446,13 @@ mod tests {
     #[test]
     fn apply_maps_the_remaining_kafka_keys_onto_the_log_config() {
         let overrides = maplit::btreemap! {
-        SEGMENT_MS.to_string() => "60000".to_string(),
-        INDEX_INTERVAL_BYTES.to_string() => "8192".to_string(),
-        SEGMENT_INDEX_BYTES.to_string() => "1048576".to_string(),
-        MIN_COMPACTION_LAG_MS.to_string() => "30000".to_string(),
-        MAX_COMPACTION_LAG_MS.to_string() => "120000".to_string(),
-        MIN_CLEANABLE_DIRTY_RATIO.to_string() => "0.25".to_string(),
-        MESSAGE_TIMESTAMP_TYPE.to_string() => "LogAppendTime".to_string()};
+        SEGMENT_MS.to_owned() => "60000".to_owned(),
+        INDEX_INTERVAL_BYTES.to_owned() => "8192".to_owned(),
+        SEGMENT_INDEX_BYTES.to_owned() => "1048576".to_owned(),
+        MIN_COMPACTION_LAG_MS.to_owned() => "30000".to_owned(),
+        MAX_COMPACTION_LAG_MS.to_owned() => "120000".to_owned(),
+        MIN_CLEANABLE_DIRTY_RATIO.to_owned() => "0.25".to_owned(),
+        MESSAGE_TIMESTAMP_TYPE.to_owned() => "LogAppendTime".to_owned()};
 
         let out = apply_to_log_config(&overrides, &LogConfig::default());
 
@@ -463,7 +464,7 @@ mod tests {
                 min_compaction_lag: millis(30_000),
                 max_compaction_lag: Some(millis(120_000)),
                 min_cleanable_dirty_ratio: krabka_units::fraction(0.25),
-                message_timestamp_type: krabka_protocol::records::TimestampType::LogAppendTime,
+                message_timestamp_type: TimestampType::LogAppendTime,
                 ..LogConfig::default()
             }
         );
@@ -485,8 +486,8 @@ mod tests {
 
     #[test]
     fn apply_cleanup_policy_delete_propagates() {
-        let mut overrides = std::collections::BTreeMap::new();
-        overrides.insert(CLEANUP_POLICY.to_string(), "delete".to_string());
+        let mut overrides = BTreeMap::new();
+        overrides.insert(CLEANUP_POLICY.to_owned(), "delete".to_owned());
         let base = krabka_log::LogConfig {
             cleanup_policy: krabka_log::CleanupPolicy::Compact,
             ..krabka_log::LogConfig::default()
@@ -615,7 +616,7 @@ mod active_options_tests {
                     file_delete_delay: Time::from_millis(1000),
                     flush_messages: Some(10),
                     flush_interval: Some(Time::from_millis(50)),
-                    ..base.clone()
+                    ..base
                 }
         );
         assert2::assert!(apply_to_log_config(&BTreeMap::new(), &base) == base);

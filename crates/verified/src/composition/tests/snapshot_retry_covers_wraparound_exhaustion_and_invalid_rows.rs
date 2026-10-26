@@ -1,4 +1,4 @@
-use {super::*, assert2::assert};
+use {super::*, assert2::assert, proptest::collection};
 
 fn snapshot_entry() -> ProducerSnapshotEntryFacts {
     ProducerSnapshotEntryFacts {
@@ -69,7 +69,7 @@ fn snapshot_retry_covers_wraparound_exhaustion() {
 proptest! {
     #[test]
     fn published_trim_matches_checkpoint_prefix_and_fetch_oracles(
-        ends in proptest::collection::btree_set(1i64..=64, 0..16),
+        ends in collection::btree_set(1i64..=64, 0..16),
         prior_slot in any::<u8>(),
         requested in 1i64..128,
         stage in 0u8..=3,
@@ -150,7 +150,7 @@ proptest! {
         key_len in 0usize..=7,
         is_control in any::<bool>(),
         matches_pid in any::<bool>(),
-        other_starts in proptest::collection::vec(0i64..=10, 0..16),
+        other_starts in collection::vec(0i64..=10, 0..16),
         hw in prop_oneof![Just(12i64), Just(13), any::<i64>()],
         deliverable in any::<i64>(),
     ) {

@@ -6,6 +6,8 @@
 //! The replicator's Fetch path, the raft transport's outbound dial, and the
 //! controller-heartbeat loop all use this client.
 
+#[cfg(target_family = "wasm")]
+use krabka_client_core::transport::{self, SocketOptions};
 #[cfg(not(target_family = "wasm"))]
 use krabka_units::convert::ByteSizeExt as _;
 use {
@@ -16,7 +18,7 @@ use {
     krabka_client_core::ClientDuplex,
     krabka_security::ListenerProtocol,
     krabka_units::{ByteSize, mebibytes},
-    std::sync::Arc,
+    std::{collections::BTreeMap, io, sync::Arc},
     thiserror::Error,
     tokio::net::TcpStream,
     tokio_rustls::TlsConnector,
@@ -56,7 +58,7 @@ pub(crate) fn tune_socket(
     stream: &TcpStream,
     send_buffer: ByteSize,
     receive_buffer: ByteSize,
-    on_error: [fn(std::io::Error); 3],
+    on_error: [fn(io::Error); 3],
 ) {
     if let Err(error) = stream.set_nodelay(true) {
         on_error[0](error);
@@ -115,7 +117,7 @@ pub(crate) fn to_client_creds(c: &InterBrokerCredentials) -> krabka_client_core:
         InterBrokerCredentials::OAuthBearer { token_path } => {
             krabka_client_core::SaslCredentials::OAuthBearer {
                 token: krabka_client_core::OAuthBearerTokenSource::File(token_path.clone()),
-                extensions: std::collections::BTreeMap::new(),
+                extensions: BTreeMap::new(),
             }
         }
     }
@@ -131,9 +133,10 @@ pub enum InterBrokerError {
 }
 
 /// Constructs outbound connections to other brokers, and runs TLS and SASL
-/// as the listener protocol demands. It is cheap to clone and share, because
-/// it holds only a `TlsConnector`, which is an `Arc` internally, and
-/// credentials.
+/// as the listener protocol demands.
+///
+/// It is cheap to clone and share, because it holds only a `TlsConnector`,
+/// which is an `Arc` internally, and credentials.
 pub struct InterBrokerClient {
     tls_connector: Option<TlsConnector>,
     creds: Option<InterBrokerCredentials>,
@@ -194,7 +197,7 @@ impl InterBrokerClient {
     /// round-trip-bound exchanges that Nagle would stall, and once rustls owns
     /// the stream the raw socket is no longer reachable.
     #[cfg(not(target_family = "wasm"))]
-    async fn dial_tuned(&self, host: &str, port: u16) -> Result<TcpStream, std::io::Error> {
+    async fn dial_tuned(&self, host: &str, port: u16) -> Result<TcpStream, io::Error> {
         let tcp = TcpStream::connect((unbracket_host(host), port)).await?;
         tune_outbound_socket(&tcp, self.socket_send_buffer, self.socket_receive_buffer);
         Ok(tcp)
@@ -207,16 +210,12 @@ impl InterBrokerClient {
     /// [`krabka_client_core::transport::install_connector`]. The socket policy
     /// travels with the request, but a connector socket takes none of it.
     #[cfg(target_family = "wasm")]
-    async fn dial_tuned(&self, host: &str, port: u16) -> Result<TcpStream, std::io::Error> {
-        krabka_client_core::transport::dial(
-            unbracket_host(host),
-            port,
-            krabka_client_core::transport::SocketOptions {
-                send_buffer: Some(self.socket_send_buffer),
-                receive_buffer: Some(self.socket_receive_buffer),
-                nodelay: true,
-            },
-        )
+    async fn dial_tuned(&self, host: &str, port: u16) -> Result<TcpStream, io::Error> {
+        transport::dial(unbracket_host(host), port, SocketOptions {
+            send_buffer: Some(self.socket_send_buffer),
+            receive_buffer: Some(self.socket_receive_buffer),
+            nodelay: true,
+        })
         .await
     }
 
@@ -239,9 +238,8 @@ impl InterBrokerClient {
             let connector = self.tls_connector.clone().ok_or_else(|| {
                 InterBrokerError::Config("TLS listener without TlsConnector".into())
             })?;
-            let sni =
-                tokio_rustls::rustls::pki_types::ServerName::try_from(server_name.to_string())
-                    .map_err(|e| InterBrokerError::Tls(format!("invalid server name: {e}")))?;
+            let sni = tokio_rustls::rustls::pki_types::ServerName::try_from(server_name.to_owned())
+                .map_err(|e| InterBrokerError::Tls(format!("invalid server name: {e}")))?;
             let tls = connector
                 .connect(sni, tcp)
                 .await
@@ -304,8 +302,10 @@ fn unbracket_host(host: &str) -> &str {
 
 /// Adapter that lets `krabka_raft` reach the broker's
 /// [`InterBrokerClient`] without taking a build dependency on the
-/// broker crate. It wraps an `Arc<InterBrokerClient>` and the protocol and
-/// SNI configuration once, and the raft network factory clones it cheaply.
+/// broker crate.
+///
+/// It wraps an `Arc<InterBrokerClient>` and the protocol and SNI
+/// configuration once, and the raft network factory clones it cheaply.
 pub struct InterBrokerDialer {
     client: Arc<InterBrokerClient>,
     listener_protocol: ListenerProtocol,
@@ -340,8 +340,8 @@ impl krabka_raft::OutboundDialer for InterBrokerDialer {
         // addresses we honour the configured `server_name` for SNI
         // separately from the literal host string.
         let HostPort { host, port } = parse_host_port(addr).ok_or_else(|| {
-            krabka_client_core::ClientError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            krabka_client_core::ClientError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 format!("invalid raft peer address {addr:?}"),
             ))
         })?;
@@ -356,7 +356,7 @@ impl krabka_raft::OutboundDialer for InterBrokerDialer {
             .await
             .map_err(|e| match e {
                 InterBrokerError::Io(io) => krabka_client_core::ClientError::Io(io),
-                other => krabka_client_core::ClientError::Io(std::io::Error::other(format!(
+                other => krabka_client_core::ClientError::Io(io::Error::other(format!(
                     "InterBrokerClient dial: {other}"
                 ))),
             })
@@ -376,6 +376,7 @@ mod tests {
         },
         krabka_units::kibibytes,
         std::path::PathBuf,
+        tokio::net::TcpListener,
     };
 
     #[tokio::test]
@@ -395,7 +396,7 @@ mod tests {
 
     #[tokio::test]
     async fn dialed_socket_is_tuned_before_tls_and_sasl() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind loopback listener");
         let addr = listener.local_addr().expect("listener addr");

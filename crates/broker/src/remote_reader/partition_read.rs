@@ -20,6 +20,10 @@ use {
     krabka_ids::LeaderEpoch,
     krabka_log::Offset,
     krabka_remote_storage::{RemoteStorageError, TopicIdPartition},
+    std::{
+        sync::{PoisonError, atomic::Ordering},
+        time::Instant,
+    },
 };
 
 impl RemoteReader {
@@ -33,7 +37,7 @@ impl RemoteReader {
     /// `Log::established_log_start`. An offset below an established floor is
     /// gone from every tier, and a local read answers it with `OffsetTooLow`.
     pub(crate) fn serves(partition: &Partition, offset: Offset) -> bool {
-        let log = partition.log.lock().expect("log mutex poisoned");
+        let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
         log.config_snapshot().remote_storage_enable
             && offset < log.local_log_start_offset()
             && log
@@ -71,7 +75,7 @@ impl RemoteReader {
                 "the remote reader pool is saturated".to_owned(),
             ));
         };
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         let read = self.fetch_raw(tp, leader_epoch, offset.0, max_bytes).await;
         metrics.observe_remote_reader_fetch(started.elapsed());
         match &read {
@@ -116,15 +120,11 @@ impl RemoteReader {
 /// never by local eviction, so a tiered offset still finds the epoch it was
 /// copied under.
 fn owning_epoch(partition: &Partition, offset: Offset) -> LeaderEpoch {
-    let current = LeaderEpoch(
-        partition
-            .current_leader_epoch
-            .load(std::sync::atomic::Ordering::Acquire),
-    );
+    let current = LeaderEpoch(partition.current_leader_epoch.load(Ordering::Acquire));
     partition
         .log
         .lock()
-        .expect("log mutex poisoned")
+        .unwrap_or_else(PoisonError::into_inner)
         .epoch_checkpoint()
         .epoch_for_offset(offset)
         .unwrap_or(current)

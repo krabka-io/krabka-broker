@@ -8,22 +8,25 @@
 /// controller's ELR bookkeeping, which `ElrPublisher::extend` reads with
 /// `feature_enabled`, and `UpdateFeatures` clears the published state when it
 /// is finalized back to 0.
-pub(crate) use krabka_metadata::metadata_version::ELR_VERSION_FEATURE as ELR_VERSION;
-pub(crate) use krabka_metadata::metadata_version::METADATA_VERSION_FEATURE as METADATA_VERSION;
+pub use krabka_metadata::metadata_version::ELR_VERSION_FEATURE as ELR_VERSION;
+pub use krabka_metadata::metadata_version::METADATA_VERSION_FEATURE as METADATA_VERSION;
 // Re-exported for `ApiVersions` tests / range-bound assertions; consumed only
 // from `#[cfg(test)]` modules, so the non-test lib target sees them as unused.
 #[cfg(test)]
-pub(crate) use krabka_metadata::metadata_version::METADATA_VERSION_MAX;
+pub use krabka_metadata::metadata_version::METADATA_VERSION_MAX;
 #[cfg(test)]
-pub(crate) use krabka_metadata::metadata_version::METADATA_VERSION_MIN;
+pub use krabka_metadata::metadata_version::METADATA_VERSION_MIN;
 /// The `share.version` feature name (KIP-932). The share-group APIs are on
 /// only while it is finalized at 1 or more, see [`share_groups_enabled`].
-pub(crate) use krabka_metadata::metadata_version::SHARE_VERSION_FEATURE as SHARE_VERSION;
+pub use krabka_metadata::metadata_version::SHARE_VERSION_FEATURE as SHARE_VERSION;
 /// The `streams.version` feature name (KIP-1071). It gates
 /// `StreamsGroupHeartbeat` and `StreamsGroupDescribe`. Those handlers read it
 /// with `feature_enabled`.
-pub(crate) use krabka_metadata::metadata_version::STREAMS_VERSION_FEATURE as STREAMS_VERSION;
-use {crate::codes::UNSUPPORTED_VERSION, krabka_metadata::MetadataImage};
+pub use krabka_metadata::metadata_version::STREAMS_VERSION_FEATURE as STREAMS_VERSION;
+use {
+    crate::codes::UNSUPPORTED_VERSION,
+    krabka_metadata::{MetadataImage, metadata_version},
+};
 
 /// The `metadata.version` a self-bootstrapped cluster finalizes: Kafka 4.3's
 /// `MetadataVersion.LATEST_PRODUCTION`, `4.3-IV0`. It is the level
@@ -33,24 +36,22 @@ use {crate::codes::UNSUPPORTED_VERSION, krabka_metadata::MetadataImage};
 /// `4.5-IV0`. A stock 4.3 node or tool does not know them, so a node supports
 /// them only under `unstable.feature.versions.enable`, and a cluster reaches
 /// them only through `UpdateFeatures` or `krabka format` with that set.
-pub(crate) const LATEST_PRODUCTION_METADATA_VERSION: i16 =
-    krabka_raft::LATEST_PRODUCTION_METADATA_VERSION;
+pub const LATEST_PRODUCTION_METADATA_VERSION: i16 = krabka_raft::LATEST_PRODUCTION_METADATA_VERSION;
 
 /// The `metadata.version` level at which CIDR-based ACL host patterns
 /// (KIP-1276) are accepted: upstream Kafka's `4.4-IV1`,
 /// `MetadataVersion.isCidrAclSupported`.
-pub(crate) const CIDR_ACL_HOST_MIN_LEVEL: i16 =
-    krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL;
+pub const CIDR_ACL_HOST_MIN_LEVEL: i16 = metadata_version::CIDR_ACL_MIN_LEVEL;
 
 /// The `metadata.version` level from which the controller serves
 /// `UnregisterController` (KIP-1312): Kafka trunk's `4.4-IV2`,
 /// `MetadataVersion.isControllerUnregistrationSupported`.
-pub(crate) const CONTROLLER_UNREGISTRATION_MIN_LEVEL: i16 =
-    krabka_metadata::metadata_version::CONTROLLER_UNREGISTRATION_MIN_LEVEL;
+pub const CONTROLLER_UNREGISTRATION_MIN_LEVEL: i16 =
+    metadata_version::CONTROLLER_UNREGISTRATION_MIN_LEVEL;
 
 /// One row of the `ApiVersions.supported_features` advertisement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SupportedFeature {
+pub struct SupportedFeature {
     pub name: &'static str,
     pub min_version: i16,
     pub max_version: i16,
@@ -59,9 +60,7 @@ pub(crate) struct SupportedFeature {
 /// The features this broker supports finalizing under `unstable`. They come
 /// from the `krabka_metadata` registry, the single source of truth, capped as
 /// Kafka's `BrokerFeatures.defaultSupportedFeatures` caps them.
-pub(crate) fn supported_features(
-    unstable: krabka_raft::UnstableFeatureVersions,
-) -> Vec<SupportedFeature> {
+pub fn supported_features(unstable: krabka_raft::UnstableFeatureVersions) -> Vec<SupportedFeature> {
     krabka_metadata::feature_registry()
         .iter()
         .map(|f| {
@@ -79,7 +78,7 @@ pub(crate) fn supported_features(
 /// the module's feature-surface API. The `UpdateFeatures` handler resolves the
 /// registry feature directly, so the non-test lib target sees this as unused.
 #[cfg(test)]
-pub(crate) fn lookup(name: &str) -> Option<SupportedFeature> {
+pub fn lookup(name: &str) -> Option<SupportedFeature> {
     krabka_metadata::feature(name).map(|f| {
         let (min_version, max_version) = f.supported_range();
         SupportedFeature {
@@ -101,11 +100,7 @@ pub(crate) fn lookup(name: &str) -> Option<SupportedFeature> {
 /// work. It is the wrong helper for [`CIDR_ACL_HOST_MIN_LEVEL`]: an
 /// unfinalized `metadata.version` there is a real (if legacy or
 /// pre-bootstrap) image, never a blank check. See [`cidr_hosts_supported`].
-pub(crate) fn require_feature(
-    image: &MetadataImage,
-    name: &str,
-    required_level: i16,
-) -> Result<(), i16> {
+pub fn require_feature(image: &MetadataImage, name: &str, required_level: i16) -> Result<(), i16> {
     let finalized = image.finalized_features().get(name).copied();
     if finalized.is_some_and(|level| level < required_level) {
         Err(UNSUPPORTED_VERSION)
@@ -120,7 +115,7 @@ pub(crate) fn require_feature(
 /// as [`LATEST_PRODUCTION_METADATA_VERSION`], the level a cluster bootstraps
 /// at, not as an unconditional pass: CIDR hosts are Kafka trunk's, and a
 /// cluster reaches them only by finalizing 4.4-IV1 (#784).
-pub(crate) fn cidr_hosts_supported(image: &MetadataImage) -> bool {
+pub fn cidr_hosts_supported(image: &MetadataImage) -> bool {
     image
         .finalized_features()
         .get(METADATA_VERSION)
@@ -134,11 +129,7 @@ pub(crate) fn cidr_hosts_supported(image: &MetadataImage) -> bool {
 /// means "off", for example `group.version` → next-gen disabled. This differs
 /// from `require_feature`, which is permissive on absence and serves
 /// metadata.version-gated RPCs on legacy images.
-pub(crate) fn feature_enabled(
-    image: &krabka_metadata::MetadataImage,
-    name: &str,
-    level: i16,
-) -> bool {
+pub fn feature_enabled(image: &krabka_metadata::MetadataImage, name: &str, level: i16) -> bool {
     image.finalized_features().get(name).copied().unwrap_or(0) >= level
 }
 
@@ -148,7 +139,7 @@ pub(crate) fn feature_enabled(
 /// the gate of `ShareGroupHeartbeat`, `ShareGroupDescribe`, `ShareFetch`,
 /// `ShareAcknowledge` and the three `*ShareGroupOffsets` APIs. Kafka 4.3.1 has
 /// no broker config for it.
-pub(crate) fn share_groups_enabled(image: &krabka_metadata::MetadataImage) -> bool {
+pub fn share_groups_enabled(image: &krabka_metadata::MetadataImage) -> bool {
     feature_enabled(image, SHARE_VERSION, 1)
 }
 
@@ -157,7 +148,7 @@ pub(crate) fn share_groups_enabled(image: &krabka_metadata::MetadataImage) -> bo
 /// `ShareVersion.supportsShareGroupDLQ`, which `BrokerServer` hands to every
 /// `SharePartition`. A node reaches level 2 only under
 /// `unstable.feature.versions.enable`, so this is false for a default node.
-pub(crate) fn share_dlq_supported(image: &krabka_metadata::MetadataImage) -> bool {
+pub fn share_dlq_supported(image: &krabka_metadata::MetadataImage) -> bool {
     feature_enabled(image, SHARE_VERSION, 2)
 }
 
@@ -373,7 +364,7 @@ mod tests {
         use krabka_metadata::{FeatureLevelRecord, MetadataRecord};
         let mut image = MetadataImage::new(uuid::Uuid::nil());
         image.apply(&MetadataRecord::V1FeatureLevel(FeatureLevelRecord {
-            name: METADATA_VERSION.to_string(),
+            name: METADATA_VERSION.to_owned(),
             level: 10,
         }));
         assert2::assert!(

@@ -58,7 +58,10 @@ use {
         tool_output::{Assignment, TopicPartition, parse_cancelled, reassignment_json},
     },
     assert2::{assert, check},
-    krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle},
+    krabka_broker::{
+        BootstrapMode, Broker, BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer,
+    },
+    std::sync::Arc,
 };
 
 /// The super-user the tools authenticate as.
@@ -290,9 +293,7 @@ async fn reassign_partitions_cancel_reports_the_break_glass_gate_to_the_jvm_tool
         // The authorizer is built from the super-user set, so it has to be
         // rebuilt after widening it; the one the cluster helper constructed
         // captured the old set.
-        config.authorizer = std::sync::Arc::new(
-            krabka_broker::authorizer::SimpleAclAuthorizer::new(config.super_users.clone()),
-        );
+        config.authorizer = Arc::new(SimpleAclAuthorizer::new(config.super_users.clone()));
         config
     });
     for handle in handles.into_iter().flatten() {

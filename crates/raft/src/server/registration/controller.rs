@@ -17,7 +17,8 @@ use {
     bytes::Bytes,
     krabka_metadata::{ControllerRegistrationRecord, MetadataRecord, NodeId},
     krabka_protocol::{
-        Decode, owned::controller_registration_request::ControllerRegistrationRequest,
+        Decode,
+        owned::controller_registration_request::{self, ControllerRegistrationRequest},
     },
     std::collections::BTreeMap,
 };
@@ -106,7 +107,7 @@ pub(super) async fn controller_registration(
 
 krabka_macros::registration_feature_projection!(
     registration_features,
-    ::krabka_protocol::owned::controller_registration_request::Feature
+    controller_registration_request::Feature
 );
 
 fn decode_controller_features(
@@ -124,7 +125,12 @@ fn decode_controller_features(
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::check, krabka_protocol::owned::controller_registration_request};
+    use {
+        super::*,
+        assert2::check,
+        krabka_metadata::metadata_version::METADATA_VERSION_FEATURE,
+        krabka_protocol::{owned::controller_registration_request, primitives::uuid::Uuid},
+    };
 
     fn feature(name: &str, min: i16, max: i16) -> controller_registration_request::Feature {
         controller_registration_request::Feature {
@@ -329,8 +335,7 @@ mod tests {
                 engine
                     .submit_change(vec![MetadataRecord::V1FeatureLevel(
                         krabka_metadata::FeatureLevelRecord {
-                            name: krabka_metadata::metadata_version::METADATA_VERSION_FEATURE
-                                .into(),
+                            name: METADATA_VERSION_FEATURE.into(),
                             level,
                         },
                     )])
@@ -339,7 +344,7 @@ mod tests {
             }
             let request = ControllerRegistrationRequest {
                 controller_id,
-                incarnation_id: krabka_protocol::primitives::uuid::Uuid(*incarnation.as_bytes()),
+                incarnation_id: Uuid(*incarnation.as_bytes()),
                 zk_migration_ready,
                 listeners: vec![listener.clone()],
                 features: vec![feature("kraft.version", 0, 1)],

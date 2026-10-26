@@ -12,7 +12,7 @@ use {
 };
 
 /// Start a single PLAINTEXT broker with a 1s cleaner interval.
-pub(crate) async fn start_broker_with_fast_cleaner() -> (BrokerHandle, TempDir, SocketAddr) {
+pub async fn start_broker_with_fast_cleaner() -> (BrokerHandle, TempDir, SocketAddr) {
     let log_dir = tempfile::tempdir().unwrap();
     let mut cfg = BrokerConfig::for_tests(log_dir.path().to_path_buf());
     cfg.cleaner_interval_override = Some(krabka_units::secs(1));

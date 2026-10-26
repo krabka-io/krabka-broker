@@ -16,6 +16,7 @@
 //! its own WAL and trims its local log, so that read is a WAL cold read with
 //! the consumer's KIP-320 `last_fetched_epoch` below the trimmed log start
 //! (#1525).
+#![cfg(test)]
 
 use {
     assert2::{assert, check},
@@ -28,7 +29,8 @@ use {
         run,
     },
     krabka_broker::{
-        Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId, RemoteStorageBackend, RlmmKind,
+        Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId, RemoteStorageBackend,
+        RlmmKind, testing,
     },
     krabka_client_admin::{AdminClient, CreateTopicSpec, TopicMutationOptions},
     krabka_client_consumer::Consumer,
@@ -43,10 +45,12 @@ use {
     krabka_restore::{Cli, restore},
     std::{
         collections::BTreeMap,
+        fs, iter,
         net::SocketAddr,
         time::{Duration, Instant},
     },
     tempfile::TempDir,
+    tokio::{net::TcpListener, time::sleep},
     uuid::Uuid,
 };
 
@@ -74,8 +78,8 @@ struct DisklessBroker {
 }
 
 /// Bind a loopback listener on an OS-assigned port.
-async fn bind_loopback() -> tokio::net::TcpListener {
-    tokio::net::TcpListener::bind("127.0.0.1:0")
+async fn bind_loopback() -> TcpListener {
+    TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind a loopback listener")
 }
@@ -98,10 +102,7 @@ async fn start_diskless_broker() -> DisklessBroker {
 /// the static voter set, so neither can be `:0`. A restored node is formatted
 /// with its controller address, so its caller binds that listener before the
 /// restore runs.
-async fn boot_diskless_broker(
-    log_dir: TempDir,
-    controller: tokio::net::TcpListener,
-) -> DisklessBroker {
+async fn boot_diskless_broker(log_dir: TempDir, controller: TcpListener) -> DisklessBroker {
     let data = bind_loopback().await;
     let data_addr: SocketAddr = data.local_addr().expect("data address");
     let controller_addr: SocketAddr = controller.local_addr().expect("controller address");
@@ -135,7 +136,7 @@ async fn boot_diskless_broker(
         .await
         .expect("the diskless broker starts");
     handle.wait_until_brokers_registered(1).await;
-    handle.wait_until_diskless_flusher_ready().await;
+    handle.wait_until_diskless_flusher_ready().await.unwrap();
     DisklessBroker {
         handle,
         bootstrap: data_addr.to_string(),
@@ -224,7 +225,7 @@ async fn produce_batch(
             ..shape.clone()
         };
         let response = client
-            .send(krabka_broker::testing::single_partition_produce_request(
+            .send(testing::single_partition_produce_request(
                 TOPIC, topic_id, partition, batch, -1, 30_000,
             ))
             .await
@@ -236,7 +237,7 @@ async fn produce_batch(
                     Instant::now() <= deadline,
                     "{values:?} found no diskless leader: {response:?}"
                 );
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(100)).await;
             }
             error_code => panic!("produce of {values:?} failed with {error_code}"),
         }
@@ -293,7 +294,7 @@ async fn await_flush_state(
             Instant::now() <= deadline,
             "partition {partition} was never {what}; last state was {state:?}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -326,7 +327,7 @@ async fn capture_freezes_a_live_diskless_index_without_producing_to_it() {
     let (backup_root, id) = capture(&broker.bootstrap).await;
 
     let manifest: Manifest = serde_json::from_slice(
-        &std::fs::read(backup_root.path().join(capture_key(&id, MANIFEST))).expect("manifest"),
+        &fs::read(backup_root.path().join(capture_key(&id, MANIFEST))).expect("manifest"),
     )
     .expect("decode the manifest");
     let names: Vec<&str> = manifest
@@ -336,7 +337,7 @@ async fn capture_freezes_a_live_diskless_index_without_producing_to_it() {
         .collect();
     check!(names == vec![GROUP_OFFSETS, DISKLESS_WAL_INDEX]);
     let capture = DisklessWalCapture::from_slice(
-        &std::fs::read(
+        &fs::read(
             backup_root
                 .path()
                 .join(capture_key(&id, DISKLESS_WAL_INDEX)),
@@ -416,15 +417,14 @@ fn noise(seed: &str, len: usize) -> String {
     let mut state = seed.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
     });
-    (0..len)
-        .map(|_| {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            char::from_digit(u32::try_from(state >> 60).expect("a nibble"), 16)
-                .expect("a hex digit")
-        })
-        .collect()
+    iter::repeat_with(|| {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        char::from_digit(u32::try_from(state >> 60).expect("a nibble"), 16).expect("a hex digit")
+    })
+    .take(len)
+    .collect()
 }
 
 /// The controller metadata checkpoint the source node holds: the topic, its
@@ -517,7 +517,7 @@ async fn init_producer_id(client: &Client) -> i64 {
 async fn latest_offset(client: &Client, partition: i32) -> i64 {
     let mut response = client
         .send(
-            krabka_broker::testing::list_offsets_request()
+            testing::list_offsets_request()
                 .topic(TOPIC.to_owned())
                 .partition_index(partition)
                 .timestamp(LATEST_TIMESTAMP)
@@ -563,7 +563,7 @@ async fn a_restored_diskless_partition_serves_every_materialized_record() {
         }
         // Let the flusher close a WAL object between rounds, so every
         // partition's history spans many objects.
-        tokio::time::sleep(Duration::from_millis(30)).await;
+        sleep(Duration::from_millis(30)).await;
     }
     for (partition, values) in &expected {
         let end = i64::try_from(values.len()).expect("a small partition");
@@ -573,7 +573,7 @@ async fn a_restored_diskless_partition_serves_every_materialized_record() {
     let capture_path = backup_root
         .path()
         .join(capture_key(&id, DISKLESS_WAL_INDEX));
-    let capture = DisklessWalCapture::from_slice(&std::fs::read(&capture_path).expect("capture"))
+    let capture = DisklessWalCapture::from_slice(&fs::read(&capture_path).expect("capture"))
         .expect("decode the diskless capture");
     assert!(
         capture
@@ -587,7 +587,7 @@ async fn a_restored_diskless_partition_serves_every_materialized_record() {
 
     // The source is lost; its object store is the archive.
     let checkpoint = backup_root.path().join("metadata.checkpoint");
-    std::fs::write(&checkpoint, diskless_metadata_checkpoint(topic_id)).expect("write checkpoint");
+    fs::write(&checkpoint, diskless_metadata_checkpoint(topic_id)).expect("write checkpoint");
     let target = TempDir::new().expect("restore target");
     let controller = bind_loopback().await;
     let controller_addr = controller.local_addr().expect("controller address");

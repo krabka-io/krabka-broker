@@ -45,7 +45,7 @@ const DEFAULT_RESOURCE_TYPES: [i8; 5] = [
     RESOURCE_TYPE_GROUP,
 ];
 
-pub(crate) fn handle(
+pub fn handle(
     broker: &Broker,
     req: &ListConfigResourcesRequest,
     version: i16,
@@ -274,7 +274,7 @@ mod tests {
                      name,
                  }| {
                     krabka_macros::tagged_wire!(ConfigResource {
-                        resource_name: name.to_string(),
+                        resource_name: name.to_owned(),
                         resource_type,
                     })
                 },

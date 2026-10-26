@@ -10,9 +10,13 @@ use {
     bytes::Bytes,
     krabka_protocol::{
         Decode, ProtocolError,
+        kafka_3_6_2::owned::produce_request,
         owned::produce_request::ProduceRequest,
         primitives::{fixed::get_i16, uuid::Uuid as WireUuid, varint::get_uvarint},
-        records::{Attributes, RecordsPayload, count_records_in_v2_batches, produce_framing},
+        records::{
+            Attributes, ProduceFraming, RecordsPayload, count_records_in_v2_batches,
+            produce_framing,
+        },
     },
 };
 
@@ -124,14 +128,13 @@ const ATTRIBUTES_OFFSET: usize = MAGIC_OFFSET + 1 + 4;
 /// `MessageSet`) is never transactional -- the attribute predates neither the
 /// idempotent producer nor v2 batches.
 fn any_v2_batch_transactional(buf: &[u8]) -> bool {
-    if buf.len() <= MAGIC_OFFSET || buf[MAGIC_OFFSET] != 2 {
+    if buf.get(MAGIC_OFFSET) != Some(&2) {
         return false;
     }
     let mut remaining = buf;
     while let Some(SplitBatch { batch, tail }) = complete_v2_batch(remaining) {
-        let attributes =
-            i16::from_be_bytes([batch[ATTRIBUTES_OFFSET], batch[ATTRIBUTES_OFFSET + 1]]);
-        if Attributes(attributes).is_transactional() {
+        let attributes = be_bytes_at::<2>(batch, ATTRIBUTES_OFFSET).map(i16::from_be_bytes);
+        if attributes.is_some_and(|attributes| Attributes(attributes).is_transactional()) {
             return true;
         }
         remaining = tail;
@@ -171,10 +174,9 @@ const MIN_RECORD_SIZE: i32 = 14;
 /// Frame the first batch of `buf` from its size and magic bytes alone, in
 /// Kafka's own order: no CRC, no compression, no record.
 pub(super) fn next_batch(buf: &[u8]) -> NextBatch {
-    let Some(size) = buf.get(8..LOG_OVERHEAD) else {
+    let Some(size) = be_bytes_at::<4>(buf, 8).map(i32::from_be_bytes) else {
         return NextBatch::Incomplete;
     };
-    let size = i32::from_be_bytes([size[0], size[1], size[2], size[3]]);
     if size < MIN_RECORD_SIZE {
         return NextBatch::Corrupt;
     }
@@ -197,15 +199,21 @@ pub(super) fn next_batch(buf: &[u8]) -> NextBatch {
 /// Splits one complete v2 batch from the tail, stopping at the same
 /// malformed or truncated boundary for both header-only walks.
 fn complete_v2_batch(buf: &[u8]) -> Option<SplitBatch<'_>> {
-    if buf.len() < V2_HEADER_LEN || buf[MAGIC_OFFSET] != 2 {
+    if buf.len() < V2_HEADER_LEN || buf.get(MAGIC_OFFSET) != Some(&2) {
         return None;
     }
-    let length = i32::from_be_bytes([buf[8], buf[9], buf[10], buf[11]]);
+    let length = i32::from_be_bytes(be_bytes_at::<4>(buf, 8)?);
     let length = usize::try_from(length).ok()?.checked_add(LOG_OVERHEAD)?;
-    (V2_HEADER_LEN..=buf.len()).contains(&length).then(|| {
-        let (batch, tail) = buf.split_at(length);
-        SplitBatch { batch, tail }
-    })
+    if length < V2_HEADER_LEN {
+        return None;
+    }
+    let (batch, tail) = buf.split_at_checked(length)?;
+    Some(SplitBatch { batch, tail })
+}
+
+/// The `N` bytes of `buf` that start at `at`, or `None` when `buf` ends first.
+fn be_bytes_at<const N: usize>(buf: &[u8], at: usize) -> Option<[u8; N]> {
+    buf.get(at..at.checked_add(N)?)?.try_into().ok()
 }
 
 /// One complete v2 batch and the bytes that follow it.
@@ -219,7 +227,7 @@ struct SplitBatch<'a> {
 /// Returns `buf.len()` for a slice that is not v2 at all, which is a legacy
 /// `MessageSet` the owned path up-converts into one batch.
 fn largest_v2_batch_len(buf: &[u8]) -> usize {
-    if buf.len() <= MAGIC_OFFSET || buf[MAGIC_OFFSET] != 2 {
+    if buf.get(MAGIC_OFFSET) != Some(&2) {
         return buf.len();
     }
     let mut largest = 0usize;
@@ -258,7 +266,7 @@ pub(super) struct FramedPartition {
 impl ProduceFramed {
     /// v≥3: build from the header-only `produce_framing` walk. This function
     /// decodes and decompresses no record body.
-    fn from_framing(f: krabka_protocol::records::ProduceFraming) -> Self {
+    fn from_framing(f: ProduceFraming) -> Self {
         Self {
             transactional_id: f.transactional_id,
             acks: f.acks,
@@ -274,10 +282,9 @@ impl ProduceFramed {
                         .into_iter()
                         .map(|p| FramedPartition {
                             index: p.partition,
-                            payload: match p.records {
-                                Some(b) => PartitionPayload::Slice(b),
-                                None => PartitionPayload::Null,
-                            },
+                            payload: p
+                                .records
+                                .map_or(PartitionPayload::Null, PartitionPayload::Slice),
                         })
                         .collect(),
                 })
@@ -327,10 +334,9 @@ impl ProduceFramed {
                         .into_iter()
                         .map(|p| FramedPartition {
                             index: p.index,
-                            payload: match p.records {
-                                Some(rp) => PartitionPayload::Owned(rp),
-                                None => PartitionPayload::Null,
-                            },
+                            payload: p
+                                .records
+                                .map_or(PartitionPayload::Null, PartitionPayload::Owned),
                         })
                         .collect(),
                 })
@@ -351,11 +357,7 @@ pub(super) fn decode_produce_request(
     }
     let mut cursor = request_bytes;
     let owned: ProduceRequest =
-        krabka_protocol::kafka_3_6_2::owned::produce_request::ProduceRequest::decode(
-            &mut cursor,
-            version,
-        )?
-        .into();
+        produce_request::ProduceRequest::decode(&mut cursor, version)?.into();
     Ok(ProduceFramed::from_owned(owned))
 }
 
@@ -370,7 +372,7 @@ pub(super) fn decode_produce_request(
 /// # Errors
 ///
 /// [`BrokerError::Protocol`] when the body ends before `acks`.
-pub(crate) fn produce_acks(body: &[u8], version: i16) -> Result<i16, BrokerError> {
+pub fn produce_acks(body: &[u8], version: i16) -> Result<i16, BrokerError> {
     let mut cursor = body;
     if version >= 9 {
         let length = usize::try_from(get_uvarint(&mut cursor)?).unwrap_or(usize::MAX);
@@ -392,23 +394,30 @@ pub(crate) fn produce_acks(body: &[u8], version: i16) -> Result<i16, BrokerError
 
 /// Advances `cursor` past `count` bytes, or fails as a truncated body.
 fn skip(cursor: &mut &[u8], count: usize) -> Result<(), BrokerError> {
-    let rest = cursor.get(count..).ok_or(ProtocolError::UnexpectedEof {
-        needed: count.saturating_sub(cursor.len()),
-    })?;
+    let rest = cursor
+        .get(count..)
+        .ok_or_else(|| ProtocolError::UnexpectedEof {
+            needed: count.saturating_sub(cursor.len()),
+        })?;
     *cursor = rest;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::handlers::produce::test_support::encode_batch, assert2::assert};
+    use {
+        super::*,
+        crate::handlers::produce::test_support::encode_batch,
+        assert2::assert,
+        krabka_protocol::records::{Record, RecordBatch},
+    };
 
-    fn batch_with_value(len: usize) -> krabka_protocol::records::RecordBatch {
-        krabka_protocol::records::RecordBatch {
+    fn batch_with_value(len: usize) -> RecordBatch {
+        RecordBatch {
             last_offset_delta: 0,
             max_timestamp: 1,
             producer_id: -1,
-            records: vec![krabka_protocol::records::Record {
+            records: vec![Record {
                 offset_delta: 0,
                 value: Some(Bytes::from(vec![b'x'; len])),
                 ..Default::default()

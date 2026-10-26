@@ -18,9 +18,11 @@ use {
     krabka_protocol::records::{Attributes, Record, RecordBatch},
     krabka_raft::NodeId,
     std::{
+        collections::HashMap,
         sync::Arc,
         time::{Duration, Instant},
     },
+    tokio::time::sleep,
 };
 
 /// This broker.
@@ -157,7 +159,7 @@ async fn only_the_leader_with_enough_replicas_appends_a_marker() {
                     .set_policy(LeaderPolicy {
                         effective_min_isr: 2,
                         replica_lag_time_max: Duration::from_secs(30),
-                        brokers: std::collections::HashMap::new(),
+                        brokers: HashMap::new(),
                     });
             }
         }
@@ -236,7 +238,7 @@ async fn a_marker_counts_only_once_committed_under_its_leader() {
             let partition = Arc::clone(&partition);
             tokio::spawn(async move {
                 // intentional: the wait has to start before the change lands.
-                tokio::time::sleep(Duration::from_millis(20)).await;
+                sleep(Duration::from_millis(20)).await;
                 match change {
                     Change::FollowersCatchUp => set_hw(&partition, MARKER_END).await,
                     Change::LeaderMoves => {
@@ -256,7 +258,7 @@ async fn a_marker_counts_only_once_committed_under_its_leader() {
                             state.set_policy(LeaderPolicy {
                                 effective_min_isr: 2,
                                 replica_lag_time_max: Duration::from_secs(30),
-                                brokers: std::collections::HashMap::new(),
+                                brokers: HashMap::new(),
                             });
                         }
                         set_hw(&partition, MARKER_END).await;

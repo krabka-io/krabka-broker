@@ -21,9 +21,11 @@ use {
     assert2::assert,
     krabka_client_core::{FetchMinBytes, IsolatedFetch},
     std::{
-        process::Stdio,
+        iter,
+        process::{Output, Stdio},
         time::{Duration, Instant},
     },
+    tokio::{process::Command, time},
 };
 
 /// The image the JVM console consumer runs from.
@@ -37,7 +39,7 @@ const JVM_IMAGE: &str = "mirror.gcr.io/confluentinc/cp-kafka:7.4.0";
 const JVM_CONSUME_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Fetch the partition directly and require the exact acknowledged ledger.
-pub(crate) async fn assert_rust_readback(bootstrap: &str, ledger: &[AckedRecord]) {
+pub async fn assert_rust_readback(bootstrap: &str, ledger: &[AckedRecord]) {
     let observed = consume_ledger(bootstrap, ledger.len()).await;
     let expected = ledger_values(ledger);
     assert!(
@@ -94,11 +96,11 @@ async fn consume_ledger(bootstrap: &str, expected: usize) -> Vec<LedgerEntry> {
 
 /// Run the JVM console consumer against `bootstrap` and require its stdout to
 /// be the acknowledged values, in order, one per line.
-pub(crate) async fn assert_jvm_differential(bootstrap: &str, ledger: &[AckedRecord]) {
+pub async fn assert_jvm_differential(bootstrap: &str, ledger: &[AckedRecord]) {
     let observed = jvm_consume_exact(bootstrap, ledger.len()).await;
     let expected = ledger_values(ledger)
         .iter()
-        .flat_map(|entry| entry.value.iter().copied().chain(std::iter::once(b'\n')))
+        .flat_map(|entry| entry.value.iter().copied().chain(iter::once(b'\n')))
         .collect::<Vec<_>>();
     assert!(
         observed == expected,
@@ -148,15 +150,15 @@ async fn jvm_consume_exact(bootstrap: &str, expected: usize) -> Vec<u8> {
 /// stalled image pull holds the test open until the CI job wall stops it. The
 /// tokio child gives the wait an async deadline, and `kill_on_drop` stops the
 /// `docker` client when the timeout drops the future.
-async fn docker_output(args: &[&str], deadline: Duration, what: &str) -> std::process::Output {
-    let child = tokio::process::Command::new("docker")
+async fn docker_output(args: &[&str], deadline: Duration, what: &str) -> Output {
+    let child = Command::new("docker")
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .unwrap_or_else(|err| panic!("spawn {what}: {err}"));
-    tokio::time::timeout(deadline, child.wait_with_output())
+    time::timeout(deadline, child.wait_with_output())
         .await
         .unwrap_or_else(|_| panic!("{what} did not finish within {deadline:?}"))
         .unwrap_or_else(|err| panic!("run {what}: {err}"))

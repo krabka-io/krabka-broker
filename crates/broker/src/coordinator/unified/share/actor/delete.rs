@@ -193,6 +193,7 @@ mod tests {
         crate::{
             coordinator::unified::{
                 ShareGroupSeed,
+                group_coordinator::GroupType,
                 share::{
                     actor::ShareGroupActorMessage,
                     persistence::{
@@ -207,7 +208,8 @@ mod tests {
             metrics::{BrokerMetrics, ShareGroupIdLabel},
         },
         assert2::check,
-        std::collections::HashMap,
+        std::{collections::HashMap, time::Duration},
+        tokio::{sync::oneshot, time::timeout},
     };
 
     struct Row {
@@ -406,9 +408,7 @@ mod tests {
                 "row {index}"
             );
             check!(
-                (coordinator.group_type("sg")
-                    == Some(crate::coordinator::unified::group_coordinator::GroupType::Share))
-                    == kept,
+                (coordinator.group_type("sg") == Some(GroupType::Share)) == kept,
                 "row {index}"
             );
             let written = appended_records(log.as_ref()).await;
@@ -425,14 +425,14 @@ mod tests {
         coordinator.mark_share("sg");
         coordinator.update_share_cache("sg", seed(0, &[]));
         let handle = coordinator.get_or_create_share("sg");
-        let (stopped_tx, stopped_rx) = tokio::sync::oneshot::channel();
+        let (stopped_tx, stopped_rx) = oneshot::channel();
         handle
             .tx
             .send(ShareGroupActorMessage::Shutdown(stopped_tx))
             .await
             .expect("stop the share actor");
         stopped_rx.await.expect("the share actor stopped");
-        tokio::time::timeout(std::time::Duration::from_secs(5), handle.tx.closed())
+        timeout(Duration::from_secs(5), handle.tx.closed())
             .await
             .expect("the stopped actor closes its mailbox");
 

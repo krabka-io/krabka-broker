@@ -110,7 +110,7 @@ pub fn parse_partition_dir(name: &str) -> Option<(String, i32)> {
     if partition < 0 {
         return None;
     }
-    Some((topic.to_string(), partition))
+    Some((topic.to_owned(), partition))
 }
 
 #[cfg(test)]
@@ -156,8 +156,8 @@ mod tests {
             .expect("path has a file name")
             .to_str()
             .expect("file name is utf-8");
-        assert!(parse_partition_dir(name) == Some(("foo".to_string(), 7)));
-        assert!(parse_partition_dir("foo-0") == Some(("foo".to_string(), 0)));
+        assert!(parse_partition_dir(name) == Some(("foo".to_owned(), 7)));
+        assert!(parse_partition_dir("foo-0") == Some(("foo".to_owned(), 0)));
     }
 
     #[test]
@@ -178,6 +178,6 @@ mod tests {
     #[test]
     fn handles_topic_with_dashes() {
         // Topic names can themselves contain hyphens; rsplit takes the last.
-        assert!(parse_partition_dir("my-cool-topic-3") == Some(("my-cool-topic".to_string(), 3)));
+        assert!(parse_partition_dir("my-cool-topic-3") == Some(("my-cool-topic".to_owned(), 3)));
     }
 }

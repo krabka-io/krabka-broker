@@ -1,4 +1,5 @@
 //! `KraftLog`: the replicated metadata log behind the `LogView` seam.
+//!
 //! It is a thin facade over `krabka_log::Log` that adds high-watermark
 //! tracking, committed-read filtering for KIP-595 `Fetch`, and divergence
 //! lookup. The controller uses it as the metadata log.
@@ -12,9 +13,14 @@ use {
     krabka_ids::{LeaderEpoch, Offset},
     krabka_log::{FailedDeletion, Log, LogConfig, RawRead},
     krabka_protocol::{Decode as _, records::RecordBatch},
-    krabka_units::prelude::ByteSize,
+    krabka_units::{prelude, prelude::ByteSize},
+    krabka_verified::raft,
     std::{
+        fs,
+        io::{Error, ErrorKind},
         path::{Path, PathBuf},
+        str,
+        thread::{self, JoinHandle},
         time::SystemTime,
     },
 };
@@ -31,13 +37,13 @@ pub struct KraftLog {
     failure: Option<String>,
     /// The retired files being deleted off the engine, if a deletion is
     /// running. See [`Self::reap_retired_files`].
-    reaping: Option<std::thread::JoinHandle<Result<(), FailedDeletion>>>,
+    reaping: Option<JoinHandle<Result<(), FailedDeletion>>>,
 }
 
 /// Read budget [`KraftLog::timestamp_below`] starts from. It only ever needs
 /// one batch, and `read_decoded` grows the window until one fits, so this is
 /// sized to make that the common case rather than to bound the result.
-const TIMESTAMP_READ_WINDOW: ByteSize = krabka_units::prelude::kibibytes(64);
+const TIMESTAMP_READ_WINDOW: ByteSize = prelude::kibibytes(64);
 
 /// The file the committed offset survives a restart in. Kafka keeps no such
 /// file, so the name is krabka's own. It sits beside the KIP-630 snapshots in
@@ -110,15 +116,15 @@ fn decode_high_watermark(text: &str) -> Result<Offset, PersistedFormatError> {
 /// not cover. Both are a hard error, so a node never runs on a format it
 /// cannot read.
 fn recover_high_watermark(hwm_path: &Path, log_start: Offset) -> Result<Offset, RaftError> {
-    let bytes = match std::fs::read(hwm_path) {
+    let bytes = match fs::read(hwm_path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(log_start),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(log_start),
         Err(error) => {
             tracing::warn!(?error, path = %hwm_path.display(), "kraft: high watermark unreadable; starting from the log start");
             return Ok(log_start);
         }
     };
-    let decoded = std::str::from_utf8(&bytes)
+    let decoded = str::from_utf8(&bytes)
         .map_err(|error| PersistedFormatError::Malformed(error.to_string()))
         .and_then(decode_high_watermark);
     match decoded {
@@ -162,7 +168,7 @@ impl KraftLog {
     pub fn open(dir: impl AsRef<Path>, config: &MetadataLogConfig) -> Result<Self, RaftError> {
         let log_dir = dir.as_ref();
         let hwm_path = log_dir.join(HIGH_WATERMARK_FILE);
-        std::fs::create_dir_all(log_dir).map_err(krabka_log::LogError::Io)?;
+        fs::create_dir_all(log_dir).map_err(krabka_log::LogError::Io)?;
         // `krabka_log::Log` checkpoints its own log start, so a prune that
         // advanced inside the active segment is already restored here.
         let log = Log::open(log_dir, metadata_log_config(config))?;
@@ -192,7 +198,7 @@ impl KraftLog {
         Ok(result?)
     }
 
-    fn note_failure(&mut self, error: &std::io::Error) {
+    fn note_failure(&mut self, error: &Error) {
         if self.failure.is_none() {
             self.failure = Some(error.to_string());
         }
@@ -332,7 +338,7 @@ impl KraftLog {
     /// past the log end.
     pub fn advance_hwm(&mut self, new_hwm: Offset) {
         let log_end = self.log.log_end_offset();
-        let next = Offset(krabka_verified::raft::advance_high_watermark(
+        let next = Offset(raft::advance_high_watermark(
             self.hwm.0, new_hwm.0, log_end.0,
         ));
         if next > self.hwm {
@@ -400,12 +406,14 @@ impl KraftLog {
     /// # Errors
     /// Returns [`RaftError`] if the earlier deletion failed, or if the flush
     /// that `Log::maintain_deferring_deletions` runs first fails.
-    ///
-    /// # Panics
-    /// Panics if the deletion thread panicked.
+    /// It also returns one if the deletion thread panicked.
     pub fn reap_retired_files(&mut self, now: SystemTime) -> Result<(), RaftError> {
         if let Some(reaping) = self.reaping.take_if(|reaping| reaping.is_finished()) {
-            let deleted = reaping.join().expect("the retired-file deletion panicked");
+            let deleted = reaping.join().map_err(|_| {
+                RaftError::Storage(krabka_log::LogError::Corrupt(
+                    "the retired-file deletion panicked".into(),
+                ))
+            })?;
             if let Err(FailedDeletion { error, remaining }) = deleted {
                 self.log.restore_deletions(remaining, now);
                 return self.checked(Err(error));
@@ -417,7 +425,7 @@ impl KraftLog {
         let due = self.log.maintain_deferring_deletions(now);
         let due = self.checked(due)?;
         if !due.is_empty() {
-            self.reaping = Some(std::thread::spawn(move || due.delete()));
+            self.reaping = Some(thread::spawn(move || due.delete()));
         }
         Ok(())
     }
@@ -444,8 +452,8 @@ impl KraftLog {
     /// lowers the value a restart begins from.
     fn persist_hwm(&mut self) {
         let tmp = self.hwm_path.with_file_name(HIGH_WATERMARK_TMP_FILE);
-        let written = std::fs::write(&tmp, encode_high_watermark(self.hwm))
-            .and_then(|()| std::fs::rename(&tmp, &self.hwm_path));
+        let written = fs::write(&tmp, encode_high_watermark(self.hwm))
+            .and_then(|()| fs::rename(&tmp, &self.hwm_path));
         if let Err(error) = written {
             tracing::error!(?error, path = %self.hwm_path.display(), "kraft: persist high watermark failed");
             self.note_failure(&error);
@@ -475,13 +483,10 @@ pub fn end_offset_for_epoch_in(
         return past_every_epoch;
     };
     let (found, end) = checkpoint.epoch_and_offset_for(LeaderEpoch(requested), log_end);
-    match u32::try_from(found.0) {
-        Ok(found) => LogOffsetMetadata {
-            offset: end.0,
-            epoch: found,
-        },
-        Err(_) => past_every_epoch,
-    }
+    u32::try_from(found.0).map_or(past_every_epoch, |found| LogOffsetMetadata {
+        offset: end.0,
+        epoch: found,
+    })
 }
 
 impl LogView for KraftLog {
@@ -518,7 +523,11 @@ mod tests {
     use {
         super::*,
         assert2::{assert, check},
-        krabka_units::prelude::mebibytes,
+        krabka_units::{prelude, prelude::mebibytes},
+        std::{
+            fs, thread,
+            time::{Duration, Instant},
+        },
     };
 
     /// Read budget the log tests use. It is larger than any batch they append,
@@ -891,7 +900,7 @@ mod tests {
 
     /// The `.log` files in `dir`, by name, oldest first.
     fn segment_files(dir: &Path) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(dir)
+        let mut names: Vec<String> = fs::read_dir(dir)
             .expect("list the partition directory")
             .flatten()
             .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "log"))
@@ -911,14 +920,14 @@ mod tests {
             (
                 "inside both limits",
                 mebibytes(1),
-                krabka_units::prelude::secs(10),
+                prelude::secs(10),
                 vec![0, 5_000, 10_000],
                 vec!["00000000000000000000.log"],
             ),
             (
                 "the size limit",
-                krabka_units::prelude::bytes(1),
-                krabka_units::prelude::secs(10),
+                prelude::bytes(1),
+                prelude::secs(10),
                 vec![0, 1, 2],
                 vec![
                     "00000000000000000000.log",
@@ -929,7 +938,7 @@ mod tests {
             (
                 "the roll interval",
                 mebibytes(1),
-                krabka_units::prelude::secs(10),
+                prelude::secs(10),
                 vec![0, 10_000, 10_001],
                 vec!["00000000000000000000.log", "00000000000000000002.log"],
             ),
@@ -954,7 +963,7 @@ mod tests {
     fn four_committed_segments() -> LogInDir {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = MetadataLogConfig {
-            segment_size: krabka_units::prelude::bytes(1),
+            segment_size: prelude::bytes(1),
             ..MetadataLogConfig::default()
         };
         let mut log = KraftLog::open(dir.path(), &config).expect("open");
@@ -990,7 +999,7 @@ mod tests {
     #[test]
     fn a_reap_deletes_the_pruned_segments_once_their_delay_has_passed() {
         let retired = |dir: &Path| -> Vec<String> {
-            let mut names: Vec<String> = std::fs::read_dir(dir)
+            let mut names: Vec<String> = fs::read_dir(dir)
                 .expect("list the partition directory")
                 .flatten()
                 .filter_map(|entry| entry.file_name().into_string().ok())
@@ -1015,19 +1024,19 @@ mod tests {
         );
 
         for (when, now, left) in [
-            ("inside the delay", pruned_at, after_prune.clone()),
+            ("inside the delay", pruned_at, after_prune),
             (
                 "past the delay",
-                after_prune_at + std::time::Duration::from_secs(61),
+                after_prune_at + Duration::from_secs(61),
                 Vec::new(),
             ),
         ] {
             log.reap_retired_files(now).expect("reap");
             // The unlinks run off the caller, so wait for them, collecting
             // the finished deletion on each call as the engine does.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while retired(dir.path()) != left && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while retired(dir.path()) != left && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
                 log.reap_retired_files(now).expect("reap");
             }
             check!(retired(dir.path()) == left, "{when}");
@@ -1053,7 +1062,7 @@ mod tests {
         let LogInDir { log, dir } = log_with_hwm_three();
         drop(log);
 
-        let written = std::fs::read(dir.path().join(HIGH_WATERMARK_FILE)).expect("read");
+        let written = fs::read(dir.path().join(HIGH_WATERMARK_FILE)).expect("read");
         check!(written == HIGH_WATERMARK_V0_FIXTURE);
         check!(!dir.path().join(HIGH_WATERMARK_TMP_FILE).exists());
         check!(decode_high_watermark("0\n3\n") == Ok(Offset(3)));
@@ -1138,7 +1147,7 @@ mod tests {
             let LogInDir { log, dir } = log_with_hwm_three();
             drop(log);
             let path = dir.path().join(HIGH_WATERMARK_FILE);
-            std::fs::write(&path, contents).expect("write the high-watermark file");
+            fs::write(&path, contents).expect("write the high-watermark file");
 
             let opened = KraftLog::open(dir.path(), &MetadataLogConfig::default());
 

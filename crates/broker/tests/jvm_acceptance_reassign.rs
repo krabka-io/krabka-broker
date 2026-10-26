@@ -4,6 +4,7 @@
 //! The shared harness lives in [`jvm_acceptance`]; see it for the container
 //! networking these suites depend on. The binary root carries only the module
 //! tree, and each child covers one admin-tool flow.
+#![cfg(test)]
 
 mod jvm_acceptance;
 mod support;

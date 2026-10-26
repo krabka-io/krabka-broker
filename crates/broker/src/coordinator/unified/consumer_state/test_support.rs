@@ -4,10 +4,13 @@ use {
     super::{group::GroupState, member::MemberState, regex::ResolvedRegularExpression},
     crate::coordinator::unified::{actor::MetadataProvider, reconciler::ReconcileInput},
     krabka_protocol::primitives::uuid::Uuid,
-    std::time::{Duration, Instant},
+    std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    },
 };
 
-pub(crate) fn member(id: &str) -> MemberState {
+pub fn member(id: &str) -> MemberState {
     MemberState {
         client_id: "c".into(),
         client_host: "/127.0.0.1".into(),
@@ -17,14 +20,14 @@ pub(crate) fn member(id: &str) -> MemberState {
 }
 
 /// `member(id)` subscribed to the topics `names`.
-pub(crate) fn subscribed_member(id: &str, names: &[&str]) -> MemberState {
+pub fn subscribed_member(id: &str, names: &[&str]) -> MemberState {
     MemberState {
         subscribed_topic_names: names.iter().map(|name| (*name).to_owned()).collect(),
         ..member(id)
     }
 }
 
-pub(crate) fn regex_group(subscriptions: &[(&str, Option<&str>)]) -> GroupState {
+pub fn regex_group(subscriptions: &[(&str, Option<&str>)]) -> GroupState {
     let mut group = GroupState::new("g");
     for (member_id, regex) in subscriptions {
         let mut m = member(member_id);
@@ -34,7 +37,7 @@ pub(crate) fn regex_group(subscriptions: &[(&str, Option<&str>)]) -> GroupState 
     group
 }
 
-pub(crate) fn resolved_regex(
+pub fn resolved_regex(
     topics: &[&str],
     version: i64,
     timestamp_ms: i64,
@@ -48,7 +51,7 @@ pub(crate) fn resolved_regex(
 
 /// A topic that [`Topics`] holds.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct NamedTopic {
+pub struct NamedTopic {
     pub(crate) name: &'static str,
     pub(crate) id: Uuid,
 }
@@ -56,11 +59,11 @@ pub(crate) struct NamedTopic {
 /// A metadata provider that holds the topics it was given, each with two
 /// partitions.
 #[derive(Debug)]
-pub(crate) struct Topics(pub(crate) Vec<NamedTopic>);
+pub struct Topics(pub(crate) Vec<NamedTopic>);
 
 impl MetadataProvider for Topics {
-    fn snapshot(&self) -> std::sync::Arc<ReconcileInput> {
-        std::sync::Arc::new(ReconcileInput {
+    fn snapshot(&self) -> Arc<ReconcileInput> {
+        Arc::new(ReconcileInput {
             topic_id_by_name: self
                 .0
                 .iter()

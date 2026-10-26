@@ -30,18 +30,18 @@ fn additions(item: &ItemStruct, role: &str) -> Result<FieldAdditions, ParseError
             suffix: TokenStream::new(),
         });
     }
-    if !fields.first().is_some_and(|field| {
+    let Some(members_field) = fields.first().filter(|field| {
         field
             .ident
             .as_ref()
             .is_some_and(|name| name.text() == "members")
-    }) {
+    }) else {
         return Err(ParseError::new(
             item.ident.span(),
             "group projection must declare members before its extra fields",
         ));
-    }
-    let member_type = &fields.first().expect("validated members field").ty;
+    };
+    let member_type = &members_field.ty;
     let simple_member_list = member_type.as_path().and_then(|ty| ty.path.last()).is_some_and(|segment| {
         segment.ident.text() == "Vec" && matches!(&segment.args,
             PathArguments::AngleBracketed(arguments) if arguments.args.len() == 1
@@ -76,7 +76,7 @@ fn group_derives() -> TokenStream {
     }
 }
 
-pub(crate) fn expand(
+pub fn expand(
     metadata: &TokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
@@ -115,9 +115,9 @@ pub(crate) fn expand(
             .ok_or_else(|| {
                 ParseError::new(parsed.ident.span(), "members field needs a trailing comma")
             })?;
-        fields.extend(original[..=separator].iter().cloned());
+        fields.extend(original.iter().take(separator + 1).cloned());
         fields.extend(NativeTokenStream::from(suffix));
-        fields.extend(original[separator + 1..].iter().cloned());
+        fields.extend(original.iter().skip(separator + 1).cloned());
     } else {
         fields.extend(original);
     }

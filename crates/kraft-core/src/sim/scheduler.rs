@@ -17,7 +17,7 @@ use {
         event::Event,
         simulation_support::{
             NodeFingerprint, SimulationTimer as SimTimer, StableFingerprint, clear_timer,
-            earliest_timer, fingerprint, reconcile_timers,
+            fingerprint, reconcile_timers,
         },
         types::NodeId,
     },
@@ -25,6 +25,8 @@ use {
 
 impl Sim {
     krabka_macros::simulation_heartbeat!(crate, deadline_millis(HEARTBEAT));
+
+    krabka_macros::simulation_earliest_timer!(crate);
 
     // ---- fingerprint / stability ---------------------------------------------
 
@@ -56,77 +58,69 @@ impl Sim {
     }
 
     pub(super) fn fire_next_timer(&mut self) -> bool {
-        let best = earliest_timer(self.nodes.values().map(|node| {
-            (node.id, [
-                node.election_deadline,
-                node.fetch_deadline,
-                node.heartbeat_deadline,
-                node.check_quorum_deadline,
-            ])
-        }));
-        let Some((deadline, id, kind)) = best else {
+        let Some((deadline, id, kind)) = self.earliest_armed_timer() else {
             return false;
         };
         self.now = self.now.max(deadline);
-        let node = self.nodes.get_mut(&id).unwrap();
-        clear_timer(
-            kind,
-            &mut node.election_deadline,
-            &mut node.fetch_deadline,
-            &mut node.heartbeat_deadline,
-            &mut node.check_quorum_deadline,
-        );
+        if let Some(node) = self.nodes.get_mut(&id) {
+            clear_timer(
+                kind,
+                &mut node.election_deadline,
+                &mut node.fetch_deadline,
+                &mut node.heartbeat_deadline,
+                &mut node.check_quorum_deadline,
+            );
+        }
         match kind {
-            SimTimer::Heartbeat => {
-                self.fire_leader_heartbeat(id);
-                true
-            }
+            SimTimer::Heartbeat => self.fire_leader_heartbeat(id),
             SimTimer::Fetch => {
                 if let Some(leader_id) = self.reachable_leader(id) {
                     let deadline = self
                         .now
                         .saturating_add_ms(deadline_millis(election_timeout_of(id)));
-                    self.nodes.get_mut(&id).unwrap().fetch_deadline = Some(deadline);
+                    if let Some(node) = self.nodes.get_mut(&id) {
+                        node.fetch_deadline = Some(deadline);
+                    }
                     self.apply_action(id, Action::SendFetch { leader_id });
                     return true;
                 }
                 self.record(
                     TraceAction::Timeout {
                         node: id.0,
-                        kind: "fetch".to_string(),
+                        kind: "fetch".to_owned(),
                     },
                     format!("N{id} lost contact with its leader and starts an election"),
                 );
                 self.step(id, Event::FetchTimeout);
-                true
             }
             SimTimer::Election => {
                 self.record(
                     TraceAction::Timeout {
                         node: id.0,
-                        kind: "election".to_string(),
+                        kind: "election".to_owned(),
                     },
                     format!("N{id}'s election timer fires"),
                 );
                 self.step(id, Event::ElectionTimeout);
-                true
             }
             SimTimer::CheckQuorum => {
                 self.record(
                     TraceAction::Timeout {
                         node: id.0,
-                        kind: "check-quorum".to_string(),
+                        kind: "check-quorum".to_owned(),
                     },
                     format!("N{id} has not heard from a majority of voters and resigns"),
                 );
                 self.step(id, Event::CheckQuorumTimeout);
-                true
             }
         }
+        true
     }
 
     pub(super) fn reconcile_timers_for_role(&mut self, id: NodeId) {
-        let node = self.nodes.get_mut(&id).unwrap();
+        let Some(node) = self.nodes.get_mut(&id) else {
+            return;
+        };
         reconcile_timers(
             node.machine.role(),
             &mut node.election_deadline,

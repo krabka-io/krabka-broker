@@ -8,7 +8,7 @@ use {
     super::member::Member,
     crate::codes::{FENCED_INSTANCE_ID, UNKNOWN_MEMBER_ID},
     std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         time::{Duration, Instant},
     },
 };
@@ -60,7 +60,7 @@ pub struct ClassicGroup {
     /// load. In that case the assignor's cooperative-sticky Pass-3 omissions
     /// strand partitions on no member. Every transition into
     /// `PreparingRebalance` clears this set.
-    pub joined_this_round: std::collections::HashSet<String>,
+    pub joined_this_round: HashSet<String>,
     /// `true` while the current `PreparingRebalance` round opened from an
     /// `Empty` group. That is a new group, or one whose members had all left,
     /// for example after a warm-up consumer joins and leaves.
@@ -95,7 +95,7 @@ pub struct ClassicGroup {
     /// have not sent `SyncGroup` yet. A completed join phase fills it, the
     /// member's own `SyncGroup` empties it one member at a time, and every new
     /// rebalance clears it.
-    pub pending_sync_members: std::collections::HashSet<String>,
+    pub pending_sync_members: HashSet<String>,
     /// Kafka's `classicGroupSyncKey` timer: when the members still in
     /// [`Self::pending_sync_members`] are removed. It is armed with the group
     /// rebalance timeout when the join phase completes and cancelled when
@@ -124,12 +124,12 @@ impl ClassicGroup {
             members: HashMap::new(),
             static_members: HashMap::new(),
             rebalance_deadline: None,
-            joined_this_round: std::collections::HashSet::new(),
+            joined_this_round: HashSet::new(),
             rebalance_from_empty: false,
             pending_members: HashMap::new(),
             initial_join: None,
             new_member_added: false,
-            pending_sync_members: std::collections::HashSet::new(),
+            pending_sync_members: HashSet::new(),
             sync_deadline: None,
         }
     }

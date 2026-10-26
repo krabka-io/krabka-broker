@@ -59,7 +59,7 @@ pub(super) fn indexed_offset_scan_preserves_first_batch(
         (0, _, _) => return Err(()),
         _ => {}
     }
-    if batches[0].coordinate != 0 {
+    if batches.first().ok_or(())?.coordinate != 0 {
         return Err(());
     }
     let mut i = 0usize;
@@ -68,12 +68,16 @@ pub(super) fn indexed_offset_scan_preserves_first_batch(
         ==> exists<k: Int> 0 <= k && k < batches@.len() && rows@[j] == batches@[k])]
     #[variant(rows@.len() - i@)]
     while i < rows.len() {
+        let row = rows.get(i).ok_or(())?;
         let mut j = 0usize;
         #[invariant(j@ <= batches@.len())]
         #[invariant(forall<k: Int> 0 <= k && k < j@ ==> rows@[i@] != batches@[k])]
         #[variant(batches@.len() - j@)]
         while j < batches.len()
-            && (rows[i].key != batches[j].key || rows[i].coordinate != batches[j].coordinate)
+            && !matches!(
+                batches.get(j),
+                Some(batch) if row.key == batch.key && row.coordinate == batch.coordinate
+            )
         {
             j += 1;
         }
@@ -90,8 +94,9 @@ pub(super) fn indexed_offset_scan_preserves_first_batch(
     #[invariant(forall<j: Int> 0 <= j && j < i@ ==> scan@[j]@ == if batches@[j].coordinate@ >= floor@ { batches@[j].key@ } else { -1 })]
     #[variant(batches@.len() - i@)]
     while i < batches.len() {
-        scan.push(if batches[i].coordinate >= floor {
-            i64::from(batches[i].key)
+        let batch = batches.get(i).ok_or(())?;
+        scan.push(if batch.coordinate >= floor {
+            i64::from(batch.key)
         } else {
             -1
         });

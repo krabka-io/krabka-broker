@@ -10,6 +10,8 @@
 use super::oauthbearer::DEFAULT_INTROSPECTION_HTTP_TIMEOUT;
 #[cfg(not(target_family = "wasm"))]
 use crate::oauth_introspection::ReqwestIntrospectionClient;
+#[cfg(not(target_family = "wasm"))]
+use std::fs;
 use {
     super::{
         FileConfigError,
@@ -19,7 +21,13 @@ use {
         },
     },
     crate::config::{BrokerConfig, DEFAULT_JWKS_MIN_ON_DEMAND_PAUSE},
+    jsonpath_rust::{parser, parser::model::JpQuery},
     krabka_units::{Time, convert::TimeExt as _},
+    std::sync::{
+        Arc, PoisonError,
+        atomic::{AtomicI64, AtomicU64},
+    },
+    tokio::sync::mpsc,
 };
 
 /// Set the principal claim and the clock skew of a JWS validator from
@@ -43,8 +51,8 @@ fn apply_jws_claim_options(
 fn configure_introspection_validator(
     oauth: &FileOAuthBearerConfig,
     endpoint: &str,
-    custom_claim_check: Option<jsonpath_rust::parser::model::JpQuery>,
-    groups_claim: Option<jsonpath_rust::parser::model::JpQuery>,
+    custom_claim_check: Option<JpQuery>,
+    groups_claim: Option<JpQuery>,
     cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     let client_id = oauth.introspection_client_id.clone().ok_or_else(|| {
@@ -61,7 +69,7 @@ fn configure_introspection_validator(
                     .into(),
             )
         })?;
-    let client_secret = std::fs::read_to_string(&secret_path)
+    let client_secret = fs::read_to_string(&secret_path)
         .map_err(|error| {
             FileConfigError::InvalidConfig(format!(
                 "[oauthbearer]: failed to read client secret {}: {error}",
@@ -116,8 +124,8 @@ fn configure_introspection_validator(
 fn configure_introspection_validator(
     _oauth: &FileOAuthBearerConfig,
     _endpoint: &str,
-    _custom_claim_check: Option<jsonpath_rust::parser::model::JpQuery>,
-    _groups_claim: Option<jsonpath_rust::parser::model::JpQuery>,
+    _custom_claim_check: Option<JpQuery>,
+    _groups_claim: Option<JpQuery>,
     _cfg: &mut BrokerConfig,
 ) -> Result<(), FileConfigError> {
     Err(FileConfigError::InvalidConfig(
@@ -164,7 +172,7 @@ pub(super) fn apply_oauthbearer(
         .custom_claim_check
         .as_deref()
         .map(|expr| {
-            jsonpath_rust::parser::parse_json_path(expr).map_err(|error| {
+            parser::parse_json_path(expr).map_err(|error| {
                 FileConfigError::InvalidConfig(format!(
                     "[oauthbearer]: invalid custom_claim_check JsonPath expression {expr:?}: {error}"
                 ))
@@ -176,7 +184,7 @@ pub(super) fn apply_oauthbearer(
         .groups_claim
         .as_deref()
         .map(|expr| {
-            jsonpath_rust::parser::parse_json_path(expr).map_err(|error| {
+            parser::parse_json_path(expr).map_err(|error| {
                 FileConfigError::InvalidConfig(format!(
                     "[oauthbearer]: invalid groups_claim JsonPath expression {expr:?}: {error}"
                 ))
@@ -207,24 +215,24 @@ pub(super) fn apply_oauthbearer(
                     .into(),
             ));
         }
-        (Some(_), None) => {
+        (Some(jwks_uri), None) => {
             // Signed-JWT validation. The empty key handle is
             // populated by the refresher `Broker::start` spawns.
-            let jwks_uri = oauth.jwks_endpoint_uri.clone().unwrap();
+            let jwks_uri = jwks_uri.clone();
 
             // Create the signal channel + the shared
             // timestamps here so the validator's `JwksHandle` and
             // the refresher (constructed in `Broker::start`) point at
             // the same Arc-shared state. Channel capacity 1 +
             // `try_send` on the producer ⇒ signals coalesce.
-            let (signal_tx, signal_rx) = tokio::sync::mpsc::channel::<()>(1);
-            let last_successful = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
-            let cache_generation = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-            let last_on_demand = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
+            let (signal_tx, signal_rx) = mpsc::channel::<()>(1);
+            let last_successful = Arc::new(AtomicI64::new(0));
+            let cache_generation = Arc::new(AtomicU64::new(0));
+            let last_on_demand = Arc::new(AtomicI64::new(0));
 
             let handle = krabka_security::JwksHandle::new_with_refresher_handles(
                 krabka_security::Jwks::empty(),
-                last_successful.clone(),
+                Arc::clone(&last_successful),
                 signal_tx,
             );
 
@@ -261,7 +269,9 @@ pub(super) fn apply_oauthbearer(
             }
 
             // Park signal_rx + shared state for Broker::start.
-            *cfg.oauthbearer_jwks_signal_rx.lock().unwrap() = Some(signal_rx);
+            *cfg.oauthbearer_jwks_signal_rx
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(signal_rx);
             cfg.oauthbearer_jwks_last_successful_fetch_ms = last_successful;
             cfg.oauthbearer_jwks_cache_generation = cache_generation;
             cfg.oauthbearer_jwks_last_on_demand_refresh_ms = last_on_demand;
@@ -344,6 +354,10 @@ mod tests {
         base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64},
         krabka_security::OAuthBearerValidator,
         krabka_units::{minutes, secs},
+        std::{
+            fs,
+            path::{Path, PathBuf},
+        },
     };
 
     /// The instant every clock-skew case validates at, in epoch milliseconds.
@@ -501,13 +515,13 @@ mod tests {
     /// A client secret file, and the directory that holds it.
     struct ClientSecret {
         dir: tempfile::TempDir,
-        path: std::path::PathBuf,
+        path: PathBuf,
     }
 
     fn client_secret(value: &str) -> ClientSecret {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("client-secret");
-        std::fs::write(&path, value).unwrap();
+        fs::write(&path, value).unwrap();
         ClientSecret { dir, path }
     }
 
@@ -642,7 +656,7 @@ idp_tls_trust = "/etc/krabka/oauth/idp-ca.pem"
         let cfg = configured_unwrap_parse(toml).unwrap();
         assert!(
             cfg.oauthbearer_idp_tls_trust.as_deref()
-                == Some(std::path::Path::new("/etc/krabka/oauth/idp-ca.pem"))
+                == Some(Path::new("/etc/krabka/oauth/idp-ca.pem"))
         );
     }
 
@@ -766,8 +780,8 @@ introspection_client_secret_path = '{}'
         let secret_contents = "never-print-this-secret";
         let secret_path = dir.path().join("client-secret");
         let ca_path = dir.path().join("invalid-ca.pem");
-        std::fs::write(&secret_path, secret_contents).unwrap();
-        std::fs::write(&ca_path, "not a PEM certificate").unwrap();
+        fs::write(&secret_path, secret_contents).unwrap();
+        fs::write(&ca_path, "not a PEM certificate").unwrap();
         let toml = format!(
             r#"
 [oauthbearer]

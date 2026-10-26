@@ -10,10 +10,13 @@ use {
     super::{LogOffset, TimestampMs, corrupt_log},
     crate::error::RemoteStorageError,
     krabka_protocol::records::{Attributes, RecordBatch, TimestampType},
+    krabka_verified::timestamp::timestamp_record_time,
 };
 
 /// Decodes remote log batches and returns the earliest record at or after both
-/// `floor_offset` and `target_timestamp`. Under `LogAppendTime`, every record
+/// `floor_offset` and `target_timestamp`.
+///
+/// Under `LogAppendTime`, every record
 /// uses the batch append stamp instead of producer base time and deltas.
 ///
 /// `max_record_body` is Kafka trunk's `max.decompressed.message.bytes`, or
@@ -61,12 +64,9 @@ pub fn first_record_at_or_after_timestamp(
             if offset < floor_offset {
                 continue;
             }
-            let timestamp = krabka_verified::timestamp::timestamp_record_time(
-                batch.base_timestamp,
-                record.timestamp_delta,
-                append_time,
-            )
-            .ok_or_else(|| corrupt_log("record timestamp overflow"))?;
+            let timestamp =
+                timestamp_record_time(batch.base_timestamp, record.timestamp_delta, append_time)
+                    .ok_or_else(|| corrupt_log("record timestamp overflow"))?;
             if timestamp >= target_timestamp {
                 return Ok(Some((offset, timestamp)));
             }
@@ -76,7 +76,9 @@ pub fn first_record_at_or_after_timestamp(
 }
 
 /// Decodes batches from `data` and returns the first one whose last offset is
-/// `>= floor`. It skips the batches at the start of the returned byte range
+/// `>= floor`.
+///
+/// It skips the batches at the start of the returned byte range
 /// that the offset index pointed at but that do not cover the requested
 /// offset. Kafka offset indexes are sparse, so such batches occur.
 #[must_use]

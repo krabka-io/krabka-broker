@@ -10,6 +10,7 @@ use {
     super::{LoadStatus, ShareCoordinator},
     crate::{
         broker::spawn_partition_with_replication_target,
+        codes,
         coordinator::test_support::single_replica_partition,
         log_dir::partition_dir,
         log_dir_status::LogDirRegistry,
@@ -20,6 +21,7 @@ use {
         share_coordinator::{
             bootstrap,
             config::ShareCoordinatorConfig,
+            coordinator::{ShareStateError, message::FENCED_STATE_EPOCH},
             persistence::{
                 KEY_SHARE_SNAPSHOT, ShareSnapshotValue, ShareUpdateValue, StateBatch,
                 parse_state_key,
@@ -32,24 +34,26 @@ use {
     krabka_log::{Log, LogConfig, Offset},
     qubit_clock::{ManualMonotonicClock, ManualWallClock},
     std::{
+        fs::create_dir_all,
         path::Path,
-        sync::Arc,
+        sync::{Arc, Mutex},
         time::{Duration, UNIX_EPOCH},
     },
+    tokio::{sync::Notify, task::yield_now, time::timeout},
 };
 
 /// Wait until a state partition reaches the expected recovery status.
-pub(crate) async fn await_load_status(
+pub async fn await_load_status(
     coordinator: &ShareCoordinator,
     partition: PartitionIndex,
     expected: LoadStatus,
 ) {
-    tokio::time::timeout(Duration::from_secs(2), async {
+    timeout(Duration::from_secs(2), async {
         loop {
             if coordinator.load_status(partition).await == Some(expected) {
                 break;
             }
-            tokio::task::yield_now().await;
+            yield_now().await;
         }
     })
     .await
@@ -57,20 +61,17 @@ pub(crate) async fn await_load_status(
 }
 
 /// Inject an indeterminate append and its normal recovery wakeup.
-pub(crate) fn mark_append_uncertain(coordinator: &ShareCoordinator, partition: PartitionIndex) {
+pub fn mark_append_uncertain(coordinator: &ShareCoordinator, partition: PartitionIndex) {
     coordinator.uncertain_appends.insert(partition, ());
     coordinator.recovery_needed.notify_one();
 }
 
 /// Open a real state log whose writer waits for an explicit test release.
-pub(crate) fn gated_state_partition(
-    log_dir: &Path,
-    release_writer: &Arc<tokio::sync::Notify>,
-) -> Arc<Partition> {
+pub fn gated_state_partition(log_dir: &Path, release_writer: &Arc<Notify>) -> Arc<Partition> {
     let gate = Arc::clone(release_writer);
     Arc::new(Partition::writer_fixture(
         bootstrap::TOPIC,
-        Arc::new(std::sync::Mutex::new(
+        Arc::new(Mutex::new(
             Log::open(log_dir, LogConfig::default()).unwrap(),
         )),
         Arc::new(ArcSwap::from_pointee(log_dir.to_path_buf())),
@@ -85,7 +86,7 @@ pub(crate) fn gated_state_partition(
 }
 
 #[bon::builder]
-pub(crate) async fn assert_recovered_epoch_is_fenced(
+pub async fn assert_recovered_epoch_is_fenced(
     coordinator: &ShareCoordinator,
     topic_image: &krabka_metadata::MetadataImage,
     topic_id: uuid::Uuid,
@@ -95,33 +96,31 @@ pub(crate) async fn assert_recovered_epoch_is_fenced(
         coordinator
             .initialize(topic_image, "g", topic_id, 0, 1, Offset(20))
             .await
-            == Err(
-                crate::share_coordinator::coordinator::ShareStateError::Refused {
-                    code: crate::codes::FENCED_STATE_EPOCH,
-                    message: crate::share_coordinator::coordinator::message::FENCED_STATE_EPOCH,
-                }
-            )
+            == Err(ShareStateError::Refused {
+                code: codes::FENCED_STATE_EPOCH,
+                message: FENCED_STATE_EPOCH,
+            })
     );
 }
 
 /// The wall-clock time, in milliseconds, at which every test coordinator
 /// starts.
-pub(crate) const NOW_MS: i64 = 1_700_000_000_000;
+pub const NOW_MS: i64 = 1_700_000_000_000;
 
 use std::ops::RangeInclusive;
 
 #[derive(Clone, Copy, Default)]
-pub(crate) enum FixtureDeliveryState {
+pub enum FixtureDeliveryState {
     #[default]
     Available,
     Acknowledged,
     Archiving,
     Archived,
 }
-pub(crate) use crate::share_partition::state::test_support::DeliveryCount as DeliveryAttemptCount;
+pub use crate::share_partition::state::test_support::DeliveryCount as DeliveryAttemptCount;
 
 #[derive(krabka_macros::FieldDefaults)]
-pub(crate) struct StateBatchSetup {
+pub struct StateBatchSetup {
     #[default(Offset(0)..=Offset(9))]
     pub bounds: RangeInclusive<Offset>,
     pub delivery: FixtureDeliveryState,
@@ -130,7 +129,7 @@ pub(crate) struct StateBatchSetup {
 }
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy, Default)]
-pub(crate) struct StateSeedEpoch(pub i32);
+pub struct StateSeedEpoch(pub i32);
 
 #[derive(Clone, Copy, krabka_macros::FieldDefaults)]
 pub(super) struct StateSeedSetup {
@@ -147,7 +146,7 @@ pub(super) fn batch(bounds: RangeInclusive<Offset>) -> StateBatch {
 
 /// A literal batch fixture shared by wire-layout and state-combination tests.
 #[bon::builder]
-pub(crate) fn state_batch(
+pub fn state_batch(
     #[builder(default = Offset (0) ..= Offset (9))] bounds: RangeInclusive<Offset>,
     #[builder(default)] delivery: FixtureDeliveryState,
     #[builder(default = DeliveryAttemptCount (1))] attempts: DeliveryAttemptCount,
@@ -180,26 +179,27 @@ pub(crate) fn state_batch(
 ///
 /// The partition has a live writer, and it leads on node 1 at leader epoch
 /// 0. This function mirrors `fixture_partition` in `partition_registry`.
-pub(crate) fn open_state_partition(reg: &PartitionRegistry, log_dir: &Path, p: i32) {
+pub fn open_state_partition(reg: &PartitionRegistry, log_dir: &Path, p: i32) {
     let part_dir = partition_dir(log_dir, bootstrap::TOPIC, p);
-    std::fs::create_dir_all(&part_dir).unwrap();
+    create_dir_all(&part_dir).unwrap();
     let log = Log::open(&part_dir, LogConfig::default()).unwrap();
-    let part = spawn_partition_with_replication_target(
-        bootstrap::TOPIC.to_string(),
+    let part = spawn_partition_with_replication_target()
+        .topic(bootstrap::TOPIC.to_owned())
         // The metadata reconcile installs the leader of the image before the
         // partition is visible: here this broker, node 1, at epoch 0.
-        ReplicationTarget {
+        .replication_target(ReplicationTarget {
             topic_id: None,
             leader_node_id: krabka_raft::NodeId(1),
             leader_epoch: krabka_metadata::LeaderEpoch(0),
-        },
-        PartitionIndex(p),
-        log_dir.to_path_buf(),
-        log,
-        LogDirRegistry::default(),
-        Arc::new(ProducerState::new()),
-        false,
-    );
+        })
+        .partition_id(PartitionIndex(p))
+        .log_dir(log_dir.to_path_buf())
+        .log(log)
+        .log_dir_status(LogDirRegistry::default())
+        .producer_state(Arc::new(ProducerState::new()))
+        .diskless(false)
+        .call()
+        .unwrap();
     reg.insert(bootstrap::TOPIC.into(), PartitionIndex(p), part);
 }
 
@@ -226,7 +226,7 @@ pub(super) async fn initialize_led_group(
 }
 
 /// Register the requested number of live, initially led state partitions.
-pub(crate) fn open_state_partitions(dir: &Path, count: i32) -> Arc<PartitionRegistry> {
+pub fn open_state_partitions(dir: &Path, count: i32) -> Arc<PartitionRegistry> {
     let registry = Arc::new(PartitionRegistry::new());
     for partition in 0..count {
         open_state_partition(&registry, dir, partition);
@@ -235,19 +235,19 @@ pub(crate) fn open_state_partitions(dir: &Path, count: i32) -> Arc<PartitionRegi
 }
 
 /// A manual wall clock that reads [`NOW_MS`] until a test moves it.
-pub(crate) fn manual_clock() -> Arc<ManualWallClock> {
+pub fn manual_clock() -> Arc<ManualWallClock> {
     ManualMonotonicClock::new_shared()
         .new_wall_clock(UNIX_EPOCH + Duration::from_millis(NOW_MS.unsigned_abs()))
 }
 
 /// Moves `clock` to `ms` milliseconds after [`NOW_MS`].
-pub(crate) fn set_clock(clock: &ManualWallClock, ms: u64) {
+pub fn set_clock(clock: &ManualWallClock, ms: u64) {
     clock.reanchor(UNIX_EPOCH + Duration::from_millis(NOW_MS.unsigned_abs() + ms));
 }
 
 /// A coordinator, the partitions it runs over, and the manual clock that
 /// drives it.
-pub(crate) struct ConfiguredCoordinator {
+pub struct ConfiguredCoordinator {
     pub coord: ShareCoordinator,
     pub registry: Arc<PartitionRegistry>,
     pub clock: Arc<ManualWallClock>,
@@ -261,15 +261,12 @@ pub(super) struct CoordinatorWithRegistry {
 
 /// A coordinator with `config` over all of its state partitions, open
 /// locally, and the manual clock that drives it.
-pub(crate) fn configured_coordinator(
-    dir: &Path,
-    config: ShareCoordinatorConfig,
-) -> ConfiguredCoordinator {
+pub fn configured_coordinator(dir: &Path, config: ShareCoordinatorConfig) -> ConfiguredCoordinator {
     let reg = open_state_partitions(dir, config.state_topic_num_partitions);
     let clock = manual_clock();
     let coord = ShareCoordinator::with_wall_clock(
         krabka_audit::NodeId(1),
-        reg.clone(),
+        Arc::clone(&reg),
         config,
         Arc::clone(&clock) as Arc<dyn qubit_clock::WallClock>,
     );
@@ -296,7 +293,7 @@ pub(super) async fn lead_all(coord: &ShareCoordinator) {
 
 /// One record of a state partition log, decoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Logged {
+pub enum Logged {
     Snapshot(ShareSnapshotValue),
     Update(ShareUpdateValue),
     Tombstone,
@@ -304,13 +301,13 @@ pub(crate) enum Logged {
 
 /// A decoded record of a state partition log, and its offset.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LoggedRecord {
+pub struct LoggedRecord {
     pub offset: Offset,
     pub logged: Logged,
 }
 
 /// Decoded records appended after the caller's previous log-length snapshot.
-pub(crate) fn logged_since(
+pub fn logged_since(
     coordinator: &ShareCoordinator,
     state_partition: PartitionIndex,
     before: usize,
@@ -323,7 +320,7 @@ pub(crate) fn logged_since(
 }
 
 /// Every record of `state_partition` from its log start, with its offset.
-pub(crate) fn logged_records(
+pub fn logged_records(
     coord: &ShareCoordinator,
     state_partition: PartitionIndex,
 ) -> Vec<LoggedRecord> {
@@ -364,16 +361,13 @@ pub(crate) fn logged_records(
 
 /// A metadata image that holds one data topic, `t`, with id `topic_id` and
 /// `partitions` partitions.
-pub(crate) fn image_with_topic(
-    topic_id: uuid::Uuid,
-    partitions: i32,
-) -> krabka_metadata::MetadataImage {
+pub fn image_with_topic(topic_id: uuid::Uuid, partitions: i32) -> krabka_metadata::MetadataImage {
     image_with_topics(&[(topic_id, partitions)])
 }
 
 /// A metadata image that holds one data topic `t<i>` for each
 /// `(topic_id, partitions)` of `topics`.
-pub(crate) fn image_with_topics(topics: &[(uuid::Uuid, i32)]) -> krabka_metadata::MetadataImage {
+pub fn image_with_topics(topics: &[(uuid::Uuid, i32)]) -> krabka_metadata::MetadataImage {
     let mut records = Vec::new();
     for (index, (topic_id, partitions)) in topics.iter().enumerate() {
         let name = if index == 0 {
@@ -403,7 +397,7 @@ pub(crate) fn image_with_topics(topics: &[(uuid::Uuid, i32)]) -> krabka_metadata
 }
 
 /// A `WriteShareGroupState` partition.
-pub(crate) fn share_write(
+pub fn share_write(
     epochs: (i32, i32),
     progress: (i64, i32),
     batches: Vec<StateBatch>,

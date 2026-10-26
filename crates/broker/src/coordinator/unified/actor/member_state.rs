@@ -26,7 +26,7 @@ use {
         primitives::uuid::Uuid,
     },
     std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         sync::Arc,
         time::{Duration, Instant},
     },
@@ -154,7 +154,7 @@ pub(super) fn update_member_state(
             m.rebalance_timeout = Duration::from_millis(millis);
         }
         if let Some(ref names) = req.subscribed_topic_names {
-            let set: std::collections::HashSet<String> = names.iter().cloned().collect();
+            let set: HashSet<String> = names.iter().cloned().collect();
             if set != m.subscribed_topic_names {
                 m.subscribed_topic_names = set;
                 names_changed = true;
@@ -277,7 +277,7 @@ pub(super) fn maybe_update_target(
         return None;
     }
     let input = metadata.snapshot();
-    let assignor = pick_assignor(state, config);
+    let assignor = pick_assignor(state, config)?;
     let changed = reconciler::compute_target(state, &input, &*assignor);
     state.record_assignment(wall_clock_ms());
     Some(changed)
@@ -286,12 +286,12 @@ pub(super) fn maybe_update_target(
 /// Kafka's `maybeUpdateTargetAssignment`: the group runs the assignor that the
 /// most members name (`ConsumerGroup.computePreferredServerAssignor`), and the
 /// first of `group.consumer.assignors` when no member names one. `Describe`
-/// reports the same choice.
-fn pick_assignor(state: &GroupState, config: &NextGenConfig) -> Arc<dyn Assignor> {
+/// reports the same choice. It is `None` only for a configuration with no
+/// assignor, which `NextGenConfig::validate_assignors` refuses.
+fn pick_assignor(state: &GroupState, config: &NextGenConfig) -> Option<Arc<dyn Assignor>> {
     preferred_server_assignor(state)
         .and_then(|name| config.find_assignor(&name))
         .or_else(|| config.assignors.first().cloned())
-        .expect("NextGenConfig must have at least one registered assignor")
 }
 
 /// Builds a first-join member, rejecting a heartbeat whose
@@ -322,7 +322,7 @@ pub(super) fn build_member(
     client: ClientIdentity<'_>,
     now: Instant,
 ) -> MemberState {
-    let subs: std::collections::HashSet<String> = req
+    let subs: HashSet<String> = req
         .subscribed_topic_names
         .clone()
         .unwrap_or_default()
@@ -350,21 +350,24 @@ pub(super) fn build_member(
 mod tests {
     use {
         super::*,
-        crate::coordinator::unified::{
-            ClientIdentity,
-            actor::{
-                heartbeat::step_heartbeat,
-                regex_resolution::apply_regex_result,
-                test_support::{
-                    StaticMetadata, coordinator_with_log, empty_metadata, rpc::consumer_request,
+        crate::{
+            codes,
+            coordinator::unified::{
+                ClientIdentity,
+                actor::{
+                    heartbeat::step_heartbeat,
+                    regex_resolution::apply_regex_result,
+                    test_support::{
+                        StaticMetadata, coordinator_with_log, empty_metadata, rpc::consumer_request,
+                    },
                 },
+                assignor::{Assignment, GroupSpec, TopicMetadata},
+                consumer_state::GroupState,
+                offsets_log::fake::InMemoryOffsetsLog,
+                persistence_next_gen::MemberAssignmentState,
+                reconciler::ReconcileInput,
+                regex_resolver::FixedRegexResolver,
             },
-            assignor::{Assignment, GroupSpec, TopicMetadata},
-            consumer_state::GroupState,
-            offsets_log::fake::InMemoryOffsetsLog,
-            persistence_next_gen::MemberAssignmentState,
-            reconciler::ReconcileInput,
-            regex_resolver::FixedRegexResolver,
         },
         assert2::{assert, check},
         std::sync::atomic::{AtomicUsize, Ordering},
@@ -670,7 +673,7 @@ mod tests {
         );
 
         check!(
-            step.response.error_code == crate::codes::INVALID_REGULAR_EXPRESSION,
+            step.response.error_code == codes::INVALID_REGULAR_EXPRESSION,
             "{pattern}"
         );
         check!(
@@ -781,13 +784,12 @@ mod tests {
             Instant::now(),
             &RegexResolution::with(&resolver),
         );
-        let assigned: Vec<i32> = state.members["m1"]
+        let assigned = state.members["m1"]
             .assigned_partitions
             .values()
             .flatten()
-            .copied()
-            .collect();
-        assert!(assigned.len() == 2, "{:?}", state.members["m1"]);
+            .count();
+        assert!(assigned == 2, "{:?}", state.members["m1"]);
     }
 
     /// Kafka's `maybeUpdateSubscribedTopicRegex`: an absent pattern leaves the
@@ -870,8 +872,8 @@ mod tests {
         word_boundary_control = { r"\x08x\x08", true },
         unicode_number = { r"\pN", true },
         greek = { r"\p{Greek}", true },
-        named_group_re = { r"(?P<name>a)", true },
-        named_group_angle = { r"(?<name>a)", true },
+        named_group_re = { "(?P<name>a)", true },
+        named_group_angle = { "(?<name>a)", true },
         unmatched_parenthesis = { "(", false },
         unfinished_class = { "[a-", false },
         flag_i = { "(?i)abc", true },
@@ -907,7 +909,7 @@ mod tests {
                 == Err(
                     "SubscribedTopicRegex `(?x)abc` is not a valid regular expression: \
                         invalid or unsupported Perl syntax."
-                        .to_string()
+                        .to_owned()
                 )
         );
     }
@@ -934,7 +936,7 @@ mod tests {
 
         fn assign(&self, _group: &GroupSpec, _topics: &TopicMetadata) -> Assignment {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            std::collections::HashMap::new()
+            HashMap::new()
         }
     }
 
@@ -955,7 +957,7 @@ mod tests {
         state.members.insert("m1".into(), m);
 
         let picked = pick_assignor(&state, &config);
-        assert!(picked.name() == "uniform");
+        assert!(picked.map(|assignor| assignor.name()) == Some("uniform"));
     }
 
     /// Kafka's `computePreferredServerAssignor`: the group runs the assignor
@@ -999,11 +1001,11 @@ mod tests {
             }
 
             check!(
-                pick_assignor(&state, &config).name() == expected,
+                pick_assignor(&state, &config).map(|assignor| assignor.name()) == Some(expected),
                 "{named:?}"
             );
             check!(
-                preferred_server_assignor(&state).unwrap_or_else(|| "uniform".to_string())
+                preferred_server_assignor(&state).unwrap_or_else(|| "uniform".to_owned())
                     == expected,
                 "{named:?}"
             );
@@ -1016,7 +1018,7 @@ mod tests {
         let mut config = NextGenConfig::assigning_at_once();
         config
             .register_assignor(Arc::new(CountingAssignor {
-                calls: calls.clone(),
+                calls: Arc::clone(&calls),
             }))
             .unwrap();
 

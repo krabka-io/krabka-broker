@@ -38,7 +38,7 @@ use {
         describe_configs_request::{DescribeConfigsRequest, DescribeConfigsResource},
         describe_configs_response::DescribeConfigsResponse,
     },
-    std::{collections::BTreeMap, sync::Mutex},
+    std::{collections::BTreeMap, env, sync::Mutex},
 };
 
 /// Kafka's `ConfigResource.Type.TOPIC`.
@@ -48,7 +48,7 @@ const TOPIC_RESOURCE: i8 = 2;
 const BROKER_RESOURCE: i8 = 4;
 
 /// The lifecycle state of one run.
-pub(crate) struct LifecycleRun {
+pub struct LifecycleRun {
     pub(crate) lifecycle: Lifecycle,
     /// The image reference each side runs from.
     images: BTreeMap<Side, String>,
@@ -103,15 +103,15 @@ impl LifecycleRun {
 /// The image the source runs from: `KRABKA_LIFECYCLE_SOURCE_IMAGE` where the
 /// runner loaded the release under a tag, as the container suites do, else
 /// the contract's digest reference, which the daemon pulls.
-pub(crate) fn source_image(lifecycle: &Lifecycle) -> String {
-    std::env::var("KRABKA_LIFECYCLE_SOURCE_IMAGE")
+pub fn source_image(lifecycle: &Lifecycle) -> String {
+    env::var("KRABKA_LIFECYCLE_SOURCE_IMAGE")
         .ok()
         .filter(|image| !image.is_empty())
         .unwrap_or_else(|| lifecycle.source.image.clone())
 }
 
 /// Pull `image` unless the daemon has it, and return the id it has for it.
-pub(crate) fn image_id(image: &str) -> Result<String, String> {
+pub fn image_id(image: &str) -> Result<String, String> {
     let inspect = || docker_try(&["image", "inspect", "--format", "{{.Id}}", image]);
     inspect().or_else(|_| {
         docker_try(&["pull", "--quiet", image])?;
@@ -146,9 +146,7 @@ async fn api_versions(nodes: &Nodes) -> Result<ApiVersionsResponse, String> {
 }
 
 /// The feature ranges the cluster advertises, by feature.
-pub(crate) async fn supported_features(
-    nodes: &Nodes,
-) -> Result<BTreeMap<String, LevelRange>, String> {
+pub async fn supported_features(nodes: &Nodes) -> Result<BTreeMap<String, LevelRange>, String> {
     Ok(api_versions(nodes)
         .await?
         .supported_features
@@ -227,7 +225,7 @@ fn described(
 }
 
 /// Every entry of `expected` that `found` does not hold, one line each.
-pub(crate) fn config_mismatches(
+pub fn config_mismatches(
     resource: &str,
     expected: &BTreeMap<String, String>,
     found: &BTreeMap<String, Option<String>>,
@@ -258,7 +256,7 @@ fn expected_topic_configs(contract: &Contract, path: &str) -> BTreeMap<String, S
 }
 
 /// The cluster as it stands after transition `fault`.
-pub(crate) async fn checkpoint(
+pub async fn checkpoint(
     fault: &str,
     run: &LifecycleRun,
     nodes: &Nodes,

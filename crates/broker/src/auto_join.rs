@@ -34,7 +34,7 @@ mod rpc;
 mod test_support;
 mod voter_updates;
 
-pub(crate) use self::{join_loop::run, voter_updates::run_voter_updates};
+pub use self::{join_loop::run, voter_updates::run_voter_updates};
 use crate::{metadata_source::MetadataSource, network::client::InterBrokerClient};
 
 /// Everything the auto-join driver needs, pulled out of `BrokerConfig` +
@@ -43,7 +43,7 @@ use crate::{metadata_source::MetadataSource, network::client::InterBrokerClient}
 /// leader only appears once this loop has driven the leader-side `add_learner`
 /// + promotion — so the two must run concurrently.
 #[derive(Clone)]
-pub(crate) struct AutoJoinParams {
+pub struct AutoJoinParams {
     pub auto_join: bool,
     pub retry_backoff: Time,
     pub voter_request_timeout: Time,

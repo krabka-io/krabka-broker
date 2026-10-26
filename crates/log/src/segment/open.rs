@@ -5,6 +5,8 @@
 //! and active segments recover their tail. Log recovery also uses a private
 //! no-scan loader before it supplies the sealed segment bounds.
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use {
     super::{Segment, io::seek_to_log_size},
     crate::{
@@ -18,11 +20,11 @@ use {
     krabka_protocol::records::RecordBatch,
     krabka_units::prelude::{ByteSize, ByteSizeExt},
     std::{
-        fs::{File, OpenOptions},
+        fs::{File, Metadata, OpenOptions},
         path::Path,
-        sync::Arc,
+        sync::{Arc, atomic::AtomicBool},
     },
-    tracing::instrument,
+    tracing::{field, instrument},
 };
 
 /// One sparse-index point the tail scan found, as Kafka's `LogSegment.recover`
@@ -46,7 +48,7 @@ struct IndexPoint {
 /// prefix, the segment's frontiers, and the sparse-index points Kafka's
 /// `LogSegment.recover` writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TailScan {
+pub struct TailScan {
     valid_end: u64,
     last_offset: Offset,
     max_timestamp: i64,
@@ -59,7 +61,7 @@ pub(crate) struct TailScan {
 /// The tail scan feeds it the batches it decodes from a file, and a
 /// compaction rewrite the batches it writes, so the two derive the same
 /// frontiers and index points by the same rule.
-pub(crate) struct FrontierScan {
+pub struct FrontierScan {
     base_offset: Offset,
     file_end: u64,
     index_interval: ByteSize,
@@ -243,7 +245,7 @@ impl Segment {
             direct: None,
             direct_asked: false,
             wrote_direct: false,
-            cache_probe_unsupported: std::sync::atomic::AtomicBool::new(false),
+            cache_probe_unsupported: AtomicBool::new(false),
         })
     }
 
@@ -302,7 +304,7 @@ impl Segment {
         fields(
             base_offset = self.base_offset.0,
             log_size = self.log_size,
-            recovered_last_offset = tracing::field::Empty,
+            recovered_last_offset = field::Empty,
         ),
         err,
     )]
@@ -421,13 +423,11 @@ impl Segment {
 /// Bytes of disk the file behind `metadata` occupies, which is past its
 /// length when blocks are reserved beyond its end.
 #[cfg(unix)]
-fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
-    std::os::unix::fs::MetadataExt::blocks(metadata).saturating_mul(512)
-}
+fn allocated_bytes(metadata: &Metadata) -> u64 { MetadataExt::blocks(metadata).saturating_mul(512) }
 
 /// The targets without block counts cannot reserve blocks either.
 #[cfg(not(unix))]
-fn allocated_bytes(metadata: &std::fs::Metadata) -> u64 {
+fn allocated_bytes(metadata: &Metadata) -> u64 {
     let _ = metadata;
     0
 }
@@ -439,9 +439,10 @@ mod tests {
         crate::segment::test_support::{
             DENSE_INDEX, FIVE_OFFSET_TIMESTAMP_BATCHES, NO_LIMIT, ONE_RECORD_BATCH,
             SECOND_SINGLE_RECORD_BATCH, THIRD_SINGLE_RECORD_BATCH, sample_batch, seeded_segment,
+            three_single_record_batches,
         },
         krabka_units::prelude::kibibytes,
-        std::io::Write,
+        std::{fs, io::Write},
         tempfile::tempdir,
     };
 
@@ -470,7 +471,7 @@ mod tests {
         let read = seg.read(Offset(0), NO_LIMIT).unwrap();
         assert2::assert!(position > 0);
         assert2::assert!(seg.last_offset() == Offset(2));
-        assert2::assert!(read == crate::segment::test_support::three_single_record_batches());
+        assert2::assert!(read == three_single_record_batches());
     }
 
     /// Tail recovery must physically truncate a partial or garbage tail and
@@ -504,7 +505,7 @@ mod tests {
                 .unwrap();
         assert2::assert!(seg.last_offset() == Offset(4));
         assert2::assert!(seg.log_size == valid_size);
-        assert2::assert!(std::fs::metadata(&log_path).unwrap().len() == valid_size);
+        assert2::assert!(fs::metadata(&log_path).unwrap().len() == valid_size);
         // The first batch takes no entry (Kafka's `LogSegment.recover` indexes
         // a batch once more than the interval lies between it and the last
         // entry, which starts at zero), so the second batch's is the one.
@@ -521,7 +522,7 @@ mod tests {
                 .unwrap();
         assert2::assert!(retry.last_offset() == Offset(4));
         assert2::assert!(retry.log_size == valid_size);
-        assert2::assert!(std::fs::metadata(&log_path).unwrap().len() == valid_size);
+        assert2::assert!(fs::metadata(&log_path).unwrap().len() == valid_size);
         assert2::assert!(retry.offset_index.entry_count() == 1);
         assert2::assert!(retry.time_index.entry_count() == 1);
     }

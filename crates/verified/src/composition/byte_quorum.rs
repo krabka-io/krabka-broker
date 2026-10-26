@@ -120,13 +120,15 @@ pub(super) fn durable_matching_copies_bound_fetch(
         } else { w.log_start@ })]
     #[variant(voters@.len() - i@)]
     while i < voters.len() {
+        let &voter = voters.get(i)?;
+        let observation = observations.get(i)?;
         let report = authenticated_copy_vote(
             voters,
-            voters[i],
+            voter,
             placement.0,
             placement.2,
             (source, w.log_start, w.log_end),
-            &observations[i],
+            observation,
         )
         .unwrap_or(w.log_start);
         reports.push(report);

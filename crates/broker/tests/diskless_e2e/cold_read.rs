@@ -21,7 +21,8 @@ use {
         },
     },
     assert2::assert,
-    std::time::Duration,
+    std::time::{Duration, Instant},
+    tokio::time,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -80,7 +81,7 @@ struct TrimmedFlush {
 /// it. The `diskless` flag is asserted here because every other assertion in
 /// this case would also hold for an ordinary topic that simply never trimmed.
 async fn await_trimmed_flush(leader: &krabka_broker::BrokerHandle, committed: i64) -> TrimmedFlush {
-    let deadline = std::time::Instant::now() + Duration::from_secs(90);
+    let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         let state = leader.diskless_flush_state_for_test(TOPIC, 0).await;
         if let Some((diskless, _, log_start, _, high_watermark, frontier)) = state {
@@ -97,11 +98,11 @@ async fn await_trimmed_flush(leader: &krabka_broker::BrokerHandle, committed: i6
             }
         }
         assert!(
-            std::time::Instant::now() <= deadline,
+            Instant::now() <= deadline,
             "the diskless flusher did not flush and trim the committed prefix; last state \
              was {state:?}"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 

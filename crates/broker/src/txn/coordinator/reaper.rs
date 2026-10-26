@@ -22,6 +22,7 @@ use {
     krabka_log::ProducerId,
     krabka_verified::transaction::TransactionReaperCompletionDecision as CompletionDecision,
     std::sync::Arc,
+    tokio::sync::{Mutex, OwnedMutexGuard},
     tracing::{info, warn},
 };
 
@@ -54,7 +55,7 @@ mod tests;
 /// part.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
-pub(crate) trait ReaperBackend: Send + Sync {
+pub trait ReaperBackend: Send + Sync {
     /// Is this broker the transaction coordinator for `tid` right now?
     async fn is_coordinator_for(&self, tid: &str) -> bool;
 
@@ -122,7 +123,7 @@ fn complete_abort_decision(entry: &TxnEntry, prepared: &TxnEntry) -> CompletionD
 fn handle_is_current(
     coordinator: &TxnCoordinator,
     tid: &str,
-    handle: &Arc<tokio::sync::Mutex<TxnEntry>>,
+    handle: &Arc<Mutex<TxnEntry>>,
 ) -> bool {
     coordinator.is_current_entry(tid, handle)
 }
@@ -174,10 +175,7 @@ async fn sweep_with_backend<B: ReaperBackend + ?Sized>(
 }
 
 impl TxnCoordinator {
-    async fn current_entry_guard(
-        &self,
-        tid: &str,
-    ) -> Option<tokio::sync::OwnedMutexGuard<TxnEntry>> {
+    async fn current_entry_guard(&self, tid: &str) -> Option<OwnedMutexGuard<TxnEntry>> {
         let handle = self.get(tid)?;
         let entry = Arc::clone(&handle).lock_owned().await;
         handle_is_current(self, tid, &handle).then_some(entry)
@@ -227,7 +225,7 @@ impl ReaperBackend for TxnCoordinator {
     // cargo-mutants: thin adapter over inherent method / live lock state
     #[cfg_attr(test, mutants::skip)]
     async fn is_coordinator_for(&self, tid: &str) -> bool {
-        TxnCoordinator::is_coordinator_for(self, tid).await
+        Self::is_transaction_coordinator_for(self, tid).await
     }
 
     // cargo-mutants: I/O over live entry locks + raft persistence
@@ -259,7 +257,9 @@ impl ReaperBackend for TxnCoordinator {
         }
         // `complete_abort` compares the snapshot this returns against the live
         // entry by full equality, so it has to be the entry publication holds.
-        match self.put_under_state_partition_lock(prepared, txnv).await {
+        let persisted = self.put_under_state_partition_lock(prepared, txnv).await;
+        drop(entry);
+        match persisted {
             Ok(persisted) => Some(persisted),
             Err(e) => {
                 warn!(tid, error = %e, "txn reaper: failed to persist PrepareAbort; skipping");
@@ -313,7 +313,9 @@ impl ReaperBackend for TxnCoordinator {
         let mut complete = entry.clone();
         let (new_pid, new_epoch) = completion_producer_identity(&complete);
         apply_complete_abort(&mut complete, new_pid, new_epoch, now_ms);
-        match self.put_under_state_partition_lock(complete, txnv).await {
+        let persisted = self.put_under_state_partition_lock(complete, txnv).await;
+        drop(entry);
+        match persisted {
             Ok(persisted) => Some(persisted),
             Err(e) => {
                 warn!(tid, error = %e, "txn reaper: failed to persist CompleteAbort; skipping");

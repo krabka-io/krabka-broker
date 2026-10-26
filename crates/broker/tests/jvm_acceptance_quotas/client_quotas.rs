@@ -182,7 +182,7 @@ async fn quota_round_trip(case: QuotaCase<'_>) {
     // Confirm the quota was cleared from the committed metadata image.
     h1.wait_for_image(|img| {
         let key: krabka_metadata::EntityKey =
-            vec![(metadata_entity.to_string(), Some(name.to_string()))];
+            vec![(metadata_entity.to_owned(), Some(name.to_owned()))];
         img.client_quotas()
             .get(&key)
             .and_then(|m| m.get(quota))

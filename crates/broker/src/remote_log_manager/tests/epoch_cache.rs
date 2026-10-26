@@ -18,6 +18,7 @@ use {
     krabka_remote_storage::{
         RemoteLogSegmentId, RemoteLogSegmentMetadata, RemoteLogSegmentMetadataUpdate,
     },
+    std::{fs, path::Path},
     uuid::Uuid,
 };
 
@@ -73,7 +74,7 @@ fn config() -> LogConfig {
 
 /// A log of twelve two-record batches: epoch 1 over offsets 0 to 7, epoch 2
 /// over 8 to 15 and epoch 3 over 16 to 23.
-fn epoch_log(partition_dir: &std::path::Path) -> Log {
+fn epoch_log(partition_dir: &Path) -> Log {
     let mut log = Log::open(partition_dir, config()).unwrap();
     for epoch in [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3] {
         let mut batch = batch(2);
@@ -86,7 +87,7 @@ fn epoch_log(partition_dir: &std::path::Path) -> Log {
 /// Ticks once over `log` as a leader that was just restarted on it, with the
 /// archive the constants above describe, and returns the ids of the segments
 /// the archive still holds.
-async fn survivors_of_a_tick(log_dir: &std::path::Path, log: Log) -> Vec<u128> {
+async fn survivors_of_a_tick(log_dir: &Path, log: Log) -> Vec<u128> {
     let remote_dir = tempfile::tempdir().unwrap();
     let fixtures::Backends { rsm, rlmm } = local_backends(remote_dir.path());
     for ArchiveSegment {
@@ -181,7 +182,7 @@ async fn the_epoch_cache_cleanup_follows_an_established_log_start_across_a_resta
     {
         let log_dir = tempfile::tempdir().unwrap();
         let partition_dir = partition_dir(log_dir.path(), "orders", 0);
-        std::fs::create_dir_all(&partition_dir).unwrap();
+        fs::create_dir_all(&partition_dir).unwrap();
         let mut log = epoch_log(&partition_dir);
         mutate(&mut log);
         drop(log);

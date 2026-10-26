@@ -19,7 +19,7 @@ use {
     krabka_protocol::{
         Decode,
         owned::{
-            begin_quorum_epoch_response::{self as bqe_resp, BeginQuorumEpochResponse},
+            begin_quorum_epoch_response::{self as bqe_resp, BeginQuorumEpochResponse, TopicData},
             end_quorum_epoch_response::{self as eqe_resp, EndQuorumEpochResponse},
             fetch_response::{self as fetch_resp, FetchResponse},
             fetch_snapshot_response::{self as fs_resp, FetchSnapshotResponse},
@@ -124,7 +124,7 @@ impl FetchAnswer {
         // names the leader when its id and endpoint are known.
         let resp = FetchResponse {
             responses: vec![fetch_resp::FetchableTopicResponse {
-                topic: METADATA_TOPIC.to_string(),
+                topic: METADATA_TOPIC.to_owned(),
                 topic_id: METADATA_TOPIC_ID,
                 partitions: vec![partition],
                 ..Default::default()
@@ -209,15 +209,13 @@ impl QuorumLeader {
     ) -> Self {
         let leader_id = (wire_leader >= 0).then(|| node_from_wire(wire_leader));
         let endpoint = leader_id.and_then(|_| {
-            endpoints
+            let (_, host, port) = endpoints
                 .into_iter()
-                .find(|(node_id, ..)| *node_id == wire_leader)
-                .and_then(|(_, host, port)| {
-                    u16::try_from(port).ok().map(|port| LeaderEndpoint {
-                        host: host.to_string(),
-                        port,
-                    })
-                })
+                .find(|(node_id, ..)| *node_id == wire_leader)?;
+            u16::try_from(port).ok().map(|port| LeaderEndpoint {
+                host: host.to_owned(),
+                port,
+            })
         });
         Self {
             leader_id,
@@ -255,7 +253,7 @@ pub fn encode_vote_response(
     let resp = if top_level_error == 0 {
         VoteResponse {
             topics: vec![vote_resp::TopicData {
-                topic_name: METADATA_TOPIC.to_string(),
+                topic_name: METADATA_TOPIC.to_owned(),
                 partitions: vec![vote_resp::PartitionData {
                     partition_index: METADATA_PARTITION,
                     error_code: partition_error,
@@ -438,7 +436,7 @@ fn encode_fetch_snapshot_response(
     let (end_offset, epoch) = snapshot_id;
     let resp = FetchSnapshotResponse {
         topics: vec![fs_resp::TopicSnapshot {
-            name: METADATA_TOPIC.to_string(),
+            name: METADATA_TOPIC.to_owned(),
             partitions: vec![fs_resp::PartitionSnapshot {
                 index: METADATA_PARTITION,
                 error_code,
@@ -463,35 +461,31 @@ impl PeerResponse {
     #[must_use]
     pub fn encode(&self) -> Bytes {
         match self {
-            PeerResponse::Vote {
+            Self::Vote {
                 error_code,
                 granted,
                 leader,
             } => encode_vote_response(0, *error_code, *granted, leader, VOTE_VERSION),
-            PeerResponse::Ack { epoch } => {
+            Self::Ack { epoch } => {
                 // A Begin/End ack is encoded as the corresponding
                 // BeginQuorumEpochResponse with the responder's leader_epoch.
                 let resp = BeginQuorumEpochResponse {
-                    topics: vec![
-                        krabka_protocol::owned::begin_quorum_epoch_response::TopicData {
-                            topic_name: METADATA_TOPIC.to_string(),
-                            partitions: vec![
-                                krabka_protocol::owned::begin_quorum_epoch_response::PartitionData {
-                                    partition_index: METADATA_PARTITION,
-                                    leader_id: -1,
-                                    leader_epoch: epoch_to_wire(*epoch),
-                                    ..Default::default()
-                                },
-                            ],
+                    topics: vec![TopicData {
+                        topic_name: METADATA_TOPIC.to_owned(),
+                        partitions: vec![bqe_resp::PartitionData {
+                            partition_index: METADATA_PARTITION,
+                            leader_id: -1,
+                            leader_epoch: epoch_to_wire(*epoch),
                             ..Default::default()
-                        },
-                    ],
+                        }],
+                        ..Default::default()
+                    }],
                     ..Default::default()
                 };
                 encode_body(&resp, QUORUM_EPOCH_VERSION)
             }
-            PeerResponse::Fetch(answer) => answer.encode(FETCH_VERSION),
-            PeerResponse::FetchSnapshot {
+            Self::Fetch(answer) => answer.encode(FETCH_VERSION),
+            Self::FetchSnapshot {
                 snapshot_id,
                 size,
                 position,
@@ -509,7 +503,7 @@ impl PeerResponse {
         let mut cur = buf;
         let resp = VoteResponse::decode(&mut cur, VOTE_VERSION).ok()?;
         let p = resp.topics.first()?.partitions.first()?;
-        Some(PeerResponse::Vote {
+        Some(Self::Vote {
             error_code: p.error_code,
             granted: p.vote_granted,
             leader: QuorumLeader::from_wire(
@@ -533,7 +527,7 @@ impl PeerResponse {
         let mut cur = buf;
         let resp = BeginQuorumEpochResponse::decode(&mut cur, QUORUM_EPOCH_VERSION).ok()?;
         let p = resp.topics.first()?.partitions.first()?;
-        Some(PeerResponse::Ack {
+        Some(Self::Ack {
             epoch: epoch_from_wire(p.leader_epoch),
         })
     }
@@ -557,24 +551,17 @@ impl PeerResponse {
         );
         // diverging_epoch defaults to (-1, -1); a real divergence carries a
         // non-negative end_offset.
-        let diverging = if p.diverging_epoch.end_offset >= 0 {
-            Some(LogOffsetMetadata {
-                offset: p.diverging_epoch.end_offset,
-                epoch: epoch_from_wire(p.diverging_epoch.epoch),
-            })
-        } else {
-            None
-        };
-        let snapshot_id = if p.snapshot_id.end_offset >= 0 {
-            Some((p.snapshot_id.end_offset, p.snapshot_id.epoch))
-        } else {
-            None
-        };
+        let diverging = (p.diverging_epoch.end_offset >= 0).then(|| LogOffsetMetadata {
+            offset: p.diverging_epoch.end_offset,
+            epoch: epoch_from_wire(p.diverging_epoch.epoch),
+        });
+        let snapshot_id = (p.snapshot_id.end_offset >= 0)
+            .then_some((p.snapshot_id.end_offset, p.snapshot_id.epoch));
         let records = p
             .records
             .as_ref()
             .map_or_else(Bytes::new, records_payload_to_bytes);
-        Some(PeerResponse::Fetch(FetchAnswer {
+        Some(Self::Fetch(FetchAnswer {
             error_code: p.error_code,
             leader,
             diverging,
@@ -592,7 +579,7 @@ impl PeerResponse {
         let resp = FetchSnapshotResponse::decode(&mut cur, FETCH_SNAPSHOT_VERSION).ok()?;
         let p = resp.topics.first()?.partitions.first()?;
         let bytes = records_payload_to_bytes(&p.unaligned_records);
-        Some(PeerResponse::FetchSnapshot {
+        Some(Self::FetchSnapshot {
             snapshot_id: (p.snapshot_id.end_offset, p.snapshot_id.epoch),
             size: p.size,
             position: p.position,

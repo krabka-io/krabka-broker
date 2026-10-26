@@ -21,6 +21,7 @@ use {
         error::BrokerError,
     },
     bytes::{BufMut, BytesMut},
+    krabka_protocol::primitives::{array::get_nullable_array_len, fixed},
     std::collections::BTreeMap,
 };
 
@@ -85,17 +86,16 @@ pub(super) fn decode_task_map_with_epochs(
             if tag != TAG_ASSIGNMENT_EPOCHS {
                 return Ok(false);
             }
-            assignment_epochs =
-                match krabka_protocol::primitives::array::get_nullable_array_len(payload, true)? {
-                    None => None,
-                    Some(count) => {
-                        let mut values = Vec::with_capacity(count.min(payload.len() / 4));
-                        for _ in 0..count {
-                            values.push(krabka_protocol::primitives::fixed::get_i32(payload)?);
-                        }
-                        Some(values)
+            assignment_epochs = match get_nullable_array_len(payload, true)? {
+                None => None,
+                Some(count) => {
+                    let mut values = Vec::with_capacity(count.min(payload.len() / 4));
+                    for _ in 0..count {
+                        values.push(fixed::get_i32(payload)?);
                     }
-                };
+                    Some(values)
+                }
+            };
             Ok(true)
         })?;
         if let Some(assignment_epochs) = assignment_epochs {

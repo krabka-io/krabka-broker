@@ -38,7 +38,7 @@ use {
         end_txn_request::EndTxnRequest, end_txn_response::EndTxnResponse,
         init_producer_id_response::InitProducerIdResponse, produce_request::ProduceRequest,
     },
-    std::time::Duration,
+    std::{path::Path, time::Duration},
     tempfile::TempDir,
 };
 
@@ -187,7 +187,7 @@ struct Started {
     bootstrap: String,
 }
 
-async fn start(log_dir: &std::path::Path, bootstrap_mode: Option<BootstrapMode>) -> Started {
+async fn start(log_dir: &Path, bootstrap_mode: Option<BootstrapMode>) -> Started {
     let broker = Broker::start(config(log_dir.to_path_buf(), bootstrap_mode))
         .await
         .expect("start broker");
@@ -234,7 +234,7 @@ struct FanoutTransaction {
 }
 
 async fn fanout_transaction(
-    log_dir: &std::path::Path,
+    log_dir: &Path,
     transactional_id: &str,
     topic: &str,
     downgrade_to: Option<i16>,

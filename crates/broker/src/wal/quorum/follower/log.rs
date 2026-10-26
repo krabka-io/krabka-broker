@@ -22,7 +22,7 @@ use {
             shard_dir,
         },
     },
-    bytes::{Bytes, BytesMut},
+    bytes::BytesMut,
     krabka_ids::Offset,
     krabka_kraft_core::{LogOffsetMetadata, LogView as _},
     krabka_log::{Log, LogConfig},
@@ -30,7 +30,7 @@ use {
     krabka_raft::NodeId,
     std::{
         path::{Path, PathBuf},
-        sync::Arc,
+        sync::{Arc, Mutex},
     },
 };
 
@@ -71,7 +71,7 @@ impl FollowerLog {
         let mut log = Log::open(dir, log_config)?;
         recover_durable_offset(&mut log, &durable_offset_path)?;
         Ok(Self {
-            log: ShardLog::new(Arc::new(std::sync::Mutex::new(log))),
+            log: ShardLog::new(Arc::new(Mutex::new(log))),
             durable_offset_path,
         })
     }
@@ -85,7 +85,7 @@ impl FollowerLog {
         })
         .unwrap();
         Self {
-            log: ShardLog::new(Arc::new(std::sync::Mutex::new(log))),
+            log: ShardLog::new(Arc::new(Mutex::new(log))),
             durable_offset_path,
         }
     }
@@ -127,6 +127,7 @@ impl FollowerLog {
         })?;
         log.trim_to_offset(floor)?;
         log.sync()?;
+        drop(log);
         Ok(())
     }
 
@@ -161,10 +162,8 @@ impl FollowerLog {
         let durable_offset_path = self.durable_offset_path.clone();
         run_blocking(move || {
             let mut log = log.lock();
-            let range = mutation(&mut log)?;
-            log.sync()?;
-            write_durable_offset(&durable_offset_path, range)?;
-            Ok(())
+            // The checkpoint is written under the same hold as the mutation.
+            mutate_and_checkpoint_locked(&mut log, &durable_offset_path, mutation)
         })
         .await
     }
@@ -232,7 +231,7 @@ impl FollowerLog {
         records
             .encode_to(&mut encoded)
             .map_err(|error| BrokerError::Replication(format!("encode WAL fetch: {error}")))?;
-        let bytes: Bytes = encoded.freeze();
+        let bytes = encoded.freeze();
         let batches = split_batches(&bytes)?;
         let mut expected = requested;
         let restart = batches.first().filter(|first| {
@@ -305,13 +304,27 @@ async fn run_blocking<T: Send + 'static>(
         .map_err(|error| storage_failure_error("WAL follower storage task panicked", error))?
 }
 
+/// Apply `mutation` to the locked `log`, fsync it, and then publish its new
+/// durable range, all under the caller's hold of the log.
+fn mutate_and_checkpoint_locked(
+    log: &mut Log,
+    durable_offset_path: &Path,
+    mutation: impl FnOnce(&mut Log) -> Result<DurableRange, BrokerError>,
+) -> Result<(), BrokerError> {
+    let range = mutation(log)?;
+    log.sync()?;
+    write_durable_offset(durable_offset_path, range)
+}
+
 #[cfg(test)]
 mod tests {
     use {
         super::*,
         crate::wal::quorum::test_support::batch as empty_batch,
         assert2::assert,
+        bytes::Bytes,
         krabka_protocol::records::{Record, RecordBatch},
+        std::{fs, fs::File, io},
     };
 
     /// A directory and the follower log opened in it.
@@ -332,11 +345,11 @@ mod tests {
     #[tokio::test]
     async fn empty_fetches_do_not_checkpoint_and_failed_appends_recover_before_retrying() {
         let FreshFollower { dir, follower } = fresh_follower();
-        let checkpoint = std::fs::read(&follower.durable_offset_path).unwrap();
+        let checkpoint = fs::read(&follower.durable_offset_path).unwrap();
         let temporary = follower
             .durable_offset_path
             .with_extension("checkpoint.tmp");
-        std::fs::create_dir(&temporary).unwrap();
+        fs::create_dir(&temporary).unwrap();
         for records in [
             None,
             Some(RecordsPayload::Raw(Bytes::new())),
@@ -349,7 +362,7 @@ mod tests {
                     .unwrap()
                     == Offset(0)
             );
-            assert!(std::fs::read(&follower.durable_offset_path).unwrap() == checkpoint);
+            assert!(fs::read(&follower.durable_offset_path).unwrap() == checkpoint);
         }
 
         // A real append must still publish its checkpoint before it can be acknowledged.
@@ -364,7 +377,7 @@ mod tests {
                 .is_err()
         );
         assert!(follower.end_offset() == Offset(1));
-        std::fs::remove_dir(temporary).unwrap();
+        fs::remove_dir(temporary).unwrap();
         drop(follower);
 
         // The follower run loop reopens after any append error, discarding that unacknowledged tail.
@@ -407,26 +420,24 @@ mod tests {
             }
         }
         impl krabka_log::LogIo for InterruptedTrim {
-            fn sync_data(&self, file: &std::fs::File) -> std::io::Result<()> {
+            fn sync_data(&self, file: &File) -> io::Result<()> {
                 if self.fails(1) {
-                    return Err(std::io::Error::other("interrupted before byte sync"));
+                    return Err(io::Error::other("interrupted before byte sync"));
                 }
                 file.sync_data()
             }
 
-            fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> std::io::Result<()> {
+            fn rename(&self, target: IoTarget, from: &Path, to: &Path) -> io::Result<()> {
                 if target == IoTarget::LogStartOffsetCheckpoint && self.fails(2) {
-                    return Err(std::io::Error::other(
-                        "interrupted before floor publication",
-                    ));
+                    return Err(io::Error::other("interrupted before floor publication"));
                 }
-                std::fs::rename(from, to)
+                fs::rename(from, to)
             }
 
-            fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
-                std::fs::File::open(dir)?.sync_all()?;
+            fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+                File::open(dir)?.sync_all()?;
                 if self.fails(3) {
-                    return Err(std::io::Error::other("interrupted after floor publication"));
+                    return Err(io::Error::other("interrupted after floor publication"));
                 }
                 Ok(())
             }
@@ -464,24 +475,24 @@ mod tests {
                     follower
                         .log
                         .lock()
-                        .test_set_io(Arc::new(InterruptedTrim(fault.clone())));
+                        .test_set_io(Arc::new(InterruptedTrim(Arc::clone(&fault))));
                     fault.store(failure, Ordering::SeqCst);
                     let temporary = follower
                         .durable_offset_path
                         .with_extension("checkpoint.tmp");
                     if failure == 4 {
-                        std::fs::create_dir(&temporary).unwrap();
+                        fs::create_dir(&temporary).unwrap();
                     }
                     assert!(follower.trim_to_blocking(Offset(requested)).is_err());
                     let published = matches!(failure, 2 | 3);
                     let floor = if published { requested.min(3) } else { 0 };
                     let end = if published { 3 } else { prior_end };
                     assert!(
-                        std::fs::read_to_string(&follower.durable_offset_path).unwrap()
+                        fs::read_to_string(&follower.durable_offset_path).unwrap()
                             == format!("0\n{floor} {end}\n")
                     );
                     if failure == 4 {
-                        std::fs::remove_dir(temporary).unwrap();
+                        fs::remove_dir(temporary).unwrap();
                     }
                     drop(follower);
 

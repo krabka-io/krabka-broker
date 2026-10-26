@@ -93,7 +93,7 @@ fn record_failure(
 }
 
 /// Compaction and retention classify failures identically for operator metrics.
-pub(crate) fn failure_reason(error: &BrokerError) -> CleanerFailureReason {
+pub fn failure_reason(error: &BrokerError) -> CleanerFailureReason {
     use crate::error::BrokerError;
     match error {
         BrokerError::Log(krabka_log::LogError::Io(_)) => CleanerFailureReason::Io,

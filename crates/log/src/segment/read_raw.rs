@@ -16,7 +16,7 @@ use {
     krabka_protocol::records::{HEADER_LEN, RecordBatchHeader},
     krabka_units::prelude::{ByteSize, ByteSizeExt},
     std::ops::Range,
-    tracing::instrument,
+    tracing::{field, instrument},
     zerocopy::FromBytes,
 };
 
@@ -98,13 +98,11 @@ impl Segment {
     #[instrument(
         level = "debug",
         skip(self),
-        fields(base_offset = self.base_offset.0, bytes = tracing::field::Empty),
+        fields(base_offset = self.base_offset.0, bytes = field::Empty),
         err,
     )]
     /// # Errors
     /// Returns an error when log I/O fails, a record or index is corrupt, or the requested offset violates the segment state.
-    /// # Panics
-    /// Panics if synchronized log state is poisoned or a segment previously validated as nonempty is unexpectedly missing its required batch or index entry.
     pub fn read_raw(
         &self,
         fetch_offset: Offset,
@@ -176,7 +174,10 @@ impl Segment {
         if let Some(cached) = self.cached_bytes(start_pos, first_read) {
             let range =
                 select_raw_range(fetch_offset, limit_offset, max_bytes, cached.len(), |pos| {
-                    RawBatch::decode(&cached[pos..pos + HEADER_LEN]).map(Some)
+                    cached
+                        .get(pos..pos + HEADER_LEN)
+                        .map(RawBatch::decode)
+                        .transpose()
                 })?;
             if let Some(range) = range.filter(|range| range.positions.end <= cached.len()) {
                 let bytes = cached.slice(range.positions);
@@ -200,7 +201,9 @@ impl Segment {
 
         let Some(range) =
             select_raw_range(fetch_offset, limit_offset, max_bytes, buf.len(), |pos| {
-                RawBatch::decode(&buf[pos..pos + HEADER_LEN]).map(Some)
+                buf.get(pos..pos + HEADER_LEN)
+                    .map(RawBatch::decode)
+                    .transpose()
             })?
         else {
             return Ok(RawSegmentRead::empty());

@@ -64,9 +64,9 @@ use {
 /// What the KIP-373 `CreateTokens` check reads: the broker's authorizer and
 /// the peer the request came from.
 #[derive(Clone, Copy)]
-pub(crate) struct TokenAcl<'a> {
-    pub(crate) authorizer: &'a dyn Authorizer,
-    pub(crate) peer: &'a SocketAddr,
+pub struct TokenAcl<'a> {
+    pub authorizer: &'a dyn Authorizer,
+    pub peer: &'a SocketAddr,
 }
 
 mod lifetime;
@@ -78,15 +78,18 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-use self::{
-    lifetime::{TokenCreateDecision, create_token_deadlines},
-    owner::{may_create_for, resolve_owner},
-    wire::{broker_refusal, controller_refusal, minted_response},
+use {
+    self::{
+        lifetime::{TokenCreateDecision, create_token_deadlines},
+        owner::{may_create_for, resolve_owner},
+        wire::{broker_refusal, controller_refusal, minted_response},
+    },
+    krabka_metadata::metadata_version,
 };
 
 /// A relative span of milliseconds, such as a token lifetime or a renew
 /// period. It is not an absolute epoch timestamp in milliseconds.
-pub(crate) type DurationMs = i64;
+pub type DurationMs = i64;
 
 /// Kafka's `KafkaPrincipal.USER_TYPE`, the only renewer type Kafka accepts.
 const USER_PRINCIPAL_TYPE: &str = "User";
@@ -95,8 +98,8 @@ const USER_PRINCIPAL_TYPE: &str = "User";
 /// not authenticated.
 fn anonymous_principal() -> KafkaPrincipal {
     KafkaPrincipal {
-        principal_type: USER_PRINCIPAL_TYPE.to_string(),
-        name: "ANONYMOUS".to_string(),
+        principal_type: USER_PRINCIPAL_TYPE.to_owned(),
+        name: "ANONYMOUS".to_owned(),
     }
 }
 
@@ -106,7 +109,7 @@ fn anonymous_principal() -> KafkaPrincipal {
     skip_all,
     fields(api = "CreateDelegationToken")
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     req: &CreateDelegationTokenRequest,
     auth: &ConnectionAuth,
     secret_key: Option<&SecretBytes>,
@@ -159,7 +162,7 @@ pub(crate) async fn handle(
     if require_feature(
         &image,
         METADATA_VERSION,
-        krabka_metadata::metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
+        metadata_version::DELEGATION_TOKEN_MIN_LEVEL,
     )
     .is_err()
     {

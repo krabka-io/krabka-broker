@@ -17,7 +17,9 @@ use {
             add_raft_voter_response::AddRaftVoterResponse,
             remove_raft_voter_request::{self, RemoveRaftVoterRequest},
             remove_raft_voter_response::RemoveRaftVoterResponse,
+            update_raft_voter_response::CurrentLeader,
         },
+        primitives::uuid::Uuid,
     },
 };
 
@@ -205,7 +207,7 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
         what: &'static str,
         request_cluster_id: Option<String>,
         voter_id: i32,
-        voter_directory_id: krabka_protocol::primitives::uuid::Uuid,
+        voter_directory_id: Uuid,
         expected: RemoveRaftVoterResponse,
     }
 
@@ -216,7 +218,7 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
     wait_for_leader(&engine).await;
     let cluster_id = engine.current_image().cluster_id().to_string();
 
-    let real_directory = krabka_protocol::primitives::uuid::Uuid([7u8; 16]);
+    let real_directory = Uuid([7u8; 16]);
     let remove_request = |cluster_id, voter_id, voter_directory_id| RemoveRaftVoterRequest {
         cluster_id,
         voter_id,
@@ -254,7 +256,7 @@ async fn a_malformed_reconfiguration_is_refused_before_the_quorum_sees_it() {
             what: "a zero directory id",
             request_cluster_id: Some(cluster_id.clone()),
             voter_id: 2,
-            voter_directory_id: krabka_protocol::primitives::uuid::Uuid::ZERO,
+            voter_directory_id: Uuid::ZERO,
             expected: invalid_voter,
         },
     ];
@@ -339,16 +341,11 @@ async fn adding_a_voter_needs_an_id_and_a_reachable_listener() {
         port: 9093,
         ..Default::default()
     };
-    let directory = krabka_protocol::primitives::uuid::Uuid([9u8; 16]);
+    let directory = Uuid([9u8; 16]);
 
     let cases = [
         ("a negative voter id", -1, directory, vec![good_listener()]),
-        (
-            "a zero directory id",
-            2,
-            krabka_protocol::primitives::uuid::Uuid::ZERO,
-            vec![good_listener()],
-        ),
+        ("a zero directory id", 2, Uuid::ZERO, vec![good_listener()]),
         ("no listeners at all", 2, directory, vec![]),
         ("a listener on port zero", 2, directory, vec![Listener {
             port: 0,
@@ -471,7 +468,7 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
     let cluster_id = engine.current_image().cluster_id().to_string();
     let epoch = i32::try_from(engine.quorum_state().await.expect("quorum").leader_epoch)
         .expect("epoch fits i32");
-    let directory = krabka_protocol::primitives::uuid::Uuid([9u8; 16]);
+    let directory = Uuid([9u8; 16]);
     let listener = || Listener {
         name: "CONTROLLER".to_owned(),
         host: "host-b".to_owned(),
@@ -571,7 +568,7 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
         UpdateRaftVoterResponse::decode(&mut &bytes[..], version).expect("decode")
             == UpdateRaftVoterResponse {
                 error_code: FENCED_LEADER_EPOCH,
-                current_leader: krabka_protocol::owned::update_raft_voter_response::CurrentLeader {
+                current_leader: CurrentLeader {
                     leader_id: 1,
                     leader_epoch: epoch,
                     host: "controller-1".into(),
@@ -589,7 +586,7 @@ async fn updating_a_voter_needs_the_cluster_the_epoch_and_a_coherent_range() {
 
     // A zero directory id is rejected as INVALID_REQUEST
     let mut zero_dir = update(Some(cluster_id.clone()), epoch, range(0, 1));
-    zero_dir.voter_directory_id = krabka_protocol::primitives::uuid::Uuid::ZERO;
+    zero_dir.voter_directory_id = Uuid::ZERO;
     check!(code_for(zero_dir).await == INVALID_REQUEST);
 
     // A voter id of 0 is valid and not rejected as INVALID_REQUEST

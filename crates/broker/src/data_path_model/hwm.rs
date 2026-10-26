@@ -16,7 +16,10 @@ use {
     },
     crate::replica_state::{LeaderPolicy, ReplicaState},
     krabka_log::Offset,
-    std::{collections::HashMap, time::Instant},
+    std::{
+        collections::HashMap,
+        time::{Duration, Instant},
+    },
 };
 
 /// The follower's effective LEO *as seen by the leader*. It is the length of
@@ -63,7 +66,7 @@ pub(super) fn real_hwm(s: &DpState, base: Instant, min_isr: usize) -> i64 {
     );
     rs.set_policy(LeaderPolicy {
         effective_min_isr: min_isr,
-        replica_lag_time_max: std::time::Duration::ZERO,
+        replica_lag_time_max: Duration::ZERO,
         brokers: HashMap::new(),
     });
     rs.hw = Offset(s.hwm);

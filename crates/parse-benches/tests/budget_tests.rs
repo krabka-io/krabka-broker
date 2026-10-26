@@ -1,10 +1,11 @@
 //! The broker performance lane: the contract, the record, and the budget
 //! evaluator that judges one against the other.
+#![cfg(test)]
 
 use {
     krabka_parse_benches::{
         Command,
-        budget::{BudgetVerdict, Rejection, Status, evaluate, judge},
+        budget::{BudgetVerdict, MetricVerdict, Rejection, Status, evaluate, judge},
         contract::{Budget, BudgetError, Contract, Metric, Mode, contract_digest},
         record::{
             Host, Measurement, PerformanceRecord, ProcessSample, Side, Subject, Trial,
@@ -67,27 +68,29 @@ fn trial(
     #[builder(default = 0)] duplicates: u64,
     failure: Option<&str>,
 ) -> Trial {
-    let outcome = match failure {
-        Some(reason) => TrialOutcome::Failed {
-            reason: reason.to_string(),
+    let outcome = failure.map_or_else(
+        || {
+            TrialOutcome::Completed(Measurement {
+                sent: RECORDS,
+                consumed,
+                duplicates,
+                errors: 0,
+                seconds: 10.0,
+                records_per_second,
+                mib_per_second: records_per_second / 1024.0,
+                latency_ms_p50: 1.0,
+                latency_ms_p95: 2.0,
+                latency_ms_p99,
+                cpu_seconds: 20.0,
+                peak_rss_bytes: 300 * MIB,
+            })
         },
-        None => TrialOutcome::Completed(Measurement {
-            sent: RECORDS,
-            consumed,
-            duplicates,
-            errors: 0,
-            seconds: 10.0,
-            records_per_second,
-            mib_per_second: records_per_second / 1024.0,
-            latency_ms_p50: 1.0,
-            latency_ms_p95: 2.0,
-            latency_ms_p99,
-            cpu_seconds: 20.0,
-            peak_rss_bytes: 300 * MIB,
-        }),
-    };
+        |reason| TrialOutcome::Failed {
+            reason: reason.to_owned(),
+        },
+    );
     Trial {
-        cell: cell.to_string(),
+        cell: cell.to_owned(),
         round,
         side,
         order,
@@ -97,8 +100,8 @@ fn trial(
 
 fn subject(label: &str, revision: &str) -> Subject {
     Subject {
-        label: label.to_string(),
-        revision: revision.to_string(),
+        label: label.to_owned(),
+        revision: revision.to_owned(),
         image: format!("docker.io/krabka-io/krabka-broker:{revision}"),
         image_digest: format!("sha256:{revision}"),
     }
@@ -111,22 +114,22 @@ fn record(
 ) -> PerformanceRecord {
     PerformanceRecord {
         format_version: 1,
-        contract_name: "test-contract".to_string(),
+        contract_name: "test-contract".to_owned(),
         contract_sha256: contract_digest(CONTRACT.as_bytes()),
         mode,
         reference: subject("krabka", "aaaa"),
         candidate: subject("krabka", "bbbb"),
-        client_image: "apache/kafka:4.3.1".to_string(),
-        client_image_digest: "sha256:cccc".to_string(),
+        client_image: "apache/kafka:4.3.1".to_owned(),
+        client_image_digest: "sha256:cccc".to_owned(),
         host: Host {
-            cpu_model: "test cpu".to_string(),
+            cpu_model: "test cpu".to_owned(),
             logical_cpus: 16,
             memory_bytes: 64 * 1024 * MIB,
             disk_available_bytes: 400 * 1024 * MIB,
-            kernel: "6.0.0".to_string(),
+            kernel: "6.0.0".to_owned(),
             clock_ticks_per_second: 100,
         },
-        started_at: "2026-10-15T00:00:00Z".to_string(),
+        started_at: "2026-10-15T00:00:00Z".to_owned(),
         settings: BTreeMap::new(),
         trials,
     }
@@ -138,12 +141,12 @@ fn rounds(reference: [f64; 5], candidate: [f64; 5]) -> Vec<Trial> {
     let mut trials = Vec::new();
     for (index, (reference, candidate)) in reference.into_iter().zip(candidate).enumerate() {
         let round = index + 1;
-        let (first, second) = if round % 2 == 1 {
-            ((Side::Reference, reference), (Side::Candidate, candidate))
+        let sides = if round % 2 == 1 {
+            [(Side::Reference, reference), (Side::Candidate, candidate)]
         } else {
-            ((Side::Candidate, candidate), (Side::Reference, reference))
+            [(Side::Candidate, candidate), (Side::Reference, reference)]
         };
-        for (offset, (side, rate)) in [first, second].into_iter().enumerate() {
+        for (offset, (side, rate)) in sides.into_iter().enumerate() {
             trials.push(
                 trial()
                     .round(round)
@@ -208,7 +211,7 @@ fn judge_reports_the_numbers_behind_a_regression() {
         &[80.0, 81.0, 79.0],
         Some(&THROUGHPUT),
     );
-    let expected = krabka_parse_benches::budget::MetricVerdict {
+    let expected = MetricVerdict {
         reference_median: 100.0,
         candidate_median: 80.0,
         worse_change: 0.2,
@@ -240,7 +243,7 @@ fn regression() -> Vec<Trial> { rounds(STEADY, STEADY.map(|rate| rate * 0.8)) }
         Expected {
             passed: false,
             rejections: vec![Rejection::MaterialRegression {
-                cell: "c".to_string(),
+                cell: "c".to_owned(),
                 metric: Metric::RecordsPerSecond,
                 worse_change: 0.2,
                 allowed_change: 0.05,
@@ -266,7 +269,7 @@ fn regression() -> Vec<Trial> { rounds(STEADY, STEADY.map(|rate| rate * 0.8)) }
         Expected {
             passed: false,
             rejections: vec![Rejection::ExcessVariance {
-                cell: "c".to_string(),
+                cell: "c".to_owned(),
                 metric: Metric::RecordsPerSecond,
                 spread: 0.15,
                 max_spread: 0.1,
@@ -307,29 +310,29 @@ fn with_trial(round: usize, side: Side, replace: impl FnOnce(Trial) -> Trial) ->
     duplicate_record = {
         with_trial(3, Side::Candidate, |t| trial().round(t.round).side(t.side).order(t.order).duplicates(1).call()),
         Rejection::CorrectnessFailure {
-            cell: "c".to_string(),
+            cell: "c".to_owned(),
             round: 3,
             side: Side::Candidate,
-            reason: "expected 1000000 records; sent=1000000 consumed=1000000 duplicates=1 errors=0".to_string(),
+            reason: "expected 1000000 records; sent=1000000 consumed=1000000 duplicates=1 errors=0".to_owned(),
         }
     },
     lost_record = {
         with_trial(2, Side::Candidate, |t| trial().round(t.round).side(t.side).order(t.order).consumed(RECORDS - 1).call()),
         Rejection::CorrectnessFailure {
-            cell: "c".to_string(),
+            cell: "c".to_owned(),
             round: 2,
             side: Side::Candidate,
-            reason: "expected 1000000 records; sent=1000000 consumed=999999 duplicates=0 errors=0".to_string(),
+            reason: "expected 1000000 records; sent=1000000 consumed=999999 duplicates=0 errors=0".to_owned(),
         }
     },
     // A reference that loses data invalidates the comparison too.
     failed_reference = {
         with_trial(1, Side::Reference, |t| trial().round(t.round).side(t.side).order(t.order).failure("sent=10 consumed=9").call()),
         Rejection::CorrectnessFailure {
-            cell: "c".to_string(),
+            cell: "c".to_owned(),
             round: 1,
             side: Side::Reference,
-            reason: "sent=10 consumed=9".to_string(),
+            reason: "sent=10 consumed=9".to_owned(),
         }
     },
 )]
@@ -353,7 +356,7 @@ fn a_missing_trial_rejects() {
     assert2::assert!(
         verdict.rejections
             == vec![Rejection::MissingTrial {
-                cell: "c".to_string(),
+                cell: "c".to_owned(),
                 round: 5,
                 side: Side::Candidate,
             }]
@@ -381,7 +384,7 @@ fn the_same_side_first_in_consecutive_rounds_rejects() {
     let verdict = verdict(&record().trials(trials).call());
     let expected: Vec<_> = (2..=5)
         .map(|round| Rejection::NotInterleaved {
-            cell: "c".to_string(),
+            cell: "c".to_owned(),
             round,
         })
         .collect();
@@ -474,8 +477,8 @@ fn a_snapshot_parses_into_per_pod_samples() {
                 pod=krabka-1\ncpu_ticks=250\nprocess_start_ticks=5000\nrss_hwm_kib=2048\n";
     let parsed = parse_snapshot("resources-before.txt", text).unwrap();
     let expected = BTreeMap::from([
-        ("krabka-0".to_string(), sample(100, 1024)),
-        ("krabka-1".to_string(), sample(250, 2048)),
+        ("krabka-0".to_owned(), sample(100, 1024)),
+        ("krabka-1".to_owned(), sample(250, 2048)),
     ]);
     assert2::assert!(parsed == expected);
 }
@@ -494,25 +497,25 @@ fn a_malformed_snapshot_is_an_error(text: &str) {
 #[test]
 fn resource_delta_sums_cpu_and_peak_memory_over_brokers() {
     let before = BTreeMap::from([
-        ("a".to_string(), sample(100, 1)),
-        ("b".to_string(), sample(50, 1)),
+        ("a".to_owned(), sample(100, 1)),
+        ("b".to_owned(), sample(50, 1)),
     ]);
     let after = BTreeMap::from([
-        ("a".to_string(), sample(300, 1024)),
-        ("b".to_string(), sample(150, 2048)),
+        ("a".to_owned(), sample(300, 1024)),
+        ("b".to_owned(), sample(150, 2048)),
     ]);
     assert2::assert!(resource_delta(&before, &after, 100) == Ok((3.0, 3 * MIB)));
 }
 
 #[yare::parameterized(
-    restarted = { BTreeMap::from([("a".to_string(), sample(10, 1))]) },
+    restarted = { BTreeMap::from([("a".to_owned(), sample(10, 1))]) },
     // The container restarted under the same pod name, and the new process
     // has already used more CPU than the old one had.
-    restarted_with_more_cpu = { BTreeMap::from([("a".to_string(), started(500, 1, 9_000))]) },
-    pod_replaced = { BTreeMap::from([("z".to_string(), sample(500, 1))]) },
+    restarted_with_more_cpu = { BTreeMap::from([("a".to_owned(), started(500, 1, 9_000))]) },
+    pod_replaced = { BTreeMap::from([("z".to_owned(), sample(500, 1))]) },
 )]
 fn resource_delta_refuses_a_replaced_broker(after: BTreeMap<String, ProcessSample>) {
-    let before = BTreeMap::from([("a".to_string(), sample(100, 1))]);
+    let before = BTreeMap::from([("a".to_owned(), sample(100, 1))]);
     assert2::assert!(resource_delta(&before, &after, 100).is_err());
 }
 
@@ -605,21 +608,19 @@ fn assemble_reads_the_harness_layout() {
     write_artifacts(dir.path(), STEADY.map(Some));
     let record = assemble(dir.path()).unwrap();
     assert2::assert!(record.trials.len() == 10);
-    assert2::assert!(
-        record.settings == BTreeMap::from([("linger_ms".to_string(), "5".to_string())])
-    );
+    assert2::assert!(record.settings == BTreeMap::from([("linger_ms".to_owned(), "5".to_owned())]));
     assert2::assert!(
         record.candidate
             == Subject {
-                label: "krabka".to_string(),
-                revision: "bbbb".to_string(),
-                image: "docker.io/krabka-io/krabka-broker:budget-candidate".to_string(),
-                image_digest: "sha256:2222".to_string(),
+                label: "krabka".to_owned(),
+                revision: "bbbb".to_owned(),
+                image: "docker.io/krabka-io/krabka-broker:budget-candidate".to_owned(),
+                image_digest: "sha256:2222".to_owned(),
             }
     );
     let first = &record.trials[0];
     let expected = Trial {
-        cell: "c".to_string(),
+        cell: "c".to_owned(),
         round: 1,
         side: Side::Reference,
         order: 1,
@@ -707,12 +708,11 @@ fn a_lost_record_in_the_sample_rejects_and_names_it() {
     let (passed, verdict, markdown) = evaluate_artifacts(candidate);
     assert2::assert!(!passed);
     assert2::assert!(verdict.rejections == vec![Rejection::CorrectnessFailure {
-        cell: "c".to_string(),
+        cell: "c".to_owned(),
         round: 4,
         side: Side::Candidate,
         reason: "the workload reported no result: Exception in thread \"main\" \
-                 java.lang.IllegalStateException: sent=1000000 consumed=999998 duplicates=0 errors=0"
-            .to_string(),
+                 java.lang.IllegalStateException: sent=1000000 consumed=999998 duplicates=0 errors=0".to_owned(),
     }]);
     assert2::assert!(markdown.contains("**Verdict: reject.**"));
     assert2::assert!(markdown.contains("| `c` | all | — | — | — | — | — | not evaluated |"));
@@ -764,7 +764,7 @@ fn parse_env_skips_comments_and_blank_lines() {
         "# written by qualify.sh\n\nmode = before_after\n",
     )
     .unwrap();
-    assert2::assert!(parsed == BTreeMap::from([("mode".to_string(), "before_after".to_string())]));
+    assert2::assert!(parsed == BTreeMap::from([("mode".to_owned(), "before_after".to_owned())]));
 }
 
 #[test]
@@ -774,7 +774,7 @@ fn the_report_names_every_rejection() {
         rounds(STEADY, STEADY)
             .into_iter()
             .map(|trial| Trial {
-                cell: "d".to_string(),
+                cell: "d".to_owned(),
                 order: trial.order + 100,
                 ..trial
             })
@@ -792,7 +792,7 @@ fn the_report_names_every_rejection() {
     let mut contract = contract();
     for id in ["d", "e"] {
         let mut cell = contract.cells[0].clone();
-        cell.id = id.to_string();
+        cell.id = id.to_owned();
         contract.cells.push(cell);
     }
     // The verdict judges the edited contract, so give the record its digest.

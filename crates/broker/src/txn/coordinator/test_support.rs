@@ -22,8 +22,8 @@ use {
 };
 
 #[allow(unused_imports)]
-pub(crate) mod test_prelude {
-    pub(crate) use {
+pub mod test_prelude {
+    pub use {
         assert2::{assert, check},
         krabka_ids::PartitionIndex,
         krabka_log::{Log, LogConfig, Offset, ProducerId, ReadOutput},

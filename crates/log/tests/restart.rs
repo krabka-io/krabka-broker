@@ -1,4 +1,5 @@
 //! What a reopened log knows about the segments it did not write.
+#![cfg(test)]
 
 use {
     assert2::check,

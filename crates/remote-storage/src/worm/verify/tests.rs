@@ -10,6 +10,7 @@ use {
     },
     assert2::check,
     object_store::{ObjectStoreExt as _, PutPayload, memory::InMemory, path::Path},
+    std::collections::BTreeSet,
 };
 
 #[tokio::test]
@@ -17,10 +18,7 @@ async fn an_exact_externally_authenticated_object_is_not_an_orphan() {
     let archive = Archive::build(&[1]).await;
     Tamper::StrayObject.apply(&archive).await;
     let request = VerifyRequest {
-        externally_authenticated_objects: std::collections::BTreeSet::from([format!(
-            "{}/{STRAY}",
-            archive.dir
-        )]),
+        externally_authenticated_objects: BTreeSet::from([format!("{}/{STRAY}", archive.dir)]),
         ..Default::default()
     };
 
@@ -82,26 +80,26 @@ enum Category {
 impl Category {
     fn matches(self, reason: &str) -> bool {
         match self {
-            Category::Size => reason.contains("the manifest records a size of"),
-            Category::Missing => reason.contains("is missing from the archive"),
-            Category::Chain => {
+            Self::Size => reason.contains("the manifest records a size of"),
+            Self::Missing => reason.contains("is missing from the archive"),
+            Self::Chain => {
                 reason.contains("chain sequence gap") || reason.contains("chain head mismatch")
             }
-            Category::Signature => {
+            Self::Signature => {
                 reason.contains("unsigned")
                     || reason.contains("untrusted")
                     || reason.contains("does not verify")
             }
-            Category::ObjectSet => {
+            Self::ObjectSet => {
                 reason.contains("not named by any manifest")
                     || reason.contains("named more than once")
                     || reason.contains("segment coordinates or suffix")
                     || reason.contains("archive holds")
                     || reason.contains("names no segment objects")
             }
-            Category::Format => reason.contains("format version"),
-            Category::Digest => reason.contains("hashes to"),
-            Category::Tip => reason.contains("does not match the expected head"),
+            Self::Format => reason.contains("format version"),
+            Self::Digest => reason.contains("hashes to"),
+            Self::Tip => reason.contains("does not match the expected head"),
         }
     }
 }
@@ -127,12 +125,12 @@ enum Orphans {
 impl Orphans {
     fn expected(self, archive: &Archive) -> Vec<String> {
         match self {
-            Orphans::None => Vec::new(),
-            Orphans::Stray => vec![format!("{}/{STRAY}", archive.dir)],
-            Orphans::Object(segment, object) => {
+            Self::None => Vec::new(),
+            Self::Stray => vec![format!("{}/{STRAY}", archive.dir)],
+            Self::Object(segment, object) => {
                 vec![archive.segments[segment].entries[object].key.clone()]
             }
-            Orphans::Segment(i) => {
+            Self::Segment(i) => {
                 let mut keys: Vec<String> = archive.segments[i]
                     .entries
                     .iter()

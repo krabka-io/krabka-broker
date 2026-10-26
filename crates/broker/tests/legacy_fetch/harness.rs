@@ -21,6 +21,7 @@ use {
         owned::produce_response::ProduceResponse,
         records::{RecordBatch, RecordsPayload},
     },
+    std::net::SocketAddr,
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpStream,
@@ -83,23 +84,18 @@ pub async fn create_topic_with_partitions(
 
 /// Produces a single v2 batch to (topic, partition=0) with a modern flexible
 /// `ProduceRequest`, version 9. Returns `Ok(())` on success.
-pub async fn produce_batch(addr: std::net::SocketAddr, topic: &str, batch: RecordBatch) {
+pub async fn produce_batch(addr: SocketAddr, topic: &str, batch: RecordBatch) {
     produce_batch_to(addr, topic, 0, batch).await;
 }
 
 /// Produces a single v2 batch to `(topic, partition)` with a modern flexible
 /// `ProduceRequest`, version 9.
-pub async fn produce_batch_to(
-    addr: std::net::SocketAddr,
-    topic: &str,
-    partition: i32,
-    batch: RecordBatch,
-) {
+pub async fn produce_batch_to(addr: SocketAddr, topic: &str, partition: i32, batch: RecordBatch) {
     const PRODUCE_VERSION: i16 = 9;
     let body = encode_batch_request(batch, topic, partition, PRODUCE_VERSION);
 
     let mut stream = TcpStream::connect(addr).await.expect("connect for produce");
-    stream.set_nodelay(true).ok();
+    let _ = stream.set_nodelay(true);
     // ProduceRequest v9 is flexible (FLEXIBLE_MIN = 9).
     let frame = request_frame()
         .api_key(0)
@@ -144,12 +140,12 @@ pub async fn produce_batch_to(
 /// Encoding at a low version drops the fields that version does not have, for
 /// example `max_bytes`, which is v3+. One struct therefore works for v0 to
 /// v3.
-pub async fn fetch_legacy_raw(addr: std::net::SocketAddr, topic: &str, version: i16) -> Vec<u8> {
+pub async fn fetch_legacy_raw(addr: SocketAddr, topic: &str, version: i16) -> Vec<u8> {
     fetch_legacy_raw_at(addr, topic, version, 0).await
 }
 
 pub async fn fetch_legacy_raw_at(
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
     topic: &str,
     version: i16,
     fetch_offset: i64,
@@ -164,7 +160,7 @@ pub async fn fetch_legacy_raw_at(
 /// per-partition body more than once, which is where the topic name is turned
 /// into a metric label.
 pub async fn fetch_legacy_raw_partitions(
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
     topic: &str,
     version: i16,
     partitions: &[i32],
@@ -176,7 +172,7 @@ pub async fn fetch_legacy_raw_partitions(
         min_bytes: 1,
         max_bytes: 1 << 20,
         topics: vec![FetchTopic {
-            topic: topic.to_string(),
+            topic: topic.to_owned(),
             partitions: partitions
                 .iter()
                 .map(|&partition| FetchPartition {
@@ -197,7 +193,7 @@ pub async fn fetch_legacy_raw_partitions(
     let mut stream = TcpStream::connect(addr)
         .await
         .expect("connect for legacy fetch");
-    stream.set_nodelay(true).ok();
+    let _ = stream.set_nodelay(true);
     round_trip_nonflexible()
         .stream(&mut stream)
         .api_key(1)

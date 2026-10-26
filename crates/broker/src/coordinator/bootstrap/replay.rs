@@ -35,6 +35,7 @@ use {
         collections::{HashMap, HashSet},
         sync::Arc,
     },
+    tokio::sync::oneshot,
 };
 
 /// How much of `__consumer_offsets` one replay read returns before the walk
@@ -121,7 +122,7 @@ struct DeferredRecord {
 
 /// Replay one newly-led offsets partition into the coordinator after a
 /// metadata leadership change.
-pub(crate) async fn replay_partition(
+pub async fn replay_partition(
     partitions: &PartitionRegistry,
     coordinator: &Arc<GroupCoordinator>,
     partition_id: PartitionIndex,
@@ -180,7 +181,7 @@ pub(super) fn replay_records(
                     .records
                     .first()
                     .and_then(|record| record.key.as_deref())
-                    .is_some_and(|key| key.len() >= 4 && key[2..4] == 1_i16.to_be_bytes());
+                    .is_some_and(|key| key.get(2..4) == Some(&1_i16.to_be_bytes()[..]));
                 if let Some(records) = pending_transactions.remove(&batch.producer_id)
                     && committed
                 {
@@ -470,8 +471,7 @@ pub(super) fn apply_tombstone(
 /// `OffsetFetch` with a stale committed offset until the next replay.
 pub(super) async fn finalize(coordinator: &Arc<GroupCoordinator>, mut replayed: Replayed) {
     // Next-gen group ids are those present in the coordinator's seed map.
-    let next_gen_ids: std::collections::HashSet<String> =
-        coordinator.seeds.iter().map(|e| e.key().clone()).collect();
+    let next_gen_ids: HashSet<String> = coordinator.seeds.iter().map(|e| e.key().clone()).collect();
 
     // Spawn + seed next-gen (consumer) actors.
     coordinator.finalize_bootstrap();
@@ -484,7 +484,7 @@ pub(super) async fn finalize(coordinator: &Arc<GroupCoordinator>, mut replayed: 
             && let Some(handle) = coordinator.find(&gid)
         {
             let entries: Vec<((String, i32), OffsetEntry)> = offsets.into_iter().collect();
-            let (tx, _rx) = tokio::sync::oneshot::channel();
+            let (tx, _rx) = oneshot::channel();
             if handle
                 .tx
                 .send(GroupActorMessage::UpdateCommitted { entries, reply: tx })
@@ -505,7 +505,7 @@ pub(super) async fn finalize(coordinator: &Arc<GroupCoordinator>, mut replayed: 
             && let Some(handle) = coordinator.find(&gid)
         {
             for (producer_id, pending) in by_producer {
-                let (tx, _rx) = tokio::sync::oneshot::channel();
+                let (tx, _rx) = oneshot::channel();
                 if handle
                     .tx
                     .send(GroupActorMessage::AddPendingTxnOffsets {
@@ -529,7 +529,7 @@ pub(super) async fn finalize(coordinator: &Arc<GroupCoordinator>, mut replayed: 
 
     // Classic groups: those with classic metadata, plus offset-only and
     // open-transaction-only groups that are not next-gen.
-    let classic_ids: std::collections::HashSet<String> = replayed
+    let classic_ids: HashSet<String> = replayed
         .classic
         .keys()
         .cloned()

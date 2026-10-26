@@ -15,6 +15,7 @@
 
 use std::{
     process::{Child, ExitStatus},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -34,7 +35,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 ///
 /// Panics when the child cannot be waited on at all, which means the process
 /// handle is broken rather than the child being slow.
-pub(crate) fn wait_bounded(child: &mut Child, budget: Duration) -> Option<ExitStatus> {
+pub fn wait_bounded(child: &mut Child, budget: Duration) -> Option<ExitStatus> {
     let deadline = Instant::now() + budget;
     loop {
         if let Some(status) = child.try_wait().expect("wait on child process") {
@@ -45,7 +46,7 @@ pub(crate) fn wait_bounded(child: &mut Child, budget: Duration) -> Option<ExitSt
             let _ = child.wait();
             return None;
         }
-        std::thread::sleep(POLL_INTERVAL);
+        thread::sleep(POLL_INTERVAL);
     }
 }
 
@@ -55,7 +56,7 @@ pub(crate) fn wait_bounded(child: &mut Child, budget: Duration) -> Option<ExitSt
 /// itself by it; `gap` is the pause between a failed attempt and the next one.
 /// Returns how many attempts it took to become ready, or `Err` with the number
 /// that were made before the deadline passed.
-pub(crate) fn retry_until(
+pub fn retry_until(
     budget: Duration,
     gap: Duration,
     mut probe: impl FnMut(Duration) -> bool,
@@ -71,7 +72,7 @@ pub(crate) fn retry_until(
         if remaining.is_zero() {
             return Err(attempts);
         }
-        std::thread::sleep(gap.min(remaining));
+        thread::sleep(gap.min(remaining));
     }
 }
 
@@ -81,13 +82,14 @@ mod tests {
         super::{retry_until, wait_bounded},
         assert2::assert,
         std::{
-            process::{Command, Stdio},
+            process::{Child, Command, Stdio},
+            thread,
             time::{Duration, Instant},
         },
     };
 
     /// Spawn a shell that runs `script`, with its output discarded.
-    fn spawn(script: &str) -> std::process::Child {
+    fn spawn(script: &str) -> Child {
         Command::new("sh")
             .args(["-c", script])
             .stdout(Stdio::null())
@@ -151,7 +153,7 @@ mod tests {
         // remaining budget reaching it, one attempt alone would outlast the
         // whole wait.
         let attempts = retry_until(budget, Duration::from_millis(10), |remaining| {
-            std::thread::sleep(remaining);
+            thread::sleep(remaining);
             false
         });
         let elapsed = started.elapsed();

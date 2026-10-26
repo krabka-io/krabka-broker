@@ -30,7 +30,7 @@ use {
     crate::codes,
     std::{
         collections::{HashMap, HashSet, hash_map::Entry},
-        sync::Mutex,
+        sync::{Mutex, PoisonError},
     },
 };
 
@@ -115,8 +115,8 @@ struct SessionKey {
 impl SessionKey {
     fn new(group: &str, member: &str) -> Self {
         Self {
-            group: group.to_string(),
-            member: member.to_string(),
+            group: group.to_owned(),
+            member: member.to_owned(),
         }
     }
 }
@@ -164,6 +164,55 @@ impl ShareSessionCache {
         &self,
         request: ShareFetchSessionRequest<'_>,
     ) -> Result<ShareFetchSessionUpdate, i16> {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .update_fetch(self.max, request)
+    }
+
+    /// Which rows of an incremental response the response carries, without
+    /// changing the session: the selection Kafka's
+    /// `ShareSessionContext.responseSize` sizes a response by before it knows
+    /// whether a quota throttles it.
+    ///
+    /// A row with records or an error is always carried, and so is a
+    /// partition that the session flagged. A row of a partition that the
+    /// session does not hold is carried.
+    pub(crate) fn select_response(
+        &self,
+        group: &str,
+        member: &str,
+        rows: &[ResponseRow],
+    ) -> Vec<bool> {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .select_response(&SessionKey::new(group, member), rows)
+    }
+
+    /// Kafka's `ShareSessionContext.updateAndGenerateResponseData` for an
+    /// incremental response that goes out: updates the session for the rows
+    /// that [`Self::select_response`] judged. A throttled response, which
+    /// carries no rows, leaves the session as it was.
+    ///
+    /// An error flags the partition for the next response too, so the client
+    /// learns when it clears. A partition that returned records moves to the
+    /// end of the session's order.
+    pub(crate) fn commit_response(&self, group: &str, member: &str, rows: &[ResponseRow]) {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .commit_response(&SessionKey::new(group, member), rows);
+    }
+}
+
+impl Inner {
+    /// The body of [`ShareSessionCache::update_fetch`], under its lock.
+    fn update_fetch(
+        &mut self,
+        max: usize,
+        request: ShareFetchSessionRequest<'_>,
+    ) -> Result<ShareFetchSessionUpdate, i16> {
         let ShareFetchSessionRequest {
             identity: (group, member),
             connection_id,
@@ -172,10 +221,9 @@ impl ShareSessionCache {
             has_acknowledgements,
         } = request;
         let key = SessionKey::new(group, member);
-        let mut inner = self.inner.lock().expect("share-session mutex poisoned");
 
         if epoch == FINAL_EPOCH {
-            let session = remove_session(&mut inner, &key).ok_or(codes::SHARE_SESSION_NOT_FOUND)?;
+            let session = remove_session(self, &key).ok_or(codes::SHARE_SESSION_NOT_FOUND)?;
             return Ok(ShareFetchSessionUpdate {
                 partitions: Vec::new(),
                 released: session.partitions.iter().copied().collect(),
@@ -188,8 +236,8 @@ impl ShareSessionCache {
             if has_acknowledgements {
                 return Err(codes::INVALID_REQUEST);
             }
-            remove_session(&mut inner, &key);
-            if inner.sessions.len() >= self.max {
+            remove_session(self, &key);
+            if self.sessions.len() >= max {
                 return Err(codes::SHARE_SESSION_LIMIT_REACHED);
             }
             let mut ordered = Vec::with_capacity(partitions.requested.len());
@@ -203,14 +251,13 @@ impl ShareSessionCache {
                 }
             }
             let fetch = ordered.clone();
-            inner
-                .connections
-                .insert(connection_id.to_string(), key.clone());
-            inner.sessions.insert(key, ShareSession {
+            self.connections
+                .insert(connection_id.to_owned(), key.clone());
+            self.sessions.insert(key, ShareSession {
                 epoch: 1,
                 partitions: ordered,
                 cached,
-                connection_id: connection_id.to_string(),
+                connection_id: connection_id.to_owned(),
             });
             return Ok(ShareFetchSessionUpdate {
                 partitions: fetch,
@@ -220,7 +267,7 @@ impl ShareSessionCache {
             });
         }
 
-        let session = session_at_epoch(&mut inner, &key, epoch)?;
+        let session = session_at_epoch(self, &key, epoch)?;
         for requested in partitions.requested {
             if let Entry::Vacant(entry) = session.cached.entry(*requested) {
                 entry.insert(CachedPartition {
@@ -244,23 +291,9 @@ impl ShareSessionCache {
         })
     }
 
-    /// Which rows of an incremental response the response carries, without
-    /// changing the session: the selection Kafka's
-    /// `ShareSessionContext.responseSize` sizes a response by before it knows
-    /// whether a quota throttles it.
-    ///
-    /// A row with records or an error is always carried, and so is a
-    /// partition that the session flagged. A row of a partition that the
-    /// session does not hold is carried.
-    pub(crate) fn select_response(
-        &self,
-        group: &str,
-        member: &str,
-        rows: &[ResponseRow],
-    ) -> Vec<bool> {
-        let key = SessionKey::new(group, member);
-        let inner = self.inner.lock().expect("share-session mutex poisoned");
-        let Some(session) = inner.sessions.get(&key) else {
+    /// The body of [`ShareSessionCache::select_response`], under its lock.
+    fn select_response(&self, key: &SessionKey, rows: &[ResponseRow]) -> Vec<bool> {
+        let Some(session) = self.sessions.get(key) else {
             return vec![true; rows.len()];
         };
         rows.iter()
@@ -273,18 +306,9 @@ impl ShareSessionCache {
             .collect()
     }
 
-    /// Kafka's `ShareSessionContext.updateAndGenerateResponseData` for an
-    /// incremental response that goes out: updates the session for the rows
-    /// that [`Self::select_response`] judged. A throttled response, which
-    /// carries no rows, leaves the session as it was.
-    ///
-    /// An error flags the partition for the next response too, so the client
-    /// learns when it clears. A partition that returned records moves to the
-    /// end of the session's order.
-    pub(crate) fn commit_response(&self, group: &str, member: &str, rows: &[ResponseRow]) {
-        let key = SessionKey::new(group, member);
-        let mut inner = self.inner.lock().expect("share-session mutex poisoned");
-        let Some(session) = inner.sessions.get_mut(&key) else {
+    /// The body of [`ShareSessionCache::commit_response`], under its lock.
+    fn commit_response(&mut self, key: &SessionKey, rows: &[ResponseRow]) {
+        let Some(session) = self.sessions.get_mut(key) else {
             return;
         };
         for row in rows {
@@ -309,6 +333,40 @@ impl ShareSessionCache {
         session.partitions.extend(moved_order);
     }
 
+    /// The body of [`ShareSessionCache::update_acknowledge`] for a request
+    /// past the initial epoch, under its lock.
+    fn update_acknowledge(
+        &mut self,
+        key: &SessionKey,
+        epoch: i32,
+    ) -> Result<HashSet<SharePartitionKey>, i16> {
+        if epoch == FINAL_EPOCH {
+            return remove_session(self, key)
+                .map(|session| session.partitions.iter().copied().collect())
+                .ok_or(codes::SHARE_SESSION_NOT_FOUND);
+        }
+        let session = session_at_epoch(self, key, epoch)?;
+        session.epoch = next_epoch(session.epoch);
+        Ok(HashSet::new())
+    }
+
+    /// The body of [`ShareSessionCache::disconnect`], under its lock.
+    fn disconnect(&mut self, connection_id: &str) -> Option<ClosedShareSession> {
+        let key = self.connections.remove(connection_id)?;
+        let session = self.sessions.get(&key)?;
+        if session.connection_id != connection_id {
+            return None;
+        }
+        let session = self.sessions.remove(&key)?;
+        Some(ClosedShareSession {
+            group: key.group,
+            member: key.member,
+            partitions: session.partitions.iter().copied().collect(),
+        })
+    }
+}
+
+impl ShareSessionCache {
     /// Validate a `ShareAcknowledge` epoch and advance or close its session.
     pub(crate) fn update_acknowledge(
         &self,
@@ -319,39 +377,25 @@ impl ShareSessionCache {
         if epoch == INITIAL_EPOCH {
             return Err(codes::INVALID_SHARE_SESSION_EPOCH);
         }
-        let key = SessionKey::new(group, member);
-        let mut inner = self.inner.lock().expect("share-session mutex poisoned");
-        if epoch == FINAL_EPOCH {
-            return remove_session(&mut inner, &key)
-                .map(|session| session.partitions.iter().copied().collect())
-                .ok_or(codes::SHARE_SESSION_NOT_FOUND);
-        }
-        let session = session_at_epoch(&mut inner, &key, epoch)?;
-        session.epoch = next_epoch(session.epoch);
-        Ok(HashSet::new())
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .update_acknowledge(&SessionKey::new(group, member), epoch)
     }
 
     /// Removes every session, as Kafka's `ShareSessionCache.removeAllSessions`.
     pub(crate) fn clear(&self) {
-        let mut inner = self.inner.lock().expect("share-session mutex poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         inner.sessions.clear();
         inner.connections.clear();
     }
 
     /// Remove the session owned by a closing client connection.
     pub(crate) fn disconnect(&self, connection_id: &str) -> Option<ClosedShareSession> {
-        let mut inner = self.inner.lock().expect("share-session mutex poisoned");
-        let key = inner.connections.remove(connection_id)?;
-        let session = inner.sessions.get(&key)?;
-        if session.connection_id != connection_id {
-            return None;
-        }
-        let session = inner.sessions.remove(&key)?;
-        Some(ClosedShareSession {
-            group: key.group,
-            member: key.member,
-            partitions: session.partitions.iter().copied().collect(),
-        })
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .disconnect(connection_id)
     }
 }
 

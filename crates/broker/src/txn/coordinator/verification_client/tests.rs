@@ -84,7 +84,9 @@ impl Listener {
             let request = AddPartitionsToTxnRequest::decode(&mut body, version).unwrap();
             let mut requests = observed_requests.lock().unwrap();
             requests.push((version, request));
-            if close_first && requests.len() == 1 {
+            let first = requests.len() == 1;
+            drop(requests);
+            if close_first && first {
                 return MockReply::Close;
             }
             MockReply::Respond(scripted_response_body(&answer, version, true))

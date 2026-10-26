@@ -63,7 +63,7 @@ mod linux {
         }
     }
 
-    pub(super) fn main() {
+    pub fn main() {
         let dir =
             std::env::var_os("KRABKA_IOBENCH_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
         let batch_kib = env_or("KRABKA_DIRECT_BATCH_KIB", 1024);

@@ -26,6 +26,7 @@
 //! over the wire, which is where the client-visible contract KFC-3 states --
 //! the offset bounds, the batches, the leader epoch, and all of it again
 //! after a restart -- is actually checked.
+#![cfg(test)]
 
 #[path = "support/topic_configuration.rs"]
 mod topic_configuration;

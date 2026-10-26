@@ -20,7 +20,7 @@ use {
 
 impl RuntimeFileConfig {
     pub(super) fn apply_recovery_and_queues(
-        &mut self,
+        &self,
         cfg: &mut BrokerConfig,
     ) -> Result<(), FileConfigError> {
         let runtime = self;

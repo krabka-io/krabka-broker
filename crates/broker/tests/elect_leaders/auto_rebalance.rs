@@ -47,7 +47,7 @@ async fn auto_rebalance_restores_preferred_leader() {
     // KIP-853 auto-join is the dynamic voter reconfiguration work stream.
     let (client_addrs, controller_addrs, client_listeners, controller_listeners) =
         support::bind_and_hold_ports(3).await;
-    let voters: Vec<(u64, std::net::SocketAddr)> = (0u64..3)
+    let voters: Vec<(u64, SocketAddr)> = (0u64..3)
         .map(|i| (i + 1, controller_addrs[usize::try_from(i).unwrap()]))
         .collect();
 

@@ -35,7 +35,7 @@ fn image_rate(image: &MetadataImage, node_id: NodeId, kind: ThrottleKind) -> Byt
         .unwrap_or(<ByteRate as ByteRateExt>::ZERO)
 }
 
-pub(crate) fn apply_image(image: &MetadataImage, node_id: NodeId, throttle: &ThrottleState) {
+pub fn apply_image(image: &MetadataImage, node_id: NodeId, throttle: &ThrottleState) {
     let leader_rate = image_rate(image, node_id, ThrottleKind::Leader);
     let follower_rate = image_rate(image, node_id, ThrottleKind::Follower);
     let alter_log_dirs_rate = image_rate(image, node_id, ThrottleKind::AlterLogDirs);

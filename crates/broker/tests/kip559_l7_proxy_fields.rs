@@ -1,4 +1,4 @@
-// Rust 1.95 annotate-snippets ICE on clippy::pedantic in test files.
+#![cfg(test)]
 
 //! KIP-559: the `JoinGroup` v7+ and `SyncGroup` v5+ responses carry
 //! `protocol_type` and `protocol_name`, so an L7 proxy can identify the

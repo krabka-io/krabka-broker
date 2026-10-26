@@ -16,22 +16,32 @@ use {
         },
     },
     assert2::{assert, check},
-    std::{sync::Arc, time::Duration},
+    std::{
+        io, iter,
+        path::Path,
+        sync::{Arc, atomic},
+        time::{Duration, Instant},
+    },
     tempfile::tempdir,
-    tokio::task::JoinHandle,
+    tokio::{
+        net::{TcpListener, TcpStream},
+        sync::{oneshot, watch},
+        task::{self, JoinHandle},
+        time,
+    },
 };
 
 async fn assert_listener_stops_accepting(addr: SocketAddr) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        match tokio::net::TcpStream::connect(addr).await {
+        match TcpStream::connect(addr).await {
             Ok(stream) => {
                 drop(stream);
                 assert!(
-                    std::time::Instant::now() < deadline,
+                    Instant::now() < deadline,
                     "listener at {addr} still accepts connections after shutdown"
                 );
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                time::sleep(Duration::from_millis(20)).await;
             }
             Err(_) => return,
         }
@@ -39,13 +49,13 @@ async fn assert_listener_stops_accepting(addr: SocketAddr) {
 }
 
 async fn wait_for_connection_count(broker: &Broker, expected: usize, message: &'static str) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if broker.connections.total() == expected {
             return;
         }
-        assert!(std::time::Instant::now() < deadline, "{message}");
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(Instant::now() < deadline, "{message}");
+        time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -62,7 +72,7 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     check!(handle.offset_for_leader_epoch_count_for_test() == 0);
     broker
         .offset_for_leader_epoch_requests
-        .store(2, std::sync::atomic::Ordering::Release);
+        .store(2, atomic::Ordering::Release);
     assert!(handle.offset_for_leader_epoch_count_for_test() == 2);
     assert!(!handle.rlmm_topic_backed_active_for_test());
     broker.metrics.tiered_storage_rlmm_topic_backed.set(1);
@@ -80,19 +90,19 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     );
     check!(
         handle
-            .change_membership([krabka_raft::NodeId(1)].into_iter().collect())
+            .change_membership(iter::once(krabka_raft::NodeId(1)).collect())
             .await
             .is_ok()
     );
 
-    let leader = handle.wait_until_controller_leader().await;
+    let leader = handle.wait_until_controller_leader().await.unwrap();
     assert!(leader == krabka_raft::NodeId(handle.node_id()));
     assert!(handle.controller_leader_id() == Some(krabka_raft::NodeId(handle.node_id())));
 
     let mut endpoints = handle.self_registration_endpoints();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while endpoints.is_empty() && std::time::Instant::now() < deadline {
-        tokio::task::yield_now().await;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while endpoints.is_empty() && Instant::now() < deadline {
+        task::yield_now().await;
         endpoints = handle.self_registration_endpoints();
     }
     assert!(!endpoints.is_empty());
@@ -104,8 +114,8 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
                 incarnation_id: uuid::Uuid::from_u128(0xBEEF),
                 port: 19_092,
                 endpoints: vec![krabka_metadata::BrokerEndpoint {
-                    name: "PLAINTEXT".to_string(),
-                    host: "127.0.0.1".to_string(),
+                    name: "PLAINTEXT".to_owned(),
+                    host: "127.0.0.1".to_owned(),
                     port: 19_092,
                     protocol: krabka_security::ListenerProtocol::Plaintext,
                 }],
@@ -171,7 +181,7 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
         .partition_record_for_test(topic, 0)
         .expect("partition record");
     let expected_partition = krabka_metadata::PartitionRecord {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         partition: 0,
         leader: krabka_audit::NodeId(partition_leader),
         replicas: partition_isr
@@ -195,8 +205,8 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     check!(handle.partition_isr_for_test("missing-mutant-topic", 0) == None);
     check!(handle.partition_record_for_test("missing-mutant-topic", 0) == None);
     check!(
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
+        time::timeout(
+            Duration::from_secs(1),
             handle.wait_until_partition_leader_changed(
                 topic,
                 0,
@@ -243,7 +253,7 @@ async fn single_broker_handle_helpers_observe_real_state_and_errors() {
     assert!(
         local_part
             .current_leader_epoch
-            .load(std::sync::atomic::Ordering::Acquire)
+            .load(atomic::Ordering::Acquire)
             == 7
     );
     handle
@@ -262,7 +272,7 @@ struct DefaultBroker {
     addr: SocketAddr,
 }
 
-async fn start_default_broker(dir: &std::path::Path) -> DefaultBroker {
+async fn start_default_broker(dir: &Path) -> DefaultBroker {
     let config = BrokerConfig::for_tests(dir.to_path_buf());
     let handle = Broker::start(config).await.unwrap();
     let broker = handle.broker_arc_for_test();
@@ -281,10 +291,7 @@ struct ShutdownFixture {
     partition: Arc<Partition>,
 }
 
-async fn shutdown_fixture(
-    root: &std::path::Path,
-    setup: LocalPartitionSetup<'_>,
-) -> ShutdownFixture {
+async fn shutdown_fixture(root: &Path, setup: LocalPartitionSetup<'_>) -> ShutdownFixture {
     let DefaultBroker {
         handle,
         broker,
@@ -299,7 +306,7 @@ async fn shutdown_fixture(
         .call();
     broker
         .partitions
-        .insert(topic.into(), index, partition.clone());
+        .insert(topic.into(), index, Arc::clone(&partition));
     ShutdownFixture {
         handle,
         broker,
@@ -322,16 +329,16 @@ async fn start_and_shutdown_clean() {
     })
     .await;
     assert!(addr.port() != 0);
-    let stream = tokio::net::TcpStream::connect(addr)
+    let stream = TcpStream::connect(addr)
         .await
         .expect("listener accepts before shutdown");
     wait_for_connection_count(&broker, 1, "accept_loop did not register live connection").await;
-    tokio::time::timeout(std::time::Duration::from_secs(5), handle.shutdown())
+    time::timeout(Duration::from_secs(5), handle.shutdown())
         .await
         .expect("broker shutdown completes");
     assert!(broker.connections.total() == 0);
     assert!(partition.take_writer_handle().is_none());
-    let (ack, _ack_rx) = tokio::sync::oneshot::channel();
+    let (ack, _ack_rx) = oneshot::channel();
     assert!(
         partition
             .writer_tx
@@ -356,7 +363,7 @@ async fn dropping_handle_stops_idle_connections_and_partition_writers() {
         ..Default::default()
     })
     .await;
-    let stream = tokio::net::TcpStream::connect(addr)
+    let stream = TcpStream::connect(addr)
         .await
         .expect("listener accepts before handle drop");
     wait_for_connection_count(&broker, 1, "accept_loop did not register live connection").await;
@@ -403,7 +410,7 @@ async fn copy_task_finished(broker: &Broker) -> Option<bool> {
 /// synchronous pass over the registry takes, so a count that stays raised
 /// across consecutive samples is the sweep's.
 async fn await_sweep_parked_on(partition: &Arc<Partition>, baseline: usize) {
-    tokio::time::timeout(Duration::from_secs(10), async {
+    time::timeout(Duration::from_secs(10), async {
         let mut raised = 0;
         while raised < 5 {
             raised = if Arc::strong_count(partition) > baseline {
@@ -413,7 +420,7 @@ async fn await_sweep_parked_on(partition: &Arc<Partition>, baseline: usize) {
             };
             // intentional: the sweep runs on its own 10 ms interval, and a
             // reference count is the only sign it holds the partition.
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
@@ -472,7 +479,7 @@ async fn a_stopped_broker_leaves_no_remote_log_manager_task_running(stop: Stop) 
             // intentional: a shutdown that did not join the task would return
             // within this window; one that joins it cannot while the lock is
             // held, which is the property under test.
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            time::sleep(Duration::from_millis(500)).await;
             // `shutdown` holds the task's handle while it joins it, so the
             // handle cannot be read here; the shutdown itself is the witness.
             check!(
@@ -480,7 +487,7 @@ async fn a_stopped_broker_leaves_no_remote_log_manager_task_running(stop: Stop) 
                 "shutdown returned with the copy task still mid-tick"
             );
             drop(held);
-            tokio::time::timeout(Duration::from_secs(10), shutdown)
+            time::timeout(Duration::from_secs(10), shutdown)
                 .await
                 .expect("shutdown returns once the tick finishes")
                 .expect("shutdown does not panic");
@@ -489,7 +496,7 @@ async fn a_stopped_broker_leaves_no_remote_log_manager_task_running(stop: Stop) 
             let crash = tokio::spawn(handle.crash_for_test());
             await_copy_task_finished(&broker).await;
             drop(held);
-            tokio::time::timeout(Duration::from_secs(10), crash)
+            time::timeout(Duration::from_secs(10), crash)
                 .await
                 .expect("the crash returns")
                 .expect("the crash does not panic");
@@ -508,9 +515,9 @@ async fn a_stopped_broker_leaves_no_remote_log_manager_task_running(stop: Stop) 
 /// Waits until the broker's remote-log-manager task has finished, with the
 /// replica-state lock it is parked on still held.
 async fn await_copy_task_finished(broker: &Broker) {
-    tokio::time::timeout(Duration::from_secs(10), async {
+    time::timeout(Duration::from_secs(10), async {
         while copy_task_finished(broker).await != Some(true) {
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
     })
     .await
@@ -527,7 +534,7 @@ async fn controlled_shutdown_timeout_stops_listener_and_reports_error() {
     handle.broker.controller.halt().await;
     assert!(!*handle.should_shutdown_rx().borrow());
     let err = handle
-        .controlled_shutdown(std::time::Duration::ZERO)
+        .controlled_shutdown(Duration::ZERO)
         .await
         .expect_err("zero-timeout controlled shutdown should report drain timeout");
     assert!(matches!(err, BrokerError::ShutdownTimeout(timeout) if timeout.is_zero()));
@@ -550,9 +557,9 @@ async fn a_fatal_controller_fault_latches_self_shutdown_and_names_its_reason() {
     check!(handle.fatal_fault().as_deref() == Some(UNSUPPORTED_LEVEL_FAULT));
 
     // The flag is latched, so there is no leadership drain to wait for.
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        handle.controlled_shutdown(std::time::Duration::from_secs(300)),
+    time::timeout(
+        Duration::from_secs(30),
+        handle.controlled_shutdown(Duration::from_secs(300)),
     )
     .await
     .expect("controlled shutdown waited for a drain that the dead controller cannot serve")
@@ -569,7 +576,7 @@ async fn a_broker_whose_broker_id_differs_from_its_node_id_is_refused_at_startup
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
     config.broker_id = 42;
 
-    let started = tokio::time::timeout(std::time::Duration::from_secs(10), Broker::start(config))
+    let started = time::timeout(Duration::from_secs(10), Broker::start(config))
         .await
         .expect("the start waited instead of refusing the config");
 
@@ -620,7 +627,7 @@ async fn a_fault_while_joining_the_quorum_fails_the_start_without_waiting_on_bac
     config.self_registration_backoff_min = krabka_units::hours(1);
     config.self_registration_backoff_max = krabka_units::hours(1);
 
-    let started = tokio::time::timeout(std::time::Duration::from_secs(60), Broker::start(config))
+    let started = time::timeout(Duration::from_secs(60), Broker::start(config))
         .await
         .expect("the start waited on the retry backoff of a dead controller");
 
@@ -661,15 +668,15 @@ async fn only_a_stop_without_a_fatal_fault_leaves_a_clean_shutdown_proof() {
 
 async fn latch_unsupported_fault(
     handle: &BrokerHandle,
-    should_shutdown: &mut tokio::sync::watch::Receiver<bool>,
+    should_shutdown: &mut watch::Receiver<bool>,
 ) {
     handle
         .submit_metadata_record_for_test(finalize_unstable_metadata_version())
         .await
         .expect("the unsupported level commits before the controller stops");
 
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
+    time::timeout(
+        Duration::from_secs(30),
         should_shutdown.wait_for(|down| *down),
     )
     .await
@@ -710,9 +717,7 @@ async fn a_taken_listener_port_fails_the_start_with_a_listener_bind_error(
     listener: &str,
     setting: &str,
 ) {
-    let taken = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let taken = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = taken.local_addr().expect("local address");
     let dir = tempdir().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
@@ -736,7 +741,7 @@ async fn a_taken_listener_port_fails_the_start_with_a_listener_bind_error(
     assert2::check!(failed == listener);
     assert2::check!(failed_addr == addr);
     assert2::check!(failed_setting == setting);
-    assert2::check!(source.kind() == std::io::ErrorKind::AddrInUse);
+    assert2::check!(source.kind() == io::ErrorKind::AddrInUse);
     assert2::check!(
         message
             == format!(

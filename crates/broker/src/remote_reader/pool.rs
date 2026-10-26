@@ -22,11 +22,11 @@ use {
 
 /// A read the pool refused because its pending queue was already full.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ReaderPoolRejected;
+pub struct ReaderPoolRejected;
 
 /// The concurrency cap and pending-task queue for cold-tier reads.
 #[derive(Debug)]
-pub(crate) struct ReaderPool {
+pub struct ReaderPool {
     permits: Semaphore,
     /// Reads waiting for a permit. Not the same as `Semaphore::available_permits`:
     /// this is the queue Kafka bounds, and it excludes the running reads.
@@ -41,7 +41,7 @@ pub(crate) struct ReaderPool {
 
 /// A permit held for the duration of one cold-tier read. Dropping it releases
 /// the slot.
-pub(crate) struct ReaderPermit<'pool> {
+pub struct ReaderPermit<'pool> {
     _permit: SemaphorePermit<'pool>,
 }
 

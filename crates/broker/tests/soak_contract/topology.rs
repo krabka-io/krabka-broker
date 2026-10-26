@@ -22,10 +22,11 @@ use {
         sync::Mutex,
         time::Duration,
     },
+    tokio::time,
 };
 
 /// A topic partition.
-pub(crate) type TopicPartition = (String, i32);
+pub type TopicPartition = (String, i32);
 
 /// The gauge a node sets to 1 while it is the active controller.
 const ACTIVE_CONTROLLER: &str = "krabka_broker_active_controller";
@@ -36,7 +37,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// One partition as a node's metadata reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PartitionState {
+pub struct PartitionState {
     pub(crate) topic: String,
     pub(crate) partition: i32,
     pub(crate) leader: i32,
@@ -45,7 +46,7 @@ pub(crate) struct PartitionState {
 }
 
 /// The partitions of a `Metadata` response.
-pub(crate) fn partition_states(response: &MetadataResponse) -> Vec<PartitionState> {
+pub fn partition_states(response: &MetadataResponse) -> Vec<PartitionState> {
     response
         .topics
         .iter()
@@ -63,7 +64,7 @@ pub(crate) fn partition_states(response: &MetadataResponse) -> Vec<PartitionStat
 }
 
 /// The leader of one partition, when it has one.
-pub(crate) fn leader_of(states: &[PartitionState], topic: &str, partition: i32) -> Option<i32> {
+pub fn leader_of(states: &[PartitionState], topic: &str, partition: i32) -> Option<i32> {
     states
         .iter()
         .find(|state| state.topic == topic && state.partition == partition)
@@ -74,7 +75,7 @@ pub(crate) fn leader_of(states: &[PartitionState], topic: &str, partition: i32) 
 /// The partitions `node` leads that can fail over: those with a replica on
 /// another node. A single-replica partition, such as the broker's own audit
 /// topic, has nowhere to move.
-pub(crate) fn led_by(states: &[PartitionState], node: i32) -> BTreeSet<TopicPartition> {
+pub fn led_by(states: &[PartitionState], node: i32) -> BTreeSet<TopicPartition> {
     states
         .iter()
         .filter(|state| {
@@ -86,7 +87,7 @@ pub(crate) fn led_by(states: &[PartitionState], node: i32) -> BTreeSet<TopicPart
 
 /// The partitions of `led` that have no live leader other than `target`, with
 /// the leader each reports (`-1` for none, `None` when it is not reported).
-pub(crate) fn not_failed_over(
+pub fn not_failed_over(
     states: &[PartitionState],
     led: &BTreeSet<TopicPartition>,
     target: i32,
@@ -105,7 +106,7 @@ pub(crate) fn not_failed_over(
 
 /// Whether every partition of every topic in `topics` (name and partition
 /// count) is reported with its full replica set in its ISR.
-pub(crate) fn isr_complete(states: &[PartitionState], topics: &[(String, i32)]) -> bool {
+pub fn isr_complete(states: &[PartitionState], topics: &[(String, i32)]) -> bool {
     topics.iter().all(|(topic, partitions)| {
         (0..*partitions).all(|partition| {
             states
@@ -124,14 +125,14 @@ pub(crate) fn isr_complete(states: &[PartitionState], topics: &[(String, i32)]) 
 
 /// The two roles a fault target is named by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct Roles {
+pub struct Roles {
     pub(crate) controller: Option<i32>,
     /// The leader of the first path's partition 0.
     pub(crate) leader: Option<i32>,
 }
 
 /// The node `target` names among `nodes` (index order), given the roles.
-pub(crate) fn resolve_target(target: Target, nodes: &[i32], roles: Roles) -> Result<i32, String> {
+pub fn resolve_target(target: Target, nodes: &[i32], roles: Roles) -> Result<i32, String> {
     match target {
         Target::Controller => roles
             .controller
@@ -156,7 +157,7 @@ pub(crate) fn resolve_target(target: Target, nodes: &[i32], roles: Roles) -> Res
 /// active controller, whatever else it was, then `leader` when it led the
 /// first path's partition 0, else `follower`; `broker` when no node reported
 /// itself the controller, so the roles were not known.
-pub(crate) fn role_of(node: i32, roles: Roles) -> &'static str {
+pub fn role_of(node: i32, roles: Roles) -> &'static str {
     if roles.controller.is_none() {
         "broker"
     } else if roles.controller == Some(node) {
@@ -170,7 +171,7 @@ pub(crate) fn role_of(node: i32, roles: Roles) -> &'static str {
 
 /// The node whose `/metrics` body reports it the active controller, among
 /// `scrapes` of `(node, body)`.
-pub(crate) fn active_controller(scrapes: &[(i32, String)]) -> Option<i32> {
+pub fn active_controller(scrapes: &[(i32, String)]) -> Option<i32> {
     scrapes
         .iter()
         .find(|(_, body)| probe::sum_metric(body, ACTIVE_CONTROLLER) >= 1.0)
@@ -179,7 +180,7 @@ pub(crate) fn active_controller(scrapes: &[(i32, String)]) -> Option<i32> {
 
 /// One broker as the executor addresses it.
 #[derive(Debug, Clone)]
-pub(crate) struct Node {
+pub struct Node {
     pub(crate) id: i32,
     pub(crate) container: String,
     pub(crate) bootstrap: String,
@@ -193,7 +194,7 @@ pub(crate) struct Node {
 }
 
 /// The cluster's nodes, and a client pinned to each.
-pub(crate) struct Nodes {
+pub struct Nodes {
     members: Vec<Node>,
     http: reqwest::Client,
     /// A client per node that never refreshes metadata, so every request it
@@ -319,7 +320,7 @@ impl Nodes {
 
 /// `future`, or an error once the probe timeout passes.
 async fn bounded<T>(future: impl Future<Output = T>) -> Result<T, String> {
-    tokio::time::timeout(PROBE_TIMEOUT, future)
+    time::timeout(PROBE_TIMEOUT, future)
         .await
         .map_err(|_| format!("no answer within {PROBE_TIMEOUT:?}"))
 }

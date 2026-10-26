@@ -22,6 +22,7 @@ use {
     },
     krabka_units::convert::{ByteSizeExt as _, TimeExt as _},
     std::{collections::BTreeMap, sync::Arc},
+    tokio::time,
     tracing::{debug, error, warn},
     uuid::Uuid,
 };
@@ -168,9 +169,14 @@ async fn copy_one_inner(
     // object, which would leave orphans in a bucket that takes nothing back.
     let metadata = match chain {
         ChainPosition::Unchained => metadata,
-        ChainPosition::At(stamp) => {
-            metadata.with_custom_metadata(WormChainRecord::request(stamp).to_custom_metadata())
-        }
+        ChainPosition::At(stamp) => match WormChainRecord::request(stamp).to_custom_metadata() {
+            Ok(custom) => metadata.with_custom_metadata(custom),
+            Err(e) => {
+                warn!(topic = %tp.topic, partition = tp.partition, base = ex.base_offset.0,
+                      error = %e, "remote-log-manager: cannot encode WORM chain stamp");
+                return CopyOutcome::Failed;
+            }
+        },
         ChainPosition::Exhausted => return CopyOutcome::Failed,
     };
 
@@ -204,9 +210,9 @@ async fn copy_one_inner(
     // the upload is abandoned rather than stopped — it keeps running on the
     // blocking pool against a segment id no metadata will ever finish, and
     // its objects are what the next tick's fresh id copies again.
-    let rsm_copy = rsm.clone();
+    let rsm_copy = Arc::clone(rsm);
     let md_copy = metadata.clone();
-    let copy_result = tokio::time::timeout(
+    let copy_result = time::timeout(
         tier.copy_timeout.to_std(),
         spawn_blocking(move || rsm_copy.copy_log_segment_data(&md_copy, &data)),
     )
@@ -444,7 +450,7 @@ async fn rollback(
     let id = metadata.remote_log_segment_id().clone();
     match archive {
         ArchiveMode::Mutable => {
-            let rsm_del = rsm.clone();
+            let rsm_del = Arc::clone(rsm);
             let md_del = metadata.clone();
             let _ = spawn_blocking(move || rsm_del.delete_log_segment_data(&md_del)).await;
         }
@@ -483,7 +489,10 @@ mod tests {
             ChainHead, ChainStamp, CustomMetadata, EpochId, ManifestSeq, RemoteStorageError,
         },
         krabka_units::bytes,
-        std::sync::Mutex,
+        std::{
+            fs,
+            sync::{Mutex, PoisonError},
+        },
     };
 
     /// An RSM whose copy always fails, but whose delete succeeds. The tests
@@ -535,7 +544,7 @@ mod tests {
         ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
             self.seen
                 .lock()
-                .expect("captured-metadata mutex poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .push(metadata.clone());
             Err(RemoteStorageError::InvalidArgument("captured".into()))
         }
@@ -588,7 +597,7 @@ mod tests {
         ) -> Result<(), RemoteStorageError> {
             self.deleted
                 .lock()
-                .expect("deleted-segments mutex poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .push(metadata.remote_log_segment_id().id);
             Ok(())
         }
@@ -609,7 +618,7 @@ mod tests {
         rlmm: &Arc<dyn RemoteLogMetadataManager>,
         floor: Option<Offset>,
     ) -> CopyResidue {
-        let rsm: Arc<dyn RemoteStorageManager> = rsm_impl.clone();
+        let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
         let outcome = copy_one(
             &tier(ArchiveMode::Mutable, &rsm, rlmm),
             &tp(),
@@ -631,7 +640,7 @@ mod tests {
         let deletes = rsm_impl
             .deleted
             .lock()
-            .expect("deleted-segments mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .len();
         CopyResidue {
             outcome,
@@ -679,7 +688,7 @@ mod tests {
     async fn a_copy_marked_for_deletion_mid_copy_rolls_back() {
         let rlmm = fixtures::in_memory_metadata();
         let rsm_impl = Arc::new(DeletingRsm {
-            marking: Some(rlmm.clone()),
+            marking: Some(Arc::clone(&rlmm)),
             ..DeletingRsm::default()
         });
 
@@ -727,7 +736,7 @@ mod tests {
         let src = tempfile::tempdir().unwrap();
         let write = |name: &str, bytes: &[u8]| {
             let p = src.path().join(name);
-            std::fs::write(&p, bytes).unwrap();
+            fs::write(&p, bytes).unwrap();
             p
         };
         let export = SegmentExport {
@@ -774,12 +783,16 @@ mod tests {
             (
                 "write-once stamps the request form",
                 ChainPosition::At(stamp),
-                Some(WormChainRecord::request(stamp).to_custom_metadata()),
+                Some(
+                    WormChainRecord::request(stamp)
+                        .to_custom_metadata()
+                        .unwrap(),
+                ),
             ),
         ];
         for (name, chain, expected) in cases {
             let rsm_impl = Arc::new(CapturingRsm::default());
-            let rsm: Arc<dyn RemoteStorageManager> = rsm_impl.clone();
+            let rsm = Arc::clone(&rsm_impl) as Arc<dyn RemoteStorageManager>;
             let rlmm = fixtures::in_memory_metadata();
             let export = synth_export().call();
 
@@ -793,10 +806,7 @@ mod tests {
             .await;
 
             check!(matches!(outcome, CopyOutcome::Failed), "case {name}");
-            let seen = rsm_impl
-                .seen
-                .lock()
-                .expect("captured-metadata mutex poisoned");
+            let seen = rsm_impl.seen.lock().unwrap_or_else(PoisonError::into_inner);
             check!(seen.len() == 1, "case {name}");
             // The stamp is on the metadata the backend sees, which is the
             // same value the RLMM recorded as `CopySegmentStarted`.
@@ -804,6 +814,7 @@ mod tests {
                 seen[0].custom_metadata() == expected.as_ref(),
                 "case {name}"
             );
+            drop(seen);
         }
     }
 
@@ -824,7 +835,7 @@ mod tests {
         ];
         for receipt in cases {
             let rsm: Arc<dyn RemoteStorageManager> =
-                Arc::new(ReturningRsm(Some(receipt.to_custom_metadata())));
+                Arc::new(ReturningRsm(Some(receipt.to_custom_metadata().unwrap())));
             let rlmm = fixtures::in_memory_metadata();
 
             let outcome = copy_one(
@@ -941,7 +952,7 @@ mod tests {
 }
 
 /// The export's epoch map, using the caller's fallback only when no checkpoint exists.
-pub(crate) fn export_epoch_map(
+pub fn export_epoch_map(
     export: &SegmentExport,
     fallback: krabka_ids::LeaderEpoch,
 ) -> BTreeMap<krabka_ids::LeaderEpoch, i64> {

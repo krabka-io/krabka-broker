@@ -18,7 +18,11 @@ use {
     assert2::{assert, check},
     krabka_ids::PartitionIndex,
     krabka_log::Offset,
-    std::{sync::Arc, time::Duration},
+    std::{
+        path::Path,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
     tempfile::tempdir,
 };
 
@@ -64,7 +68,7 @@ struct OnePartition {
     part: Arc<Partition>,
 }
 
-fn one_partition(dir: &std::path::Path, timeout: Duration) -> OnePartition {
+fn one_partition(dir: &Path, timeout: Duration) -> OnePartition {
     let config = ShareCoordinatorConfig {
         state_topic_num_partitions: 1,
         write_timeout: timeout,
@@ -283,7 +287,7 @@ async fn a_prune_trims_only_committed_snapshots() {
                 &both,
                 &both,
                 krabka_raft::NodeId(1),
-                std::time::Instant::now(),
+                Instant::now(),
             );
         }
         let second = coord

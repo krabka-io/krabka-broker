@@ -17,6 +17,7 @@ use {
         support::topics::configured_topic_setup,
     },
     assert2::assert,
+    krabka_broker::throttle::TopicThrottle,
 };
 
 /// Test 1: `IncrementalAlterConfigs` with `resource_type=Broker` sets the
@@ -86,13 +87,9 @@ async fn topic_throttle_config_propagates() {
     handle
         .wait_for_image(|img| {
             let throttles_partition_0 = |broker| {
-                krabka_broker::throttle::TopicThrottle::for_topic(
-                    img,
-                    "foo",
-                    krabka_broker::NodeId(broker),
-                )
-                .leader
-                .contains(0)
+                TopicThrottle::for_topic(img, "foo", krabka_broker::NodeId(broker))
+                    .leader
+                    .contains(0)
             };
             throttles_partition_0(1) && throttles_partition_0(2) && !throttles_partition_0(3)
         })

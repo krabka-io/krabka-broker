@@ -1,22 +1,24 @@
 //! Lifecycle methods select the protocol's capabilities and delegate removals.
+#![cfg(test)]
 
 use {
     assert2::assert,
     std::{
         collections::HashMap,
+        mem,
         time::{Duration, Instant},
     },
 };
 
 mod metadata_epoch {
-    pub(crate) fn next_i32(epoch: i32) -> Option<i32> { epoch.checked_add(1) }
+    pub fn next_i32(epoch: i32) -> Option<i32> { epoch.checked_add(1) }
 }
 
 mod coordinator {
-    pub(crate) mod unified {
+    pub mod unified {
         use std::time::{Duration, Instant};
 
-        pub(crate) fn expired_member_ids<'a>(
+        pub fn expired_member_ids<'a>(
             members: impl Iterator<Item = (&'a str, Instant)>,
             now: Instant,
             timeout: Duration,
@@ -33,10 +35,10 @@ mod coordinator {
             expired
         }
 
-        pub(crate) mod member_helpers {
+        pub mod member_helpers {
             use std::time::Duration;
 
-            pub(crate) fn can_compute_next_target_assignment(
+            pub fn can_compute_next_target_assignment(
                 timestamp: i64,
                 interval: Duration,
                 now: i64,
@@ -71,9 +73,7 @@ impl<T> Consumer<T> {
         self.members.remove(id);
     }
 
-    fn rebalance_timeouts_due(&mut self, _: Instant) -> Vec<String> {
-        std::mem::take(&mut self.due)
-    }
+    fn rebalance_timeouts_due(&mut self, _: Instant) -> Vec<String> { mem::take(&mut self.due) }
 }
 
 #[derive(Default, krabka_macros::GroupLifecycle)]

@@ -16,7 +16,7 @@ use {
     std::{future::Future, net::IpAddr, sync::Arc},
     tokio::{
         sync::{Notify, watch},
-        time::Instant,
+        time::{self, Instant},
     },
     tokio_util::sync::CancellationToken,
     tracing::debug,
@@ -53,7 +53,7 @@ async fn run_with<Lookup, Found>(
     });
     tokio::select! {
         () = apply_images => {}
-        () = resolve_hosts(&latest, &buckets, &image_arrived, &lookup) => {}
+        never = resolve_hosts(&latest, &buckets, &image_arrived, &lookup) => match never {},
     }
 }
 
@@ -73,7 +73,8 @@ async fn resolve_hosts<Lookup, Found>(
     buckets: &QuotaBuckets,
     image_arrived: &Notify,
     lookup: &Lookup,
-) where
+) -> !
+where
     Lookup: Fn(String) -> Found,
     Found: Future<Output = Option<IpAddr>>,
 {
@@ -89,7 +90,7 @@ async fn resolve_hosts<Lookup, Found>(
         }
         match names.next_retry() {
             Some(at) => {
-                let _ = tokio::time::timeout_at(at, image_arrived.notified()).await;
+                let _ = time::timeout_at(at, image_arrived.notified()).await;
             }
             None => image_arrived.notified().await,
         }
@@ -187,6 +188,7 @@ mod tests {
             sync::atomic::{AtomicUsize, Ordering},
             time::Duration,
         },
+        tokio::{net, task::JoinHandle, time},
     };
 
     krabka_macros::fixture_constructors! { quota: img_with_quota -> Arc<MetadataImage> = shared_image_from_quota_setup; }
@@ -324,7 +326,7 @@ mod tests {
     /// its rate to the bucket of the address the host resolved to (#1214).
     #[tokio::test]
     async fn run_applies_a_host_name_entity_to_its_address() {
-        let peer = tokio::net::lookup_host("localhost:0")
+        let peer = net::lookup_host("localhost:0")
             .await
             .expect("localhost resolves")
             .next()
@@ -349,7 +351,7 @@ mod tests {
             if rate == bucket_rate(3.0) {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            time::sleep(Duration::from_millis(25)).await;
         }
         shutdown.cancel();
         task.await.expect("the refresh task stops on cancellation");
@@ -385,7 +387,7 @@ mod tests {
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
             let running = self.running.fetch_add(1, Ordering::SeqCst) + 1;
             self.most_running.fetch_max(running, Ordering::SeqCst);
-            tokio::time::sleep(self.delay).await;
+            time::sleep(self.delay).await;
             self.running.fetch_sub(1, Ordering::SeqCst);
             (call >= self.failures).then_some(self.address)
         }
@@ -399,7 +401,7 @@ mod tests {
         images: watch::Sender<Arc<MetadataImage>>,
         bucket: Arc<TokenBucket>,
         shutdown: CancellationToken,
-        task: tokio::task::JoinHandle<()>,
+        task: JoinHandle<()>,
     }
 
     impl Running {
@@ -453,7 +455,7 @@ mod tests {
         let mut seen = Vec::new();
         // (how long to let the clock run, then what to expect)
         for step in [500, 1_000, 2_000, 600_000] {
-            tokio::time::sleep(Duration::from_millis(step)).await;
+            time::sleep(Duration::from_millis(step)).await;
             seen.push((resolver.calls(), running.bucket.byte_rate()));
         }
         running.stop().await;
@@ -478,7 +480,7 @@ mod tests {
 
         // While the first lookup runs, ten more images arrive.
         for _ in 0..10 {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
             running
                 .images
                 .send(db_image())
@@ -487,7 +489,7 @@ mod tests {
         let mut calls = Vec::new();
         // The lookup ends at 3 s and the retry is due at 4 s.
         for step in [2_200, 300, 1_000] {
-            tokio::time::sleep(Duration::from_millis(step)).await;
+            time::sleep(Duration::from_millis(step)).await;
             running
                 .images
                 .send(db_image())
@@ -508,21 +510,21 @@ mod tests {
     async fn a_failed_host_whose_entity_is_gone_is_not_retried() {
         let resolver = Resolver::new(usize::MAX, Duration::ZERO);
         let running = Running::start(db_image(), &resolver);
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
         let first = resolver.calls();
 
         running
             .images
             .send(other_image())
             .expect("the task is running");
-        tokio::time::sleep(Duration::from_secs(3_600)).await;
+        time::sleep(Duration::from_secs(3_600)).await;
         let while_gone = resolver.calls();
 
         running
             .images
             .send(db_image())
             .expect("the task is running");
-        tokio::time::sleep(Duration::from_millis(1)).await;
+        time::sleep(Duration::from_millis(1)).await;
         let put_back = resolver.calls();
         running.stop().await;
 

@@ -12,7 +12,7 @@ use {
         support::{ContainerInput, jvm_docker_command, jvm_parse_offset},
     },
     assert2::assert,
-    std::io::Write as _,
+    std::{io::Write as _, process::Stdio},
 };
 
 /// `kafka-delete-records --offset-json-file <(...)`: produce 20
@@ -103,9 +103,9 @@ fn produce_lines(topic: &str, count: usize) {
         ])
         .input(ContainerInput::Attached)
         .call()
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("spawn producer");
     {

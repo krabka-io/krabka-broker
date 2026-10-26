@@ -1,19 +1,17 @@
 //! Shared retry and HTTP timeout fields of object-store configurations.
 
 use crate::{
-    meta::{ItemBody, named_body, no_arguments},
+    meta::{ItemBody, body_group, named_body, no_arguments},
     prelude::*,
 };
 
-pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     no_arguments(meta, "object_store_config")?;
     let ItemBody {
         mut tokens,
         body_index: body,
     } = named_body(item, "object_store_config")?;
-    let TokenTree::Group(group) = &mut tokens[body] else {
-        unreachable!()
-    };
+    let group = body_group(&mut tokens, body)?;
     group.tokens.extend(moxy::template! {
         /// How many times one request is retried before the error surfaces.
         /// Defaults to [`DEFAULT_MAX_RETRIES`]; `0` disables retries.

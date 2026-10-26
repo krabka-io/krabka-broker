@@ -1,4 +1,5 @@
 //! What `#[derive(PrimitiveCmp)]` compares, in both directions.
+#![cfg(test)]
 
 use {assert2::assert, krabka_macros::PrimitiveCmp};
 

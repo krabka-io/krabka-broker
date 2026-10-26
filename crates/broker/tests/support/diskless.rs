@@ -1,6 +1,29 @@
 //! Peer identity and distinct-rack placement for native diskless WAL clusters.
 
-use {crate::support::NodeIndex, krabka_broker::NodeId};
+use {
+    crate::support::NodeIndex,
+    krabka_broker::{
+        NodeId,
+        config::{InterBrokerCredentials, KafkaRlmmConfig, RlmmKind},
+    },
+    std::path::PathBuf,
+};
+
+/// The topic-backed metadata log a diskless WAL cluster's flush index lives
+/// in: one partition replicated across `voters` brokers, so the index stays
+/// cheap and survives a leader loss, with every broker bootstrapping its
+/// client against `bootstrap`.
+pub fn flush_index_metadata(bootstrap: String, voters: usize) -> RlmmKind {
+    RlmmKind::TopicBacked(KafkaRlmmConfig {
+        bootstrap,
+        num_partitions: 1,
+        replication: i32::try_from(voters).expect("small cluster"),
+        snapshot_interval: krabka_units::hours(1),
+        snapshot_dir: PathBuf::new(), // derived from log_dir
+        security: None,
+        ..KafkaRlmmConfig::default()
+    })
+}
 
 #[derive(derive_more::From, derive_more::Into, Clone, Copy)]
 pub struct WalVoterCount(pub usize);
@@ -64,7 +87,7 @@ pub fn configure_identity(
         voters,
         password,
     };
-    config.inter_broker_credentials = Some(krabka_broker::config::InterBrokerCredentials::Plain {
+    config.inter_broker_credentials = Some(InterBrokerCredentials::Plain {
         username: broker_principal(setup.node),
         password: setup.password.to_owned(),
     });

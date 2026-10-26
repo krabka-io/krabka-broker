@@ -53,7 +53,7 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use self::plan::process_one_partition;
+pub use self::plan::process_one_partition;
 use {
     self::{
         cancel_approval::{ReassignBatch, ReassignEnv, alter_one},
@@ -64,9 +64,10 @@ use {
         freeze::resolve::resolve_freeze_mutation,
         handlers::{audit_resource, stamp_unset},
     },
+    std::mem,
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: AlterPartitionReassignmentsRequest,
     _version: ApiVersion,
@@ -116,7 +117,7 @@ pub(crate) async fn handle(
             Ok(()) => {
                 if let Err(error) = broker
                     .controller
-                    .submit_change(std::mem::take(&mut batch.records))
+                    .submit_change(mem::take(&mut batch.records))
                     .await
                 {
                     let message = format!("submit failed: {error}");

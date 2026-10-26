@@ -6,8 +6,7 @@
 //! what they do to its epoch afterwards, so the setup lives here instead of
 //! being repeated beside each of them.
 
-pub use crate::support::boot_single;
-pub(crate) use crate::support::topic_id_for;
+pub use crate::support::{boot_single, topic_id_for};
 use {
     crate::support::{
         client::connect_client,
@@ -19,8 +18,8 @@ use {
     krabka_protocol::records::RecordBatch,
 };
 
-pub(crate) async fn create_topic(broker: &BrokerHandle, bootstrap: &str, name: &str) {
-    let client = connect_client(bootstrap.to_string(), None).await;
+pub async fn create_topic(broker: &BrokerHandle, bootstrap: &str, name: &str) {
+    let client = connect_client(bootstrap.to_owned(), None).await;
     let _ = client
         .send(create_topic_request(
             creatable_topic().name((name).into()).call(),
@@ -30,7 +29,7 @@ pub(crate) async fn create_topic(broker: &BrokerHandle, bootstrap: &str, name: &
     broker.wait_until_partition_present(name, 0).await;
 }
 
-pub(crate) async fn set_leader_epoch(broker: &BrokerHandle, name: &str, epoch: i32) {
+pub async fn set_leader_epoch(broker: &BrokerHandle, name: &str, epoch: i32) {
     // Keep reconciliation on the same epoch as the appends under test.
     let mut partition = broker
         .partition_record_for_test(name, 0)
@@ -46,10 +45,10 @@ pub(crate) async fn set_leader_epoch(broker: &BrokerHandle, name: &str, epoch: i
         .await;
 }
 
-pub(crate) fn record(value: &str) -> RecordBatch {
+pub fn record(value: &str) -> RecordBatch {
     let mut b = RecordBatch::default();
     b.records
-        .push(value_record(0, Some(Bytes::from(value.to_string()))));
+        .push(value_record(0, Some(Bytes::from(value.to_owned()))));
     b.last_offset_delta = 0;
     b
 }

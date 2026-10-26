@@ -31,6 +31,7 @@ use {
         sync::{Arc, Mutex},
         time::SystemTime,
     },
+    tokio::sync,
 };
 
 /// What a failed or panicked compaction task reports.
@@ -62,7 +63,7 @@ impl BuildingCompaction {
 /// bound agree.
 pub(super) async fn start_compaction(
     (log, log_dir, registry): LogStorage<'_>,
-    replica_state: &tokio::sync::Mutex<ReplicaState>,
+    replica_state: &sync::Mutex<ReplicaState>,
     ack: MaintenanceAck,
 ) -> Option<BuildingCompaction> {
     let high_watermark = replica_state.lock().await.hw;

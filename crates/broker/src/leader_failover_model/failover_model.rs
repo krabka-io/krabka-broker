@@ -202,10 +202,9 @@ impl Model for FailoverModel {
                 s.isr.contains(&s.leader)
             }),
             // The witness invariant: no reachable state has a witness leader.
-            Property::always(
-                "leader_never_witness",
-                |model: &FailoverModel, s: &FailoverState| !model.witnesses.contains(&s.leader),
-            ),
+            Property::always("leader_never_witness", |model: &Self, s: &FailoverState| {
+                !model.witnesses.contains(&s.leader)
+            }),
             Property::sometimes("can_elect", |_, s: &FailoverState| s.leader_epoch > 0),
             // Without re-admission every election would ratchet the ISR down
             // for good; this is the witness that a revived replica gets back.
@@ -222,7 +221,7 @@ impl Model for FailoverModel {
             // is what keeps `acks=all` writable after a site loss.
             properties.push(Property::sometimes(
                 "witness_stays_in_isr_after_election",
-                |model: &FailoverModel, s: &FailoverState| {
+                |model: &Self, s: &FailoverState| {
                     s.leader_epoch > 0 && s.isr.iter().any(|n| model.witnesses.contains(n))
                 },
             ));

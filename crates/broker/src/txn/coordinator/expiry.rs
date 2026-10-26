@@ -77,7 +77,7 @@ fn state_allows_expiration(state: TxnState) -> bool {
 /// negative elapsed time through a saturating subtraction and so yields
 /// `false`, never a spurious expiry.
 #[must_use]
-pub(crate) fn should_expire_transactional_id(
+pub fn should_expire_transactional_id(
     state: TxnState,
     last_update_ms: i64,
     now_ms: i64,
@@ -137,7 +137,7 @@ impl TxnCoordinator {
             // The same ownership check every other coordinator path makes:
             // only the broker that leads a tid's `__transaction_state`
             // partition decides its fate.
-            if !self.is_coordinator_for(&tid).await {
+            if !self.is_transaction_coordinator_for(&tid).await {
                 continue;
             }
             // A load holds the state-partition lock across its replay, so the
@@ -168,15 +168,19 @@ impl TxnCoordinator {
             // re-create the id once its tombstone is in the log.
             let before_expiry = entry.state;
             entry.state = TxnState::Dead;
-            match self.tombstone(&entry).await {
+            let tombstoned = self.tombstone(&entry).await;
+            if tombstoned.is_err() {
+                // The id is still live: nothing was appended and nothing
+                // was unpublished, so it must not read as dead.
+                entry.state = before_expiry;
+            }
+            drop(entry);
+            match tombstoned {
                 Ok(()) => {
                     info!(tid, "txn id expiry: tombstoned expired transactional id");
                     expired.push(tid);
                 }
                 Err(error) => {
-                    // The id is still live: nothing was appended and nothing
-                    // was unpublished, so it must not read as dead.
-                    entry.state = before_expiry;
                     warn!(tid, %error, "txn id expiry: tombstone append failed; will retry");
                 }
             }

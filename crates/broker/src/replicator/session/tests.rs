@@ -7,7 +7,7 @@ use {super::*, assert2::check};
 
 fn key(topic: &str, partition: i32) -> SessionKey {
     SessionKey {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         topic_id: WireUuid([7; 16]),
         partition,
     }
@@ -47,7 +47,7 @@ struct SentRow {
 /// A [`SentRow`] of `topic`, `partition` at `fetch_offset`.
 fn sent(topic: &str, partition: i32, fetch_offset: i64) -> SentRow {
     SentRow {
-        topic: topic.to_string(),
+        topic: topic.to_owned(),
         partition,
         fetch_offset,
     }
@@ -132,7 +132,7 @@ fn a_partition_this_follower_stopped_following_is_forgotten_once() {
             .iter()
             .map(|topic| (topic.topic.clone(), topic.partitions.clone()))
             .collect::<Vec<_>>()
-            == vec![("a".to_string(), vec![1]), ("b".to_string(), vec![0]),]
+            == vec![("a".to_owned(), vec![1]), ("b".to_owned(), vec![0]),]
     );
     // Forgotten is a delta, not a standing list.
     check!(after.forgotten_topics_data.is_empty());

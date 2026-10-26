@@ -6,6 +6,7 @@
 //! the next connection the broker accepts, as Kafka 4.3.1's
 //! `DynamicListenerConfig` and `ConnectionQuotas` apply it. Deleting the
 //! config restores the static value, again without a restart.
+#![cfg(test)]
 
 mod kafka_wire;
 mod support;
@@ -20,6 +21,7 @@ use {
         wire::HeaderEncoding,
     },
     assert2::assert,
+    krabka_broker::codes,
     krabka_protocol::owned::{
         describe_configs_request::DescribeConfigsRequest,
         describe_configs_response::{DescribeConfigsResourceResult, DescribeConfigsResponse},
@@ -31,7 +33,10 @@ use {
         net::{IpAddr, Ipv4Addr, SocketAddr},
         time::{Duration, Instant},
     },
-    tokio::net::{TcpSocket, TcpStream},
+    tokio::{
+        net::{TcpSocket, TcpStream},
+        time,
+    },
 };
 
 /// The client id every request header in this suite carries.
@@ -114,7 +119,7 @@ async fn eventually_served_from(addr: SocketAddr, source: Option<IpAddr>, want: 
         // its slot when its connection task sees the close. Neither has a
         // signal a test can wait on, so each iteration re-drives the real
         // connect and round trip.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -181,10 +186,7 @@ async fn describe_broker(
         .into_iter()
         .next()
         .expect("one resource result");
-    assert!(
-        result.error_code == krabka_broker::codes::NONE,
-        "{result:?}"
-    );
+    assert!(result.error_code == codes::NONE, "{result:?}");
     result.configs.into_iter().find(|entry| entry.name == key)
 }
 
@@ -199,14 +201,14 @@ async fn hold_one_from(addr: SocketAddr, source: Option<IpAddr>) -> TcpStream {
             return stream;
         }
         assert!(Instant::now() < deadline, "no connection slot came free");
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 }
 
 /// The response row of an alter that succeeded on `resource_name`.
 fn accepted(resource_name: String) -> AlterConfigsResourceResponse {
     AlterConfigsResourceResponse {
-        error_code: krabka_broker::codes::NONE,
+        error_code: codes::NONE,
         error_message: None,
         resource_type: BROKER_RESOURCE,
         resource_name,
@@ -399,7 +401,7 @@ async fn invalid_broker_config_changes_are_refused_with_kafkas_errors() {
                 .await;
             assert!(
                 row == AlterConfigsResourceResponse {
-                    error_code: krabka_broker::codes::INVALID_REQUEST,
+                    error_code: codes::INVALID_REQUEST,
                     error_message: Some(message.clone()),
                     ..accepted(resource.clone())
                 },

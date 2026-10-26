@@ -45,7 +45,7 @@ use {
 /// A job that carries a proposal took the operator path, where the handler
 /// already spent an approved proposal. None of this applies to it.
 #[derive(Debug, Clone)]
-pub(crate) struct BackgroundRecovery {
+pub struct BackgroundRecovery {
     /// Whether this broker runs the two-person rule at all.
     ///
     /// An empty `break_glass.approvers` turns the workflow off, and nobody can

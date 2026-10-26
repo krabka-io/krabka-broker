@@ -1,4 +1,5 @@
 //! Real Stateright checkers distinguish the two declared runner diagnostic orders.
+#![cfg(test)]
 
 use {
     assert2::assert,

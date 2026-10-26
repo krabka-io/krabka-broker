@@ -3,12 +3,12 @@
 use {
     crate::fixtures::{CommaArguments, name as fixture_name},
     moxy::{
-        ast::ParseError,
+        ast::{ParseError, Visibility},
         token::{Delim, Span, TokenStream, TokenTree},
     },
 };
 
-pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
     let arguments = CommaArguments::new(input);
     let parts = arguments.parts();
     let Some([TokenTree::Ident(mode)]) = parts.first().copied() else {
@@ -86,7 +86,7 @@ fn arguments_error(span: Span) -> ParseError {
 }
 
 /// Preserve absent, empty and ordered SCRAM user filters as distinct requests.
-pub(crate) fn scram_users(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn scram_users(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = fixture_name(input)?;
     Ok(moxy::template! {
         fn {{ name }}(users_filter: Option<Vec<String>>) -> ::krabka_protocol::owned::describe_user_scram_credentials_request::DescribeUserScramCredentialsRequest {
@@ -103,7 +103,7 @@ pub(crate) fn scram_users(input: TokenStream) -> Result<TokenStream, ParseError>
 }
 
 /// Construct the request's ordered directories, topics and partition assignments.
-pub(crate) fn assignment_dirs(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn assignment_dirs(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = fixture_name(input)?;
     Ok(moxy::template! {
         #[derive(Clone, Copy, ::krabka_macros::FieldDefaults)]
@@ -145,7 +145,7 @@ pub(crate) fn assignment_dirs(input: TokenStream) -> Result<TokenStream, ParseEr
 }
 
 /// Keep registry guards and finish diagnostics in the caller's original scope.
-pub(crate) fn metric_registry(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn metric_registry(input: TokenStream) -> Result<TokenStream, ParseError> {
     let error = ParseError::new(
         input.span(),
         "expected metrics, output, guard; finish(args)",
@@ -185,7 +185,7 @@ pub(crate) fn metric_registry(input: TokenStream) -> Result<TokenStream, ParseEr
 }
 
 /// Read epoch milliseconds with each caller's original checked conversions.
-pub(crate) fn unix_millis(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn unix_millis(input: TokenStream) -> Result<TokenStream, ParseError> {
     let arguments = CommaArguments::new(input);
     let parts = arguments.parts();
     let [binding, epoch_context, conversion_context] = parts.as_slice() else {
@@ -204,7 +204,7 @@ pub(crate) fn unix_millis(input: TokenStream) -> Result<TokenStream, ParseError>
         ));
     }
     let visibility = TokenStream::from(visibility);
-    let visibility = moxy::parse!({ visibility } as moxy::ast::Visibility)?;
+    let visibility = moxy::parse!({ visibility } as Visibility)?;
     let epoch_context = TokenStream::from(*epoch_context);
     let conversion_context = TokenStream::from(*conversion_context);
     Ok(moxy::template! {
@@ -224,7 +224,7 @@ pub(crate) fn unix_millis(input: TokenStream) -> Result<TokenStream, ParseError>
 }
 
 /// Preserve the Vec frame allocation and each fixture's signed length limit.
-pub(crate) fn vector_request(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn vector_request(input: TokenStream) -> Result<TokenStream, ParseError> {
     let tokens = Vec::from(input);
     let [TokenTree::Ident(name), comma, TokenTree::Ident(length)] = tokens.as_slice() else {
         return Err(ParseError::new(Span::call_site(), "expected name, u32|i32"));
@@ -256,7 +256,10 @@ pub(crate) fn vector_request(input: TokenStream) -> Result<TokenStream, ParseErr
 
 #[cfg(test)]
 mod tests {
-    use super::{expand, metric_registry};
+    use {
+        super::{expand, metric_registry},
+        moxy::ast::{ItemFn, ItemStruct, Parse},
+    };
 
     #[yare::parameterized(
         expect = { "expect" },
@@ -268,8 +271,8 @@ mod tests {
             .unwrap();
         let output = expand(input).unwrap();
         let parser = moxy::ast::Parser::from_tokens(&output);
-        let _: moxy::ast::ItemStruct = moxy::ast::Parse::parse(&parser).unwrap();
-        let _: moxy::ast::ItemFn = moxy::ast::Parse::parse(&parser).unwrap();
+        let _: ItemStruct = Parse::parse(&parser).unwrap();
+        let _: ItemFn = Parse::parse(&parser).unwrap();
         assert2::assert!(parser.is_empty());
         let rendered = output.to_string();
         assert2::assert!(!rendered.contains("macro_rules"));

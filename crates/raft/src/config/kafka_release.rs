@@ -126,12 +126,12 @@ pub const KAFKA_4_3_1_APIS: &[ReleasedApi] = &[
 /// api key.
 #[must_use]
 pub const fn kafka_4_3_1_api(api_key: i16) -> Option<ReleasedApi> {
-    let mut index = 0;
-    while index < KAFKA_4_3_1_APIS.len() {
-        if KAFKA_4_3_1_APIS[index].api_key == api_key {
-            return Some(KAFKA_4_3_1_APIS[index]);
+    let mut rest: &[ReleasedApi] = KAFKA_4_3_1_APIS;
+    while let [row, tail @ ..] = rest {
+        if row.api_key == api_key {
+            return Some(*row);
         }
-        index += 1;
+        rest = tail;
     }
     None
 }

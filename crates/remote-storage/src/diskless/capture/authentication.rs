@@ -9,7 +9,7 @@ use {
         verify_manifest_signature,
     },
     krabka_audit::FileEd25519Signer,
-    std::collections::BTreeMap,
+    std::collections::{BTreeMap, BTreeSet},
     uuid::Uuid,
 };
 
@@ -36,12 +36,12 @@ impl DisklessWalCapture {
             .iter()
             .flat_map(|partition| &partition.ranges)
             .map(|range| range.object_key.clone())
-            .collect::<std::collections::BTreeSet<_>>();
+            .collect::<BTreeSet<_>>();
         objects.sort_by(|a, b| a.key.cmp(&b.key));
         let actual = objects
             .iter()
             .map(|object| object.key.clone())
-            .collect::<std::collections::BTreeSet<_>>();
+            .collect::<BTreeSet<_>>();
         if expected != actual || objects.len() != actual.len() {
             return Err("signed WAL claims do not exactly cover capture references".to_owned());
         }
@@ -162,7 +162,7 @@ impl DisklessWalCapture {
             .iter()
             .flat_map(|partition| &partition.ranges)
             .map(|range| range.object_key.as_str())
-            .collect::<std::collections::BTreeSet<_>>();
+            .collect::<BTreeSet<_>>();
         if expected != claims.keys().map(String::as_str).collect() {
             return Err("signed WAL claims do not exactly cover capture references".to_owned());
         }

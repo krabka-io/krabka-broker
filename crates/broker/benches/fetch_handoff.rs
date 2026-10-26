@@ -27,15 +27,22 @@
 //! of real reading.
 
 use {
-    criterion::{Criterion, criterion_group, criterion_main},
-    krabka_log::{Log, LogConfig, Offset},
+    criterion::Criterion,
+    krabka_log::{Log, LogConfig, LogError, Offset},
     krabka_units::prelude::{ByteSize, mebibytes},
     std::{
-        sync::{Arc, Mutex},
+        io, iter,
+        sync::{Arc, Mutex, PoisonError},
         time::{Duration, Instant},
     },
     tempfile::TempDir,
+    tokio::{runtime::Runtime, task},
 };
+
+#[path = "support/first_error.rs"]
+mod first_error;
+
+use first_error::{BenchError, FirstError};
 
 /// Partition counts: a single-partition fetch, a modest subscription, and the
 /// wide one from the issue that motivated the measurement.
@@ -81,37 +88,52 @@ struct BenchPartition {
 
 krabka_macros::record_batch_fixture!(make_batch);
 
+/// One partition log holding one batch of the given shape.
+fn partition(records: i32, payload: usize) -> Result<BenchPartition, BenchError> {
+    let dir = tempfile::tempdir()?;
+    let mut log = Log::open(dir.path(), LogConfig::default())?;
+    log.append(&mut make_batch(records, payload))?;
+    let limit = log.log_end_offset();
+    Ok(BenchPartition {
+        _dir: dir,
+        log: Mutex::new(log),
+        limit,
+    })
+}
+
 /// `count` partition logs, each holding one batch of the given shape.
-fn partitions(count: usize, records: i32, payload: usize) -> Arc<Vec<BenchPartition>> {
-    Arc::new(
-        (0..count)
-            .map(|_| {
-                let dir = tempfile::tempdir().expect("temp dir");
-                let mut log = Log::open(dir.path(), LogConfig::default()).expect("open log");
-                log.append(&mut make_batch(records, payload))
-                    .expect("append the partition's batch");
-                let limit = log.log_end_offset();
-                BenchPartition {
-                    _dir: dir,
-                    log: Mutex::new(log),
-                    limit,
-                }
-            })
-            .collect(),
-    )
+fn partitions(
+    count: usize,
+    records: i32,
+    payload: usize,
+) -> Result<Arc<[BenchPartition]>, BenchError> {
+    iter::repeat_with(|| partition(records, payload))
+        .take(count)
+        .collect::<Result<Vec<_>, _>>()
+        .map(Arc::from)
 }
 
 /// The blocking work one partition of a fetch does: take the log mutex, seek,
 /// and copy the records run out.
-fn read_one(partition: &BenchPartition) -> usize {
-    let log = partition.log.lock().expect("log mutex poisoned");
-    log.read_raw(Offset(0), partition.limit, UNBOUNDED)
-        .expect("the bench log always holds the range it is asked for")
+fn read_one(partition: &BenchPartition) -> Result<usize, LogError> {
+    let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
+    Ok(log
+        .read_raw(Offset(0), partition.limit, UNBOUNDED)?
         .bytes
-        .len()
+        .len())
 }
 
-fn read_all(partitions: &[BenchPartition]) -> usize { partitions.iter().map(read_one).sum() }
+/// [`read_one`] on the partition at `index`.
+fn read_at(partitions: &[BenchPartition], index: usize) -> Result<usize, BenchError> {
+    let partition = partitions
+        .get(index)
+        .ok_or("partition index out of range")?;
+    Ok(read_one(partition)?)
+}
+
+fn read_all(partitions: &[BenchPartition]) -> Result<usize, LogError> {
+    partitions.iter().map(read_one).sum()
+}
 
 /// The three hand-off shapes, in report order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,78 +164,83 @@ impl Handoff {
 }
 
 /// Serve one fetch across every partition, under one hand-off shape.
-async fn serve_fetch(handoff: Handoff, partitions: &Arc<Vec<BenchPartition>>) -> usize {
+async fn serve_fetch(
+    handoff: Handoff,
+    partitions: &Arc<[BenchPartition]>,
+) -> Result<usize, BenchError> {
     match handoff {
         Handoff::PerPartition => {
             let mut bytes = 0;
             for index in 0..partitions.len() {
                 let partitions = Arc::clone(partitions);
-                bytes += tokio::task::spawn_blocking(move || read_one(&partitions[index]))
-                    .await
-                    .expect("the read task does not panic");
+                bytes += task::spawn_blocking(move || read_at(&partitions, index)).await??;
             }
-            bytes
+            Ok(bytes)
         }
         Handoff::Batched => {
             let partitions = Arc::clone(partitions);
-            tokio::task::spawn_blocking(move || read_all(&partitions))
-                .await
-                .expect("the read task does not panic")
+            Ok(task::spawn_blocking(move || read_all(&partitions)).await??)
         }
-        Handoff::InPlace => partitions
+        Handoff::InPlace => Ok(partitions
             .iter()
-            .map(|partition| tokio::task::block_in_place(|| read_one(partition)))
-            .sum(),
+            .map(|partition| task::block_in_place(|| read_one(partition)))
+            .sum::<Result<usize, LogError>>()?),
     }
 }
 
 /// A multi-threaded runtime, which is what the broker's `#[tokio::main]` gives
 /// it and what `block_in_place` requires: it panics on a current-thread
 /// runtime, so the `InPlace` arm cannot even be measured without one.
-fn runtime() -> tokio::runtime::Runtime {
-    tokio::runtime::Runtime::new().expect("build a multi-threaded runtime")
-}
+fn runtime() -> io::Result<Runtime> { Runtime::new() }
 
 /// Serve `iters` fetches, returning only the time they took.
 fn timed_fetches(
-    runtime: &tokio::runtime::Runtime,
+    runtime: &Runtime,
     handoff: Handoff,
-    partitions: &Arc<Vec<BenchPartition>>,
+    partitions: &Arc<[BenchPartition]>,
     iters: u64,
-) -> Duration {
+) -> Result<Duration, BenchError> {
     runtime.block_on(async {
         // One untimed fetch, so the pool's threads are already spun up and the
         // partition files are already in page cache when the clock starts.
-        serve_fetch(handoff, partitions).await;
+        serve_fetch(handoff, partitions).await?;
         let start = Instant::now();
         for _ in 0..iters {
-            serve_fetch(handoff, partitions).await;
+            serve_fetch(handoff, partitions).await?;
         }
-        start.elapsed()
+        Ok(start.elapsed())
     })
 }
 
-fn bench_fetch_handoff(c: &mut Criterion) {
-    let mut group = c.benchmark_group("broker/fetch_handoff");
-    let runtime = runtime();
-
-    for BatchShape {
-        label: shape,
-        records,
-        payload,
-    } in SHAPES
+fn bench_fetch_handoff(c: &mut Criterion) -> Result<(), BenchError> {
+    let runtime = runtime()?;
+    let failure = FirstError::default();
     {
-        for count in PARTITION_COUNTS {
-            let partitions = partitions(count, records, payload);
-            for handoff in Handoff::ALL {
-                group.bench_function(format!("{shape}/{count}p/{}", handoff.name()), |b| {
-                    b.iter_custom(|iters| timed_fetches(&runtime, handoff, &partitions, iters));
-                });
+        let mut group = c.benchmark_group("broker/fetch_handoff");
+
+        for BatchShape {
+            label: shape,
+            records,
+            payload,
+        } in SHAPES
+        {
+            for count in PARTITION_COUNTS {
+                let partitions = partitions(count, records, payload)?;
+                for handoff in Handoff::ALL {
+                    group.bench_function(format!("{shape}/{count}p/{}", handoff.name()), |b| {
+                        b.iter_custom(|iters| {
+                            failure
+                                .keep(timed_fetches(&runtime, handoff, &partitions, iters))
+                                .unwrap_or(Duration::ZERO)
+                        });
+                    });
+                }
             }
         }
-    }
 
-    group.finish();
+        group.finish();
+    }
+    failure.into_result()
 }
 
 /// Print microseconds per fetch for each hand-off shape, and the two ratios
@@ -222,7 +249,7 @@ fn bench_fetch_handoff(c: &mut Criterion) {
 /// Criterion compares a benchmark against its own previous run, not against a
 /// sibling, so the number this suite exists for — what the per-partition
 /// hand-off costs against batching it — has to be computed here.
-fn bench_ratio(_c: &mut Criterion) {
+fn bench_ratio(_c: &mut Criterion) -> Result<(), BenchError> {
     /// Fetches per measurement run.
     const SAMPLES: u32 = 50;
     /// Measurement runs per case, of which the fastest is the one reported.
@@ -232,7 +259,7 @@ fn bench_ratio(_c: &mut Criterion) {
     /// is the estimator it cannot pull the wrong way.
     const RUNS: u32 = 5;
 
-    let runtime = runtime();
+    let runtime = runtime()?;
     println!(
         "\nbroker/fetch_handoff — microseconds per fetch (fastest of {RUNS} runs), and what the per-partition hand-off costs"
     );
@@ -253,21 +280,10 @@ fn bench_ratio(_c: &mut Criterion) {
     } in SHAPES
     {
         for count in PARTITION_COUNTS {
-            let partitions = partitions(count, records, payload);
-            let micros: Vec<f64> = Handoff::ALL
-                .into_iter()
-                .map(|handoff| {
-                    (0..RUNS)
-                        .map(|_| {
-                            timed_fetches(&runtime, handoff, &partitions, u64::from(SAMPLES))
-                                .as_secs_f64()
-                                * 1.0e6
-                                / f64::from(SAMPLES)
-                        })
-                        .fold(f64::INFINITY, f64::min)
-                })
-                .collect();
-            let (per_partition, batched, in_place) = (micros[0], micros[1], micros[2]);
+            let partitions = partitions(count, records, payload)?;
+            let [per_partition, batched, in_place] = Handoff::ALL
+                .map(|handoff| fastest_micros(&runtime, handoff, &partitions, SAMPLES, RUNS));
+            let (per_partition, batched, in_place) = (per_partition?, batched?, in_place?);
             println!(
                 "{shape:<14} {count:>6} {per_partition:>14.1} {batched:>14.1} {in_place:>14.1} {:>13.2}x {:>13.2}x",
                 per_partition / batched,
@@ -276,7 +292,24 @@ fn bench_ratio(_c: &mut Criterion) {
         }
     }
     println!();
+    Ok(())
 }
 
-criterion_group!(benches, bench_fetch_handoff, bench_ratio);
-criterion_main!(benches);
+/// Microseconds per fetch for one hand-off shape: the fastest of `runs`
+/// measurement runs of `samples` fetches each.
+fn fastest_micros(
+    runtime: &Runtime,
+    handoff: Handoff,
+    partitions: &Arc<[BenchPartition]>,
+    samples: u32,
+    runs: u32,
+) -> Result<f64, BenchError> {
+    let mut fastest = f64::INFINITY;
+    for _ in 0..runs {
+        let elapsed = timed_fetches(runtime, handoff, partitions, u64::from(samples))?;
+        fastest = fastest.min(elapsed.as_secs_f64() * 1.0e6 / f64::from(samples));
+    }
+    Ok(fastest)
+}
+
+krabka_macros::bench_main!(bench_fetch_handoff, bench_ratio);

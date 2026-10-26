@@ -1,6 +1,7 @@
 use {
     super::*,
     assert2::assert,
+    proptest::collection,
     std::collections::{BTreeMap, HashSet},
 };
 
@@ -59,8 +60,8 @@ fn check_seek(
 proptest! {
     #[test]
     fn offset_seek_rejects_arbitrary_invalid_archives(
-        rows in proptest::collection::vec(any::<(u32, u32)>().prop_map(|(key, coordinate)| OffsetEntry::new(key, coordinate)), 0..12),
-        batches in proptest::collection::vec(any::<(u32, u32)>().prop_map(|(key, coordinate)| OffsetEntry::new(key, coordinate)), 0..12),
+        rows in collection::vec(any::<(u32, u32)>().prop_map(|(key, coordinate)| OffsetEntry::new(key, coordinate)), 0..12),
+        batches in collection::vec(any::<(u32, u32)>().prop_map(|(key, coordinate)| OffsetEntry::new(key, coordinate)), 0..12),
         target in any::<u32>(), max_relative in any::<i64>(), log_bytes in any::<u64>(),
     ) {
         check_seek(&rows, &batches, target, max_relative, log_bytes);
@@ -68,7 +69,7 @@ proptest! {
 
     #[test]
     fn sparse_offset_seek_matches_full_batch_scan(
-        offsets in proptest::collection::btree_set(0u32..1000, 0..20),
+        offsets in collection::btree_set(0u32..1000, 0..20),
         selected in any::<u32>(), target in 0u32..1100,
     ) {
         let batches: Vec<_> = offsets.into_iter().enumerate().map(|(i, offset)| {

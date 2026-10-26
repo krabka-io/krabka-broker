@@ -1,5 +1,4 @@
-// Rust 1.95 annotate-snippets ICE on `clippy::pedantic` in test files
-// (same upstream bug as `tests/mtls.rs` etc).
+#![cfg(test)]
 
 //! The `/healthz` and `/readyz` probes across a broker's startup.
 //!
@@ -17,7 +16,7 @@
 mod support;
 
 use {
-    crate::support::client::http_get,
+    crate::support::{client::http_get, listeners},
     assert2::{assert, check},
     krabka_broker::{
         Broker, BrokerConfig,
@@ -25,8 +24,8 @@ use {
         health::{HealthState, router},
     },
     krabka_security::ListenerProtocol,
-    std::{net::SocketAddr, time::Duration},
-    tokio::net::TcpListener,
+    std::{net::SocketAddr, path::Path, time::Duration},
+    tokio::{net::TcpListener, time},
 };
 
 /// The status line and body of one HTTP response.
@@ -39,10 +38,10 @@ struct ProbeResponse {
 async fn get(addr: SocketAddr, path: &str) -> ProbeResponse {
     let raw = http_get(addr, path, true).await;
     let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw.as_str(), ""));
-    let status = head.lines().next().unwrap_or_default().to_string();
+    let status = head.lines().next().unwrap_or_default().to_owned();
     ProbeResponse {
         status,
-        body: body.to_string(),
+        body: body.to_owned(),
     }
 }
 
@@ -57,9 +56,9 @@ async fn serve_probes(state: HealthState) -> SocketAddr {
     bound
 }
 
-fn loopback_config(log_dir: &std::path::Path) -> BrokerConfig {
+fn loopback_config(log_dir: &Path) -> BrokerConfig {
     let mut cfg = BrokerConfig::for_tests(log_dir.to_path_buf());
-    cfg.listeners = vec![crate::support::listeners::loopback_listener(
+    cfg.listeners = vec![listeners::loopback_listener(
         "PLAINTEXT",
         ListenerProtocol::Plaintext,
     )];
@@ -134,7 +133,7 @@ async fn readyz_names_each_condition_as_startup_advances() {
 struct RunningProbes {
     log_dir: tempfile::TempDir,
     state: HealthState,
-    probes: std::net::SocketAddr,
+    probes: SocketAddr,
     handle: krabka_broker::BrokerHandle,
 }
 
@@ -168,7 +167,7 @@ async fn readyz_stays_200_while_the_broker_runs() {
     for _ in 0..3 {
         let ProbeResponse { status, .. } = get(probes, "/readyz").await;
         check!(status.contains("200 OK"), "{status}");
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        time::sleep(Duration::from_millis(50)).await;
     }
 
     handle.shutdown().await;

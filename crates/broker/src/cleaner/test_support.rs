@@ -14,7 +14,7 @@ use {
     krabka_ids::PartitionIndex,
     krabka_metadata::NodeId,
     krabka_protocol::records::{Record, RecordBatch},
-    std::sync::Arc,
+    std::{fs, path::PathBuf, sync::Arc},
     tempfile::TempDir,
 };
 
@@ -40,7 +40,7 @@ fn keyed_batch(base: i64, key: &[u8], value: &[u8]) -> RecordBatch {
 /// The rewrite streams into `.cleaned` files, which `atomic_swap` promotes
 /// through `.swap`. Returns the blocked paths so a test can unblock them and
 /// watch the cleaner recover.
-pub(super) fn block_compaction_swap(root: &TempDir, topic: &str) -> Vec<std::path::PathBuf> {
+pub(super) fn block_compaction_swap(root: &TempDir, topic: &str) -> Vec<PathBuf> {
     block_log_artifact_paths(root.path(), topic, "log.cleaned", "block the rewrite path")
 }
 
@@ -94,7 +94,7 @@ pub(super) async fn compactable_partition(
         log_dir_status,
     } = setup;
     let part_dir = partition_dir(root.path(), topic, partition_id.0);
-    std::fs::create_dir_all(&part_dir).expect("create partition dir");
+    fs::create_dir_all(&part_dir).expect("create partition dir");
     let mut log = krabka_log::Log::open(&part_dir, cfg).expect("open compactable log");
     for idx in 0..12 {
         let mut batch = keyed_batch(idx, b"duplicate-key", format!("v{idx}").as_bytes());
@@ -138,7 +138,7 @@ pub(super) async fn register_compactable(
 ) -> CompactablePartition {
     let partition = compactable_partition().root(root).topic(topic).call().await;
     let initial_count = record_count(&partition);
-    registry.insert(topic.into(), PartitionIndex(0), partition.clone());
+    registry.insert(topic.into(), PartitionIndex(0), Arc::clone(&partition));
     CompactablePartition {
         partition,
         record_count: initial_count,

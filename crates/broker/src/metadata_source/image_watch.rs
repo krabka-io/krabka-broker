@@ -4,7 +4,9 @@
 //! controller log itself.
 
 use {
-    krabka_metadata::MetadataImage, std::sync::Arc, tokio::sync::watch,
+    krabka_metadata::MetadataImage,
+    std::{future, sync::Arc},
+    tokio::sync::watch,
     tokio_util::sync::CancellationToken,
 };
 
@@ -17,7 +19,7 @@ use {
 /// than the whole [`MetadataSource`](super::MetadataSource) keeps the read of
 /// latest image on the same channel that woke the loop. Intermediate images
 /// can be skipped, so the callback should rebuild from the complete image.
-pub(crate) async fn watch_image_loop(
+pub async fn watch_image_loop(
     mut images: watch::Receiver<Arc<MetadataImage>>,
     task: &str,
     shutdown: CancellationToken,
@@ -43,18 +45,16 @@ pub(crate) async fn watch_image_loop(
 }
 
 /// The next owned publication on this receiver, or no image when its publisher closes.
-pub(crate) async fn next_published_image(
+pub async fn next_published_image(
     images: &mut watch::Receiver<Arc<MetadataImage>>,
 ) -> Option<Arc<MetadataImage>> {
-    if wait_for_image_change(Some(images)).await {
-        Some(images.borrow_and_update().clone())
-    } else {
-        None
-    }
+    wait_for_image_change(Some(images))
+        .await
+        .then(|| images.borrow_and_update().clone())
 }
 
 /// Wait for a publication until cancellation or the publisher closing.
-pub(crate) async fn next_image_until_shutdown(
+pub async fn next_image_until_shutdown(
     images: &mut watch::Receiver<Arc<MetadataImage>>,
     shutdown: &CancellationToken,
 ) -> Option<Arc<MetadataImage>> {
@@ -65,18 +65,18 @@ pub(crate) async fn next_image_until_shutdown(
 }
 
 /// Wait for a subscribed image update; no subscription leaves that select arm pending.
-pub(crate) async fn wait_for_image_change(
+pub async fn wait_for_image_change(
     images: Option<&mut watch::Receiver<Arc<MetadataImage>>>,
 ) -> bool {
     match images {
         Some(images) => images.changed().await.is_ok(),
-        None => std::future::pending().await,
+        None => future::pending().await,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, tokio::sync::mpsc};
 
     /// The loop both callers share: it must apply the image already in the
     /// channel before waiting, apply each update observed in this test, and stop
@@ -94,7 +94,7 @@ mod tests {
         // this deterministic on the current-thread test runtime: the loop task
         // is not polled until this task parks, so a publish sent before that
         // first park would be the image the loop reads as its "current" one.
-        let (applied_tx, mut applied) = tokio::sync::mpsc::unbounded_channel();
+        let (applied_tx, mut applied) = mpsc::unbounded_channel();
         let shutdown = CancellationToken::new();
 
         let task = tokio::spawn(watch_image_loop(rx, "test", shutdown.clone(), move |img| {

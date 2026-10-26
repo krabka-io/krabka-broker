@@ -15,15 +15,16 @@ use {
     clap::Parser as _,
     krabka_ids::Offset,
     krabka_log::{Log, LogConfig, name},
-    krabka_protocol::records::{Attributes, RecordBatch},
+    krabka_protocol::records::{Attributes, Record, RecordBatch},
     krabka_remote_storage::TopicIdPartition,
+    std::path::Path,
     uuid::Uuid,
 };
 
 /// Parses `RestoreArgs` the same way the binary does, with a fixed dummy
 /// archive source and the given `log_dir`, so a test only has to state
 /// the target and bound flags under test.
-pub(super) fn args_from(extra: &[&str], log_dir: &std::path::Path) -> RestoreArgs {
+pub(super) fn args_from(extra: &[&str], log_dir: &Path) -> RestoreArgs {
     let mut argv = vec![
         "krabka-restore".to_owned(),
         "--archive-local".to_owned(),
@@ -60,8 +61,8 @@ pub(super) fn topic_id_partition(topic: &str, partition: i32) -> TopicIdPartitio
 }
 
 /// A minimal record at `offset_delta`, with no key or headers.
-pub(super) fn record(offset_delta: i32, value: &str) -> krabka_protocol::records::Record {
-    krabka_protocol::records::Record {
+pub(super) fn record(offset_delta: i32, value: &str) -> Record {
+    Record {
         attributes: 0,
         timestamp_delta: i64::from(offset_delta),
         offset_delta,
@@ -73,8 +74,8 @@ pub(super) fn record(offset_delta: i32, value: &str) -> krabka_protocol::records
 
 /// A record like [`record`], but with a key an `--exclude-key` pattern
 /// can match.
-pub(super) fn record_with_key(offset_delta: i32, key: &str) -> krabka_protocol::records::Record {
-    krabka_protocol::records::Record {
+pub(super) fn record_with_key(offset_delta: i32, key: &str) -> Record {
+    Record {
         key: Some(Bytes::copy_from_slice(key.as_bytes())),
         ..record(offset_delta, "v")
     }
@@ -83,10 +84,7 @@ pub(super) fn record_with_key(offset_delta: i32, key: &str) -> krabka_protocol::
 /// A batch at `base_offset` holding `records`, with `last_offset_delta`
 /// derived from the highest `offset_delta` among them, matching how a
 /// real producer batch is shaped.
-pub(super) fn batch(
-    base_offset: i64,
-    records: Vec<krabka_protocol::records::Record>,
-) -> RecordBatch {
+pub(super) fn batch(base_offset: i64, records: Vec<Record>) -> RecordBatch {
     let delta = records.iter().map(|r| r.offset_delta).max().unwrap_or(0);
     let ts = 1_700_000_000_000;
     RecordBatch {

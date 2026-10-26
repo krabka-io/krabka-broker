@@ -10,7 +10,11 @@ use {
     },
     krabka_remote_storage_topic::Snapshot,
     krabka_verified::{RestoreReconcileDecision, RestoreSnapshotState},
-    std::collections::{HashMap, HashSet},
+    std::{
+        collections::{HashMap, HashSet},
+        io::{Error, ErrorKind},
+        path::Path,
+    },
     uuid::Uuid,
 };
 
@@ -26,15 +30,15 @@ use {
 /// [`RestoreError::Io`]: the restore crate defines no dedicated snapshot-error
 /// variant, and an operator who passed the flag expects the file to be there
 /// and to be readable.
-pub(crate) fn load_snapshot(path: &std::path::Path) -> Result<Snapshot, RestoreError> {
+pub fn load_snapshot(path: &Path) -> Result<Snapshot, RestoreError> {
     match Snapshot::load(path) {
         Ok(Some(snapshot)) => Ok(snapshot),
-        Ok(None) => Err(RestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
+        Ok(None) => Err(RestoreError::Io(Error::new(
+            ErrorKind::NotFound,
             format!("--rlmm-snapshot {} does not exist", path.display()),
         ))),
-        Err(error) => Err(RestoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
+        Err(error) => Err(RestoreError::Io(Error::new(
+            ErrorKind::InvalidData,
             format!("--rlmm-snapshot {}: {error}", path.display()),
         ))),
     }
@@ -63,7 +67,7 @@ pub(crate) fn load_snapshot(path: &std::path::Path) -> Result<Snapshot, RestoreE
 pub(super) fn reconcile_with_snapshot(
     partitions: &mut Vec<PartitionInventory>,
     args: &RestoreArgs,
-    path: &std::path::Path,
+    path: &Path,
 ) -> Result<(), RestoreError> {
     reconcile_with_snapshot_policy(partitions, args, &load_snapshot(path)?, false)
 }
@@ -71,7 +75,7 @@ pub(super) fn reconcile_with_snapshot(
 /// Reconcile a WORM archive with a snapshot whose digest was authenticated by
 /// the signed capture boundary. Immutable objects for completed deletions are
 /// expected and are excluded from restore.
-pub(crate) fn reconcile_authenticated_snapshot(
+pub fn reconcile_authenticated_snapshot(
     partitions: &mut Vec<PartitionInventory>,
     args: &RestoreArgs,
     snapshot: &Snapshot,

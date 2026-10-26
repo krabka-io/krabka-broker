@@ -14,19 +14,22 @@ use {
                 },
             },
         },
-        test_support::allow_acl,
+        test_support::{allow_acl, broker_registration},
     },
     assert2::check,
     krabka_metadata::{
         BrokerRegistrationRecord, DeleteTopicRecord, MetadataRecord, NodeId, PartitionRecord,
         TopicConfigRecord, TopicRecord,
     },
-    krabka_protocol::owned::{
-        common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions,
-        consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
-        consumer_group_heartbeat_response::{Assignment, ConsumerGroupHeartbeatResponse},
+    krabka_protocol::{
+        owned::{
+            common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions,
+            consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+            consumer_group_heartbeat_response::{Assignment, ConsumerGroupHeartbeatResponse},
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
-    std::collections::BTreeMap,
+    std::{collections::BTreeMap, sync::Arc},
     uuid::Uuid,
 };
 
@@ -119,7 +122,7 @@ fn changed_topics_are_the_created_changed_and_deleted_topics() {
                     incarnation_id: Uuid::from_u128(3),
                     host: "broker-3".into(),
                     rack: Some("rack-c".into()),
-                    ..crate::test_support::broker_registration(krabka_raft::NodeId(3))
+                    ..broker_registration(krabka_raft::NodeId(3))
                 },
             )],
             topics: vec![],
@@ -252,7 +255,7 @@ fn a_new_topic_or_a_changed_acl_can_change_a_resolution() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_metadata_update_refreshes_the_groups_this_broker_coordinates() {
     let metadata = SwitchableMetadata::new(snapshot_of(&[]));
-    let coordinator = make_coord_with_metadata(metadata.clone());
+    let coordinator = make_coord_with_metadata(Arc::<SwitchableMetadata>::clone(&metadata));
     let groups = ["a", "b", "not-owned"];
     for group_id in groups {
         let handle = coordinator.get_or_create_consumer(group_id);
@@ -269,7 +272,7 @@ async fn a_metadata_update_refreshes_the_groups_this_broker_coordinates() {
 
     metadata.set(snapshot_of(&[("orders", 1, 2)]));
     on_metadata_update(&coordinator, |group_id| group_id != "not-owned", &[
-        "orders".to_string(),
+        "orders".to_owned(),
     ])
     .await;
 
@@ -293,7 +296,7 @@ async fn a_metadata_update_refreshes_the_groups_this_broker_coordinates() {
         heartbeat_interval_ms: 5_000,
         assignment: assignment.map(|partitions| Assignment {
             topic_partitions: vec![TopicPartitions {
-                topic_id: krabka_protocol::primitives::uuid::Uuid([1; 16]),
+                topic_id: WireUuid([1; 16]),
                 partitions,
                 ..Default::default()
             }],

@@ -25,6 +25,11 @@ use {
     },
     krabka_remote_storage::{RemoteStorageError, corrupt_log},
     krabka_units::convert::TimeExt as _,
+    krabka_verified::transaction,
+    std::{
+        sync::{PoisonError, atomic},
+        time::Instant,
+    },
     zerocopy::FromBytes as _,
 };
 
@@ -58,14 +63,14 @@ fn remote_batch_is_deliverable(
 /// however the read ended.
 struct ReadTimer<'metrics> {
     metrics: &'metrics BrokerMetrics,
-    started: std::time::Instant,
+    started: Instant,
 }
 
 impl<'metrics> ReadTimer<'metrics> {
     fn started(metrics: &'metrics BrokerMetrics) -> Self {
         Self {
             metrics,
-            started: std::time::Instant::now(),
+            started: Instant::now(),
         }
     }
 }
@@ -392,7 +397,7 @@ pub(super) async fn try_remote_read(
         log_start,
         local_log_start,
     ) = {
-        let log = part.log.lock().expect("log mutex poisoned");
+        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
         let config = log.config_snapshot();
         (
             config.remote_storage_enable,
@@ -463,10 +468,8 @@ pub(super) async fn try_remote_read(
     );
     // Atomic stores the raw epoch; wrap into `LeaderEpoch` for the
     // remote-reader / RLMM seam that follows.
-    let current_leader_epoch = LeaderEpoch(
-        part.current_leader_epoch
-            .load(std::sync::atomic::Ordering::Acquire),
-    );
+    let current_leader_epoch =
+        LeaderEpoch(part.current_leader_epoch.load(atomic::Ordering::Acquire));
     // Resolve the leader epoch that *owned* the requested fetch offset from
     // the local leader-epoch checkpoint (Kafka's `epochForOffset`).  The
     // checkpoint is only appended-to / truncated-from-end (never pruned from
@@ -480,12 +483,14 @@ pub(super) async fn try_remote_read(
     // leader (`Log::follow_leader_log_start`). The archive is the record of
     // which epoch owned it.
     let (cached_epoch, earliest_cached_epoch) = {
-        let log = part.log.lock().expect("log mutex poisoned");
+        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
         let checkpoint = log.epoch_checkpoint();
-        (
+        let epochs = (
             checkpoint.epoch_for_offset(Offset(p.fetch_offset)),
             checkpoint.entries().first().map(|entry| entry.epoch),
-        )
+        );
+        drop(log);
+        epochs
     };
     let leader_epoch = match (cached_epoch, earliest_cached_epoch) {
         (Some(epoch), _) => epoch,
@@ -609,7 +614,7 @@ pub(super) async fn try_remote_read(
         let local = part
             .log
             .lock()
-            .expect("log mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .aborted_in_range(Offset(p.fetch_offset), Offset(batch_end));
         let rows: Vec<_> = aborts
             .into_iter()
@@ -621,7 +626,7 @@ pub(super) async fn try_remote_read(
             )
             .collect();
         p.out.aborted_transactions = Some(
-            krabka_verified::transaction::unique_aborted_transaction_rows(&rows)
+            transaction::unique_aborted_transaction_rows(&rows)
                 .into_iter()
                 .map(|(producer_id, first_offset)| AbortedTransaction {
                     producer_id,
@@ -657,7 +662,7 @@ mod tests {
     use {
         crate::{
             broker::{Broker, BrokerHandle, spawn_partition},
-            codes::OFFSET_OUT_OF_RANGE,
+            codes::{self, OFFSET_OUT_OF_RANGE},
             config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
             delivery::test_support::batch_at,
             metrics::BrokerMetrics,
@@ -666,8 +671,14 @@ mod tests {
         assert2::{assert, check},
         krabka_compression::CompressionType,
         krabka_log::{DeliveryPolicy, Log, LogConfig},
+        krabka_protocol::{owned::fetch_response, primitives::uuid::Uuid, records},
         krabka_units::prelude::millis,
-        std::sync::Arc,
+        std::{
+            fs, io,
+            path::Path,
+            sync::{Arc, atomic},
+        },
+        tokio::time,
     };
 
     /// KIP-405 splits the floors, and only the global one bounds the remote
@@ -705,7 +716,7 @@ mod tests {
             let served = super::reject_saturated(&mut pending);
 
             check!(served == 0);
-            check!(pending.out == super::refused_read(0, crate::codes::UNKNOWN_SERVER_ERROR));
+            check!(pending.out == super::refused_read(0, codes::UNKNOWN_SERVER_ERROR));
         }
     }
 
@@ -730,12 +741,12 @@ mod tests {
     /// remote band, and only the tier's metadata can say what holds them.
     #[bon::builder]
     async fn tiered_partition(
-        broker: &std::sync::Arc<Broker>,
-        dir: &std::path::Path,
+        broker: &Arc<Broker>,
+        dir: &Path,
         #[builder(default)] reopen: bool,
         #[builder(default = CompressionType::None)] compression: CompressionType,
         #[builder(default = true)] archive: bool,
-    ) -> std::sync::Arc<Partition> {
+    ) -> Arc<Partition> {
         use {
             crate::remote_log_manager::{ArchiveMode, copy_eligible, test_support::tier},
             krabka_ids::{LeaderEpoch, PartitionIndex},
@@ -743,14 +754,14 @@ mod tests {
 
         /// A batch wide enough that a 256-byte segment rolls every few
         /// appends, so the log seals segments the copy pass can tier.
-        fn tiered_batch(compression: CompressionType) -> krabka_protocol::records::RecordBatch {
-            let mut batch = krabka_protocol::records::RecordBatch {
+        fn tiered_batch(compression: CompressionType) -> records::RecordBatch {
+            let mut batch = records::RecordBatch {
                 last_offset_delta: 1,
                 ..Default::default()
             };
             batch.attributes = batch.attributes.with_compression(compression);
             for offset_delta in 0..2 {
-                batch.records.push(krabka_protocol::records::Record {
+                batch.records.push(records::Record {
                     offset_delta,
                     value: Some(bytes::Bytes::from(vec![b'x'; 64])),
                     ..Default::default()
@@ -765,7 +776,7 @@ mod tests {
             ..LogConfig::default()
         };
         let part_dir = dir.join(format!("{TIERED_TOPIC}-0"));
-        std::fs::create_dir_all(&part_dir).expect("partition dir");
+        fs::create_dir_all(&part_dir).expect("partition dir");
         let mut log = Log::open(&part_dir, config.clone()).expect("open partition log");
         for _ in 0..12 {
             let mut batch = tiered_batch(compression);
@@ -801,14 +812,15 @@ mod tests {
             );
         }
         spawn_partition(
-            TIERED_TOPIC.to_string(),
+            TIERED_TOPIC.to_owned(),
             PartitionIndex(0),
             dir.to_path_buf(),
             log,
             broker.log_dir_status.clone(),
-            broker.producer_state.clone(),
+            Arc::clone(&broker.producer_state),
             false,
         )
+        .unwrap()
     }
 
     struct TieredBroker {
@@ -840,10 +852,7 @@ mod tests {
     }
 
     /// [`tiered_partition`] under `dir`, with every record it holds committed.
-    async fn committed_tiered_partition(
-        broker: &Arc<Broker>,
-        dir: &std::path::Path,
-    ) -> Arc<Partition> {
+    async fn committed_tiered_partition(broker: &Arc<Broker>, dir: &Path) -> Arc<Partition> {
         let part = tiered_partition().broker(broker).dir(dir).call().await;
         commit_everything(&part).await;
         part
@@ -914,7 +923,7 @@ mod tests {
     }
 
     /// The three bounds `out` reports.
-    fn bounds(out: &krabka_protocol::owned::fetch_response::PartitionData) -> ServedBounds {
+    fn bounds(out: &fetch_response::PartitionData) -> ServedBounds {
         ServedBounds {
             log_start_offset: out.log_start_offset,
             high_watermark: out.high_watermark,
@@ -924,7 +933,7 @@ mod tests {
 
     /// A `PendingRead` for offset 0 that the local log has already answered
     /// `OFFSET_OUT_OF_RANGE`, with the all -1 row `do_read` leaves behind.
-    fn out_of_range_at(part: &std::sync::Arc<Partition>, fetch_offset: i64) -> super::PendingRead {
+    fn out_of_range_at(part: &Arc<Partition>, fetch_offset: i64) -> super::PendingRead {
         use {crate::codes, krabka_protocol::primitives::uuid::Uuid as WireUuid};
 
         super::PendingRead {
@@ -939,7 +948,7 @@ mod tests {
             is_follower_fetch: false,
             fetch_only_leader: false,
             follower_position: None,
-            partition: Some(std::sync::Arc::clone(part)),
+            partition: Some(Arc::clone(part)),
             out: super::refused_read(0, codes::OFFSET_OUT_OF_RANGE),
             cpu_micros: 0,
         }
@@ -1126,12 +1135,14 @@ mod tests {
                 .expect("raise the floor too high");
             log.follow_leader_log_start(Offset(0))
                 .expect("take the leader's start back");
-            assert!(log.epoch_checkpoint().epoch_for_offset(Offset(0)) == None);
+            let cut_epoch = log.epoch_checkpoint().epoch_for_offset(Offset(0));
+            drop(log);
+            assert!(cut_epoch == None);
         }
         tiered
             .part
             .current_leader_epoch
-            .store(7, std::sync::atomic::Ordering::Release);
+            .store(7, atomic::Ordering::Release);
 
         let (served, bytes_served) = tiered.cold_read(0).await;
         check!(
@@ -1326,13 +1337,13 @@ mod tests {
         commit_everything(&part).await;
 
         let local_miss = super::PendingRead {
-            out: krabka_protocol::owned::fetch_response::PartitionData {
+            out: fetch_response::PartitionData {
                 partition_index: 0,
                 ..Default::default()
             },
             ..out_of_range_at(&part, 0)
         };
-        let GroupedResponses { responses, .. } = tokio::time::timeout(
+        let GroupedResponses { responses, .. } = time::timeout(
             Duration::from_secs(10),
             execute_pending_reads(
                 &broker,
@@ -1422,7 +1433,7 @@ mod tests {
     fn out_of_range_at_unattached(fetch_offset: i64) -> super::PendingRead {
         super::PendingRead {
             topic_name: TIERED_TOPIC.into(),
-            topic_id: krabka_protocol::primitives::uuid::Uuid::ZERO,
+            topic_id: Uuid::ZERO,
             partition_index: 0,
             current_leader_epoch: 0,
             last_fetched_epoch: -1,
@@ -1433,7 +1444,7 @@ mod tests {
             fetch_only_leader: false,
             follower_position: None,
             partition: None,
-            out: krabka_protocol::owned::fetch_response::PartitionData {
+            out: fetch_response::PartitionData {
                 error_code: OFFSET_OUT_OF_RANGE,
                 ..Default::default()
             },
@@ -1476,22 +1487,22 @@ mod tests {
                 UNKNOWN_SERVER_ERROR,
             ),
             (
-                RemoteStorageError::Io(std::io::Error::other("connection reset by peer")),
+                RemoteStorageError::Io(io::Error::other("connection reset by peer")),
                 UNKNOWN_SERVER_ERROR,
             ),
         ] {
             for read_committed in [false, true] {
                 let mut pending = super::PendingRead {
                     read_committed,
-                    out: krabka_protocol::owned::fetch_response::PartitionData {
+                    out: fetch_response::PartitionData {
                         partition_index: 0,
                         error_code: OFFSET_OUT_OF_RANGE,
                         high_watermark: 900,
                         last_stable_offset: 900,
                         log_start_offset: 100,
-                        records: Some(krabka_protocol::records::RecordsPayload::Raw(
-                            bytes::Bytes::from_static(b"stale"),
-                        )),
+                        records: Some(records::RecordsPayload::Raw(bytes::Bytes::from_static(
+                            b"stale",
+                        ))),
                         ..Default::default()
                     },
                     ..out_of_range_at_unattached(7)
@@ -1504,16 +1515,14 @@ mod tests {
                     error.to_string(),
                     read_committed,
                     0,
-                    krabka_protocol::owned::fetch_response::PartitionData {
+                    fetch_response::PartitionData {
                         partition_index: 0,
                         error_code: code,
                         high_watermark: -1,
                         last_stable_offset: -1,
                         log_start_offset: -1,
                         preferred_read_replica: -1,
-                        records: Some(krabka_protocol::records::RecordsPayload::Raw(
-                            bytes::Bytes::new(),
-                        )),
+                        records: Some(records::RecordsPayload::Raw(bytes::Bytes::new())),
                         aborted_transactions: None,
                         ..Default::default()
                     },
@@ -1558,7 +1567,7 @@ mod tests {
 
         // Now take the archive away under the reader, leaving the RLMM still
         // listing every segment: exactly an object-store brownout.
-        std::fs::remove_dir_all(remote_dir.path()).expect("wipe the archive");
+        fs::remove_dir_all(remote_dir.path()).expect("wipe the archive");
 
         let mut failed = out_of_range_at(&part, 0);
         let bytes_served = super::try_remote_read(

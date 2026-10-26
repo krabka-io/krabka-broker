@@ -6,8 +6,18 @@
 //! about on its own: a tab-separated row per partition, so `cut` and `awk`
 //! read it as well as a person does.
 
-use crate::{
-    EXIT_MISMATCH, EXIT_REFUSED, broker_codes::BARRIER_INJECTION_IN_PROGRESS, verify::VerifyOutcome,
+use {
+    crate::{
+        EXIT_MISMATCH, EXIT_REFUSED, broker_codes::BARRIER_INJECTION_IN_PROGRESS,
+        verify::VerifyOutcome,
+    },
+    krabka_protocol::krabka::{
+        barrier,
+        barrier::{
+            AlterBarrierGroupsResponse, DescribeBarrierGroupsResponse, ListBarrierCutsResponse,
+            TriggerBarrierResponse,
+        },
+    },
 };
 
 /// Describe an error code.
@@ -23,7 +33,7 @@ fn code_name(code: i16) -> String {
 }
 
 /// An error code and the broker's message, if it sent one.
-pub(crate) fn described_error(code: i16, message: Option<&str>) -> String {
+pub fn described_error(code: i16, message: Option<&str>) -> String {
     let name = code_name(code);
     match message {
         Some(m) => format!("{name}: {m}"),
@@ -37,9 +47,7 @@ fn report_refused(code: i16, message: Option<&str>) -> i32 {
 }
 
 /// One line per altered group.
-pub(crate) fn report_alter(
-    response: &krabka_protocol::krabka::barrier::AlterBarrierGroupsResponse,
-) -> i32 {
+pub fn report_alter(response: &AlterBarrierGroupsResponse) -> i32 {
     let mut exit = 0;
     for result in &response.results {
         if result.error_code == 0 {
@@ -57,9 +65,7 @@ pub(crate) fn report_alter(
 }
 
 /// One block per described group.
-pub(crate) fn report_describe(
-    response: &krabka_protocol::krabka::barrier::DescribeBarrierGroupsResponse,
-) -> i32 {
+pub fn report_describe(response: &DescribeBarrierGroupsResponse) -> i32 {
     let mut exit = 0;
     for group in &response.groups {
         if group.error_code != 0 {
@@ -96,9 +102,7 @@ pub(crate) fn report_describe(
 }
 
 /// The epoch a trigger produced, and the offsets it took.
-pub(crate) fn report_trigger(
-    response: &krabka_protocol::krabka::barrier::TriggerBarrierResponse,
-) -> i32 {
+pub fn report_trigger(response: &TriggerBarrierResponse) -> i32 {
     if response.error_code != 0 {
         return report_refused(response.error_code, response.error_message.as_deref());
     }
@@ -122,9 +126,7 @@ pub(crate) fn report_trigger(
 }
 
 /// One line per partition of each retained cut.
-pub(crate) fn report_list(
-    response: &krabka_protocol::krabka::barrier::ListBarrierCutsResponse,
-) -> i32 {
+pub fn report_list(response: &ListBarrierCutsResponse) -> i32 {
     if response.error_code != 0 {
         return report_refused(response.error_code, response.error_message.as_deref());
     }
@@ -152,7 +154,7 @@ pub(crate) fn report_list(
 }
 
 /// What a verify found.
-pub(crate) fn report_verify(outcome: &VerifyOutcome) -> i32 {
+pub fn report_verify(outcome: &VerifyOutcome) -> i32 {
     for checked in &outcome.checked {
         println!("{}\t{}\t{}\tok", checked.0, checked.1, checked.2);
     }
@@ -181,7 +183,7 @@ pub(crate) fn report_verify(outcome: &VerifyOutcome) -> i32 {
 
 /// The name of a cut status code.
 fn status_name(status: i8) -> &'static str {
-    if status == krabka_protocol::krabka::barrier::CUT_STATUS_COMPLETE {
+    if status == barrier::CUT_STATUS_COMPLETE {
         "complete"
     } else {
         "partial"
@@ -194,7 +196,7 @@ mod tests {
 
     #[test]
     fn a_status_code_reads_as_a_word() {
-        check!(status_name(krabka_protocol::krabka::barrier::CUT_STATUS_COMPLETE) == "complete");
-        check!(status_name(krabka_protocol::krabka::barrier::CUT_STATUS_PARTIAL) == "partial");
+        check!(status_name(barrier::CUT_STATUS_COMPLETE) == "complete");
+        check!(status_name(barrier::CUT_STATUS_PARTIAL) == "partial");
     }
 }

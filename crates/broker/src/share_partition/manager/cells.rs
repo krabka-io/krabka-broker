@@ -18,8 +18,8 @@ use {
     krabka_ids::PartitionIndex,
     krabka_log::Offset,
     krabka_remote_storage::TopicIdPartition,
-    std::sync::Arc,
-    tokio::sync::Mutex,
+    std::sync::{Arc, PoisonError},
+    tokio::{sync::Mutex, time::timeout},
     tracing::warn,
 };
 
@@ -57,9 +57,9 @@ impl SharePartitionLeaderManager {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Result<Arc<Mutex<AcquisitionState>>, i16> {
-        let key = (group.to_string(), topic_id, partition);
+        let key = (group.to_owned(), topic_id, partition);
         if let Some(cell) = self.leaders.get(&key) {
-            return Ok(cell.value().clone());
+            return Ok(Arc::clone(cell.value()));
         }
 
         // Miss: load from the persister WITHOUT holding any DashMap guard.
@@ -119,12 +119,7 @@ impl SharePartitionLeaderManager {
 
         let cell = Arc::new(Mutex::new(loaded));
         // Adopt the winner if another task loaded the same key concurrently.
-        let cell = self
-            .leaders
-            .entry(key.clone())
-            .or_insert(cell)
-            .value()
-            .clone();
+        let cell = Arc::clone(self.leaders.entry(key.clone()).or_insert(cell).value());
         // A run that the last leader left in `Archiving` resumes its
         // dead-letter write here (KIP-1191). Whichever loader takes the runs
         // first starts them, so a race starts each once.
@@ -174,7 +169,7 @@ impl SharePartitionLeaderManager {
         let config = local
             .log
             .lock()
-            .expect("log mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .config_snapshot();
         let log_start = if local.diskless
             && let Some(reader) = self.diskless_read.get()
@@ -186,18 +181,19 @@ impl SharePartitionLeaderManager {
             && let Some(reader) = self.remote_reader.get()
         {
             let tp = TopicIdPartition::new(topic_id, local.topic.clone(), partition);
-            let remote = tokio::time::timeout(
+            let remote = timeout(
                 resolve_remote_list_offsets_timeout(&image, self.node_id),
                 reader.earliest_offset(&tp),
             )
             .await
             .map_err(|_| REQUEST_TIMED_OUT)?
             .map_err(|_| KAFKA_STORAGE_ERROR)?;
-            let log = local.log.lock().expect("log mutex poisoned");
-            Offset(remote.map_or(log.log_start_offset().0, |remote| {
-                remote.min(log.log_start_offset().0)
-            }))
-            .max(log.established_log_start().unwrap_or(Offset(0)))
+            let (log_start, established) = {
+                let log = local.log.lock().unwrap_or_else(PoisonError::into_inner);
+                (log.log_start_offset().0, log.established_log_start())
+            };
+            Offset(remote.map_or(log_start, |remote| remote.min(log_start)))
+                .max(established.unwrap_or(Offset(0)))
         } else {
             local.log_start_offset()
         };
@@ -251,8 +247,8 @@ impl SharePartitionLeaderManager {
         partition: i32,
     ) -> Option<Arc<Mutex<AcquisitionState>>> {
         self.leaders
-            .get(&(group.to_string(), topic_id, partition))
-            .map(|cell| cell.value().clone())
+            .get(&(group.to_owned(), topic_id, partition))
+            .map(|cell| Arc::clone(cell.value()))
     }
 
     /// Test-only: borrows the live acquisition cell without a persister load.
@@ -265,10 +261,8 @@ impl SharePartitionLeaderManager {
         group: &str,
         topic_id: uuid::Uuid,
         partition: i32,
-    ) -> Option<std::sync::Arc<tokio::sync::Mutex<AcquisitionState>>> {
-        self.leaders
-            .get(&(group.to_string(), topic_id, partition))
-            .map(|c| c.value().clone())
+    ) -> Option<Arc<Mutex<AcquisitionState>>> {
+        self.cached(group, topic_id, partition)
     }
 
     /// Drops `cell` from the cache when it is still the cached cell for
@@ -286,7 +280,7 @@ impl SharePartitionLeaderManager {
         cell: &Arc<Mutex<AcquisitionState>>,
     ) {
         self.leaders
-            .remove_if(&(group.to_string(), topic_id, partition), |_, cached| {
+            .remove_if(&(group.to_owned(), topic_id, partition), |_, cached| {
                 Arc::ptr_eq(cached, cell)
             });
     }
@@ -314,7 +308,7 @@ impl SharePartitionLeaderManager {
     ) -> Arc<Mutex<AcquisitionState>> {
         let cell = Arc::new(Mutex::new(state));
         self.leaders
-            .insert((group.to_string(), topic_id, partition), Arc::clone(&cell));
+            .insert((group.to_owned(), topic_id, partition), Arc::clone(&cell));
         cell
     }
 
@@ -329,7 +323,7 @@ impl SharePartitionLeaderManager {
     /// offset-reset behavior.
     pub(crate) fn invalidate(&self, group: &str, topic_id: uuid::Uuid, partition: i32) {
         self.leaders
-            .remove(&(group.to_string(), topic_id, partition));
+            .remove(&(group.to_owned(), topic_id, partition));
     }
 }
 
@@ -351,7 +345,7 @@ mod tests {
                 source::test_support::diskless_partition,
                 state::AcquisitionState,
             },
-            test_support::append_partition_batch,
+            test_support::{UnixMillis, append_partition_batch},
             time_util::now_ms,
         },
         assert2::assert,
@@ -363,6 +357,7 @@ mod tests {
         krabka_remote_storage::TopicIdPartition,
         krabka_units::bytes,
         std::{sync::Arc, time::Duration},
+        tokio::sync::{Mutex, Notify},
     };
 
     krabka_macros::single_replica_partition_fixture!(partition_record);
@@ -384,7 +379,7 @@ mod tests {
             ]),
             registry,
         );
-        mgr.set_read_sources(None, Some(reader.clone()));
+        mgr.set_read_sources(None, Some(Arc::clone(&reader)));
         for floor in [0, 1] {
             reader.index.lock().await.raise_delete_floor(tid, 0, floor);
             assert!(
@@ -412,7 +407,7 @@ mod tests {
     async fn duration_initialization_selects_an_archived_match_before_local_data() {
         let (reader, _archive) = sparse_remote_segment_reader_with_max_timestamp(2_400);
         let tid = tp().topic_id;
-        let (partition, _dir) = test_partition(Arc::new(tokio::sync::Notify::new()));
+        let (partition, _dir) = test_partition(Arc::new(Notify::new()));
         {
             let mut log = partition.log.lock().unwrap();
             log.set_config(LogConfig {
@@ -445,6 +440,14 @@ mod tests {
         assert!(mgr.initial_start_offset("duration", tid, 0).await == Ok(Offset(10)));
     }
 
+    /// A log directory and an empty registry for one data partition.
+    fn data_dir_and_registry() -> (tempfile::TempDir, Arc<PartitionRegistry>) {
+        (
+            tempfile::tempdir().expect("tempdir"),
+            Arc::new(PartitionRegistry::new()),
+        )
+    }
+
     /// Every `share.auto.offset.reset` strategy, resolved against one real
     /// log: two records stamped three hours ago at offsets 0-1, two stamped
     /// ninety minutes ago at offsets 2-3, and a high watermark of 4.
@@ -455,21 +458,20 @@ mod tests {
     /// fails before it can report that the partition has no state.
     #[tokio::test]
     async fn fresh_cell_starts_where_the_group_strategy_says() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let (dir, reg) = data_dir_and_registry();
         let tid = uuid::Uuid::from_bytes([41; 16]);
         let now = now_ms();
         let hour = 60 * 60 * 1_000;
-        let reg = std::sync::Arc::new(PartitionRegistry::new());
         open_data_partition()
             .reg(&reg)
             .log_dir(dir.path())
             .batches(vec![
                 crate::share_partition::manager::test_support::TimedValues {
-                    timestamp: crate::test_support::UnixMillis(now - 3 * hour),
+                    timestamp: UnixMillis(now - 3 * hour),
                     values: &[b"stale-0", b"stale-1"],
                 },
                 crate::share_partition::manager::test_support::TimedValues {
-                    timestamp: crate::test_support::UnixMillis(now - hour - hour / 2),
+                    timestamp: UnixMillis(now - hour - hour / 2),
                     values: &[b"recent-0", b"recent-1"],
                 },
             ])
@@ -542,7 +544,7 @@ mod tests {
         ];
         for GroupStrategy { group, value } in strategies {
             records.push(MetadataRecord::V1GroupConfig(GroupConfigRecord {
-                group_id: group.to_string(),
+                group_id: group.to_owned(),
                 configs: maplit::btreemap! {
                     KEY_SHARE_AUTO_OFFSET_RESET.to_owned() => value.to_owned()
                 },
@@ -563,11 +565,10 @@ mod tests {
     async fn by_duration_start_refuses_a_record_above_the_decompressed_limit() {
         use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
-        let dir = tempfile::tempdir().expect("tempdir");
+        let (dir, reg) = data_dir_and_registry();
         let tid = uuid::Uuid::from_bytes([42; 16]);
         let now = now_ms();
         let hour = 60 * 60 * 1_000;
-        let reg = Arc::new(PartitionRegistry::new());
         open_data_partition()
             .reg(&reg)
             .log_dir(dir.path())
@@ -651,7 +652,7 @@ mod tests {
     async fn invalidate_cell_keeps_a_replacement() {
         let mgr = manager();
         let tid = uuid::Uuid::from_bytes([23; 16]);
-        let stale = Arc::new(tokio::sync::Mutex::new(AcquisitionState::new(Offset(0))));
+        let stale = Arc::new(Mutex::new(AcquisitionState::new(Offset(0))));
         let replacement = mgr.insert_for_test("g1", tid, 0, AcquisitionState::new(Offset(0)));
 
         mgr.invalidate_cell("g1", tid, 0, &stale);

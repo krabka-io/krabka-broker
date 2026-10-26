@@ -1,9 +1,31 @@
-use {assert2::assert, std::process::Command};
+#![cfg(test)]
 
-fn broker_bin() -> std::path::PathBuf {
-    let exe = std::env::var_os("CARGO_BIN_EXE_krabka-broker")
+use {
+    assert2::assert,
+    krabka_broker::config,
+    krabka_protocol::owned::produce_request,
+    std::{
+        env,
+        fmt::{self, Display, Formatter},
+        fs::File,
+        io::{BufReader, ErrorKind},
+        net::{SocketAddr, TcpStream},
+        path::{Path, PathBuf},
+        process::{Child, Command, Stdio},
+        sync::{
+            mpsc,
+            mpsc::{Receiver, RecvTimeoutError},
+        },
+        thread::{self, JoinHandle},
+        time::{Duration, Instant},
+    },
+    tokio::runtime::{Builder, Runtime},
+};
+
+fn broker_bin() -> PathBuf {
+    let exe = env::var_os("CARGO_BIN_EXE_krabka-broker")
         .expect("cargo provides CARGO_BIN_EXE_<bin> in test env");
-    std::path::PathBuf::from(exe)
+    PathBuf::from(exe)
 }
 
 /// Formats a fresh standalone log directory.
@@ -17,7 +39,7 @@ fn broker_bin() -> std::path::PathBuf {
 /// suite runs the real binary -- and a subprocess would need a Cargo working
 /// tree to build from, which a Bazel test sandbox does not have. This test is
 /// synchronous, so it drives the async formatter on a current-thread runtime.
-fn run_krabka_format(log_dir: &std::path::Path, node_id: u32, controller_listener: &str) {
+fn run_krabka_format(log_dir: &Path, node_id: u32, controller_listener: &str) {
     format_log_dir(log_dir, node_id, &[
         "--standalone",
         "--controller-listener",
@@ -27,7 +49,7 @@ fn run_krabka_format(log_dir: &std::path::Path, node_id: u32, controller_listene
 
 /// Formats a fresh log directory for `node_id` with the `quorum` flags of
 /// `krabka-format`, as [`run_krabka_format`] does.
-fn format_log_dir(log_dir: &std::path::Path, node_id: u32, quorum: &[&str]) {
+fn format_log_dir(log_dir: &Path, node_id: u32, quorum: &[&str]) {
     let node_id = node_id.to_string();
     let mut argv = vec![
         "krabka-format",
@@ -41,8 +63,8 @@ fn format_log_dir(log_dir: &std::path::Path, node_id: u32, quorum: &[&str]) {
     assert!(code == 0, "krabka-format exited {code}");
 }
 
-fn current_thread_runtime() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_current_thread()
+fn current_thread_runtime() -> Runtime {
+    Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("current-thread runtime")
@@ -88,7 +110,7 @@ fn boots_with_config_file_listener() {
     let tmp = tempfile::tempdir().expect("tempdir");
 
     let cfg_path = tmp.path().join("broker.toml");
-    let mut f = std::fs::File::create(&cfg_path).unwrap();
+    let mut f = File::create(&cfg_path).unwrap();
     writeln!(
         f,
         r#"
@@ -125,7 +147,7 @@ protocol = "Plaintext"
         .expect("the startup line names the listener");
 
     assert!(addr.port() != 0);
-    assert!(std::net::TcpStream::connect(addr).is_ok());
+    assert!(TcpStream::connect(addr).is_ok());
 }
 
 #[test]
@@ -161,22 +183,22 @@ fn refuses_a_log_dir_formatted_for_another_node() {
         "--controller-listen-addr=127.0.0.1:0".into(),
         "--metrics-listen-addr=none".into(),
     ]);
-    cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::piped());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::piped());
     let mut child = cmd.spawn().expect("spawn krabka-broker");
-    let timeout = std::time::Duration::from_secs(30);
-    let deadline = std::time::Instant::now() + timeout;
+    let timeout = Duration::from_secs(30);
+    let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll krabka-broker") {
             break Some(status);
         }
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             let _ = child.kill();
             break None;
         }
         // intentional: waiting on a spawned krabka-broker subprocess to exit;
         // it has no in-process handle to await.
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(100));
     };
     let output = child.wait_with_output().expect("collect stderr");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -200,7 +222,7 @@ const CLUSTER_ID: &str = "I2eXt9rvSnyhct8BYmW6-w";
 
 /// How long a node has to log its startup line. A broker-only node waits for
 /// its first unfence, which a few heartbeats bring.
-const STARTUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(90);
+const STARTUP_DEADLINE: Duration = Duration::from_secs(90);
 
 /// The line that a node logs when its start is complete.
 const STARTED: &str = "krabka-broker started";
@@ -211,13 +233,13 @@ const STARTED: &str = "krabka-broker started";
 /// that tried to open it would fail to bind it.
 struct Reserved {
     socket: socket2::Socket,
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
 }
 
 fn reserve_port() -> Reserved {
     let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
         .expect("create a socket");
-    let any: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let any: SocketAddr = "127.0.0.1:0".parse().unwrap();
     socket
         .bind(&any.into())
         .expect("bind an ephemeral loopback port");
@@ -234,7 +256,7 @@ fn reserve_port() -> Reserved {
 /// voter set. The reservation is released when the node binds the port, so
 /// another process can take it first; [`start_node`] retries a node that
 /// fails to bind.
-fn free_port() -> std::net::SocketAddr {
+fn free_port() -> SocketAddr {
     let Reserved { socket, addr } = reserve_port();
     drop(socket);
     addr
@@ -271,11 +293,11 @@ fn start_retrying<T>(node: &str, mut start: impl FnMut(usize) -> Result<T, Exite
 /// A running `krabka-broker` process. Dropping it kills the process, so a
 /// failed assertion leaves none behind.
 struct Process {
-    child: std::process::Child,
+    child: Child,
     /// The stdout lines of the process, one JSON object each.
-    lines: std::sync::mpsc::Receiver<String>,
+    lines: Receiver<String>,
     /// The stderr of the process, once it closes.
-    stderr: Option<std::thread::JoinHandle<String>>,
+    stderr: Option<JoinHandle<String>>,
 }
 
 /// A process that exited before it logged its startup line.
@@ -286,8 +308,8 @@ struct Exited {
     stderr: String,
 }
 
-impl std::fmt::Display for Exited {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for Exited {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "the process exited before `{STARTED}`; stderr:\n{}\nstdout:\n{}",
@@ -305,29 +327,29 @@ impl Process {
             .arg("--health-listen-addr=none")
             // The startup oracle consumes an INFO event, so request that level
             // explicitly for each child, independent of the test runner's filter.
-            .env("RUST_LOG", krabka_broker::config::DEFAULT_LOG_FILTER)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .env("RUST_LOG", config::DEFAULT_LOG_FILTER)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("spawn krabka-broker");
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
-        let (sender, lines) = std::sync::mpsc::channel();
+        let (sender, lines) = mpsc::channel();
         // The readers drain both pipes for the whole life of the process, so
         // the broker never blocks on a full pipe.
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             use std::io::BufRead as _;
-            for line in std::io::BufReader::new(stdout).lines() {
+            for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { return };
                 if sender.send(line).is_err() {
                     return;
                 }
             }
         });
-        let stderr = std::thread::spawn(move || {
+        let stderr = thread::spawn(move || {
             use std::io::Read as _;
             let mut text = String::new();
-            let _ = std::io::BufReader::new(stderr).read_to_string(&mut text);
+            let _ = BufReader::new(stderr).read_to_string(&mut text);
             // Pass it on, as an inherited stderr would.
             eprint!("{text}");
             text
@@ -343,13 +365,13 @@ impl Process {
     /// exited without it. Fails the test when the process neither logs the
     /// line nor exits within [`STARTUP_DEADLINE`].
     fn wait_until_started(mut self) -> Result<Running, Exited> {
-        let deadline = std::time::Instant::now() + STARTUP_DEADLINE;
+        let deadline = Instant::now() + STARTUP_DEADLINE;
         let mut logged = Vec::new();
         loop {
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let left = deadline.saturating_duration_since(Instant::now());
             let line = match self.lines.recv_timeout(left) {
                 Ok(line) => line,
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err(RecvTimeoutError::Disconnected) => {
                     let _ = self.child.wait();
                     let stderr = self
                         .stderr
@@ -358,7 +380,7 @@ impl Process {
                         .unwrap_or_default();
                     return Err(Exited { logged, stderr });
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
+                Err(RecvTimeoutError::Timeout) => panic!(
                     "no `{STARTED}` line within {STARTUP_DEADLINE:?}; the process logged:\n{}",
                     logged.join("\n")
                 ),
@@ -406,8 +428,8 @@ struct Running {
 /// The listener addresses that the startup line names.
 #[derive(Debug, PartialEq, Eq)]
 struct Started {
-    listen_addr: Option<std::net::SocketAddr>,
-    controller_listen_addr: Option<std::net::SocketAddr>,
+    listen_addr: Option<SocketAddr>,
+    controller_listen_addr: Option<SocketAddr>,
 }
 
 /// What a port answers.
@@ -422,9 +444,9 @@ enum Listener {
     Controller,
 }
 
-fn probe(runtime: &tokio::runtime::Runtime, addr: std::net::SocketAddr) -> Listener {
-    match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(5)) {
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+fn probe(runtime: &Runtime, addr: SocketAddr) -> Listener {
+    match TcpStream::connect_timeout(&addr, Duration::from_secs(5)) {
+        Err(error) if error.kind() == ErrorKind::ConnectionRefused => {
             return Listener::Closed;
         }
         Err(error) => panic!("connect to {addr}: {error}"),
@@ -439,7 +461,7 @@ fn probe(runtime: &tokio::runtime::Runtime, addr: std::net::SocketAddr) -> Liste
             },
         ))
         .unwrap_or_else(|error| panic!("ApiVersions on {addr}: {error}"));
-    let produce = connection.advertised_api_range(krabka_protocol::owned::produce_request::API_KEY);
+    let produce = connection.advertised_api_range(produce_request::API_KEY);
     connection.close();
     if produce.is_some() {
         Listener::Broker
@@ -455,7 +477,7 @@ struct Observed {
     /// Whether the startup line names a client listener.
     names_client: bool,
     /// The controller listener that the startup line names.
-    controller_listen_addr: Option<std::net::SocketAddr>,
+    controller_listen_addr: Option<SocketAddr>,
     client_port: Listener,
     controller_port: Listener,
 }
@@ -493,8 +515,8 @@ struct Node {
     running: Running,
     /// The client port to probe: the one the node bound, or the reserved
     /// port of a client listener the node must not open.
-    client: std::net::SocketAddr,
-    controller: std::net::SocketAddr,
+    client: SocketAddr,
+    controller: SocketAddr,
     /// The ports the node must leave closed, held until the node is dropped.
     _reserved: Vec<Reserved>,
 }
@@ -507,7 +529,7 @@ struct Node {
 /// goes into the formatted voter set, so it takes a [`free_port`], under
 /// [`start_retrying`]. A listener the node must not open gets a [`Reserved`]
 /// port.
-fn start_node(dir: &std::path::Path, case: &Case, quorum: Option<std::net::SocketAddr>) -> Node {
+fn start_node(dir: &Path, case: &Case, quorum: Option<SocketAddr>) -> Node {
     start_retrying(&format!("{} ({})", case.roles, case.node_id), |attempt| {
         let mut reserved = Vec::new();
         let mut closed_port = || {

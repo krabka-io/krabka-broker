@@ -18,11 +18,19 @@ use {
         },
     },
     bytes::Bytes,
+    futures_util::stream,
     krabka_audit::signing::FileEd25519Signer,
     krabka_object_store::{ObjectOps, ObjectStoreClient, PutRequest},
     object_store::{GetOptions, ObjectStore, ObjectStoreExt as _, memory::InMemory, path::Path},
     ring::{rand::SystemRandom, signature::Ed25519KeyPair},
-    std::{collections::HashMap, sync::Arc},
+    std::{
+        collections::HashMap,
+        fmt,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
+    },
     uuid::Uuid,
 };
 
@@ -42,7 +50,7 @@ struct TestSigner {
 
 fn signer(key_id: &str) -> TestSigner {
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
-    let signer = FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), key_id.to_string())
+    let signer = FileEd25519Signer::from_pkcs8_bytes(pkcs8.as_ref(), key_id.to_owned())
         .expect("ring mints a valid PKCS#8 Ed25519 key");
     let public_key = signer.public_key();
     TestSigner {
@@ -117,7 +125,8 @@ impl Archive {
                         seq: ManifestSeq(u64::try_from(seq).unwrap()),
                         prev_head,
                     })
-                    .to_custom_metadata(),
+                    .to_custom_metadata()
+                    .unwrap(),
                 );
                 let sealed = archiver.seal(&stamped, entries.clone()).unwrap();
                 let manifest_key = format!("{dir}/{}", segment_file_name(&md, MANIFEST_SUFFIX));
@@ -145,7 +154,7 @@ impl Archive {
     }
 
     pub(super) fn trusted(&self) -> TrustedManifestKeys {
-        TrustedManifestKeys::single(KEY_ID.to_string(), self.public_key.clone())
+        TrustedManifestKeys::single(KEY_ID.to_owned(), self.public_key.clone())
     }
 
     /// A default [`verify_archive`] run over this archive, trusting its key.
@@ -185,10 +194,11 @@ impl Archive {
         if let Some(head) = prev_head {
             stamp.prev_head = head;
         }
-        let stamped = segment
-            .metadata
-            .clone()
-            .with_custom_metadata(WormChainRecord::request(stamp).to_custom_metadata());
+        let stamped = segment.metadata.clone().with_custom_metadata(
+            WormChainRecord::request(stamp)
+                .to_custom_metadata()
+                .unwrap(),
+        );
         let sealed = WormArchiver::new(signer)
             .seal(&stamped, entries.unwrap_or_else(|| segment.entries.clone()))
             .unwrap();
@@ -222,22 +232,22 @@ struct ObjectVersion {
 #[derive(Debug)]
 pub(super) struct VersionedStore {
     inner: InMemory,
-    history: std::sync::Mutex<HashMap<ObjectVersion, Bytes>>,
-    next: std::sync::atomic::AtomicU64,
+    history: Mutex<HashMap<ObjectVersion, Bytes>>,
+    next: AtomicU64,
 }
 
 impl VersionedStore {
     pub(super) fn new() -> Self {
         Self {
             inner: InMemory::new(),
-            history: std::sync::Mutex::new(HashMap::new()),
-            next: std::sync::atomic::AtomicU64::new(0),
+            history: Mutex::new(HashMap::new()),
+            next: AtomicU64::new(0),
         }
     }
 }
 
-impl std::fmt::Display for VersionedStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for VersionedStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "VersionedStore({})", self.inner)
     }
 }
@@ -257,10 +267,7 @@ impl ObjectStore for VersionedStore {
         payload: object_store::PutPayload,
         opts: object_store::PutOptions,
     ) -> object_store::Result<object_store::PutResult> {
-        let version = format!(
-            "v{}",
-            self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-        );
+        let version = format!("v{}", self.next.fetch_add(1, Ordering::SeqCst));
         let bytes = Bytes::from(payload.iter().flatten().copied().collect::<Vec<u8>>());
         let mut result = self.inner.put_opts(location, payload, opts).await?;
         self.history
@@ -305,9 +312,9 @@ impl ObjectStore for VersionedStore {
         meta.version = Some(version);
         Ok(object_store::GetResult {
             range: 0..meta.size,
-            payload: object_store::GetResultPayload::Stream(Box::pin(futures_util::stream::once(
-                async move { Ok(bytes) },
-            ))),
+            payload: object_store::GetResultPayload::Stream(Box::pin(stream::once(async move {
+                Ok(bytes)
+            }))),
             meta,
             attributes: object_store::Attributes::default(),
             extensions: object_store::Extensions::default(),
@@ -330,8 +337,8 @@ pub(super) async fn put_entry(
         .await
         .unwrap();
     ObjectEntry {
-        suffix: suffix.to_string(),
-        key: key.to_string(),
+        suffix: suffix.to_owned(),
+        key: key.to_owned(),
         size_bytes: outcome.size_bytes,
         sha256: Sha256Digest(outcome.sha256.expect("the put was asked for a digest")),
         e_tag: outcome.e_tag,
@@ -369,20 +376,20 @@ pub(super) enum Tamper {
 impl Tamper {
     pub(super) async fn apply(self, archive: &Archive) {
         match self {
-            Tamper::None => {}
-            Tamper::FlipLogByte(i) => {
+            Self::None => {}
+            Self::FlipLogByte(i) => {
                 let segment = &archive.segments[i];
                 let mut body = segment.log_body.clone();
                 body[0] ^= 0xff;
                 put_raw(&archive.ops, &segment.log_key, Bytes::from(body)).await;
             }
-            Tamper::TruncateLog(i) => {
+            Self::TruncateLog(i) => {
                 let segment = &archive.segments[i];
                 let body = segment.log_body[..segment.log_body.len() - 1].to_vec();
                 put_raw(&archive.ops, &segment.log_key, Bytes::from(body)).await;
             }
-            Tamper::DeleteLog(i) => archive.delete(&archive.segments[i].log_key).await,
-            Tamper::RewritePrevHead(i) => {
+            Self::DeleteLog(i) => archive.delete(&archive.segments[i].log_key).await,
+            Self::RewritePrevHead(i) => {
                 archive
                     .reseal(
                         i,
@@ -392,22 +399,22 @@ impl Tamper {
                     )
                     .await;
             }
-            Tamper::DeleteManifest(i) => {
+            Self::DeleteManifest(i) => {
                 archive.delete(&archive.segments[i].manifest_key).await;
             }
-            Tamper::SignWithAnotherKey(i) => {
+            Self::SignWithAnotherKey(i) => {
                 // Same `key_id`, different key material: the verifier must
                 // check against the key it trusts and not the key the
                 // manifest carries.
                 let TestSigner { signer: other, .. } = signer(KEY_ID);
                 archive.reseal(i, Some(other), None, None).await;
             }
-            Tamper::SignWithUnknownKeyId(i) => {
+            Self::SignWithUnknownKeyId(i) => {
                 let TestSigner { signer: rogue, .. } = signer("rogue-key");
                 archive.reseal(i, Some(rogue), None, None).await;
             }
-            Tamper::Unsign(i) => archive.reseal(i, None, None, None).await,
-            Tamper::RewritePublicKey(i) => {
+            Self::Unsign(i) => archive.reseal(i, None, None, None).await,
+            Self::RewritePublicKey(i) => {
                 let segment = &archive.segments[i];
                 let mut manifest = segment.manifest.clone();
                 manifest.signature.as_mut().unwrap().public_key.0[0] ^= 0xff;
@@ -418,28 +425,28 @@ impl Tamper {
                 )
                 .await;
             }
-            Tamper::DuplicateObject(i) => {
+            Self::DuplicateObject(i) => {
                 let mut entries = archive.segments[i].entries.clone();
                 entries.push(entries[0].clone());
                 archive
                     .reseal(i, Some(Arc::clone(&archive.signer)), None, Some(entries))
                     .await;
             }
-            Tamper::WrongObjectCoordinates(i) => {
+            Self::WrongObjectCoordinates(i) => {
                 let mut entries = archive.segments[i].entries.clone();
-                entries[0].suffix = ".timeindex".to_string();
+                entries[0].suffix = ".timeindex".to_owned();
                 archive
                     .reseal(i, Some(Arc::clone(&archive.signer)), None, Some(entries))
                     .await;
             }
-            Tamper::DropObjectEntry(i) => {
+            Self::DropObjectEntry(i) => {
                 let mut entries = archive.segments[i].entries.clone();
                 entries.pop();
                 archive
                     .reseal(i, Some(Arc::clone(&archive.signer)), None, Some(entries))
                     .await;
             }
-            Tamper::StrayObject => {
+            Self::StrayObject => {
                 put_raw(
                     &archive.ops,
                     &format!("{}/{STRAY}", archive.dir),
@@ -447,7 +454,7 @@ impl Tamper {
                 )
                 .await;
             }
-            Tamper::BumpFormatVersion(i) => {
+            Self::BumpFormatVersion(i) => {
                 let segment = &archive.segments[i];
                 let mut value: serde_json::Value = serde_json::to_value(&segment.manifest).unwrap();
                 value["body"]["format_version"] =

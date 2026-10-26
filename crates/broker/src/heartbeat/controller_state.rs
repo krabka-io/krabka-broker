@@ -17,8 +17,8 @@ mod shutdown;
 mod snapshot;
 
 #[cfg(test)]
-pub(crate) use self::clock::TestClock;
-pub(crate) use self::{
+pub use self::clock::TestClock;
+pub use self::{
     registry::{BrokerLivenessState, ControllerLivenessState, LivenessTransition},
     shutdown::{BrokerControlState, HeartbeatFacts, HeartbeatWants, next_broker_state},
 };
@@ -27,7 +27,7 @@ pub(crate) use self::{
 /// registration, which `RegisterBrokerRecord` and
 /// `BrokerRegistrationChangeRecord` replay into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ReplicatedRegistration {
+pub struct ReplicatedRegistration {
     pub(crate) node_id: u64,
     pub(crate) fenced: bool,
     pub(crate) in_controlled_shutdown: bool,
@@ -58,7 +58,7 @@ impl ReplicatedRegistration {
 /// Every broker the image registers, with the fence and controlled shutdown
 /// its registration holds: what [`ControllerLivenessState::seed_brokers`]
 /// starts a controller term from.
-pub(crate) fn replicated_registrations(
+pub fn replicated_registrations(
     image: &krabka_metadata::MetadataImage,
 ) -> Vec<ReplicatedRegistration> {
     image

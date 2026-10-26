@@ -19,7 +19,7 @@ use {
 
 /// Kafka's `TransactionLogConfig.PRODUCER_ID_EXPIRATION_MS_CONFIG`, a dynamic
 /// broker config.
-pub(crate) const PRODUCER_ID_EXPIRATION_MS: &str = "producer.id.expiration.ms";
+pub const PRODUCER_ID_EXPIRATION_MS: &str = "producer.id.expiration.ms";
 
 /// The `producer.id.expiration.ms` that `node` applies as of `image`: its own
 /// dynamic value, else the cluster-wide one, else `static_value`.
@@ -33,11 +33,7 @@ pub(crate) const PRODUCER_ID_EXPIRATION_MS: &str = "producer.id.expiration.ms";
 ///
 /// This is read on each use, so a dynamic change takes effect for the next
 /// request and the next sweep.
-pub(crate) fn producer_id_expiration(
-    image: &MetadataImage,
-    node: NodeId,
-    static_value: Time,
-) -> Time {
+pub fn producer_id_expiration(image: &MetadataImage, node: NodeId, static_value: Time) -> Time {
     node_or_cluster_default(image, node, PRODUCER_ID_EXPIRATION_MS)
         .and_then(|value| value.trim().parse::<i64>().ok())
         .filter(|millis| *millis >= 1)
@@ -82,7 +78,7 @@ impl ProducerState {
             .iter()
             .map(|e| TopicSlot {
                 topic: e.key().clone(),
-                partitions: e.value().clone(),
+                partitions: Arc::clone(e.value()),
             })
             .collect();
         for TopicSlot {
@@ -94,7 +90,7 @@ impl ProducerState {
                 .iter()
                 .map(|e| PartitionSlot {
                     partition: *e.key(),
-                    handle: e.value().clone(),
+                    handle: Arc::clone(e.value()),
                 })
                 .collect();
             for PartitionSlot { partition, handle } in partition_refs {

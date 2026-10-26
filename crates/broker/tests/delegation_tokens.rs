@@ -1,6 +1,4 @@
-// rustc 1.95 clippy ICEs on this file family (same as throttle.rs /
-// describe_user_scram_credentials.rs). Suppress locally; the workspace
-// lint gate still applies elsewhere.
+#![cfg(test)]
 
 //! KIP-48 end-to-end integration: the full delegation-token lifecycle
 //! against a single-broker test cluster. Spec §8.2.

@@ -20,7 +20,7 @@ use {
     },
     krabka_units::{prelude::*, serde_units},
     serde::{Deserialize, Serialize},
-    std::collections::BTreeMap,
+    std::{collections::BTreeMap, str},
 };
 
 /// Everything one run recorded.
@@ -69,7 +69,7 @@ pub struct Evidence {
 }
 
 /// One producer's account of what it sent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProducerLedger {
     pub path: String,
     /// Unique within the run; written into every record value.
@@ -90,7 +90,7 @@ pub struct ProducerLedger {
 }
 
 /// One transaction and how it ended.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxnLedger {
     pub id: u64,
     pub seqs: SeqSet,
@@ -113,7 +113,7 @@ pub enum TxnOutcome {
 
 /// What one reader saw of one producer's records, reading from the earliest
 /// offset after the load stopped.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReaderLedger {
     pub path: String,
     pub isolation: Isolation,
@@ -256,8 +256,8 @@ pub fn record_tag(producer: &str, seq: u64) -> String { format!("{producer}/{seq
 /// no soak producer wrote.
 #[must_use]
 pub fn parse_record_tag(value: &[u8]) -> Option<(&str, u64)> {
-    let end = value.iter().position(|byte| *byte == b';')?;
-    let tag = std::str::from_utf8(&value[..end]).ok()?;
+    let (tag, _) = value.split_at_checked(value.iter().position(|byte| *byte == b';')?)?;
+    let tag = str::from_utf8(tag).ok()?;
     let (producer, seq) = tag.rsplit_once('/')?;
     Some((producer, seq.parse().ok()?))
 }

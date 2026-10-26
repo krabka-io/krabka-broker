@@ -8,7 +8,10 @@ use {
     },
     base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD},
     bytes::Bytes,
-    std::path::{Path, PathBuf},
+    std::{
+        iter,
+        path::{Path, PathBuf},
+    },
     uuid::Uuid,
 };
 
@@ -55,7 +58,7 @@ pub const LOG_FILE_SUFFIX: &str = ".log";
 
 /// Every artifact a segment copy can write, including optional indexes.
 pub fn segment_suffixes() -> impl Iterator<Item = &'static str> {
-    std::iter::once(LOG_FILE_SUFFIX).chain(IndexType::ALL.iter().map(|index| index.suffix()))
+    iter::once(LOG_FILE_SUFFIX).chain(IndexType::ALL.iter().map(|index| index.suffix()))
 }
 
 /// Character count of a Kafka Base64-rendered UUID.
@@ -196,7 +199,7 @@ pub struct LogSegmentData {
 }
 
 /// One artifact of a segment copy: the key suffix it lands under and its source.
-pub(crate) struct SegmentArtifact<'a> {
+pub struct SegmentArtifact<'a> {
     pub suffix: &'static str,
     pub body: ArtifactBody<'a>,
 }

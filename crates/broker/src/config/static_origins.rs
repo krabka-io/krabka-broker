@@ -22,6 +22,7 @@
 //! The loader records the provenance here as it applies each override, which
 //! is the only place that knows it.
 
+use std::collections::BTreeSet;
 /// The static broker keys this node's configuration named explicitly.
 ///
 /// One flag per key that `crate::handlers`' `DescribeConfigs` reports as a
@@ -40,7 +41,7 @@ pub struct StaticConfigOrigins {
     /// names from `server_properties`, such as `log.roll.ms`, are here when
     /// the operator named them. So is `inter.broker.listener.name`, when the
     /// file names `inter_broker_listener_name`.
-    pub supplied_kafka_keys: std::collections::BTreeSet<&'static str>,
+    pub supplied_kafka_keys: BTreeSet<&'static str>,
     /// `transactional.id.expiration.ms` was supplied.
     pub txn_id_expiration: bool,
     /// `transaction.remove.expired.transaction.cleanup.interval.ms` was
@@ -58,10 +59,12 @@ pub struct StaticConfigOrigins {
 }
 
 /// Which of the two static limits on a connection that has not finished
-/// authenticating this node's configuration named explicitly. Neither is
-/// dynamically reconfigurable in Kafka, so `DescribeConfigs` reports the value
-/// a broker runs with at `STATIC_BROKER_CONFIG` when `server.properties` names
-/// the key, and the built-in default alone otherwise.
+/// authenticating this node's configuration named explicitly.
+///
+/// Neither is dynamically reconfigurable in Kafka, so `DescribeConfigs`
+/// reports the value a broker runs with at `STATIC_BROKER_CONFIG` when
+/// `server.properties` names the key, and the built-in default alone
+/// otherwise.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AuthenticationOrigins {
     /// `sasl.server.max.receive.size` was supplied.
@@ -71,10 +74,11 @@ pub struct AuthenticationOrigins {
 }
 
 /// Which of the static log defaults, each the broker synonym of a topic key,
-/// this node's configuration named explicitly. A topic that overrides none of
-/// them reports the supplied one at `STATIC_BROKER_CONFIG`, Kafka's
-/// `staticNodeConfig.containsKey(synonym)` rule, and reports the built-in
-/// default alone otherwise.
+/// this node's configuration named explicitly.
+///
+/// A topic that overrides none of them reports the supplied one at
+/// `STATIC_BROKER_CONFIG`, Kafka's `staticNodeConfig.containsKey(synonym)`
+/// rule, and reports the built-in default alone otherwise.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LogOrigins {
     /// `message.max.bytes`, the default of `max.message.bytes`, was supplied.

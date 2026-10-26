@@ -34,11 +34,11 @@ fn stretch_profile() -> StretchProfile {
 /// `min.insync.replicas=2` (the only value a stretch profile accepts) and the
 /// rack-aware replica selector, which is what makes the KIP-392 redirect check
 /// meaningful.
-pub(crate) async fn start_stretch_cluster() -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
+pub async fn start_stretch_cluster() -> Vec<(BrokerHandle, BrokerConfig, TempDir)> {
     let cluster = support::start_n_node_customized_with_retry(
         3,
         |i, cfg| {
-            cfg.rack = Some(SITES[i].to_string());
+            cfg.rack = Some(SITES[i].to_owned());
             cfg.stretch = Some(stretch_profile());
             cfg.default_min_insync_replicas = 2;
             cfg.default_replication_factor = 3;
@@ -74,14 +74,11 @@ pub(crate) async fn start_stretch_cluster() -> Vec<(BrokerHandle, BrokerConfig, 
     cluster
 }
 
-pub(crate) async fn client_at(addr: &str) -> Client {
-    connect_owned(addr.to_string(), "witness-role-test", "client build").await
+pub async fn client_at(addr: &str) -> Client {
+    connect_owned(addr.to_owned(), "witness-role-test", "client build").await
 }
 
-pub(crate) async fn wait_for_witness_isr(
-    cluster: &[(BrokerHandle, BrokerConfig, TempDir)],
-    topic: &str,
-) {
+pub async fn wait_for_witness_isr(cluster: &[(BrokerHandle, BrokerConfig, TempDir)], topic: &str) {
     for (handle, _, _) in cluster {
         within(
             "partition present on every node",
@@ -96,6 +93,6 @@ pub(crate) async fn wait_for_witness_isr(
     .await;
 }
 
-pub(crate) async fn shutdown(cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>) {
+pub async fn shutdown(cluster: Vec<(BrokerHandle, BrokerConfig, TempDir)>) {
     shutdown_cluster(cluster).await;
 }

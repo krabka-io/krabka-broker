@@ -18,12 +18,14 @@ use {
     krabka_ids::PartitionIndex,
     krabka_units::{mebibytes, millis},
     std::{
+        fs,
         path::{Path, PathBuf},
         sync::{
-            Arc, Mutex,
+            Arc, Mutex, PoisonError,
             atomic::{AtomicU64, Ordering},
         },
     },
+    tokio_util::sync::CancellationToken,
 };
 
 #[derive(Debug)]
@@ -63,7 +65,7 @@ pub(super) fn append_records(part: &Arc<Partition>, setup: PartitionRecordsSetup
         .call();
     part.log
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .append(&mut batch)
         .expect("append source records");
 }
@@ -163,7 +165,7 @@ pub(super) fn registered_source_fixture(
         .count(setup.count)
         .maybe_stamp_source(setup.stamp_source)
         .call();
-    partitions.insert("t".into(), PartitionIndex(0), partition.clone());
+    partitions.insert("t".into(), PartitionIndex(0), Arc::clone(&partition));
     RegisteredSourceFixture {
         partition,
         future_logs,
@@ -173,7 +175,7 @@ pub(super) fn registered_source_fixture(
 
 pub(super) struct PlantedFutureLog {
     pub path: PathBuf,
-    pub cancel: tokio_util::sync::CancellationToken,
+    pub cancel: CancellationToken,
 }
 
 pub(super) fn plant_future_log(
@@ -181,7 +183,7 @@ pub(super) fn plant_future_log(
     target: &Path,
 ) -> PlantedFutureLog {
     let OpenedFutureLog { path, log } = open_future_log(target);
-    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel = CancellationToken::new();
     future_logs.insert(
         ("t".into(), PartitionIndex(0)),
         Arc::new(super::FutureLogState {
@@ -229,7 +231,7 @@ pub(super) fn append_epoch_batch(
         .call();
     part.log
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .append(&mut batch)
         .expect("append source batch");
 }
@@ -237,7 +239,7 @@ pub(super) fn append_epoch_batch(
 /// Open a staged future replica at the same path a real move uses.
 pub(super) fn open_future_log(target: &Path) -> OpenedFutureLog {
     let path = future_partition_dir(target, "t", 0);
-    std::fs::create_dir_all(&path).unwrap();
+    fs::create_dir_all(&path).unwrap();
     let log = krabka_log::Log::open(&path, krabka_log::LogConfig::default()).unwrap();
     OpenedFutureLog {
         path,

@@ -8,6 +8,7 @@ use {
     },
     krabka_raft::RaftError,
     std::time::Duration,
+    tokio::time,
 };
 
 /// 2. `submit_change` on a follower forwards to the leader, commits through
@@ -34,7 +35,7 @@ async fn follower_submit_change_propagates() {
     assert2::assert!(leader_hint == Some(leader));
 
     // Forward to the leader (record-carrying replication commits it on a majority).
-    tokio::time::timeout(
+    time::timeout(
         Duration::from_secs(10),
         net.get(leader)
             .unwrap()

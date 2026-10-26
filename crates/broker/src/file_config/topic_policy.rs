@@ -27,6 +27,7 @@ use {
 /// rather than leaving the broker enforcing nothing where the operator wrote
 /// a rule.
 #[krabka_macros::config_table(strict)]
+#[derive(Eq)]
 pub struct FileTopicPolicyConfig {
     /// Lowest replication factor `CreateTopics` may be asked for. The
     /// effective factor is checked, so a request that leaves it `-1` is
@@ -92,6 +93,7 @@ mod tests {
         super::*,
         crate::{config::BrokerConfig, file_config::FileConfig, topic_policy::TopicPolicy},
         assert2::check,
+        std::iter,
     };
 
     fn apply(toml: &str) -> Result<BrokerConfig, FileConfigError> {
@@ -119,14 +121,11 @@ forbidden = { "unclean.leader.election.enable" = "true" }
             min_replication_factor: Some(3),
             max_partitions: Some(64),
             min_insync_replicas: Some(2),
-            required: [("cleanup.policy".to_owned(), "delete".to_owned())]
-                .into_iter()
-                .collect(),
-            forbidden: [(
+            required: iter::once(("cleanup.policy".to_owned(), "delete".to_owned())).collect(),
+            forbidden: iter::once((
                 "unclean.leader.election.enable".to_owned(),
                 "true".to_owned(),
-            )]
-            .into_iter()
+            ))
             .collect(),
         };
         check!(cfg.topic_policy == expected);

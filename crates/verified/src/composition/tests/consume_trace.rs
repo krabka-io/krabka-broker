@@ -1,4 +1,4 @@
-use super::*;
+use {super::*, proptest::collection};
 
 fn rational_trace(
     initial: (u64, u64, u64),
@@ -51,7 +51,7 @@ proptest! {
         start in prop_oneof![Just(0_u64), any::<u64>()],
         rate in prop_oneof![1_u64..2_000_000_000, 1_u64..=u64::MAX],
         units in prop_oneof![1_u64..1_000_001, 1_u64..=u64::MAX],
-        steps in proptest::collection::vec((
+        steps in collection::vec((
             prop_oneof![0_u64..10_000_000_000, any::<u64>()],
             prop_oneof![0_u64..100, any::<u64>()]), 0..20),
     ) {

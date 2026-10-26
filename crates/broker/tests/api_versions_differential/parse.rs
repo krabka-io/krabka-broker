@@ -22,7 +22,7 @@ use {krabka_protocol::owned::api_versions_response::ApiVersion, std::fmt};
 
 /// The name the tool printed for a row.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RowName {
+pub enum RowName {
     /// The client's `ApiKeys` enum knows the key, so the tool printed its
     /// canonical Kafka name.
     Known(String),
@@ -33,7 +33,7 @@ pub(crate) enum RowName {
 
 /// One advertised row: the printed name beside the version range.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ParsedRow {
+pub struct ParsedRow {
     /// What the tool called the key.
     pub(crate) name: RowName,
     /// The advertised range, in the same shape the broker sent it.
@@ -42,7 +42,7 @@ pub(crate) struct ParsedRow {
 
 /// Why an output could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ParseError {
+pub enum ParseError {
     /// Nothing in the output opens a broker block, so the tool never reached a
     /// broker.
     NoBrokerBlock,
@@ -74,7 +74,7 @@ const BLOCK_HEADER_SUFFIX: &str = "-> (";
 ///
 /// Returns [`ParseError`] when the output holds no broker block, holds more
 /// than one, or carries a row whose version range does not parse.
-pub(crate) fn parse_single_broker(output: &str) -> Result<Vec<ParsedRow>, ParseError> {
+pub fn parse_single_broker(output: &str) -> Result<Vec<ParsedRow>, ParseError> {
     let blocks = output
         .lines()
         .filter(|line| line.trim_end().ends_with(BLOCK_HEADER_SUFFIX))
@@ -97,7 +97,7 @@ pub(crate) fn parse_single_broker(output: &str) -> Result<Vec<ParsedRow>, ParseE
 
 /// The version ranges of `rows`, which is what a broker's `ApiVersions`
 /// response carried.
-pub(crate) fn advertised(rows: &[ParsedRow]) -> Vec<ApiVersion> {
+pub fn advertised(rows: &[ParsedRow]) -> Vec<ApiVersion> {
     rows.iter().map(|row| row.api.clone()).collect()
 }
 

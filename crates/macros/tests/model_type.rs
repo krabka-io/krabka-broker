@@ -1,4 +1,5 @@
 //! Runtime contracts and original declarations survive conditional model derives.
+#![cfg(test)]
 
 use {
     assert2::assert,

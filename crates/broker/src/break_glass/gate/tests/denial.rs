@@ -45,7 +45,7 @@ fn the_gate_reports_the_refusal_that_came_nearest() {
     let withdrawn = BreakGlassProposalRecord {
         proposal_id: Uuid::from_u128(3),
         withdrawn: true,
-        ..base.clone()
+        ..base
     };
     let image = image_of(&[withdrawn, short]);
 

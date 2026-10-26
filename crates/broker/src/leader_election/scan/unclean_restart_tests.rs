@@ -107,7 +107,7 @@ async fn the_only_isr_member_restarting_uncleanly_leaves_the_partition_leaderles
 
     let plan = restart_batch(&image, &[1, 2]).await;
 
-    assert_restart_outcome(&plan, &[("t".to_string(), 0)]);
+    assert_restart_outcome(&plan, &[("t".to_owned(), 0)]);
     assert!(
         plan.changes
             == vec![MetadataRecord::V1PartitionElr(PartitionElrRecord {

@@ -14,6 +14,7 @@ use {
     },
     assert2::assert,
     krabka_broker::Broker,
+    std::collections::HashSet,
 };
 
 #[tokio::test]
@@ -63,7 +64,7 @@ async fn alter_replica_log_dirs_denied_without_cluster_alter() {
     // Default authorizer for `for_tests` is AllowAll; swap in a deny-
     // everything SimpleAclAuthorizer (empty super-users + empty ACL
     // image) so the Cluster Alter gate engages.
-    cfg.super_users = std::collections::HashSet::new();
+    cfg.super_users = HashSet::new();
     use_simple_acl_authorizer(&mut cfg);
     let handle = Broker::start(cfg).await.expect("broker start");
     let addr = handle.listen_addr();

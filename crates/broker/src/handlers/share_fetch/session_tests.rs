@@ -31,7 +31,8 @@ use {
     krabka_protocol::{
         owned::{
             share_fetch_request::{
-                AcknowledgementBatch, FetchPartition, FetchTopic, ForgottenTopic, ShareFetchRequest,
+                API_KEY, AcknowledgementBatch, FetchPartition, FetchTopic, ForgottenTopic,
+                ShareFetchRequest,
             },
             share_fetch_response::ShareFetchResponse,
         },
@@ -412,7 +413,7 @@ async fn group_share_settings_override_the_broker_defaults() {
         .broker_arc_for_test()
         .controller
         .submit_change(vec![MetadataRecord::V1GroupConfig(GroupConfigRecord {
-            group_id: "g".to_string(),
+            group_id: "g".to_owned(),
             configs: maplit::btreemap! {
                 "share.auto.offset.reset".to_owned() => "earliest".to_owned(),
                 "share.record.lock.duration.ms".to_owned() => "60000".to_owned(),
@@ -664,7 +665,7 @@ async fn fetch_with_limits(
     let started = Instant::now();
     let response = try_dispatch_context(
         &shared,
-        krabka_protocol::owned::share_fetch_request::API_KEY,
+        API_KEY,
         VERSION,
         &encode_request(&request, VERSION),
         &ctx,

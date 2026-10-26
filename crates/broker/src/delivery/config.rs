@@ -6,6 +6,7 @@
 //! timer.
 
 use {
+    crate::time_util::system_timer,
     krabka_units::{Time, millis, secs},
     qubit_clock::{StdWallClock, Timer, WallClock},
     std::sync::Arc,
@@ -17,7 +18,7 @@ use {
 /// The struct is [`Clone`] but neither [`Debug`] nor [`PartialEq`], because the
 /// two injected trait objects are neither.
 #[derive(Clone, krabka_macros::FieldDefaults)]
-pub(crate) struct DeliveryConfig {
+pub struct DeliveryConfig {
     /// Longest the scheduler sleeps when no partition it leads has a batch
     /// waiting, and the cap on every sleep.
     ///
@@ -52,7 +53,7 @@ pub(crate) struct DeliveryConfig {
     /// [`qubit_clock::ManualMonotonicClock`] that handed out [`Self::clock`],
     /// which puts the reading and the cadence on one timeline by construction
     /// rather than by agreement.
-    #[default(crate::time_util::system_timer())]
+    #[default(system_timer())]
     pub(crate) timer: Arc<dyn Timer>,
 }
 

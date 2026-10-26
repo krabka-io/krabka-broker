@@ -7,7 +7,11 @@
 
 use {
     crate::error::TelemetryError,
-    krabka_units::prelude::{Time, TimeExt, secs},
+    krabka_units::{
+        parse,
+        prelude::{Time, TimeExt, secs},
+    },
+    std::time::Duration,
 };
 
 /// OTLP transport.
@@ -72,13 +76,11 @@ fn env_truthy(v: &str) -> bool {
 }
 
 fn parse_time(name: &'static str, value: &str) -> Result<Time, TelemetryError> {
-    let time = krabka_units::parse::non_negative_time(value).map_err(|error| {
-        TelemetryError::InvalidConfig {
-            name,
-            message: error.to_string(),
-        }
+    let time = parse::non_negative_time(value).map_err(|error| TelemetryError::InvalidConfig {
+        name,
+        message: error.to_string(),
     })?;
-    std::time::Duration::try_from_secs_f64(time.secs_f64()).map_err(|error| {
+    Duration::try_from_secs_f64(time.secs_f64()).map_err(|error| {
         TelemetryError::InvalidConfig {
             name,
             message: error.to_string(),
@@ -149,7 +151,7 @@ impl OtlpConfig {
                 .and_then(|s| s.trim().parse::<u64>().ok())
                 .map_or_else(
                     || secs(10),
-                    |seconds| Time::from_std(std::time::Duration::from_secs(seconds)),
+                    |seconds| Time::from_std(Duration::from_secs(seconds)),
                 ),
         };
 

@@ -31,6 +31,7 @@ use {
         owned::offset_commit_request::{OffsetCommitRequest, OffsetCommitRequestPartition},
         primitives::uuid::Uuid as WireUuid,
     },
+    std::net::SocketAddr,
 };
 
 /// [`support::start`] with the Prometheus listener bound.
@@ -51,7 +52,7 @@ async fn start_with_metrics() -> support::InProcess {
 }
 
 /// Scrape the `OpenMetrics` body from the broker's `/metrics` endpoint.
-async fn scrape(addr: std::net::SocketAddr) -> String { scrape_metrics(addr).await }
+async fn scrape(addr: SocketAddr) -> String { scrape_metrics(addr).await }
 
 /// The number of records a fetch from offset zero returns.
 async fn fetch_record_count(client: &Client, topic: &str, topic_id: WireUuid) -> usize {

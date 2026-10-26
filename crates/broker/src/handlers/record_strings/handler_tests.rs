@@ -22,7 +22,10 @@ use {
         codes,
         error::BrokerError,
         features::STREAMS_VERSION,
-        handlers::{RequestContext, group_heartbeat_test_support::streams_request},
+        handlers::{
+            RequestContext, group_heartbeat_test_support::streams_request,
+            test_support::single_replica_partition,
+        },
         test_support::{
             decode_response, encode_request, peer, principal, request_context, start_broker_with,
             tolerate_starved_heartbeats, try_dispatch_context,
@@ -30,7 +33,7 @@ use {
     },
     assert2::assert,
     bytes::Bytes,
-    krabka_metadata::{FeatureLevelRecord, MetadataRecord},
+    krabka_metadata::{FeatureLevelRecord, MetadataRecord, group_version, metadata_version},
     krabka_protocol::{
         Decode, Encode,
         owned::{
@@ -50,9 +53,11 @@ use {
             sync_group_request::{self, SyncGroupRequest, SyncGroupRequestAssignment},
             sync_group_response::SyncGroupResponse,
         },
+        primitives::uuid::Uuid,
     },
     krabka_security::Principal,
     std::{future::Future, net::SocketAddr, sync::Arc, time::Duration},
+    tokio::time::{sleep, timeout},
 };
 
 /// The longest string a coordinator record carries.
@@ -230,8 +235,8 @@ impl Env {
         handle.wait_until_group_coordinator_ready().await;
         let broker = handle.broker_arc_for_test();
         for feature in [
-            krabka_metadata::group_version::GROUP_VERSION_FEATURE,
-            krabka_metadata::metadata_version::SHARE_VERSION_FEATURE,
+            group_version::GROUP_VERSION_FEATURE,
+            metadata_version::SHARE_VERSION_FEATURE,
             STREAMS_VERSION,
         ] {
             finalize(&broker, feature).await;
@@ -280,7 +285,7 @@ async fn create_source_topic(broker: &Broker, name: &str) {
                 partitions: 1,
                 replication_factor: 1,
             }),
-            MetadataRecord::V1Partition(crate::handlers::test_support::single_replica_partition(
+            MetadataRecord::V1Partition(single_replica_partition(
                 name,
                 krabka_ids::PartitionIndex(0),
                 node_id,
@@ -300,9 +305,9 @@ async fn finalize(broker: &Broker, feature: &'static str) {
         })])
         .await
         .expect("finalize the feature");
-    tokio::time::timeout(Duration::from_secs(5), async {
+    timeout(Duration::from_secs(5), async {
         while broker.controller.current_image().finalized_feature(feature) != Some(1) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -471,7 +476,7 @@ async fn classic_join_takes_32767_byte_ids_and_refuses_32768() {
         } = ids(case, long, length, "");
         let request = join_request(group_id.clone(), member_id, Some(instance_id));
 
-        let result = tokio::time::timeout(
+        let result = timeout(
             Duration::from_secs(20),
             env.dispatch(join_group_request::API_KEY, VERSION, &request, &client_id),
         )
@@ -515,7 +520,7 @@ async fn join(
     version: i16,
     client_id: &str,
 ) -> JoinGroupResponse {
-    let bytes = tokio::time::timeout(
+    let bytes = timeout(
         Duration::from_secs(20),
         env.dispatch(join_group_request::API_KEY, version, request, client_id),
     )
@@ -716,7 +721,7 @@ async fn initialize_share_group_state_takes_a_32767_byte_group_id_and_refuses_32
     let request = InitializeShareGroupStateRequest {
         group_id: "a".repeat(length),
         topics: vec![InitializeStateData {
-            topic_id: krabka_protocol::primitives::uuid::Uuid(topic_id.into_bytes()),
+            topic_id: Uuid(topic_id.into_bytes()),
             partitions: vec![PartitionData {
                 partition: 0,
                 state_epoch: 1,

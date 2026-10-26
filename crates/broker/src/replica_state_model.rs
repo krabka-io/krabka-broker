@@ -262,7 +262,7 @@ impl Model for IsrModel {
             // record. A missing per_follower entry for an ISR member counts as a
             // violation, although compute_hw reads one as log end -1 and holds
             // the HW for it.
-            Property::always("no_data_loss", |m: &IsrModel, s: &IsrState| {
+            Property::always("no_data_loss", |m: &Self, s: &IsrState| {
                 let leader = m.leader();
                 s.rs.isr
                     .iter()
@@ -273,7 +273,7 @@ impl Model for IsrModel {
                 s.rs.per_follower.values().all(|st| st.leo <= s.leader_leo)
             }),
             Property::always("hw_nonneg", |_, s: &IsrState| s.rs.hw >= 0),
-            Property::always("leader_in_isr", |m: &IsrModel, s: &IsrState| {
+            Property::always("leader_in_isr", |m: &Self, s: &IsrState| {
                 s.rs.isr.contains(&m.leader())
             }),
             Property::sometimes("can_advance_hw", |_, s: &IsrState| s.rs.hw > 0),
@@ -283,7 +283,7 @@ impl Model for IsrModel {
             Property::sometimes("can_pin_below_leader", |_, s: &IsrState| {
                 s.rs.hw > 0 && s.rs.hw < s.leader_leo
             }),
-            Property::sometimes("can_shrink_isr", |m: &IsrModel, s: &IsrState| {
+            Property::sometimes("can_shrink_isr", |m: &Self, s: &IsrState| {
                 let leader = m.leader();
                 m.replicas.iter().any(|&r| {
                     r != leader && !s.rs.isr.contains(&r) && s.rs.per_follower.contains_key(&r)

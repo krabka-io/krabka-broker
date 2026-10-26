@@ -31,7 +31,7 @@ use {
     },
     assert2::{assert, check},
     bytes::{BufMut, BytesMut},
-    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle, api_catalog::UnstableApiVersions},
     krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
     krabka_protocol::{
         Decode, Encode,
@@ -40,12 +40,18 @@ use {
             sasl_authenticate_request, sasl_authenticate_response, sasl_handshake_request,
             sasl_handshake_response,
         },
+        primitives::uuid::Uuid,
     },
     krabka_security::SaslMechanism,
-    std::{io, net::SocketAddr, time::Duration},
+    std::{
+        io,
+        net::SocketAddr,
+        time::{Duration, Instant},
+    },
     tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpStream,
+        time,
     },
 };
 
@@ -56,11 +62,11 @@ const REBOOTSTRAP_REQUIRED: i16 = 129;
 async fn start_broker(customize: impl FnOnce(&mut BrokerConfig)) -> BrokerHandle {
     let (log_dir, mut cfg) = sasl_temp_config(vec![SaslMechanism::Plain]);
     cfg.plain_credentials
-        .insert("admin".to_string(), admin_plain_password());
+        .insert("admin".to_owned(), admin_plain_password());
     customize(&mut cfg);
     let handle = Broker::start(cfg).await.expect("broker must start");
     // The broker keeps its log directory for its whole life.
-    std::mem::forget(log_dir);
+    let _ = log_dir.keep();
     handle
 }
 
@@ -76,9 +82,9 @@ struct RequestFrameSetup<'a> {
     api_key: krabka_ids::ApiKey,
     #[default(krabka_ids::ApiVersion(3))]
     version: krabka_ids::ApiVersion,
-    #[default(crate::support::wire::CorrelationId(2))]
+    #[default(WireCorrelationId(2))]
     correlation: WireCorrelationId,
-    #[default(crate::support::wire::HeaderEncoding::Flexible)]
+    #[default(RequestHeaderEncoding::Flexible)]
     header: RequestHeaderEncoding,
     body: &'a [u8],
 }
@@ -88,10 +94,8 @@ struct RequestFrameSetup<'a> {
 fn request_frame(
     #[builder(into, default = krabka_ids :: ApiKey (18))] api_key: krabka_ids::ApiKey,
     #[builder(into, default = krabka_ids :: ApiVersion (3))] version: krabka_ids::ApiVersion,
-    #[builder(default = crate :: support :: wire :: CorrelationId (2))]
-    correlation: WireCorrelationId,
-    #[builder(default = crate :: support :: wire :: HeaderEncoding :: Flexible)]
-    header: RequestHeaderEncoding,
+    #[builder(default = WireCorrelationId(2))] correlation: WireCorrelationId,
+    #[builder(default = RequestHeaderEncoding::Flexible)] header: RequestHeaderEncoding,
     #[builder(default)] body: &'_ [u8],
 ) -> Vec<u8> {
     let setup = RequestFrameSetup {
@@ -124,7 +128,7 @@ async fn read_frame(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 
 /// Waits for the broker to close `stream` without writing another frame.
 async fn assert_closed_without_a_frame(stream: &mut TcpStream, what: &str) {
-    let outcome = tokio::time::timeout(Duration::from_secs(10), read_frame(stream))
+    let outcome = time::timeout(Duration::from_secs(10), read_frame(stream))
         .await
         .unwrap_or_else(|_| panic!("{what}: the broker held the connection open"));
     assert!(
@@ -161,7 +165,7 @@ fn named_client(name: &str) -> api_versions_request::ApiVersionsRequest {
 async fn plain_login(stream: &mut TcpStream, password: &str) -> Result<(), io::Error> {
     let handshake = encode(
         &sasl_handshake_request::SaslHandshakeRequest {
-            mechanism: "PLAIN".to_string(),
+            mechanism: "PLAIN".to_owned(),
             ..Default::default()
         },
         1,
@@ -253,7 +257,7 @@ async fn the_larger_request_limit_returns_once_the_peer_authenticated() {
         .map(|index| {
             metadata_topic(
                 Some(format!("a-topic-name-of-thirty-two-bytes-{index:02}")),
-                krabka_protocol::primitives::uuid::Uuid::default(),
+                Uuid::default(),
             )
         })
         .collect::<Vec<_>>();
@@ -275,7 +279,7 @@ async fn the_larger_request_limit_returns_once_the_peer_authenticated() {
     let mut stream = TcpStream::connect(addr).await.unwrap();
     let handshake = encode(
         &sasl_handshake_request::SaslHandshakeRequest {
-            mechanism: "PLAIN".to_string(),
+            mechanism: "PLAIN".to_owned(),
             ..Default::default()
         },
         1,
@@ -332,7 +336,7 @@ async fn a_failed_authentication_holds_its_answer_for_the_configured_delay() {
     .await;
 
     let mut stream = TcpStream::connect(handle.listen_addr()).await.unwrap();
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let outcome = plain_login(&mut stream, &wrong_scram_password()).await;
     let elapsed = started.elapsed();
     check!(outcome.is_err(), "{outcome:?}");
@@ -413,8 +417,7 @@ async fn a_second_api_versions_before_the_handshake_closes_the_connection() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pre_auth_api_versions_carries_no_rebootstrap_check() {
     let handle = start_broker(|cfg| {
-        cfg.features.unstable_api_versions =
-            krabka_broker::api_catalog::UnstableApiVersions::Enabled;
+        cfg.features.unstable_api_versions = UnstableApiVersions::Enabled;
     })
     .await;
     let stale = api_versions_request::ApiVersionsRequest {

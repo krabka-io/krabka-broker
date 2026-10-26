@@ -14,12 +14,12 @@ use {
     assert2::check,
     krabka_log::name,
     krabka_restore::{EXIT_OK, UNRECOGNIZED_SAMPLE_LIMIT, run_from_args},
-    std::{path::Path, process::Command},
+    std::{ffi::OsString, fs, path::Path, process::Command},
 };
 
 /// The entries of `dir`, or `None` when it does not exist.
-fn entries(dir: &Path) -> Option<Vec<std::ffi::OsString>> {
-    let read = std::fs::read_dir(dir).ok()?;
+fn entries(dir: &Path) -> Option<Vec<OsString>> {
+    let read = fs::read_dir(dir).ok()?;
     let mut names: Vec<_> = read
         .map(|entry| entry.expect("directory entry").file_name())
         .collect();
@@ -40,7 +40,7 @@ async fn a_dry_run_writes_nothing_and_the_same_restore_then_succeeds(precreate: 
     let target = tempfile::tempdir().expect("target parent");
     let log_dir = target.path().join("restored");
     if precreate {
-        std::fs::create_dir(&log_dir).expect("empty target");
+        fs::create_dir(&log_dir).expect("empty target");
     }
     let before = entries(&log_dir);
     let argv = |extra| {
@@ -75,7 +75,7 @@ async fn a_dry_run_writes_nothing_and_the_same_restore_then_succeeds(precreate: 
 fn json_report_stdout_is_one_json_object(extra: &[&str], dry_run: bool, stray_keys: usize) {
     let fixture = build_fixture();
     for key in 0..stray_keys {
-        std::fs::write(
+        fs::write(
             fixture.archive_root.path().join(format!("stray-{key}")),
             b"",
         )

@@ -20,21 +20,16 @@ struct Split<'a> {
 /// `#[tokio::main(...)]` arguments. A comma inside a group belongs to the
 /// group, so only the outermost one splits.
 fn split(tokens: &[TokenTree]) -> Split<'_> {
-    match tokens.iter().position(TokenTree::is_punct_comma) {
-        Some(comma) => Split {
-            path: &tokens[..comma],
-            runtime: &tokens[comma + 1..],
-        },
-        None => Split {
-            path: tokens,
-            runtime: &[],
-        },
+    let mut halves = tokens.splitn(2, TokenTree::is_punct_comma);
+    Split {
+        path: halves.next().unwrap_or_default(),
+        runtime: halves.next().unwrap_or_default(),
     }
 }
 
 /// Expands `cli_main!(crate_path, tokio arguments...)` into the binary's
 /// `main`.
-pub(crate) fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let tokens = Vec::from(tokens);
     let Split { path, runtime } = split(&tokens);
     let path = required_tokens(

@@ -17,17 +17,23 @@ use {
     assert2::{assert, check},
     krabka_protocol::owned::consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
     qubit_clock::Timer,
-    std::{sync::Arc, time::Duration},
-    tokio::sync::mpsc,
+    std::{
+        future::poll_fn,
+        sync::{Arc, atomic::Ordering},
+        time::Duration,
+    },
+    tokio::{
+        sync::{mpsc, oneshot},
+        time::timeout,
+    },
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn actor_exits_on_append_error() {
     let (coord, log) = make_coordinator();
     let handle = coord.get_or_create_consumer("g");
-    log.fail_next
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    let (tx, rx) = tokio::sync::oneshot::channel();
+    log.fail_next.store(true, Ordering::SeqCst);
+    let (tx, rx) = oneshot::channel();
     let _ = handle
         .tx
         .send(GroupActorMessage::Heartbeat {
@@ -49,7 +55,7 @@ async fn actor_exits_on_append_error() {
     assert!(resp.error_code == codes::COORDINATOR_LOAD_IN_PROGRESS);
 
     // Wait for the actor to drain and drop its receiver.
-    tokio::time::timeout(Duration::from_secs(1), handle.tx.closed())
+    timeout(Duration::from_secs(1), handle.tx.closed())
         .await
         .expect("actor mpsc closed after exit");
     assert!(
@@ -90,10 +96,10 @@ async fn closing_an_actor_drains_messages_from_outstanding_mailbox_permits() {
         }
         let (tx, rx) = mpsc::channel(config.actor_mailbox_capacity);
         let permit = tx.reserve().await.expect("reserve before the actor exits");
-        let (stop, _stopped) = tokio::sync::oneshot::channel();
+        let (stop, _stopped) = oneshot::channel();
         tx.try_send(GroupActorMessage::Shutdown(stop)).unwrap();
         let actor = run_actor(
-            "g".to_string(),
+            "g".to_owned(),
             GroupKindTag::Classic,
             Arc::new(config),
             empty_metadata(),
@@ -102,20 +108,19 @@ async fn closing_an_actor_drains_messages_from_outstanding_mailbox_permits() {
             rx,
         );
         tokio::pin!(actor);
-        let finished =
-            std::future::poll_fn(|cx| Poll::Ready(actor.as_mut().poll(cx).is_ready())).await;
+        let finished = poll_fn(|cx| Poll::Ready(actor.as_mut().poll(cx).is_ready())).await;
         assert!(tx.is_closed());
 
         // A send reserved before closure can still enqueue after the actor stops.
-        let (reply, response) = tokio::sync::oneshot::channel();
+        let (reply, response) = oneshot::channel();
         permit.send(GroupActorMessage::FetchOffsets { reply });
         if !finished {
-            tokio::time::timeout(Duration::from_secs(1), actor)
+            timeout(Duration::from_secs(1), actor)
                 .await
                 .expect("the actor drains the reserved send");
         }
         assert!(
-            tokio::time::timeout(Duration::from_secs(1), response)
+            timeout(Duration::from_secs(1), response)
                 .await
                 .expect("the abandoned request receives a dropped reply")
                 .is_err()
@@ -136,10 +141,10 @@ async fn run_until_the_ticker_dies(timer: Arc<dyn Timer>) -> CoordinatorGroup {
         ..NextGenConfig::assigning_at_once()
     });
     let (tx, rx) = mpsc::channel(config.actor_mailbox_capacity);
-    let group = tokio::time::timeout(
+    let group = timeout(
         Duration::from_secs(10),
         run_actor(
-            "g".to_string(),
+            "g".to_owned(),
             GroupKindTag::Consumer,
             config,
             empty_metadata(),

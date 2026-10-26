@@ -28,6 +28,7 @@ use {
     crate::support::{
         admin::{ElectionSetup, election_partition_errors, election_request},
         produce::{ProduceTimeoutMillis, SinglePartitionProduceSetup, batch_request},
+        sasl,
         topics::{
             self, AssignedTopicSetup, ConfiguredTopicSetup, CreateTopicSetup, assigned_topic,
             configured_topic_request,
@@ -42,6 +43,7 @@ use {
             api_versions_request::ApiVersionsRequest,
             api_versions_response::ApiVersionsResponse,
             create_topics_request::CreatableTopic,
+            create_topics_response::CreateTopicsResponse,
             elect_leaders_request::ElectLeadersRequest,
             elect_leaders_response::ElectLeadersResponse,
             incremental_alter_configs_request::IncrementalAlterConfigsRequest,
@@ -57,6 +59,7 @@ use {
         },
         records::{Record, RecordBatch},
     },
+    krabka_units::{ByteSize, convert::ByteSizeExt},
     std::{io, net::SocketAddr},
     tokio::{
         io::{AsyncRead, AsyncWrite},
@@ -146,11 +149,9 @@ where
         .header(header)
         .client_id(client_id)
         .body(body)
-        .maybe_capacity(Some(
-            <krabka_units::ByteSize as krabka_units::convert::ByteSizeExt>::from_bytes(
-                u64::try_from(16 + client_id.len() + body.len()).expect("frame capacity fits u64"),
-            ),
-        ))
+        .maybe_capacity(Some(<ByteSize as ByteSizeExt>::from_bytes(
+            u64::try_from(16 + client_id.len() + body.len()).expect("frame capacity fits u64"),
+        )))
         .maybe_length_context(Some("client_id fits in i16"))
         .call();
 
@@ -206,7 +207,7 @@ pub struct PlainAuthenticationSetup<'a> {
     pub client_id: &'a str,
     #[default("alice")]
     pub user: &'a str,
-    #[default(crate::support::sasl::alice_password().into_bytes())]
+    #[default(sasl::alice_password().into_bytes())]
     pub password: Vec<u8>,
 }
 
@@ -214,7 +215,7 @@ pub struct PlainAuthenticationSetup<'a> {
 pub fn plain_authentication_setup<'a>(
     #[builder(default = "krabka-broker-test")] client_id: &'a str,
     #[builder(default = "alice")] user: &'a str,
-    #[builder(default = crate::support::sasl::alice_password().into_bytes())] password: Vec<u8>,
+    #[builder(default = sasl::alice_password().into_bytes())] password: Vec<u8>,
 ) -> PlainAuthenticationSetup<'a> {
     PlainAuthenticationSetup {
         client_id,
@@ -334,17 +335,16 @@ pub async fn create_topic_as_super_user(
     let setup = AutomaticTopicSetup { client_id, topic };
     let name = setup.topic.name.clone();
     let request = topics::create_topic_request(configured_topic_row(setup.topic));
-    let response: krabka_protocol::owned::create_topics_response::CreateTopicsResponse =
-        request_as_plain(addr, &request, &PlainRequestSetup {
-            authentication: PlainAuthenticationSetup::admin(setup.client_id),
-            api: ApiRequestSetup {
-                api_key: krabka_ids::ApiKey(19),
-                version: krabka_ids::ApiVersion(7),
-            },
-            operation: "CreateTopics",
-        })
-        .await
-        .expect("CreateTopics as super-user must round-trip");
+    let response: CreateTopicsResponse = request_as_plain(addr, &request, &PlainRequestSetup {
+        authentication: PlainAuthenticationSetup::admin(setup.client_id),
+        api: ApiRequestSetup {
+            api_key: krabka_ids::ApiKey(19),
+            version: krabka_ids::ApiVersion(7),
+        },
+        operation: "CreateTopics",
+    })
+    .await
+    .expect("CreateTopics as super-user must round-trip");
     assert!(response.topics.len() == 1, "one topic in response");
     assert!(
         response.topics[0].error_code == 0,
@@ -385,7 +385,7 @@ where
 
     let sh_body = encode_named(
         &SaslHandshakeRequest {
-            mechanism: "PLAIN".to_string(),
+            mechanism: "PLAIN".to_owned(),
             ..Default::default()
         },
         1,
@@ -599,14 +599,10 @@ where
 pub use crate::support::sasl::plain_payload;
 
 /// Create exactly one topic on an open connection, checking the whole response row's status.
-pub async fn create_topic_on(
-    stream: &mut TcpStream,
-    client_id: &str,
-    topic: krabka_protocol::owned::create_topics_request::CreatableTopic,
-) {
+pub async fn create_topic_on(stream: &mut TcpStream, client_id: &str, topic: CreatableTopic) {
     let name = topic.name.clone();
     let request = topics::create_topic_request(topic);
-    let response: krabka_protocol::owned::create_topics_response::CreateTopicsResponse = exchange()
+    let response: CreateTopicsResponse = exchange()
         .stream(stream)
         .request(&request)
         .api_key(19)
@@ -627,7 +623,7 @@ pub async fn create_topic_on(
 /// Create a topic on a newly authenticated PLAIN session.
 pub async fn create_topic_sasl(
     addr: SocketAddr,
-    topic: krabka_protocol::owned::create_topics_request::CreatableTopic,
+    topic: CreatableTopic,
     setup: &PlainAuthenticationSetup<'_>,
 ) {
     let mut stream = sasl_plain_authenticate(addr, setup)
@@ -642,7 +638,7 @@ pub struct ScramAuthenticationSetup<'a> {
     pub client_id: &'a str,
     #[default("alice")]
     pub user: &'a str,
-    #[default(crate::support::sasl::alice_password())]
+    #[default(sasl::alice_password())]
     pub password: String,
     #[default(krabka_security::SaslMechanism::ScramSha512)]
     pub mechanism: krabka_security::SaslMechanism,
@@ -753,7 +749,7 @@ where
     let response: SaslHandshakeResponse = exchange()
         .stream(stream)
         .request(&SaslHandshakeRequest {
-            mechanism: setup.mechanism.to_string(),
+            mechanism: setup.mechanism.to_owned(),
             ..Default::default()
         })
         .api_key(17)
@@ -839,7 +835,7 @@ impl Default for ProduceRecordCount {
 
 #[derive(Clone, krabka_macros::FieldDefaults)]
 pub struct ZeroFilledRecordsSetup {
-    #[default("quota-topic".to_string())]
+    #[default("quota-topic".to_owned())]
     pub topic: String,
     pub value_bytes: ProduceValueBytes,
     pub count: ProduceRecordCount,
@@ -856,10 +852,10 @@ pub struct SaslProduceSetup<'a> {
 /// A Produce v11-compatible batch of zero-filled records for quota tests.
 #[bon::builder]
 pub fn produce_records(
-    #[builder(default = "quota-topic" . to_string ())] topic: String,
+    #[builder(default = "quota-topic".to_owned())] topic: String,
     #[builder(into, default)] value_bytes: ProduceValueBytes,
     #[builder(into, default)] count: ProduceRecordCount,
-) -> krabka_protocol::owned::produce_request::ProduceRequest {
+) -> ProduceRequest {
     let setup = ZeroFilledRecordsSetup {
         topic,
         value_bytes,
@@ -901,7 +897,7 @@ pub fn single_record_produce_request(topic: &str, partition: i32, value: &[u8]) 
             ..Default::default()
         },
         SinglePartitionProduceSetup {
-            topic: topic.to_string(),
+            topic: topic.to_owned(),
             partition: krabka_ids::PartitionIndex(partition),
             ..SinglePartitionProduceSetup::replicated()
         },
@@ -963,11 +959,7 @@ pub async fn elect_leaders(
     election_partition_errors(resp, &topic)
 }
 
-pub async fn create_topic_plaintext(
-    addr: SocketAddr,
-    client_id: &str,
-    topic: krabka_protocol::owned::create_topics_request::CreatableTopic,
-) {
+pub async fn create_topic_plaintext(addr: SocketAddr, client_id: &str, topic: CreatableTopic) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
     create_topic_on(&mut stream, client_id, topic).await;
 }
@@ -1057,7 +1049,7 @@ pub async fn create_topic_as_admin(
 pub async fn create_topic_on_fresh_connection(
     addr: SocketAddr,
     client_id: &str,
-    topic: krabka_protocol::owned::create_topics_request::CreatableTopic,
+    topic: CreatableTopic,
 ) {
     let mut stream = TcpStream::connect(addr).await.expect("connect");
     create_topic_on(&mut stream, client_id, topic).await;
@@ -1130,7 +1122,7 @@ pub async fn produce_sasl_with_ids(
     #[builder(default)] authentication: PlainAuthenticationSetup<'_>,
     #[builder(default = "krabka-broker-test")] produce_client_id: &'_ str,
     #[builder(default)] records: ZeroFilledRecordsSetup,
-) -> krabka_protocol::owned::produce_response::ProduceResponse {
+) -> ProduceResponse {
     const VERSION: i16 = 11;
     let setup = SaslProduceSetup {
         authentication,
@@ -1158,8 +1150,7 @@ pub async fn produce_sasl_with_ids(
         .await
         .expect("Produce round-trip");
     let mut cur: &[u8] = &resp_bytes;
-    krabka_protocol::owned::produce_response::ProduceResponse::decode(&mut cur, VERSION)
-        .expect("decode ProduceResponse")
+    ProduceResponse::decode(&mut cur, VERSION).expect("decode ProduceResponse")
 }
 
 /// Automatic plaintext creation with the original JBOD fixtures' connect unwrap policy.

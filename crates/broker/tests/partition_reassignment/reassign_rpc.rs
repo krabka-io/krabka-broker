@@ -18,7 +18,7 @@ use {
             ListPartitionReassignmentsResponse, OngoingTopicReassignment,
         },
     },
-    std::net::SocketAddr,
+    std::{collections::BTreeMap, net::SocketAddr},
     tokio::net::TcpStream,
 };
 
@@ -69,11 +69,10 @@ pub async fn alter_reassignments_on(
     };
 
     // Group by topic.
-    let mut by_topic: std::collections::BTreeMap<String, Vec<ReassignablePartition>> =
-        std::collections::BTreeMap::new();
+    let mut by_topic: BTreeMap<String, Vec<ReassignablePartition>> = BTreeMap::new();
     for (topic, partition, target_opt) in rows {
         by_topic
-            .entry(topic.to_string())
+            .entry(topic.to_owned())
             .or_default()
             .push(ReassignablePartition {
                 partition_index: partition,

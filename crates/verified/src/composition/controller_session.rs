@@ -75,11 +75,14 @@ pub(super) fn published_controller_session_bounds_quorum_requests(
             && (requests@[j].1.saw_allow || requests@[j].1.default_decision == AclDefault::Allow))))]
     #[variant(requests@.len() - i@)]
     while i < requests.len() {
-        if !controller_request_admission(Some(expiry), 55, requests[i].0) {
+        let Some(&(at, acl)) = requests.get(i) else {
+            break;
+        };
+        if !controller_request_admission(Some(expiry), 55, at) {
             break;
         }
         responses.push(matches!(
-            acl_decision(requests[i].1),
+            acl_decision(acl),
             AclDecision::AllowSuperuser | AclDecision::AllowAcl | AclDecision::AllowNoAcl
         ));
         i += 1;

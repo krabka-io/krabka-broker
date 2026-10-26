@@ -37,6 +37,7 @@ use {
     },
     krabka_raft::RaftError,
     std::{sync::Arc, time::Duration},
+    tokio::time::Instant,
 };
 
 pub(super) async fn process_resource(
@@ -49,7 +50,7 @@ pub(super) async fn process_resource(
 ) -> AlterConfigsResourceResponse {
     let result = guarded_operation_on_source(
         broker.controller.as_ref(),
-        tokio::time::Instant::now() + Duration::from_secs(5),
+        Instant::now() + Duration::from_secs(5),
         |image| {
             process_resource_once(
                 broker,
@@ -211,6 +212,7 @@ mod tests {
         assert2::assert,
         krabka_metadata::{BrokerConfigRecord, MetadataRecord},
         krabka_raft::NodeId,
+        tokio::time::Instant,
     };
 
     async fn submit_replacement(
@@ -222,21 +224,17 @@ mod tests {
         ) -> Result<Vec<MetadataRecord>, (i16, String)>
         + Sync,
     ) -> Result<(), (i16, String)> {
-        guarded_operation_on_source(
-            source,
-            tokio::time::Instant::now() + Duration::from_secs(1),
-            |image| {
-                let build = &build;
-                async move {
-                    let records = match build(resource, &image) {
-                        Ok(records) => records,
-                        Err(error) => return Ok(Err(error)),
-                    };
-                    source.submit_change_if_image(records, image).await?;
-                    Ok(Ok(()))
-                }
-            },
-        )
+        guarded_operation_on_source(source, Instant::now() + Duration::from_secs(1), |image| {
+            let build = &build;
+            async move {
+                let records = match build(resource, &image) {
+                    Ok(records) => records,
+                    Err(error) => return Ok(Err(error)),
+                };
+                source.submit_change_if_image(records, image).await?;
+                Ok(Ok(()))
+            }
+        })
         .await
         .expect("bounded retry")
         .expect("guarded submission")

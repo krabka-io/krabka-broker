@@ -8,8 +8,10 @@ use {
     crate::{error::BrokerError, partition::SwapOutcome},
     arc_swap::ArcSwap,
     krabka_log::Log,
+    krabka_verified::storage,
     std::{
-        path::PathBuf,
+        fs, mem,
+        path::{Path, PathBuf},
         sync::{Arc, Mutex},
     },
 };
@@ -34,8 +36,8 @@ pub(super) fn swap_future_log(
     log_dir: &Arc<ArcSwap<PathBuf>>,
     target_log_dir: PathBuf,
     future_log: &Arc<Mutex<Log>>,
-    future_path: &std::path::Path,
-    target_partition_path: &std::path::Path,
+    future_path: &Path,
+    target_partition_path: &Path,
 ) -> Result<SwapOutcome, BrokerError> {
     // Acquire both logs under the writer's serialization and re-check
     // the caught-up invariant. If the future log fell behind between
@@ -46,10 +48,7 @@ pub(super) fn swap_future_log(
     let current_stamp_source = log_guard.stamp_source();
     let current_leo = log_guard.log_end_offset();
     let mut future_guard = lock_log(future_log);
-    if !krabka_verified::storage::future_log_swap_admission(
-        current_leo.0,
-        future_guard.log_end_offset().0,
-    ) {
+    if !storage::future_log_swap_admission(current_leo.0, future_guard.log_end_offset().0) {
         return Ok(SwapOutcome::NotCaughtUp);
     }
     let future_stamp_source = future_guard.stamp_source();
@@ -61,10 +60,10 @@ pub(super) fn swap_future_log(
     // both out via `mem::replace` against throwaway Logs anchored to
     // a sacrificial `*.tomb` directory we delete at the end.
     let tomb_dir = future_path.with_extension("krabka-swap-tomb");
-    std::fs::create_dir_all(&tomb_dir)?;
-    let old_current = std::mem::replace(&mut *log_guard, Log::open(&tomb_dir, config.clone())?);
+    fs::create_dir_all(&tomb_dir)?;
+    let old_current = mem::replace(&mut *log_guard, Log::open(&tomb_dir, config.clone())?);
     old_current.close();
-    let old_future = std::mem::replace(&mut *future_guard, Log::open(&tomb_dir, config.clone())?);
+    let old_future = mem::replace(&mut *future_guard, Log::open(&tomb_dir, config.clone())?);
     old_future.close();
     drop(future_guard);
 
@@ -72,7 +71,7 @@ pub(super) fn swap_future_log(
     // `<topic>-<partition>` slot under the target log.dir, then
     // remove the source dir. If the rename fails, reopen the source
     // so the partition keeps serving and bubble the error.
-    if let Err(e) = std::fs::rename(future_path, target_partition_path) {
+    if let Err(e) = fs::rename(future_path, target_partition_path) {
         // Best-effort recovery: reopen the original log in the
         // source dir so the partition keeps serving against the
         // pre-swap location.
@@ -91,11 +90,11 @@ pub(super) fn swap_future_log(
                 );
             }
         }
-        let _ = std::fs::remove_dir_all(&tomb_dir);
+        let _ = fs::remove_dir_all(&tomb_dir);
         return Err(BrokerError::from(e));
     }
 
-    if let Err(e) = std::fs::remove_dir_all(&source_partition_path) {
+    if let Err(e) = fs::remove_dir_all(&source_partition_path) {
         tracing::warn!(
             source = %source_partition_path.display(),
             error = %e,
@@ -103,14 +102,16 @@ pub(super) fn swap_future_log(
              partition is live at target, source will be cleaned on next restart"
         );
     }
-    let _ = std::fs::remove_dir_all(&tomb_dir);
+    let _ = fs::remove_dir_all(&tomb_dir);
 
     let mut reopened = Log::open(target_partition_path, config)?;
     if let Some(stamp_source) = future_stamp_source {
         reopened.set_stamp_source(stamp_source)?;
     }
-    *log_guard = reopened;
+    // Both the directory and the reopened log change under the log's lock.
     log_dir.store(Arc::new(target_log_dir));
+    *log_guard = reopened;
+    drop(log_guard);
     Ok(SwapOutcome::Swapped)
 }
 
@@ -120,6 +121,7 @@ mod tests {
         super::*,
         crate::partition_writer::test_support::{FixedStamp, open_log_with_records},
         assert2::check,
+        std::path::Path,
         tempfile::tempdir,
     };
 
@@ -131,7 +133,7 @@ mod tests {
         target_partition_path: PathBuf,
     }
 
-    fn swap_paths(dir: &std::path::Path) -> SwapPaths {
+    fn swap_paths(dir: &Path) -> SwapPaths {
         let source_dir = dir.join("source");
         let target_dir = dir.join("target");
         SwapPaths {
@@ -164,7 +166,7 @@ mod tests {
             .set_stamp_source(Arc::new(FixedStamp(7)))
             .expect("future stamp index");
         let future_log = Arc::new(Mutex::new(staged_log));
-        let log_dir = Arc::new(ArcSwap::from_pointee(source_dir.clone()));
+        let log_dir = Arc::new(ArcSwap::from_pointee(source_dir));
 
         let result = swap_future_log(
             &log,
@@ -188,7 +190,7 @@ mod tests {
         };
         check!(result == SwapOutcome::Swapped);
         check!(leo == 2);
-        check!(log_dir_now == target_partition_path.clone());
+        check!(log_dir_now == target_partition_path);
         check!(has_stamp_source);
         check!(log_dir.load().as_ref().clone() == target_dir);
         check!(!source_partition.exists());

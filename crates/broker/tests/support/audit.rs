@@ -11,6 +11,7 @@ use {
     crate::support::fetch::single_partition_fetch,
     krabka_broker::coordinator::AUDIT_TOPIC,
     krabka_protocol::{owned::fetch_response::FetchResponse, records::Record},
+    std::str,
 };
 
 /// Fetch the audit topic and return the `seq` header value (parsed as `u64`)
@@ -33,7 +34,7 @@ pub async fn audit_record_seqs(client: &krabka_client_core::Client) -> Vec<u64> 
             .iter()
             .find(|h| h.key == "seq")
             .and_then(|h| h.value.as_ref())
-            .and_then(|v| std::str::from_utf8(v).ok())
+            .and_then(|v| str::from_utf8(v).ok())
             .and_then(|s| s.parse::<u64>().ok())
         {
             seqs.push(seq_val);
@@ -56,9 +57,7 @@ pub async fn consume_audit_records(client: &krabka_client_core::Client) -> Vec<s
     records
 }
 
-async fn fetch_audit(
-    client: &krabka_client_core::Client,
-) -> krabka_protocol::owned::fetch_response::FetchResponse {
+async fn fetch_audit(client: &krabka_client_core::Client) -> FetchResponse {
     let topic_id = super::topic_id_for(client, AUDIT_TOPIC).await;
     client
         .send(

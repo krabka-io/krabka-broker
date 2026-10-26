@@ -42,9 +42,9 @@ mod groups;
 mod injection;
 mod recovery;
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 
-pub(crate) use self::{
+pub use self::{
     groups::{GroupDescription, RetainedCut},
     injection::InjectionOutcome,
 };
@@ -83,7 +83,7 @@ fn clamp_timeout(requested: Option<Time>, ceiling: Time) -> Time {
 /// # Errors
 /// Returns [`BarrierError::InvalidDefinition`] when the name is longer than
 /// 32767 bytes.
-pub(crate) fn validate_group_name(group: &str) -> Result<(), BarrierError> {
+pub fn validate_group_name(group: &str) -> Result<(), BarrierError> {
     if group.len() > MAX_STRING_BYTES {
         return Err(BarrierError::InvalidDefinition(format!(
             "a barrier group name is {} bytes, and the limit is {MAX_STRING_BYTES}",
@@ -100,7 +100,7 @@ pub(crate) fn validate_group_name(group: &str) -> Result<(), BarrierError> {
 /// when it holds an empty name, a name longer than 32767 bytes or a duplicate
 /// name, when `retained_cuts` is below one, or when the interval is not
 /// positive.
-pub(crate) fn validate_spec(spec: &GroupSpec) -> Result<(), BarrierError> {
+pub fn validate_spec(spec: &GroupSpec) -> Result<(), BarrierError> {
     if spec.topics.is_empty() {
         return Err(BarrierError::InvalidDefinition(
             "a barrier group needs at least one topic".to_owned(),
@@ -137,7 +137,7 @@ pub(crate) fn validate_spec(spec: &GroupSpec) -> Result<(), BarrierError> {
     Ok(())
 }
 
-pub(crate) fn validate_spec_limits(
+pub fn validate_spec_limits(
     spec: &GroupSpec,
     max_topics: usize,
     max_retained_cuts: i32,
@@ -183,7 +183,7 @@ pub(super) struct NamedGroup {
     pub(super) entry: Arc<Mutex<GroupEntry>>,
 }
 
-pub(crate) struct BarrierCoordinator {
+pub struct BarrierCoordinator {
     pub(crate) node_id: NodeId,
     partitions: Arc<PartitionRegistry>,
     controller: Arc<dyn MetadataSource>,
@@ -309,9 +309,10 @@ impl BarrierCoordinator {
             records: Vec::with_capacity(records.len()),
             ..RecordBatch::default()
         };
-        for (delta, AppendRecord { key, value }) in records.into_iter().enumerate() {
+        // `last` came from the record count, so every delta up to it fits.
+        for (offset_delta, AppendRecord { key, value }) in (0..=last).zip(records) {
             batch.records.push(Record {
-                offset_delta: i32::try_from(delta).expect("the record count fits in an i32"),
+                offset_delta,
                 key: Some(encode_key(&key)?.into()),
                 value,
                 ..Record::default()
@@ -322,11 +323,7 @@ impl BarrierCoordinator {
 
     /// The entry of `group`, or a fresh one.
     fn entry_handle(&self, group: &str) -> Arc<Mutex<GroupEntry>> {
-        self.groups
-            .entry(group.to_owned())
-            .or_default()
-            .value()
-            .clone()
+        Arc::clone(self.groups.entry(group.to_owned()).or_default().value())
     }
 
     /// The entry of a group that this broker holds.
@@ -336,7 +333,7 @@ impl BarrierCoordinator {
     fn live_entry(&self, group: &str) -> Result<Arc<Mutex<GroupEntry>>, BarrierError> {
         self.groups
             .get(group)
-            .map(|e| e.value().clone())
+            .map(|e| Arc::clone(e.value()))
             .ok_or_else(|| BarrierError::UnknownGroup {
                 group: group.to_owned(),
             })

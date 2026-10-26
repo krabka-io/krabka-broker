@@ -17,13 +17,15 @@ use {
     krabka_log::ProducerId,
     krabka_metadata::{AclOperation, MetadataImage, ResourceType},
     krabka_protocol::owned::end_txn_request::EndTxnRequest,
+    std::sync::Arc,
+    tokio::sync::Mutex,
 };
 
 pub(super) enum EndTxnValidation {
     /// Finalise the transaction. `no_partition_added` marks Kafka's
     /// `prepareAbortOrCommit(..., noPartitionAdded = true)`.
     Proceed {
-        entry: std::sync::Arc<tokio::sync::Mutex<TxnEntry>>,
+        entry: Arc<Mutex<TxnEntry>>,
         no_partition_added: bool,
     },
     /// Answer `NONE` with this identity and write nothing.

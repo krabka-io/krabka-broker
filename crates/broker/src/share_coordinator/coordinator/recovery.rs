@@ -14,7 +14,7 @@ use {
     krabka_log::Offset,
     krabka_protocol::records::RecordBatch,
     std::{collections::HashMap, sync::Arc},
-    tokio::sync::Mutex,
+    tokio::{sync::Mutex, time::timeout},
     tracing::{info, warn},
 };
 
@@ -22,7 +22,7 @@ use {
 mod tests;
 
 use {
-    super::{LoadStatus, ShareCoordinator, ShareStateKey3},
+    super::{LeaderPartitions, LoadStatus, ShareCoordinator, ShareStateKey3},
     crate::{
         blocking::spawn_blocking,
         error::BrokerError,
@@ -73,7 +73,7 @@ impl ShareCoordinator {
                 // A timed-out or cancelled append can remain in the writer's
                 // mailbox. Reading the log before this barrier would publish
                 // stale state even if the previous operation lock is free.
-                match tokio::time::timeout(self.config.write_timeout, part.writer_barrier()).await {
+                match timeout(self.config.write_timeout, part.writer_barrier()).await {
                     Ok(Ok(())) => spawn_blocking(move || {
                         replay_partition(&part, state_partition, read_max, updates_per_snapshot)
                     })
@@ -112,7 +112,23 @@ impl ShareCoordinator {
         generation: u64,
         replayed: Result<HashMap<ShareStateKey3, SharePartitionState>, BrokerError>,
     ) {
-        let mut led = self.leader_partitions.write().await;
+        self.install_term(
+            &mut *self.leader_partitions.write().await,
+            state_partition,
+            generation,
+            replayed,
+        );
+    }
+
+    /// The body of [`Self::install_load`], under the caller's write guard of
+    /// the leadership map `led`.
+    fn install_term(
+        &self,
+        led: &mut LeaderPartitions,
+        state_partition: PartitionIndex,
+        generation: u64,
+        replayed: Result<HashMap<ShareStateKey3, SharePartitionState>, BrokerError>,
+    ) {
         let Some(entry) = led
             .get_mut(&state_partition)
             .filter(|entry| entry.generation == generation && entry.status == LoadStatus::Loading)

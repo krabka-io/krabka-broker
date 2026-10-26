@@ -1,7 +1,10 @@
 //! The three-site stretch deployment profile and the check that a node's
 //! rack, roles and durability settings agree with it.
 
-use crate::{BrokerError, config::BrokerConfig};
+use {
+    crate::{BrokerError, config::BrokerConfig},
+    krabka_verified::stretch,
+};
 
 /// Number of sites a [`StretchProfile`] names: two data sites and one
 /// witness site.
@@ -56,7 +59,11 @@ impl BrokerConfig {
             });
         }
         for (i, site) in profile.sites.iter().enumerate() {
-            if profile.sites[..i].contains(site) {
+            if profile
+                .sites
+                .get(..i)
+                .is_some_and(|before| before.contains(site))
+            {
                 return Err(BrokerError::StretchProfileDuplicateSite { site: site.clone() });
             }
         }
@@ -109,7 +116,7 @@ impl BrokerConfig {
                     "{name} exceeds the stretch verification bound of 1024"
                 )));
             }
-            if !krabka_verified::stretch::min_insync_is_site_loss_safe(
+            if !stretch::min_insync_is_site_loss_safe(
                 replication_factor,
                 site_count,
                 i64::from(self.default_min_insync_replicas),
@@ -128,26 +135,30 @@ impl BrokerConfig {
 mod tests {
     use {
         super::*,
-        crate::config::{NodeRole, test_support::witness_roles},
+        crate::{
+            config::{NodeRole, test_support::witness_roles},
+            replica_selector::ReplicaSelectorKind,
+        },
         assert2::{assert, check},
+        std::path::PathBuf,
     };
 
     #[test]
     fn rack_and_selector_default_off() {
         let c = BrokerConfig::default();
         assert!(c.rack == None);
-        assert!(c.replica_selector == crate::replica_selector::ReplicaSelectorKind::Leader);
-        let t = BrokerConfig::for_tests(std::path::PathBuf::from("/tmp"));
+        assert!(c.replica_selector == ReplicaSelectorKind::Leader);
+        let t = BrokerConfig::for_tests(PathBuf::from("/tmp"));
         assert!(t.rack == None);
-        assert!(t.replica_selector == crate::replica_selector::ReplicaSelectorKind::Leader);
+        assert!(t.replica_selector == ReplicaSelectorKind::Leader);
     }
 
     /// Two data sites plus a witness site, with leadership on `dc-a`.
     fn three_site_profile() -> StretchProfile {
         StretchProfile {
-            sites: vec!["dc-a".to_string(), "dc-b".to_string(), "dc-w".to_string()],
-            witness_site: "dc-w".to_string(),
-            preferred_leader_site: "dc-a".to_string(),
+            sites: vec!["dc-a".to_owned(), "dc-b".to_owned(), "dc-w".to_owned()],
+            witness_site: "dc-w".to_owned(),
+            preferred_leader_site: "dc-a".to_owned(),
         }
     }
 
@@ -159,7 +170,7 @@ mod tests {
     fn stretch_node(rack: &str, roles: Vec<NodeRole>) -> BrokerConfig {
         BrokerConfig {
             roles,
-            rack: Some(rack.to_string()),
+            rack: Some(rack.to_owned()),
             stretch: Some(three_site_profile()),
             default_min_insync_replicas: 2,
             default_replication_factor: 3,
@@ -174,7 +185,7 @@ mod tests {
         check!(!d.is_witness());
         check!(d.roles == vec![NodeRole::Controller, NodeRole::Broker]);
 
-        let t = BrokerConfig::for_tests(std::path::PathBuf::from("/tmp"));
+        let t = BrokerConfig::for_tests(PathBuf::from("/tmp"));
         check!(t.stretch == None);
         check!(!t.is_witness());
         check!(t.roles == vec![NodeRole::Controller, NodeRole::Broker]);
@@ -220,7 +231,7 @@ mod tests {
     #[test]
     fn stretch_witness_site_must_name_one_of_the_sites() {
         let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
-        c.stretch.as_mut().expect("profile").witness_site = "dc-elsewhere".to_string();
+        c.stretch.as_mut().expect("profile").witness_site = "dc-elsewhere".to_owned();
         assert!(matches!(
             c.validate(),
             Err(BrokerError::StretchWitnessSiteUnknown { site }) if site == "dc-elsewhere"
@@ -230,7 +241,7 @@ mod tests {
     #[test]
     fn stretch_preferred_leader_site_must_name_one_of_the_sites() {
         let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
-        c.stretch.as_mut().expect("profile").preferred_leader_site = "dc-elsewhere".to_string();
+        c.stretch.as_mut().expect("profile").preferred_leader_site = "dc-elsewhere".to_owned();
         assert!(matches!(
             c.validate(),
             Err(BrokerError::StretchPreferredSiteUnknown { site }) if site == "dc-elsewhere"
@@ -240,7 +251,7 @@ mod tests {
     #[test]
     fn stretch_preferred_leader_site_must_not_be_the_witness_site() {
         let mut c = stretch_node("dc-a", vec![NodeRole::Controller, NodeRole::Broker]);
-        c.stretch.as_mut().expect("profile").preferred_leader_site = "dc-w".to_string();
+        c.stretch.as_mut().expect("profile").preferred_leader_site = "dc-w".to_owned();
         assert!(matches!(
             c.validate(),
             Err(BrokerError::StretchPreferredSiteIsWitness { site }) if site == "dc-w"

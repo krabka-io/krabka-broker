@@ -25,9 +25,11 @@ use {
     crate::{APPENDERS, RECORDS_PER_APPENDER, TOPIC, support::producer::producer_record},
     assert2::assert,
     bytes::Bytes,
+    futures_util::future,
     krabka_client_producer::{Acks, Producer},
     stateright::semantics::{ConsistencyTester, LinearizabilityTester, SequentialSpec},
     std::{
+        collections::BTreeSet,
         sync::{
             Arc,
             atomic::{AtomicU64, Ordering},
@@ -65,7 +67,7 @@ impl SequentialSpec for KafkaLogSpec {
 /// One acknowledged record, with the two counter readings that place it in
 /// real time relative to every other one.
 #[derive(Debug)]
-pub(crate) struct AckedRecord {
+pub struct AckedRecord {
     /// The checker's process id. Each append gets its own, so no process ever
     /// has two operations in flight.
     client: u64,
@@ -89,11 +91,11 @@ enum HistoryEvent<'a> {
 /// interleave at every await point either way, and joining keeps the whole
 /// history on the caller's task, so a panic inside one appender fails the case
 /// where it happened.
-pub(crate) async fn produce_concurrently(bootstrap: &str) -> Vec<AckedRecord> {
+pub async fn produce_concurrently(bootstrap: &str) -> Vec<AckedRecord> {
     let clock = Arc::new(AtomicU64::new(0));
     let appenders = (0..APPENDERS)
         .map(|appender| produce_appender(bootstrap.to_owned(), appender, Arc::clone(&clock)));
-    let mut ledger: Vec<AckedRecord> = futures_util::future::join_all(appenders)
+    let mut ledger: Vec<AckedRecord> = future::join_all(appenders)
         .await
         .into_iter()
         .flatten()
@@ -107,62 +109,65 @@ async fn produce_appender(
     appender: u64,
     clock: Arc<AtomicU64>,
 ) -> Vec<AckedRecord> {
-    let producer = Producer::builder()
-        .bootstrap(bootstrap)
-        .client_id(format!("diskless-jepsen-appender-{appender}"))
-        .enable_idempotence(true)
-        .acks(Acks::All)
-        .linger(Duration::from_millis(2))
-        .build()
-        .await
-        .expect("producer build");
-
     let mut records =
         Vec::with_capacity(usize::try_from(RECORDS_PER_APPENDER).expect("record count fits usize"));
-    for sequence in 0..RECORDS_PER_APPENDER {
-        let client = appender * RECORDS_PER_APPENDER + sequence + 1;
-        let value = format!("appender-{appender}-record-{sequence}").into_bytes();
-        let invoke_order = clock.fetch_add(1, Ordering::SeqCst);
-        let metadata = producer
-            .send(
-                producer_record()
-                    .topic((TOPIC).into())
-                    .maybe_partition(Some(0))
-                    .maybe_value(Some(Some(Bytes::copy_from_slice(&value))))
-                    .call(),
-            )
+    {
+        let producer = Producer::builder()
+            .bootstrap(bootstrap)
+            .client_id(format!("diskless-jepsen-appender-{appender}"))
+            .enable_idempotence(true)
+            .acks(Acks::All)
+            .linger(Duration::from_millis(2))
+            .build()
             .await
-            .expect("acks=all record");
-        let return_order = clock.fetch_add(1, Ordering::SeqCst);
-        records.push(AckedRecord {
-            client,
-            value,
-            partition: metadata.partition,
-            offset: metadata.offset,
-            invoke_order,
-            return_order,
-        });
+            .expect("producer build");
+
+        for sequence in 0..RECORDS_PER_APPENDER {
+            let client = appender * RECORDS_PER_APPENDER + sequence + 1;
+            let value = format!("appender-{appender}-record-{sequence}").into_bytes();
+            let invoke_order = clock.fetch_add(1, Ordering::SeqCst);
+            let metadata = producer
+                .send(
+                    producer_record()
+                        .topic((TOPIC).into())
+                        .maybe_partition(Some(0))
+                        .maybe_value(Some(Some(Bytes::copy_from_slice(&value))))
+                        .call(),
+                )
+                .await
+                .expect("acks=all record");
+            let return_order = clock.fetch_add(1, Ordering::SeqCst);
+            records.push(AckedRecord {
+                client,
+                value,
+                partition: metadata.partition,
+                offset: metadata.offset,
+                invoke_order,
+                return_order,
+            });
+        }
+        producer.flush().await.expect("producer flush");
+        producer.close().await
     }
-    producer.flush().await.expect("producer flush");
-    producer.close().await.expect("producer close");
+    .expect("producer close");
     records
 }
 
 /// The offset one past the last acknowledged record: what every survivor must
 /// hold before the acking broker is taken away.
-pub(crate) fn durable_end(ledger: &[AckedRecord]) -> i64 {
+pub fn durable_end(ledger: &[AckedRecord]) -> i64 {
     i64::try_from(ledger.len()).expect("ledger length fits i64")
 }
 
 /// The offset and value of one record, as the readback must reproduce it.
-#[derive(Debug, PartialEq)]
-pub(crate) struct LedgerEntry {
+#[derive(Debug, PartialEq, Eq)]
+pub struct LedgerEntry {
     pub(crate) offset: i64,
     pub(crate) value: Vec<u8>,
 }
 
 /// The entries the readback must reproduce.
-pub(crate) fn ledger_values(ledger: &[AckedRecord]) -> Vec<LedgerEntry> {
+pub fn ledger_values(ledger: &[AckedRecord]) -> Vec<LedgerEntry> {
     ledger
         .iter()
         .map(|record| LedgerEntry {
@@ -173,7 +178,7 @@ pub(crate) fn ledger_values(ledger: &[AckedRecord]) -> Vec<LedgerEntry> {
 }
 
 /// Every append was acknowledged, at a distinct offset, with no gap.
-pub(crate) fn assert_acked_ledger(ledger: &[AckedRecord]) {
+pub fn assert_acked_ledger(ledger: &[AckedRecord]) {
     assert!(
         ledger.len()
             == usize::try_from(APPENDERS * RECORDS_PER_APPENDER).expect("record count fits usize")
@@ -188,7 +193,7 @@ pub(crate) fn assert_acked_ledger(ledger: &[AckedRecord]) {
     let unique_values = ledger
         .iter()
         .map(|record| record.value.as_slice())
-        .collect::<std::collections::BTreeSet<_>>();
+        .collect::<BTreeSet<_>>();
     assert!(
         unique_values.len() == ledger.len(),
         "duplicate ledger values"
@@ -197,7 +202,7 @@ pub(crate) fn assert_acked_ledger(ledger: &[AckedRecord]) {
 
 /// Some total order over the acknowledged appends explains every offset the
 /// brokers returned, and respects the real-time order of the history.
-pub(crate) fn assert_linearizable_history(ledger: &[AckedRecord]) {
+pub fn assert_linearizable_history(ledger: &[AckedRecord]) {
     let mut events = ledger
         .iter()
         .flat_map(|record| {

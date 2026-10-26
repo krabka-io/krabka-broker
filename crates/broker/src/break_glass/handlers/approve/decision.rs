@@ -18,7 +18,7 @@ use {
 };
 
 /// What one caller asked to do to one proposal.
-pub(crate) struct Attempt<'a> {
+pub struct Attempt<'a> {
     /// The authenticated principal of the connection.
     pub principal: &'a str,
     /// The operator key that made `signature`, or an empty string.
@@ -62,7 +62,7 @@ pub(crate) struct Attempt<'a> {
 ///   the request carries none.
 /// - `OPERATOR_SIGNATURE_INVALID` (1009) when the signature does not verify
 ///   against the trusted key set under the approving principal.
-pub(crate) fn decide(
+pub fn decide(
     policy: BreakGlassPolicy<'_>,
     keys: &OperatorKeys,
     stored: &BreakGlassProposalRecord,

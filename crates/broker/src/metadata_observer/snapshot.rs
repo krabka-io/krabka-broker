@@ -153,7 +153,7 @@ async fn transfer(
             // converts here, at the wire boundary.
             max_bytes: range_max_bytes(config),
         }
-        .encode();
+        .try_encode()?;
         let body = match conn
             .raw_request(api_key::FETCH_SNAPSHOT, FETCH_SNAPSHOT_VERSION, request)
             .await
@@ -217,7 +217,15 @@ mod tests {
         assert2::assert,
         krabka_metadata::MetadataRecord,
         krabka_protocol::owned::api_versions_request,
-        krabka_raft::kraft::transport::wire::decode_fetch_snapshot,
+        krabka_raft::kraft::{
+            snapshot_fetch::MetadataSnapshotFetchMax, transport::wire::decode_fetch_snapshot,
+        },
+        std::{
+            net::SocketAddr,
+            sync::atomic::{AtomicUsize, Ordering},
+            time::Duration,
+        },
+        tokio::time,
         uuid::Uuid,
     };
 
@@ -230,7 +238,7 @@ mod tests {
     }
 
     impl SnapshotFixture {
-        fn new(cluster_id: Uuid, address: std::net::SocketAddr) -> Self {
+        fn new(cluster_id: Uuid, address: SocketAddr) -> Self {
             let directory = tempfile::tempdir().unwrap();
             let config = ObserverConfig {
                 voters: vec![(NodeId(1), address.to_string())],
@@ -261,10 +269,7 @@ mod tests {
     }
 
     #[bon::builder]
-    async fn assert_snapshot_fetch_was_not_applied(
-        cluster_id: Uuid,
-        address: std::net::SocketAddr,
-    ) {
+    async fn assert_snapshot_fetch_was_not_applied(cluster_id: Uuid, address: SocketAddr) {
         let mut fixture = SnapshotFixture::new(cluster_id, address);
         assert!(fixture.fetch().await.is_none());
         assert!(fixture.image.borrow().topics().next().is_none());
@@ -311,10 +316,8 @@ mod tests {
     fn request_body(after_correlation_id: &[u8]) -> &[u8] {
         let (length, rest) = after_correlation_id.split_at(2);
         let length = i16::from_be_bytes([length[0], length[1]]);
-        let rest = match usize::try_from(length) {
-            Ok(length) => &rest[length..],
-            Err(_) => rest, // a null client_id has no bytes to skip
-        };
+        // A null client_id has no bytes to skip.
+        let rest = usize::try_from(length).map_or(rest, |length| &rest[length..]);
         &rest[1..]
     }
 
@@ -355,7 +358,7 @@ mod tests {
         let snapshot_id = (4_096_i64, 7_i32);
         let artifact = snapshot_of(cluster_id, "pruned-away");
         let served = artifact.clone();
-        let chunks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let chunks = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&chunks);
         let mock = snapshot_broker(snapshot_id, move |body| {
             let Some(PeerRequest::FetchSnapshot {
@@ -367,7 +370,7 @@ mod tests {
             else {
                 return None;
             };
-            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            counted.fetch_add(1, Ordering::SeqCst);
             let start = usize::try_from(position).unwrap().min(served.len());
             let end = start
                 .saturating_add(usize::try_from(max_bytes).unwrap())
@@ -395,7 +398,7 @@ mod tests {
         // One range, because the request asks for the whole artifact: a
         // `FetchSnapshot` range cut part-way through a record batch loses the
         // partial batch in the records codec and arrives empty.
-        assert!(chunks.load(std::sync::atomic::Ordering::SeqCst) == 1);
+        assert!(chunks.load(Ordering::SeqCst) == 1);
 
         let Resumed {
             image: restored,
@@ -434,10 +437,8 @@ mod tests {
 
         // A lower reassembly ceiling wins instead, and it is asked for whole.
         let smaller = ObserverConfig {
-            snapshot_fetch_max: krabka_raft::kraft::snapshot_fetch::MetadataSnapshotFetchMax::new(
-                krabka_units::kibibytes(512),
-            )
-            .expect("valid maximum"),
+            snapshot_fetch_max: MetadataSnapshotFetchMax::new(krabka_units::kibibytes(512))
+                .expect("valid maximum"),
             ..observer_config(Uuid::nil(), dir.path().to_path_buf())
         };
         assert!(range_max_bytes(&smaller) == 512 * 1024);
@@ -480,7 +481,7 @@ mod tests {
 
         let mut fixture = SnapshotFixture::new(cluster_id, mock.addr);
 
-        let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), fixture.fetch())
+        let outcome = time::timeout(Duration::from_secs(10), fixture.fetch())
             .await
             .expect("the transfer gives up rather than re-asking forever");
 

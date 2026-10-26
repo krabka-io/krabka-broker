@@ -292,9 +292,10 @@ fn broker_ts_metrics() -> Vec<TsMetricSource<BrokerExtract>> {
 }
 
 /// For each `(cell, stack, metric)`, averages the per-interval samples across
-/// all runs at each shared time offset. A ragged run that ended early gives
-/// fewer points to the tail offsets. `TsPoint::n` records how many runs backed
-/// each averaged point.
+/// all runs at each shared time offset.
+///
+/// A ragged run that ended early gives fewer points to the tail offsets.
+/// `TsPoint::n` records how many runs backed each averaged point.
 ///
 /// The cell is a [`CellKey`], so two runs of one scenario at different
 /// partition counts stay in separate series.

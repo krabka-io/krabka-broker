@@ -79,7 +79,7 @@ fn add(
 #[test]
 fn round_trip_add_with_custom_metadata() {
     let event = MetadataEvent::AddSegment(add().maybe_custom(Some(vec![1, 2, 3, 4])).call());
-    let bytes = event.encode();
+    let bytes = event.encode().unwrap();
     let back = MetadataEvent::decode(&bytes).expect("decodes");
     assert!(back == event);
 }
@@ -87,7 +87,7 @@ fn round_trip_add_with_custom_metadata() {
 #[test]
 fn round_trip_add_without_custom_metadata() {
     let event = MetadataEvent::AddSegment(add().id(Uuid::from_u128(2)).start(100).end(199).call());
-    let bytes = event.encode();
+    let bytes = event.encode().unwrap();
     assert!(MetadataEvent::decode(&bytes).unwrap() == event);
 }
 
@@ -100,7 +100,7 @@ fn round_trip_update_finish() {
         state: RemoteLogSegmentState::CopySegmentFinished,
         broker_id: 13,
     });
-    let bytes = event.encode();
+    let bytes = event.encode().unwrap();
     assert!(MetadataEvent::decode(&bytes).unwrap() == event);
 }
 
@@ -113,7 +113,7 @@ fn round_trip_update_no_custom_metadata() {
         state: RemoteLogSegmentState::DeleteSegmentStarted,
         broker_id: 0,
     });
-    let bytes = event.encode();
+    let bytes = event.encode().unwrap();
     assert!(MetadataEvent::decode(&bytes).unwrap() == event);
 }
 
@@ -129,7 +129,7 @@ fn round_trip_partition_delete_each_state(state: RemotePartitionDeleteState) {
         event_timestamp_ms: 500,
         broker_id: 1,
     });
-    let bytes = event.encode();
+    let bytes = event.encode().unwrap();
     assert2::assert!(MetadataEvent::decode(&bytes).unwrap() == event);
 }
 
@@ -141,7 +141,7 @@ fn add_round_trips_txn_index_empty_true() {
         .call()
         .with_txn_index_empty(true);
     let event = MetadataEvent::AddSegment(md);
-    let bytes = event.encode();
+    let bytes = event.encode().unwrap();
     let back = MetadataEvent::decode(&bytes).expect("decodes");
     assert!(back == event);
     if let MetadataEvent::AddSegment(ref md) = back {
@@ -153,6 +153,7 @@ fn add_round_trips_txn_index_empty_true() {
 fn truncated_buffer_is_rejected() {
     let bytes = MetadataEvent::AddSegment(add().end(1).call())
         .encode()
+        .unwrap()
         .to_vec();
     let err = MetadataEvent::decode(&bytes[..bytes.len() - 5]).unwrap_err();
     assert!(matches!(err, CodecError::Protocol(_)));

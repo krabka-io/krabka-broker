@@ -18,7 +18,7 @@ pub(crate) mod topic_deletion;
 pub use bootstrap::AUDIT_TOPIC;
 pub mod unified;
 pub(crate) mod persistence {
-    pub(crate) use crate::coordinator::unified::persistence::*;
+    pub use crate::coordinator::unified::persistence::*;
 }
 
 use crate::coordinator::unified::classic_state::GroupState;

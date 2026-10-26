@@ -15,6 +15,7 @@
 //! name a broker the caller can resolve out of the same response, which the
 //! controller-only node's own id never is. The controller-only node itself
 //! opens no client listener, so a client never reaches it at all.
+#![cfg(test)]
 
 use {
     crate::support::{
@@ -36,9 +37,15 @@ use {
     },
     std::{
         collections::BTreeSet,
+        fs,
+        io::ErrorKind,
+        iter,
+        net::SocketAddr,
+        path::{Path, PathBuf},
         time::{Duration, Instant},
     },
     tempfile::TempDir,
+    tokio::{net::TcpStream, time},
 };
 
 mod support;
@@ -49,14 +56,14 @@ struct RoleSeparated {
     controller: BrokerHandle,
     /// The client address in the controller-only node's config. The harness
     /// hands the node a listener bound on it, which the node closes.
-    controller_client_addr: std::net::SocketAddr,
+    controller_client_addr: SocketAddr,
     brokers: Vec<BrokerHandle>,
     /// The broker-only nodes' configs, index-aligned with `brokers`, so a test
     /// can stop one and start it again on the same ports and log dir.
     broker_configs: Vec<BrokerConfig>,
     /// The controller-only node's metadata log directory, where its
     /// `__cluster_metadata-0` log and checkpoints live.
-    controller_metadata_dir: std::path::PathBuf,
+    controller_metadata_dir: PathBuf,
     // Dropping these removes the log dirs the nodes still hold open.
     _dirs: Vec<TempDir>,
 }
@@ -65,7 +72,7 @@ impl RoleSeparated {
     /// Every node's handle, controller first. The fencing state is replicated,
     /// so an assertion about it has to hold on all of them.
     fn nodes(&self) -> impl Iterator<Item = &BrokerHandle> {
-        std::iter::once(&self.controller).chain(&self.brokers)
+        iter::once(&self.controller).chain(&self.brokers)
     }
 
     async fn shutdown(self) {
@@ -121,7 +128,7 @@ async fn start_role_separated_with(
     ))
     .await;
     dirs.push(ctrl_dir);
-    controller.wait_until_controller_leader().await;
+    controller.wait_until_controller_leader().await.unwrap();
 
     let mut observers = Vec::with_capacity(brokers);
     let mut broker_configs = Vec::with_capacity(brokers);
@@ -185,7 +192,7 @@ fn fenced_anywhere(cluster: &RoleSeparated) -> BTreeSet<u64> {
 /// looks healthy until the first session expires. Waiting out that window
 /// first is what makes the assertion mean "the heartbeats are landing".
 async fn assert_settled_unfenced(cluster: &RoleSeparated) {
-    tokio::time::sleep(FENCING_WINDOW).await;
+    time::sleep(FENCING_WINDOW).await;
     let fenced = fenced_anywhere(cluster);
     assert!(
         fenced.is_empty(),
@@ -274,7 +281,7 @@ async fn restart_broker_only(cfg: &BrokerConfig) -> RestartedBroker {
             Ok(handle) => return RestartedBroker { handle, health },
             Err(error) if Instant::now() < deadline => {
                 tracing::warn!(%error, "broker-only restart failed; retrying");
-                tokio::time::sleep(Duration::from_millis(200)).await;
+                time::sleep(Duration::from_millis(200)).await;
             }
             Err(error) => panic!("broker-only restart: {error:?}"),
         }
@@ -328,7 +335,7 @@ async fn a_broker_only_node_recovers_after_the_controller_prunes_past_its_fetch_
     // The controller really has taken a snapshot — the prune that strands a
     // restarting observer happens in the same step that writes this file.
     let checkpoints = krabka_raft::metadata_partition_dir(&cluster.controller_metadata_dir);
-    let snapshot_written = std::fs::read_dir(&checkpoints).is_ok_and(|entries| {
+    let snapshot_written = fs::read_dir(&checkpoints).is_ok_and(|entries| {
         entries.flatten().any(|entry| {
             entry
                 .file_name()
@@ -412,7 +419,7 @@ async fn heartbeats_keep_brokers_unfenced_in_a_role_separated_cluster() {
             fenced.is_empty(),
             "brokers fenced while every one of them was heartbeating: {fenced:?}"
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
     }
 
     // The client-visible half (KIP-1073): `DescribeCluster` hides fenced
@@ -521,7 +528,7 @@ async fn controller_only_node_opens_no_client_listener() {
     support::init_tracing();
 
     let cluster = start_role_separated(1).await;
-    let connect = tokio::net::TcpStream::connect(cluster.controller_client_addr)
+    let connect = TcpStream::connect(cluster.controller_client_addr)
         .await
         .map(drop)
         .map_err(|error| error.kind());
@@ -534,7 +541,7 @@ async fn controller_only_node_opens_no_client_listener() {
         ) == (
             None,
             cluster.controller.controller_addr(),
-            Err(std::io::ErrorKind::ConnectionRefused),
+            Err(ErrorKind::ConnectionRefused),
         )
     );
 
@@ -622,7 +629,7 @@ async fn broker_only_nodes_are_described_as_quorum_observers() {
             "the brokers never appeared as observers: {:?}",
             partition.observers
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
     };
 
     for observer in &observers {
@@ -741,8 +748,8 @@ async fn unregister_broker_sent_to_a_broker_only_node_reaches_the_controller() {
 }
 
 /// The names of the entries directly in `dir`, sorted.
-fn entries(dir: &std::path::Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir).map_or_default(|entries| {
+fn entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir).map_or_default(|entries| {
         entries
             .flatten()
             .filter_map(|entry| entry.file_name().into_string().ok())
@@ -754,9 +761,9 @@ fn entries(dir: &std::path::Path) -> Vec<String> {
 
 /// Whether `dir` holds a KIP-630 snapshot, the file Kafka's system test looks
 /// for with `ls __cluster_metadata-0/*.checkpoint`.
-fn holds_a_checkpoint(dir: &std::path::Path) -> bool {
+fn holds_a_checkpoint(dir: &Path) -> bool {
     entries(dir).iter().any(|name| {
-        std::path::Path::new(name)
+        Path::new(name)
             .extension()
             .is_some_and(|ext| ext == "checkpoint")
     })
@@ -822,7 +829,7 @@ async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_nod
             "the first metadata segment was never cleaned: {:?}",
             entries(&partition_dir)
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
     }
 
     // The partitions are in the data directory. The controller's metadata
@@ -834,7 +841,7 @@ async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_nod
         .map(|topic| format!("{topic}-0"))
         .collect();
     want_data.sort();
-    let partitions_in = |dir: &std::path::Path| -> Vec<String> {
+    let partitions_in = |dir: &Path| -> Vec<String> {
         entries(dir)
             .into_iter()
             .filter(|name| name.starts_with("metadata-dir-topic-"))
@@ -879,8 +886,8 @@ async fn a_separate_metadata_log_directory_rolls_cleans_and_restores_a_wiped_nod
         ..
     } = cluster;
     brokers.remove(0).shutdown().await;
-    std::fs::remove_dir_all(&broker_data).unwrap();
-    std::fs::remove_dir_all(&broker_metadata).unwrap();
+    fs::remove_dir_all(&broker_data).unwrap();
+    fs::remove_dir_all(&broker_metadata).unwrap();
     let RestartedBroker {
         handle: restarted,
         health: _health,

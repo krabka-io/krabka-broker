@@ -30,7 +30,7 @@ async fn jvm_legacy_010_round_trip() {
     .await;
 }
 
-pub(crate) async fn run_round_trip(topic: &str, producer_image: &str, consumer_image: &str) {
+pub async fn run_round_trip(topic: &str, producer_image: &str, consumer_image: &str) {
     let (broker, _dir) = start_legacy_console_broker(topic).await;
     let producer = produce_console(
         producer_image,

@@ -1,4 +1,10 @@
-use {crate::types::NodeId, std::path::PathBuf, thiserror::Error};
+use {
+    crate::types::NodeId,
+    krabka_protocol::records::RecordsError,
+    std::{io, net::SocketAddr, path::PathBuf},
+    thiserror::Error,
+    wincode::error::{ReadError, WriteError},
+};
 
 /// What is wrong with a node-local file whose layout carries a version
 /// marker. [`RaftError::PersistedFormat`] names the file.
@@ -20,9 +26,10 @@ pub enum PersistedFormatError {
     Malformed(String),
 }
 
-/// A committed metadata log record that a controller cannot replay. It stops
-/// the controller, as Kafka's `QuorumController` hands a record it cannot
-/// replay to `SharedServer.fatalQuorumControllerFaultHandler`, and a
+/// A committed metadata log record that a controller cannot replay.
+///
+/// It stops the controller, as Kafka's `QuorumController` hands a record it
+/// cannot replay to `SharedServer.fatalQuorumControllerFaultHandler`, and a
 /// controller-role node's `MetadataLoader` hands one it cannot load to
 /// `SharedServer.metadataLoaderFaultHandler`, which is fatal on a node whose
 /// `process.roles` include `controller`. Both handlers halt the process.
@@ -68,7 +75,7 @@ pub enum RaftError {
     ControllerAdmin(String),
 
     #[error("records: {0}")]
-    Records(#[from] krabka_protocol::records::RecordsError),
+    Records(#[from] RecordsError),
 
     /// A record of a control batch lacks its key or value, or has an empty
     /// one. The message is the text of Kafka's
@@ -139,10 +146,10 @@ pub enum RaftError {
     VoterNotCaughtUp { id: NodeId, lag: u64 },
 
     #[error("serialization: {0}")]
-    SerdeFailed(#[from] wincode::error::WriteError),
+    SerdeFailed(#[from] WriteError),
 
     #[error("deserialization: {0}")]
-    SerdeFailedDecode(#[from] wincode::error::ReadError),
+    SerdeFailedDecode(#[from] ReadError),
 
     /// A node-local file in the metadata partition directory has a version
     /// this build does not read, or does not parse. The node does not start
@@ -176,9 +183,9 @@ pub enum RaftError {
     #[error("unable to bind the controller listener to {addr}: {source}")]
     ControllerListenerBind {
         /// The address the listener tried to bind.
-        addr: std::net::SocketAddr,
+        addr: SocketAddr,
         /// Why the bind failed, such as `Address already in use`.
-        source: std::io::Error,
+        source: io::Error,
     },
 
     /// The controller met a fault that Kafka's `ProcessTerminatingFaultHandler`

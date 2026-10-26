@@ -411,7 +411,7 @@ mod tests {
         img.apply(&MetadataRecord::V1BrokerConfig(
             krabka_metadata::BrokerConfigRecord {
                 node_id: node,
-                config_name: MIN_INSYNC_REPLICAS.to_string(),
+                config_name: MIN_INSYNC_REPLICAS.to_owned(),
                 config_value: Some(n.to_string()),
             },
         ));
@@ -505,7 +505,7 @@ mod tests {
         img.apply(&MetadataRecord::V1BrokerConfig(
             krabka_metadata::BrokerConfigRecord {
                 node_id: krabka_metadata::DEFAULT_BROKER_CONFIG_NODE_ID,
-                config_name: MIN_INSYNC_REPLICAS.to_string(),
+                config_name: MIN_INSYNC_REPLICAS.to_owned(),
                 config_value: Some(n.to_string()),
             },
         ));

@@ -6,7 +6,8 @@
 use {
     crate::broker::{BrokerHandle, TEST_AWAITER_TIMEOUT},
     krabka_ids::PartitionIndex,
-    std::sync::atomic::Ordering,
+    std::{future, path::Path, sync::atomic::Ordering, time::Duration},
+    tokio::time,
 };
 
 #[cfg(any(test, feature = "test-helpers"))]
@@ -69,7 +70,7 @@ impl BrokerHandle {
         leader_epoch: krabka_metadata::LeaderEpoch,
     ) {
         let installed = super::await_until(|| {
-            std::future::ready(
+            future::ready(
                 self.broker
                     .partitions
                     .get(topic, PartitionIndex(partition))
@@ -117,7 +118,7 @@ impl BrokerHandle {
         min: i64,
         frontier: LocalFrontier,
     ) {
-        let result = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
+        let result = time::timeout(TEST_AWAITER_TIMEOUT, async {
             loop {
                 if let Some(part) = self.broker.partitions.get(topic, PartitionIndex(partition)) {
                     let notify = match frontier {
@@ -170,7 +171,7 @@ impl BrokerHandle {
         partition: i32,
         target: i64,
     ) {
-        let res = tokio::time::timeout(TEST_AWAITER_TIMEOUT, async {
+        let res = time::timeout(TEST_AWAITER_TIMEOUT, async {
             loop {
                 if let Some(part) = self.broker.partitions.get(topic, PartitionIndex(partition)) {
                     let notified = part.append_notify.notified();
@@ -181,7 +182,7 @@ impl BrokerHandle {
                     // re-check tick so a truncate-to-target is still observed.
                     tokio::select! {
                         () = notified => {}
-                        () = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+                        () = time::sleep(Duration::from_millis(20)) => {}
                     }
                 } else {
                     let mut img = self.broker.controller.watch_image();
@@ -209,7 +210,7 @@ impl BrokerHandle {
     pub fn offset_for_leader_epoch_count_for_test(&self) -> u64 {
         self.broker
             .offset_for_leader_epoch_requests
-            .load(std::sync::atomic::Ordering::Acquire)
+            .load(Ordering::Acquire)
     }
 
     /// Test-only: flip a configured log dir offline at runtime. This simulates
@@ -217,7 +218,7 @@ impl BrokerHandle {
     /// across platforms. It drives the KIP-112 offline path.
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn test_mark_log_dir_offline(&self, dir: &std::path::Path) -> bool {
+    pub fn test_mark_log_dir_offline(&self, dir: &Path) -> bool {
         self.broker
             .log_dir_status
             .mark_offline(dir, "test-injected storage failure")
@@ -234,7 +235,8 @@ mod tests {
         },
         assert2::check,
         krabka_units::{kibibytes, mebibytes, secs},
-        std::sync::Arc,
+        std::{sync::Arc, time::Duration},
+        tokio::time,
     };
 
     #[tokio::test]
@@ -272,7 +274,7 @@ mod tests {
         assert2::assert!(handle.partition_log_start_for_test(helper_topic, 0) == Some(2));
         assert2::assert!(
             handle.partition_retention_ms_for_test(helper_topic, 0)
-                == Some(Some(std::time::Duration::from_secs(123)))
+                == Some(Some(Duration::from_secs(123)))
         );
         let observed_config = handle
             .partition_log_config_for_test(helper_topic, 0)
@@ -310,32 +312,32 @@ mod tests {
         // Waiting for log_end + 1 must stay pending; waiting for the reached
         // log_end must resolve (both the >= and == variants).
         check!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(75),
+            time::timeout(
+                Duration::from_millis(75),
                 handle.wait_until_local_log_end_offset(helper_topic, 0, log_end + 1),
             )
             .await
             .is_err()
         );
         check!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(75),
+            time::timeout(
+                Duration::from_millis(75),
                 handle.wait_until_local_log_end_offset_eq(helper_topic, 0, log_end + 1),
             )
             .await
             .is_err()
         );
         check!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(1),
+            time::timeout(
+                Duration::from_secs(1),
                 handle.wait_until_local_log_end_offset(helper_topic, 0, log_end),
             )
             .await
             .is_ok()
         );
         check!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(1),
+            time::timeout(
+                Duration::from_secs(1),
                 handle.wait_until_local_log_end_offset_eq(helper_topic, 0, log_end),
             )
             .await

@@ -1,5 +1,6 @@
 //! Raw-RPC integration tests for KIP-848 next-gen consumer groups,
 //! driven against an in-process Krabka broker through `krabka-client-core`.
+#![cfg(test)]
 
 mod support;
 
@@ -12,19 +13,22 @@ use {
         topics::{creatable_topic, create_topic_request},
     },
     assert2::{assert, check},
-    krabka_broker::{Broker, BrokerConfig},
+    krabka_broker::{Broker, BrokerConfig, codes, coordinator::unified::config::RebalanceProtocol},
     krabka_client_core::Client,
     krabka_protocol::owned::{
         common::consumer_group_heartbeat_response::topic_partitions::TopicPartitions,
         consumer_group_describe_request::ConsumerGroupDescribeRequest,
         consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
         consumer_group_heartbeat_response::{Assignment, ConsumerGroupHeartbeatResponse},
+        join_group_request::JoinGroupRequestProtocol,
         list_groups_request::ListGroupsRequest,
     },
     std::{
+        pin::Pin,
         sync::Arc,
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// A running broker, its bootstrap address and the directory that backs it.
@@ -34,7 +38,7 @@ struct BootedBroker {
     dir: tempfile::TempDir,
 }
 
-fn boot() -> std::pin::Pin<Box<impl std::future::Future<Output = BootedBroker>>> {
+fn boot() -> Pin<Box<impl Future<Output = BootedBroker>>> {
     Box::pin(async {
         let dir = tempfile::TempDir::new().unwrap();
         let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
@@ -221,12 +225,10 @@ async fn classic_group_locked_against_next_gen() {
                 ..Default::default()
             })
             .protocol_type(("connect").into())
-            .protocols(vec![
-                krabka_protocol::owned::join_group_request::JoinGroupRequestProtocol {
-                    name: "default".into(),
-                    ..Default::default()
-                },
-            ])
+            .protocols(vec![JoinGroupRequestProtocol {
+                name: "default".into(),
+                ..Default::default()
+            }])
             .call()
     };
     let required = client.send(join(String::new())).await.unwrap();
@@ -239,7 +241,7 @@ async fn classic_group_locked_against_next_gen() {
     assert!(
         (resp.error_code, resp.error_message.as_deref())
             == (
-                krabka_broker::codes::GROUP_ID_NOT_FOUND,
+                codes::GROUP_ID_NOT_FOUND,
                 Some(
                     "Cannot upgrade classic group g3 to consumer group because the group does \
                      not use the consumer embedded protocol."
@@ -252,8 +254,7 @@ async fn classic_group_locked_against_next_gen() {
 async fn kill_switch_returns_unsupported_version() {
     let dir = tempfile::TempDir::new().unwrap();
     let mut config = BrokerConfig::for_tests(dir.path().to_path_buf());
-    config.next_gen_consumer_group.rebalance_protocols =
-        vec![krabka_broker::coordinator::unified::config::RebalanceProtocol::Classic];
+    config.next_gen_consumer_group.rebalance_protocols = vec![RebalanceProtocol::Classic];
     let broker = Broker::start(config).await.unwrap();
     let bootstrap = broker.listen_addr().to_string();
     let client = Arc::new(connect_client(bootstrap.as_str(), Some("c")).await);
@@ -261,7 +262,7 @@ async fn kill_switch_returns_unsupported_version() {
     let mut req = heartbeat("g4", "", 0);
     req.subscribed_topic_names = Some(vec!["t".into()]);
     let resp = client.send(req).await.unwrap();
-    assert!(resp.error_code == krabka_broker::codes::UNSUPPORTED_VERSION);
+    assert!(resp.error_code == codes::UNSUPPORTED_VERSION);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -336,7 +337,7 @@ async fn an_old_epoch_is_fenced() {
     // assignment, so this heartbeat is fenced.
     let stale = heartbeat("g6", &mid, 2);
     let resp = client.send(stale).await.unwrap();
-    assert!(resp.error_code == krabka_broker::codes::FENCED_MEMBER_EPOCH);
+    assert!(resp.error_code == codes::FENCED_MEMBER_EPOCH);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -532,7 +533,7 @@ async fn a_topic_created_after_the_member_joined_reaches_its_next_heartbeat() {
         if answer.assignment.is_some() || created.elapsed() > Duration::from_secs(10) {
             break answer;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
     };
 
     check!(
@@ -606,7 +607,7 @@ fn consumer_case(
     topic: &str,
     partitions: i32,
     client_id: &str,
-) -> std::pin::Pin<Box<impl std::future::Future<Output = ConsumerCase>>> {
+) -> Pin<Box<impl Future<Output = ConsumerCase>>> {
     let topic = topic.to_owned();
     let client_id = client_id.to_owned();
     Box::pin(async move {

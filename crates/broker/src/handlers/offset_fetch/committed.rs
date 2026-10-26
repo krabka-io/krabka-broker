@@ -24,6 +24,7 @@ use {
         task_util::ask,
     },
     krabka_protocol::owned::offset_fetch_response as wire,
+    std::collections::BTreeMap,
 };
 
 /// Fetches the group's committed offsets, keyed by topic name and partition,
@@ -59,7 +60,7 @@ pub(super) async fn fetch_offsets(
     ask(&handle.tx, |reply| {
         GroupActorMessage::FetchOffsetsForMember {
             member: OffsetFetchMember {
-                member_id: member_id.map(str::to_string),
+                member_id: member_id.map(str::to_owned),
                 member_epoch,
             },
             selection,
@@ -74,8 +75,8 @@ pub(super) async fn fetch_offsets(
 pub(super) fn committed_topics<T>(
     offsets: &GroupOffsets,
     mut row: impl FnMut(&str, i32) -> T,
-) -> std::collections::BTreeMap<&str, Vec<T>> {
-    let mut by_topic = std::collections::BTreeMap::<&str, Vec<T>>::new();
+) -> BTreeMap<&str, Vec<T>> {
+    let mut by_topic = BTreeMap::<&str, Vec<T>>::new();
     for (topic, partition) in offsets.committed.keys() {
         by_topic
             .entry(topic.as_str())

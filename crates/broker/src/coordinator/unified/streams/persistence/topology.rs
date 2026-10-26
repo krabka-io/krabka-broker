@@ -41,6 +41,7 @@ use {
 };
 
 /// An internal, changelog, or repartition topic that a subtopology refers to.
+///
 /// It carries the partition count, the replication factor, and the per-topic
 /// config overrides that the coordinator should materialize.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,10 +104,11 @@ impl StoredCopartitionGroup {
     }
 }
 
-/// One subtopology of a streams topology. It holds the source topics, both
-/// exact and regex, the repartition sinks it produces and the repartition
-/// sources it consumes, its changelog topics, and any copartition
-/// constraints.
+/// One subtopology of a streams topology.
+///
+/// It holds the source topics, both exact and regex, the repartition sinks it
+/// produces and the repartition sources it consumes, its changelog topics, and
+/// any copartition constraints.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct StoredSubtopology {
     pub subtopology_id: String,

@@ -21,7 +21,7 @@ use {
     dashmap::DashMap,
     krabka_client_core::{Connection, ConnectionOptions},
     krabka_ids::ApiKey,
-    krabka_metadata::voters::VoterSet,
+    krabka_metadata::{metadata_version::KRAFT_VERSION_FEATURE, voters::VoterSet},
     std::{
         collections::BTreeMap,
         sync::{Arc, RwLock},
@@ -37,7 +37,7 @@ mod tests;
 /// The sender caches one connection per peer. A failed RPC evicts the cached
 /// connection, so the next send dials again, and so does a send that finds the
 /// cached connection closed, as the client's idle close leaves it.
-pub(crate) struct RealPeerSender {
+pub struct RealPeerSender {
     connections: DashMap<NodeId, Arc<Connection>>,
     voters: RwLock<VoterSet>,
     bootstrap: BTreeMap<NodeId, String>,
@@ -105,10 +105,8 @@ impl RealPeerSender {
             controller_addr(&voters, peer)
         }
         .or_else(|| {
-            self.aliases
-                .read()
-                .ok()
-                .and_then(|aliases| aliases.get(&peer).cloned())
+            let aliases = self.aliases.read().ok()?;
+            aliases.get(&peer).cloned()
         })
         .or_else(|| self.bootstrap.get(&peer).cloned())
         .ok_or(RaftError::NotLeader {
@@ -194,9 +192,7 @@ impl PeerSender for RealPeerSender {
         Ok(response
             .supported_features
             .iter()
-            .find(|feature| {
-                feature.name == krabka_metadata::metadata_version::KRAFT_VERSION_FEATURE
-            })
+            .find(|feature| feature.name == KRAFT_VERSION_FEATURE)
             .is_some_and(|feature| {
                 i16::try_from(finalized_version).is_ok_and(|version| {
                     feature.min_version <= version && version <= feature.max_version

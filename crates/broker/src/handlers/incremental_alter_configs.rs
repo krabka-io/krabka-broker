@@ -78,6 +78,8 @@ use {
             RESOURCE_TYPE_GROUP, RESOURCE_TYPE_TOPIC,
         },
     },
+    std::{iter, mem},
+    tokio::time::{Instant, sleep, timeout_at},
 };
 const OP_SET: i8 = 0;
 const OP_DELETE: i8 = 1;
@@ -87,7 +89,7 @@ const OP_SUBTRACT: i8 = 3;
 krabka_macros::decoded_dispatch! {
     /// Keep logger changes on this node and validate broker keys against local settings.
     /// Topic, group, and other resource operations use the controller's image.
-    pub(crate) async fn dispatch(
+    pub async fn dispatch(
         broker: &Broker,
         version: ApiVersion,
         req_bytes: &[u8],
@@ -103,7 +105,7 @@ krabka_macros::decoded_dispatch! {
         let mut indexed_responses = Vec::new();
         let mut forwarded = Vec::new();
         let mut forwarded_indices = Vec::new();
-        for (index, (resource, duplicate)) in std::mem::take(&mut req.resources)
+        for (index, (resource, duplicate)) in mem::take(&mut req.resources)
             .into_iter()
             .zip(duplicates)
             .enumerate()
@@ -193,7 +195,7 @@ fn audit_resources_for(
     resource: &AlterConfigsResource,
     _image: &MetadataImage,
 ) -> Vec<krabka_audit::AuditResource> {
-    std::iter::once(audit_resource(
+    iter::once(audit_resource(
         super::alter_configs::config_resource_type(resource.resource_type),
         resource.resource_name.clone(),
     ))
@@ -241,11 +243,11 @@ async fn process_resource(
 ) -> AlterConfigsResourceResponse {
     // Read and admission are optimistic; the engine atomically checks that
     // image when it appends. Rebuild every operation after a conflicting commit.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let mut images = broker.controller.watch_image();
         let image = images.borrow_and_update().clone();
-        let planned = tokio::time::timeout_at(
+        let planned = timeout_at(
             deadline,
             process_resource_once(
                 broker,
@@ -262,8 +264,8 @@ async fn process_resource(
         };
         match planned {
             Ok(response) => return response,
-            Err(RaftError::StaleMetadataImage) if tokio::time::Instant::now() < deadline => {}
-            Err(RaftError::UncommittedTail) if tokio::time::Instant::now() < deadline => {
+            Err(RaftError::StaleMetadataImage) if Instant::now() < deadline => {}
+            Err(RaftError::UncommittedTail) if Instant::now() < deadline => {
                 // Some committed control records advance the high watermark
                 // without publishing a different image. Recheck admission even
                 // when the image watch has no notification for that commit.
@@ -273,7 +275,7 @@ async fn process_resource(
                             return resource_refusal(&resource, codes::NOT_CONTROLLER);
                         }
                     }
-                    () = tokio::time::sleep(Duration::from_millis(10)) => {}
+                    () = sleep(Duration::from_millis(10)) => {}
                 }
             }
             Err(RaftError::NotLeader { .. } | RaftError::LeaderUnknown) => {
@@ -443,7 +445,7 @@ async fn process_resource_once(
     }
     broker
         .controller
-        .submit_change_if_image(to_submit, image.clone())
+        .submit_change_if_image(to_submit, Arc::clone(image))
         .await?;
     Ok(out)
 }

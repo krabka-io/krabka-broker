@@ -1,6 +1,6 @@
 use {super::remote_covered_through, assert2::assert, proptest::prelude::*};
 
-pub(crate) fn coverage_oracle(ranges: &[(i64, i64)], anchor: i64) -> Option<i64> {
+pub fn coverage_oracle(ranges: &[(i64, i64)], anchor: i64) -> Option<i64> {
     if ranges.iter().any(|(start, end)| start > end) {
         return None;
     }

@@ -4,6 +4,7 @@
 use {
     super::*,
     crate::{
+        codes,
         partition::Partition,
         partition_registry::PartitionRegistry,
         producer_id_manager::ProducerIdManager,
@@ -17,7 +18,9 @@ use {
         },
     },
     assert2::{assert, check},
-    std::path::Path,
+    krabka_protocol::records::RecordBatch,
+    krabka_verified::transaction::init_producer_id_identity_decision,
+    std::{path::Path, sync::atomic::Ordering},
 };
 
 const TID: &str = "tid-moved";
@@ -132,15 +135,19 @@ async fn a_leadership_change_loads_the_new_leader_and_unloads_the_old_one() {
         .await
         .expect("persist the prepared transaction");
     check!(first.take_completion_requests().is_empty());
-    check!(view(&second).await == unavailable_view(crate::codes::NOT_COORDINATOR));
+    check!(view(&second).await == unavailable_view(codes::NOT_COORDINATOR));
 
     // Broker 2 is elected at epoch 1. Its load waits while an append holds
     // the state-partition lock, and it answers COORDINATOR_LOAD_IN_PROGRESS.
-    let held_append = second.state_partition_writes[0].lock().await;
+    let held_append = second
+        .state_partition_writes
+        .lock_for(Some(PartitionIndex(0)))
+        .lock()
+        .await;
     let loads = second
         .refresh_leader_partitions(&image(NodeId(2), krabka_metadata::LeaderEpoch(1)))
         .await;
-    check!(view(&second).await == unavailable_view(crate::codes::COORDINATOR_LOAD_IN_PROGRESS));
+    check!(view(&second).await == unavailable_view(codes::COORDINATOR_LOAD_IN_PROGRESS));
     drop(held_append);
     loads.finished().await;
     check!(
@@ -160,7 +167,7 @@ async fn a_leadership_change_loads_the_new_leader_and_unloads_the_old_one() {
             .refresh_leader_partitions(&image(NodeId(2), krabka_metadata::LeaderEpoch(1)))
             .await,
     );
-    check!(view(&first).await == unavailable_view(crate::codes::NOT_COORDINATOR));
+    check!(view(&first).await == unavailable_view(codes::NOT_COORDINATOR));
     let refused = first.put(prepared_entry(), TxnVersion::Verified).await;
     assert!(refused.is_err(), "a resigned coordinator must not append");
 }
@@ -196,6 +203,7 @@ async fn a_new_term_refuses_the_generation_of_the_old_term() {
     let leaders = coordinator.leader_partitions.read().await;
     check!(TxnCoordinator::require_generation(&leaders, P0, generation).is_err());
     check!(TxnCoordinator::require_generation(&leaders, P0, newer).is_ok());
+    drop(leaders);
 }
 
 /// #892: under `unstable.api.versions.enable`, `last_producer_epoch`
@@ -258,7 +266,7 @@ async fn a_reload_keeps_last_producer_epoch_only_in_trunk_mode() {
         );
 
         // The retry names the epoch the entry held before it was bumped to 5.
-        let decision = krabka_verified::transaction::init_producer_id_identity_decision(
+        let decision = init_producer_id_identity_decision(
             reloaded.producer_id.get(),
             reloaded.producer_epoch,
             reloaded.last_producer_epoch,
@@ -288,10 +296,7 @@ struct ServedEntry {
 
 /// Loads `__transaction_state-0` of a two-partition topic from `batches` and
 /// shows what it serves for `tids`.
-async fn load_view(
-    batches: Vec<krabka_protocol::records::RecordBatch>,
-    tids: &[&str],
-) -> PartitionView {
+async fn load_view(batches: Vec<RecordBatch>, tids: &[&str]) -> PartitionView {
     let dir = TempDir::new().expect("tempdir");
     let partitions = Arc::new(PartitionRegistry::new());
     let part = open_state_partition(dir.path());
@@ -345,7 +350,7 @@ async fn a_bad_record_loads_the_transactions_before_it_and_serves_them() {
     let tid_in = |partition: i32, skip: usize| {
         (0..1_000)
             .map(|n| format!("tid-{n}"))
-            .filter(|tid| partition_for_tid(tid, 2) == partition)
+            .filter(|tid| partition_for_tid(tid, 2) == Some(partition))
             .nth(skip)
             .expect("a transactional id in that partition")
     };
@@ -417,12 +422,8 @@ async fn readiness_refresh_waits_for_the_installed_local_leader_epoch() {
     assert!(coordinator.load_status(P0).await == Some(LoadStatus::Pending));
 
     let partition = partitions.get(bootstrap::TOPIC, P0).unwrap();
-    partition
-        .current_leader
-        .store(1, std::sync::atomic::Ordering::Release);
-    partition
-        .current_leader_epoch
-        .store(7, std::sync::atomic::Ordering::Release);
+    partition.current_leader.store(1, Ordering::Release);
+    partition.current_leader_epoch.store(7, Ordering::Release);
     coordinator
         .refresh_ready_leader_partitions(&image)
         .await

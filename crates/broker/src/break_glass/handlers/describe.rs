@@ -35,9 +35,12 @@ use {
     },
     krabka_audit::{AuditOutcome, PrivilegedPhase},
     krabka_metadata::{BreakGlassProposalRecord, MetadataImage},
-    krabka_protocol::krabka::break_glass::{
-        BreakGlassApproval as WireApproval, DescribeBreakGlassRequest, DescribeBreakGlassResponse,
-        DescribedBreakGlassProposal,
+    krabka_protocol::{
+        krabka::break_glass::{
+            BreakGlassApproval as WireApproval, DescribeBreakGlassRequest,
+            DescribeBreakGlassResponse, DescribedBreakGlassProposal,
+        },
+        primitives::uuid::Uuid as WireUuid,
     },
     uuid::Uuid,
 };
@@ -47,7 +50,7 @@ use {
     api = "DescribeBreakGlass",
     level = "info"
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DescribeBreakGlassRequest,
     version: ApiVersion,
@@ -107,7 +110,7 @@ pub(crate) async fn handle(
 }
 
 /// The proposal a request names, or `None` when it asks for every proposal.
-fn wanted_id(id: krabka_protocol::primitives::uuid::Uuid) -> Option<Uuid> {
+fn wanted_id(id: WireUuid) -> Option<Uuid> {
     let id = from_wire_uuid(id);
     (!id.is_nil()).then_some(id)
 }
@@ -127,7 +130,7 @@ fn wanted_id(id: krabka_protocol::primitives::uuid::Uuid) -> Option<Uuid> {
 /// Returns [`Refusal`] with `RESOURCE_NOT_FOUND` (91) when `wanted` names a
 /// proposal the image does not hold. A request that matches no proposal because
 /// of `pending_only` is not an error, and answers an empty list.
-pub(crate) fn select(
+pub fn select(
     image: &MetadataImage,
     pending_only: bool,
     wanted: Option<Uuid>,
@@ -193,6 +196,7 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_metadata::BreakGlassAction,
+        std::slice,
     };
 
     fn ids(described: &[DescribedBreakGlassProposal]) -> Vec<Uuid> {
@@ -292,7 +296,7 @@ mod tests {
             ],
             ..proposal(1, BreakGlassAction::DeleteTopic, "doomed")
         };
-        let image = image_of(std::slice::from_ref(&stored));
+        let image = image_of(slice::from_ref(&stored));
 
         let described = select(&image, false, None, NOW_MS).expect("read the registry");
 
@@ -344,7 +348,7 @@ mod tests {
 
     #[test]
     fn a_nil_wire_id_asks_for_every_proposal() {
-        let nil = krabka_protocol::primitives::uuid::Uuid::ZERO;
+        let nil = WireUuid::ZERO;
 
         check!(wanted_id(nil) == None);
         check!(wanted_id(to_wire_uuid(Uuid::from_u128(5))) == Some(Uuid::from_u128(5)));

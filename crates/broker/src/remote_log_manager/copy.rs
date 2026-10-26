@@ -13,6 +13,8 @@ use {
     krabka_log::{Offset, SegmentExport},
     krabka_remote_storage::{RemoteLogSegmentState, TopicIdPartition},
     krabka_units::convert::{ByteSizeExt, TimeExt},
+    std::time::Duration,
+    tokio::time,
     tracing::{debug, warn},
 };
 
@@ -32,7 +34,7 @@ use {
 /// copies a segment as soon as it is sealed. Only a broker serving trunk's keys
 /// resolves anything else; see [`CopyDelay::resolve`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CopyDelay {
+pub struct CopyDelay {
     /// The effective `remote.copy.lag.ms`: `0` copies at once, a positive value
     /// waits, and a negative one is no time check.
     lag_ms: i64,
@@ -177,7 +179,7 @@ fn tier_holds_whole(merged: &[OffsetRange], base: i64, last: i64) -> bool {
 /// contains the resume point: the alternative is to skip it and leave the tier
 /// a permanent hole between the resume point and the next segment's base.
 #[cfg(test)]
-pub(crate) async fn copy_eligible(
+pub async fn copy_eligible(
     tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
     broker_id: i32,
@@ -208,7 +210,7 @@ pub(crate) async fn copy_eligible(
 /// they are sealed local segments the tier does not hold, as Kafka's
 /// `recordLagStats` counts them.
 #[cfg(test)]
-pub(crate) async fn copy_eligible_below(
+pub async fn copy_eligible_below(
     tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
     broker_id: i32,
@@ -242,7 +244,7 @@ pub(crate) async fn copy_eligible_below(
 /// asks its fence at the same points, and once more around the upload, because
 /// a pass that read its leadership at the start of a tick can run for as long
 /// as the object store and the metadata manager take to answer.
-pub(crate) trait CopyFence: Sync {
+pub trait CopyFence: Sync {
     /// `true` while this broker still leads the partition in the leader epoch
     /// the pass started under, and the broker is not shutting down.
     fn holds(&self) -> bool;
@@ -260,7 +262,7 @@ pub(crate) trait CopyFence: Sync {
 
 /// A fence that always holds, for tests that drive the copy pass directly.
 #[cfg(test)]
-pub(crate) struct Unfenced;
+pub struct Unfenced;
 
 #[cfg(test)]
 impl CopyFence for Unfenced {
@@ -272,7 +274,7 @@ impl CopyFence for Unfenced {
 /// The broker and leader epoch a copy pass uploads under, and the fence that
 /// says whether it still may.
 #[derive(Clone, Copy)]
-pub(crate) struct CopyIdentity<'a> {
+pub struct CopyIdentity<'a> {
     pub(crate) broker_id: i32,
     pub(crate) leader_epoch: krabka_ids::LeaderEpoch,
     pub(crate) fence: &'a dyn CopyFence,
@@ -292,7 +294,7 @@ impl CopyIdentity<'static> {
 
 /// The longest one wait for the copy quota sleeps before it asks the quota
 /// and the fence again: Kafka's `RemoteLogManager.quotaTimeout()`.
-const COPY_QUOTA_RECHECK: std::time::Duration = std::time::Duration::from_secs(1);
+const COPY_QUOTA_RECHECK: Duration = Duration::from_secs(1);
 
 /// Kafka's copy-quota gate in `RLMCopyTask.copyLogSegmentsToRemote`: wait
 /// until `quota` allows more bytes, then record the segment's `bytes` against
@@ -319,8 +321,8 @@ async fn wait_for_copy_quota(
         debug!(topic = %tp.topic, partition = tp.partition, throttle_ms,
                "remote-log-manager: quota exceeded for copying log segments, waiting for the \
                 quota to be available");
-        let wait = std::time::Duration::from_millis(u64::try_from(throttle_ms).unwrap_or(0));
-        tokio::time::sleep(wait.min(COPY_QUOTA_RECHECK)).await;
+        let wait = Duration::from_millis(u64::try_from(throttle_ms).unwrap_or(0));
+        time::sleep(wait.min(COPY_QUOTA_RECHECK)).await;
         if !fence.holds() {
             return false;
         }
@@ -330,7 +332,7 @@ async fn wait_for_copy_quota(
 /// What holds a copy pass back: the last stable offset that bounds what it
 /// uploads and the copy lag that delays it.
 #[derive(Clone, Copy)]
-pub(crate) struct CopyBound {
+pub struct CopyBound {
     pub(crate) last_stable_offset: krabka_log::Offset,
     pub(crate) delay: CopyDelay,
 }
@@ -348,7 +350,7 @@ pub(crate) struct CopyBound {
 /// holds, as Kafka's `RLMCopyTask` stops when its task is cancelled: a broker
 /// that has lost the partition, or is shutting down, must not keep uploading
 /// over the tier the new leader is copying into.
-pub(crate) async fn copy_eligible_delayed(
+pub async fn copy_eligible_delayed(
     tier: &RemoteTier<'_>,
     tp: &TopicIdPartition,
     identity: CopyIdentity<'_>,
@@ -540,9 +542,12 @@ mod tests {
             RemoteStorageManager, WormChainRecord,
         },
         krabka_units::bytes,
-        std::sync::{
-            Arc,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+        std::{
+            io,
+            sync::{
+                Arc, Mutex, PoisonError,
+                atomic::{AtomicBool, AtomicUsize, Ordering},
+            },
         },
         uuid::Uuid,
     };
@@ -796,7 +801,7 @@ mod tests {
         leadership: Arc<Leadership>,
         lose_on: usize,
         uploads: AtomicUsize,
-        held: std::sync::Mutex<Vec<RemoteLogSegmentMetadata>>,
+        held: Mutex<Vec<RemoteLogSegmentMetadata>>,
     }
 
     impl LeadershipMovingRsm {
@@ -807,7 +812,7 @@ mod tests {
                 leadership: Arc::clone(leadership),
                 lose_on,
                 uploads: AtomicUsize::new(0),
-                held: std::sync::Mutex::new(Vec::new()),
+                held: Mutex::new(Vec::new()),
             }
         }
 
@@ -816,7 +821,7 @@ mod tests {
             let mut held: Vec<(i64, i64)> = self
                 .held
                 .lock()
-                .expect("held-objects mutex poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .iter()
                 .map(|md| (md.start_offset(), md.end_offset()))
                 .collect();
@@ -834,7 +839,7 @@ mod tests {
         ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
             self.held
                 .lock()
-                .expect("held-objects mutex poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .push(metadata.clone());
             let upload = self.uploads.fetch_add(1, Ordering::SeqCst) + 1;
             if upload == self.lose_on {
@@ -849,7 +854,7 @@ mod tests {
         ) -> Result<(), RemoteStorageError> {
             self.held
                 .lock()
-                .expect("held-objects mutex poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .retain(|held| held.remote_log_segment_id() != metadata.remote_log_segment_id());
             Ok(())
         }
@@ -979,7 +984,7 @@ mod tests {
         backend: &Arc<LeadershipMovingRsm>,
         rlmm: &Arc<dyn RemoteLogMetadataManager>,
     ) -> FencedPass {
-        let rsm: Arc<dyn RemoteStorageManager> = backend.clone();
+        let rsm = Arc::clone(backend) as Arc<dyn RemoteStorageManager>;
         let metrics = BrokerMetrics::new();
         let tier = fixtures::configured_tier()
             .rsm(&rsm)
@@ -1037,7 +1042,7 @@ mod tests {
             _metadata: &RemoteLogSegmentMetadata,
             _data: &LogSegmentData,
         ) -> Result<Option<CustomMetadata>, RemoteStorageError> {
-            Err(RemoteStorageError::Io(std::io::Error::other(
+            Err(RemoteStorageError::Io(io::Error::other(
                 "the backend refused the copy",
             )))
         }
@@ -1174,7 +1179,7 @@ mod tests {
     #[tokio::test]
     async fn copy_eligible_chains_consecutive_segments() {
         let archive = Arc::new(FakeWormArchive::new());
-        let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
+        let rsm = Arc::clone(&archive) as Arc<dyn RemoteStorageManager>;
         let rlmm = fixtures::in_memory_metadata();
         let exports = three_exports().call();
 
@@ -1220,7 +1225,8 @@ mod tests {
             prev_head: ChainHead([0xaa; 32]),
         })
         .with_head(ChainHead([0xbb; 32]))
-        .to_custom_metadata();
+        .to_custom_metadata()
+        .unwrap();
         rlmm.update_remote_log_segment_metadata(RemoteLogSegmentMetadataUpdate {
             remote_log_segment_id: segment_id,
             event_timestamp_ms: 101,
@@ -1231,7 +1237,7 @@ mod tests {
         .unwrap();
 
         let archive = Arc::new(FakeWormArchive::new());
-        let rsm: Arc<dyn RemoteStorageManager> = archive.clone();
+        let rsm = Arc::clone(&archive) as Arc<dyn RemoteStorageManager>;
         let copied = copy_exports(
             &tier(ArchiveMode::WriteOnce, &rsm, &rlmm),
             three_exports().call(),

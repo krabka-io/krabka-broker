@@ -16,7 +16,10 @@ use {
         RESOURCE_TYPE_TOPIC,
         framing::CLIENT_ID,
         kafka_wire::create_topic_as_super_user,
-        support::topics::{ConfiguredTopicSetup, TopicPartitionCount},
+        support::{
+            topics::{ConfiguredTopicSetup, TopicPartitionCount},
+            wire::ApiRequestSetup,
+        },
     },
     krabka_protocol::owned::{
         create_acls_request::{AclCreation, CreateAclsRequest},
@@ -36,10 +39,10 @@ use {
 pub fn topic_allow_creation(name: &str, principal: &str, operation: i8) -> AclCreation {
     AclCreation {
         resource_type: RESOURCE_TYPE_TOPIC,
-        resource_name: name.to_string(),
+        resource_name: name.to_owned(),
         resource_pattern_type: PATTERN_TYPE_LITERAL,
-        principal: principal.to_string(),
-        host: "*".to_string(),
+        principal: principal.to_owned(),
+        host: "*".to_owned(),
         operation,
         permission_type: PERMISSION_ALLOW,
         ..Default::default()
@@ -69,7 +72,7 @@ pub async fn create_topic_as_admin(addr: SocketAddr, name: &str, partitions: i32
         .addr(addr)
         .client_id(CLIENT_ID)
         .topic(ConfiguredTopicSetup {
-            name: name.to_string(),
+            name: name.to_owned(),
             partitions: TopicPartitionCount(partitions),
             ..Default::default()
         })
@@ -80,7 +83,7 @@ pub async fn create_topic_as_admin(addr: SocketAddr, name: &str, partitions: i32
 krabka_macros::wire_test_driver!(plain pub drive_create_acls_as_plain {
     request: CreateAclsRequest,
     response: CreateAclsResponse,
-    api: crate::support::wire::ApiRequestSetup {
+    api: ApiRequestSetup {
         api_key: krabka_ids::ApiKey(30),
         version: krabka_ids::ApiVersion(CREATE_ACLS_VERSION),
     },
@@ -90,7 +93,7 @@ krabka_macros::wire_test_driver!(plain pub drive_create_acls_as_plain {
 krabka_macros::wire_test_driver!(plain pub drive_describe_acls_as_plain {
     request: DescribeAclsRequest,
     response: DescribeAclsResponse,
-    api: crate::support::wire::ApiRequestSetup {
+    api: ApiRequestSetup {
         api_key: krabka_ids::ApiKey(29),
         version: krabka_ids::ApiVersion(DESCRIBE_ACLS_VERSION),
     },
@@ -100,7 +103,7 @@ krabka_macros::wire_test_driver!(plain pub drive_describe_acls_as_plain {
 krabka_macros::wire_test_driver!(plain pub drive_delete_acls_as_plain {
     request: DeleteAclsRequest,
     response: DeleteAclsResponse,
-    api: crate::support::wire::ApiRequestSetup {
+    api: ApiRequestSetup {
         api_key: krabka_ids::ApiKey(31),
         version: krabka_ids::ApiVersion(DELETE_ACLS_VERSION),
     },

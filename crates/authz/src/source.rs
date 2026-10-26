@@ -4,7 +4,7 @@
 //! uses a `MetadataImage` snapshot. The gateway uses a `Vec<AclEntry>` cache
 //! that it fetched with `DescribeAcls`.
 
-use krabka_metadata::{AclEntry, ResourceType};
+use krabka_metadata::{AclEntry, ResourceType, metadata_version::CIDR_ACL_MIN_LEVEL};
 
 /// Borrowed ACL entries returned by a metadata image or gateway snapshot.
 pub type AclEntries<'a> = Box<dyn Iterator<Item = &'a AclEntry> + 'a>;
@@ -42,21 +42,17 @@ pub trait AclSource {
 // MetadataImage type.)
 impl AclSource for krabka_metadata::MetadataImage {
     fn matching_acls<'a>(&'a self, rt: ResourceType, name: &'a str) -> AclEntries<'a> {
-        Box::new(krabka_metadata::MetadataImage::matching_acls(
-            self, rt, name,
-        ))
+        Box::new(Self::matching_acls(self, rt, name))
     }
 
     fn acls_of_type(&self, rt: ResourceType) -> AclEntries<'_> {
-        Box::new(
-            krabka_metadata::MetadataImage::all_acls(self).filter(move |e| e.resource_type == rt),
-        )
+        Box::new(Self::all_acls(self).filter(move |e| e.resource_type == rt))
     }
 
     /// An unfinalized `metadata.version` is the bootstrap level, `4.3-IV0`,
     /// which is below the CIDR floor.
     fn cidr_hosts_supported(&self) -> bool {
         self.finalized_metadata_version()
-            .is_some_and(|level| level >= krabka_metadata::metadata_version::CIDR_ACL_MIN_LEVEL)
+            .is_some_and(|level| level >= CIDR_ACL_MIN_LEVEL)
     }
 }

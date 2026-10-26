@@ -10,7 +10,7 @@ use {
     crate::{error::BrokerError, partition::Partition, throttle::TokenBucket},
     krabka_log::{Log, Offset},
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
-    std::sync::{Arc, Mutex},
+    std::sync::{Arc, Mutex, PoisonError},
 };
 
 /// One catch-up iteration. It reads whatever the future log is missing,
@@ -35,17 +35,14 @@ pub(super) fn catch_up(
     // remote tier, and `Log::read` refuses them. Reading from the global floor
     // instead would fail every pass and the move would never finish.
     let (current_start, current_leo) = {
-        let current = part
-            .log
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let current = part.log.lock().unwrap_or_else(PoisonError::into_inner);
         (current.local_log_start_offset(), current.log_end_offset())
     };
     // Recover the guard if a panic elsewhere poisoned the mutex rather
     // than killing this (discarded-JoinHandle) replicator task.
     let future_leo = future_log
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .log_end_offset();
     if future_leo >= current_leo && future_leo >= current_start {
         return Ok(CatchUpProgress {
@@ -73,17 +70,14 @@ pub(super) fn catch_up(
         future_leo
     };
     let read = {
-        let log = part
-            .log
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let log = part.log.lock().unwrap_or_else(PoisonError::into_inner);
         log.read(fetch_offset, ByteSize::from_bytes(granted))?
     };
     if read.batches.is_empty() {
         if reset_for_retention {
             future_log
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .reset_to(current_start)?;
         }
         return Ok(CatchUpProgress {
@@ -92,9 +86,7 @@ pub(super) fn catch_up(
         });
     }
 
-    let mut future = future_log
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut future = future_log.lock().unwrap_or_else(PoisonError::into_inner);
     if reset_for_retention {
         future.reset_to(read.start_offset)?;
     }
@@ -107,6 +99,7 @@ pub(super) fn catch_up(
     if reset_for_retention {
         future.set_log_start_offset(current_start)?;
     }
+    drop(future);
     Ok(CatchUpProgress {
         caught_up: false,
         throttled: false,
@@ -126,10 +119,11 @@ mod tests {
         assert2::assert,
         krabka_ids::PartitionIndex,
         krabka_units::mebibytes,
+        std::{path::Path, sync::PoisonError},
         tempfile::tempdir,
     };
 
-    fn first_catch_up(part: &Arc<Partition>, target: &std::path::Path) -> FirstCatchUp {
+    fn first_catch_up(part: &Arc<Partition>, target: &Path) -> FirstCatchUp {
         let OpenedFutureLog { log: future, .. } = open_future_log(target);
         let progress =
             catch_up(part, &future, mebibytes(1), &TokenBucket::new()).expect("catch up");
@@ -150,17 +144,17 @@ mod tests {
         let part = fixture.partition;
         part.log
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .set_log_start_offset(Offset(2))
             .expect("advance source start");
         let FirstCatchUp { future, progress } = first_catch_up(&part, target.path());
         assert!(!progress.caught_up);
-        let future = future
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        assert!(future.log_start_offset() == Offset(2));
-        assert!(future.log_end_offset() == Offset(3));
+        let future = future.lock().unwrap_or_else(PoisonError::into_inner);
+        let (start, end) = (future.log_start_offset(), future.log_end_offset());
         let read = future.read(Offset(2), mebibytes(1)).expect("read future");
+        drop(future);
+        assert!(start == Offset(2));
+        assert!(end == Offset(3));
         assert!(read.batches.len() == 1);
         assert!(read.batches[0].base_offset == 0);
     }
@@ -172,16 +166,17 @@ mod tests {
         let part = fixture_partition(primary.path(), "t", PartitionIndex(0));
         part.log
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .reset_to(Offset(5))
             .expect("reset source");
         let FirstCatchUp { future, progress } = first_catch_up(&part, target.path());
         assert!(progress.caught_up);
-        let future = future
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        assert!(future.log_start_offset() == Offset(5));
-        assert!(future.log_end_offset() == Offset(5));
+        let (start, end) = {
+            let future = future.lock().unwrap_or_else(PoisonError::into_inner);
+            (future.log_start_offset(), future.log_end_offset())
+        };
+        assert!(start == Offset(5));
+        assert!(end == Offset(5));
     }
 
     #[tokio::test]
@@ -202,7 +197,7 @@ mod tests {
         assert!(
             future
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or_else(PoisonError::into_inner)
                 .log_end_offset()
                 == Offset(0)
         );

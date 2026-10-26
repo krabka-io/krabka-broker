@@ -6,6 +6,7 @@
 //! into the metadata image. Every other broker's `Metadata` response, and
 //! every KIP-annotated admin call that routes through it (`ListGroups`,
 //! `DescribeCluster`, ...), then named this broker's own dead endpoint.
+#![cfg(test)]
 
 mod support;
 

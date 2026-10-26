@@ -35,14 +35,13 @@ impl BrokerMetrics {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, assert2::assert};
+    use {super::*, assert2::assert, prometheus_client::encoding::text};
 
     /// Encode the registry to the Prometheus text format an operator scrapes.
     async fn scrape(metrics: &BrokerMetrics) -> String {
         let mut buf = String::new();
         let registry = metrics.registry.lock().await;
-        prometheus_client::encoding::text::encode(&mut buf, &registry)
-            .expect("encode the registry");
+        text::encode(&mut buf, &registry).expect("encode the registry");
         buf
     }
 

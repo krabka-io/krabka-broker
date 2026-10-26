@@ -63,7 +63,7 @@ pub(super) fn handle_client_metrics_scoped(
     }
     if let Err(error) = validate(&resource.resource_name, &merged) {
         out.error_code = error.code();
-        out.error_message = Some(error.message().to_string());
+        out.error_message = Some(error.message().to_owned());
         return;
     }
     if merged != current {
@@ -85,6 +85,7 @@ mod tests {
         },
         assert2::check,
         krabka_protocol::owned::incremental_alter_configs_request::AlterableConfig,
+        std::collections::BTreeMap,
     };
 
     /// One alteration: key, operation and value.
@@ -110,8 +111,8 @@ mod tests {
             ClientMetricsConfigRecord {
                 name: "sub-a".into(),
                 configs: maplit::btreemap! {
-                    "interval.ms".to_string() => "60000".to_string(),
-                    "metrics".to_string() => "a.".to_string(),
+                    "interval.ms".to_owned() => "60000".to_owned(),
+                    "metrics".to_owned() => "a.".to_owned(),
                 },
             },
         ));
@@ -286,7 +287,7 @@ mod tests {
     /// key whose value changes.
     #[test]
     fn accepted_alterations_stage_the_merged_map() {
-        let record = |configs: std::collections::BTreeMap<String, String>| {
+        let record = |configs: BTreeMap<String, String>| {
             vec![MetadataRecord::V1ClientMetricsConfig(
                 ClientMetricsConfigRecord {
                     name: "sub-a".into(),
@@ -303,8 +304,8 @@ mod tests {
                     value: Some(" 1000 "),
                 },
                 expected: record(maplit::btreemap! {
-                    "interval.ms".to_string() => " 1000 ".to_string(),
-                    "metrics".to_string() => "a.".to_string(),
+                    "interval.ms".to_owned() => " 1000 ".to_owned(),
+                    "metrics".to_owned() => "a.".to_owned(),
                 }),
             },
             AcceptedCase {
@@ -323,7 +324,7 @@ mod tests {
                     operation: OP_DELETE,
                     value: None,
                 },
-                expected: record(maplit::btreemap! {"metrics".to_string() => "a.".to_string()}),
+                expected: record(maplit::btreemap! {"metrics".to_owned() => "a.".to_owned()}),
             },
             AcceptedCase {
                 name: "java lookahead pattern",
@@ -333,9 +334,9 @@ mod tests {
                     value: Some("client_id=(?!test).*"),
                 },
                 expected: record(maplit::btreemap! {
-                    "interval.ms".to_string() => "60000".to_string(),
-                    "match".to_string() => "client_id=(?!test).*".to_string(),
-                    "metrics".to_string() => "a.".to_string(),
+                    "interval.ms".to_owned() => "60000".to_owned(),
+                    "match".to_owned() => "client_id=(?!test).*".to_owned(),
+                    "metrics".to_owned() => "a.".to_owned(),
                 }),
             },
             AcceptedCase {
@@ -346,9 +347,9 @@ mod tests {
                     value: Some("client_id=(?<n>a)\\k<n>"),
                 },
                 expected: record(maplit::btreemap! {
-                    "interval.ms".to_string() => "60000".to_string(),
-                    "match".to_string() => "client_id=(?<n>a)\\k<n>".to_string(),
-                    "metrics".to_string() => "a.".to_string(),
+                    "interval.ms".to_owned() => "60000".to_owned(),
+                    "match".to_owned() => "client_id=(?<n>a)\\k<n>".to_owned(),
+                    "metrics".to_owned() => "a.".to_owned(),
                 }),
             },
         ];

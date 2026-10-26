@@ -46,7 +46,7 @@ use {
 };
 
 #[krabka_macros::share_request_identity]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: ShareAcknowledgeRequest,
     version: ApiVersion,
@@ -258,6 +258,7 @@ async fn process_topics(context: &AcknowledgeContext<'_>) -> Vec<ShareAcknowledg
                     apply_acknowledgements(st, &application, batches())
                 })
                 .await;
+            drop(st);
             parts.push(out);
         }
 
@@ -329,7 +330,7 @@ mod tests {
             broker: broker_handle,
             dir: _dir,
         } = start_share_broker()
-            .authorizer(std::sync::Arc::new(AllowAllAuthorizer))
+            .authorizer(Arc::new(AllowAllAuthorizer))
             .support(ShareApiSupport::Disabled)
             .call()
             .await;
@@ -354,7 +355,11 @@ mod tests {
         broker_handle.shutdown().await;
     }
 
-    use crate::handlers::test_support::{DenyTopicRead, TopicIdRef as TopicRef};
+    use {
+        crate::handlers::test_support::{DenyTopicRead, TopicIdRef as TopicRef},
+        krabka_protocol::owned::share_acknowledge_request::API_KEY,
+        std::{collections::HashSet, sync::Arc},
+    };
 
     async fn create_topic(broker: &BrokerHandle, name: &str) -> ProtoUuid {
         create_topic_from_test_support()
@@ -391,7 +396,7 @@ mod tests {
                     .epoch(0)
                     .partitions(FetchPartitions {
                         requested: &[(id, 0)],
-                        forgotten: &std::collections::HashSet::new(),
+                        forgotten: &HashSet::new(),
                     })
                     .build(),
             )
@@ -400,14 +405,7 @@ mod tests {
         request.member_id = Some(member.into());
         request.share_session_epoch = 1;
         // Both ends of the version range: the response is read off the wire.
-        dispatch_wire(
-            &shared,
-            krabka_protocol::owned::share_acknowledge_request::API_KEY,
-            version,
-            &request,
-            &ctx,
-        )
-        .await
+        dispatch_wire(&shared, API_KEY, version, &request, &ctx).await
     }
 
     /// The response to one (version, topic reference) case.
@@ -486,7 +484,7 @@ mod tests {
         } = initialized_share_topic(
             async {
                 let HandlerStartedBroker { broker, dir } = start_share_broker()
-                    .authorizer(std::sync::Arc::new(AllowAllAuthorizer))
+                    .authorizer(Arc::new(AllowAllAuthorizer))
                     .call()
                     .await;
                 StartedBroker { broker, dir }
@@ -518,7 +516,7 @@ mod tests {
         } = initialized_share_topic(
             async {
                 let HandlerStartedBroker { broker, dir } = start_broker_with(|cfg| {
-                    cfg.authorizer = std::sync::Arc::new(DenyTopicRead);
+                    cfg.authorizer = Arc::new(DenyTopicRead);
                     tolerate_starved_heartbeats(cfg);
                 })
                 .await;

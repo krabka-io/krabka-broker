@@ -21,6 +21,7 @@ use {
         records::{Record, RecordsPayload},
     },
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 /// The floor the fetch asks for. 64 KiB is orders of magnitude above the one
@@ -30,10 +31,10 @@ use {
 /// The stock consumer default is `fetch.min.bytes=1`, which is why the default
 /// path never showed this; a Streams or Connect deployment raises it, and this
 /// is the shape of the request it then sends.
-pub(crate) const MIN_BYTES: i32 = 64 * 1024;
+pub const MIN_BYTES: i32 = 64 * 1024;
 
 /// The wait that bounds the floor.
-pub(crate) const MAX_WAIT_MS: i32 = 2_000;
+pub const MAX_WAIT_MS: i32 = 2_000;
 
 /// The least time the answer may take.
 ///
@@ -41,7 +42,7 @@ pub(crate) const MAX_WAIT_MS: i32 = 2_000;
 /// which lands here in single-digit milliseconds. The bound is one-sided and a
 /// slow machine only makes it more true, so it is not the kind of timing
 /// assertion instrumentation can break.
-pub(crate) const HELD_AT_LEAST: Duration = Duration::from_millis(1_800);
+pub const HELD_AT_LEAST: Duration = Duration::from_millis(1_800);
 
 /// Topic-created-already, which a re-run of the ignored differential meets.
 const TOPIC_ALREADY_EXISTS: i16 = 36;
@@ -49,7 +50,7 @@ const TOPIC_ALREADY_EXISTS: i16 = 36;
 /// What a fetch answered with, whole, so two brokers' answers compare as one
 /// value.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct FetchFacts {
+pub struct FetchFacts {
     pub(crate) error_code: i16,
     pub(crate) high_watermark: i64,
     /// The base offset of every batch the response carried.
@@ -128,7 +129,7 @@ async fn topic_id(client: &Client, topic: &str) -> WireUuid {
             return found.topic_id;
         }
         assert!(Instant::now() < deadline, "topic never got a leader");
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        time::sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -137,17 +138,20 @@ fn base_offsets(records: Option<&RecordsPayload>) -> Vec<i64> {
     let Some(payload) = records else {
         return Vec::new();
     };
-    let batches = if let Some(batches) = payload.as_v2() {
-        batches.to_vec()
-    } else if let RecordsPayload::Raw(raw) = payload {
-        let decoded = RecordsPayload::from_bytes(raw.clone()).expect("decode the fetched records");
-        let Some(batches) = decoded.as_v2() else {
-            panic!("fetched records are not v2 batches: {decoded:?}");
-        };
-        batches.to_vec()
-    } else {
-        panic!("unexpected records payload: {payload:?}");
-    };
+    let batches = payload.as_v2().map_or_else(
+        || {
+            let RecordsPayload::Raw(raw) = payload else {
+                panic!("unexpected records payload: {payload:?}");
+            };
+            let decoded =
+                RecordsPayload::from_bytes(raw.clone()).expect("decode the fetched records");
+            let Some(batches) = decoded.as_v2() else {
+                panic!("fetched records are not v2 batches: {decoded:?}");
+            };
+            batches.to_vec()
+        },
+        <[_]>::to_vec,
+    );
     batches.iter().map(|batch| batch.base_offset).collect()
 }
 
@@ -159,7 +163,7 @@ fn base_offsets(records: Option<&RecordsPayload>) -> Vec<i64> {
 /// there and then. Both records must come back, and not before `MAX_WAIT_MS`.
 ///
 /// Returns how long the fetch was held and what it answered with.
-pub(crate) async fn min_bytes_exchange(bootstrap: &str, topic: &str) -> (Duration, FetchFacts) {
+pub async fn min_bytes_exchange(bootstrap: &str, topic: &str) -> (Duration, FetchFacts) {
     let client = connect(bootstrap).await;
     create_topic(&client, topic).await;
     let topic_id = topic_id(&client, topic).await;
@@ -171,7 +175,7 @@ pub(crate) async fn min_bytes_exchange(bootstrap: &str, topic: &str) -> (Duratio
     let appended = {
         let topic = topic.to_owned();
         tokio::spawn(async move {
-            tokio::time::sleep(APPEND_AFTER).await;
+            time::sleep(APPEND_AFTER).await;
             produce_one(&producer, &topic, topic_id, b"second").await;
         })
     };

@@ -13,7 +13,8 @@
 use {
     krabka_security::{DynamicServerConfig, TlsConfig},
     krabka_units::{Time, convert::TimeExt},
-    std::{path::Path, sync::Arc, time::SystemTime},
+    std::{fs::metadata, path::Path, sync::Arc, time::SystemTime},
+    tokio::time,
     tokio_util::sync::CancellationToken,
     tracing::{debug, info, warn},
 };
@@ -25,7 +26,7 @@ struct PathMtimes {
     client_ca: Option<SystemTime>,
 }
 
-fn read_mtime(p: &Path) -> Option<SystemTime> { std::fs::metadata(p).ok()?.modified().ok() }
+fn read_mtime(p: &Path) -> Option<SystemTime> { metadata(p).ok()?.modified().ok() }
 
 fn snapshot_mtimes(cfg: &TlsConfig) -> PathMtimes {
     PathMtimes {
@@ -37,7 +38,7 @@ fn snapshot_mtimes(cfg: &TlsConfig) -> PathMtimes {
 
 /// Spawned task entry point. The task polls every `interval` and stops on the
 /// `shutdown` token.
-pub(crate) async fn run(
+pub async fn run(
     dynamic: Arc<DynamicServerConfig>,
     cfg: TlsConfig,
     interval: Time,
@@ -48,7 +49,7 @@ pub(crate) async fn run(
         return;
     }
     let mut last = snapshot_mtimes(&cfg);
-    let mut ticker = tokio::time::interval(interval.to_std());
+    let mut ticker = time::interval(interval.to_std());
     // First tick fires immediately; skip it so we don't double-load on
     // startup (the broker already built the initial ServerConfig).
     ticker.tick().await;
@@ -87,16 +88,17 @@ mod tests {
         assert2::assert,
         krabka_security::ClientAuthMode,
         krabka_units::secs,
+        rustls::crypto::aws_lc_rs,
         std::{
             fs,
             path::{Path, PathBuf},
+            sync,
             time::Duration,
         },
+        tokio::{task, time::advance},
     };
 
-    fn install_provider() {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-    }
+    fn install_provider() { let _ = aws_lc_rs::default_provider().install_default(); }
 
     /// A certificate and a key, both PEM encoded.
     struct PemPair {
@@ -194,11 +196,16 @@ mod tests {
         let before = dynamic.current();
         let shutdown = CancellationToken::new();
 
-        let task = tokio::spawn(run(dynamic.clone(), cfg.clone(), secs(1), shutdown.clone()));
-        tokio::task::yield_now().await;
+        let task = tokio::spawn(run(
+            sync::Arc::clone(&dynamic),
+            cfg.clone(),
+            secs(1),
+            shutdown.clone(),
+        ));
+        task::yield_now().await;
 
-        tokio::time::advance(Duration::from_secs(1)).await;
-        tokio::task::yield_now().await;
+        advance(Duration::from_secs(1)).await;
+        task::yield_now().await;
         let unchanged = dynamic.current();
         assert!(
             Arc::ptr_eq(&before, &unchanged),
@@ -214,8 +221,8 @@ mod tests {
         bump_mtime(&cert, Duration::from_mins(1));
         bump_mtime(&key, Duration::from_secs(61));
 
-        tokio::time::advance(Duration::from_secs(1)).await;
-        tokio::task::yield_now().await;
+        advance(Duration::from_secs(1)).await;
+        task::yield_now().await;
         let after = dynamic.current();
         assert!(
             !Arc::ptr_eq(&before, &after),

@@ -6,8 +6,19 @@
 //! without a byte count while the BSD-family `nix` binding reports a count
 //! that is valid even on `EAGAIN`.
 
+#[cfg(target_os = "linux")]
+use rustix::fs;
 #[krabka_macros::sendfile_cfg]
-use crate::{error::BrokerError, time_util::sleep_until_opt};
+use {
+    crate::{error::BrokerError, time_util::sleep_until_opt},
+    krabka_protocol::records::FileRegion,
+    std::{
+        io::{self, Error},
+        os::fd,
+        time::Duration,
+    },
+    tokio::{io::Interest, net::TcpStream, time::Instant},
+};
 
 /// `sendfile(2)` a `FileRegion` to a plaintext `TcpStream`, in a loop over
 /// partial writes and `EAGAIN`.
@@ -27,9 +38,9 @@ use crate::{error::BrokerError, time_util::sleep_until_opt};
 /// identical on Linux and on Apple/BSD.
 #[krabka_macros::sendfile_cfg]
 pub(super) async fn sendfile_region(
-    tcp: &tokio::net::TcpStream,
-    region: &krabka_protocol::records::FileRegion,
-    idle: Option<std::time::Duration>,
+    tcp: &TcpStream,
+    region: &FileRegion,
+    idle: Option<Duration>,
 ) -> Result<(), BrokerError> {
     use std::{
         io::ErrorKind,
@@ -41,7 +52,7 @@ pub(super) async fn sendfile_region(
     let out_fd: BorrowedFd<'_> = tcp.as_fd();
 
     let mut sent_total: usize = 0;
-    let mut deadline = idle.map(|window| tokio::time::Instant::now() + window);
+    let mut deadline = idle.map(|window| Instant::now() + window);
 
     while sent_total < region.len {
         // Wait for the socket to be writable, then attempt one sendfile. If
@@ -50,7 +61,7 @@ pub(super) async fn sendfile_region(
         tokio::select! {
             biased;
             () = sleep_until_opt(deadline) => {
-                return Err(BrokerError::Io(std::io::Error::new(
+                return Err(BrokerError::Io(Error::new(
                     ErrorKind::TimedOut, "sendfile made no progress within connections.max.idle.ms"
                 )));
             }
@@ -58,7 +69,7 @@ pub(super) async fn sendfile_region(
         }
         let offset = region.offset + sent_total as u64;
         let remaining = region.len - sent_total;
-        let res = tcp.try_io(tokio::io::Interest::WRITABLE, || {
+        let res = tcp.try_io(Interest::WRITABLE, || {
             sendfile_once(out_fd, in_fd, offset, remaining)
         });
         match res {
@@ -68,14 +79,14 @@ pub(super) async fn sendfile_region(
                 // (truncated mid-send). The `Arc<File>` should prevent this;
                 // treat as an I/O error so the connection closes rather than
                 // emitting a short frame.
-                return Err(BrokerError::Io(std::io::Error::new(
+                return Err(BrokerError::Io(Error::new(
                     ErrorKind::UnexpectedEof,
                     "sendfile returned 0 before region fully sent",
                 )));
             }
             Ok(n) => {
                 sent_total += n;
-                deadline = idle.map(|window| tokio::time::Instant::now() + window);
+                deadline = idle.map(|window| Instant::now() + window);
             }
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                 // Not writable yet (true would-block: zero bytes moved); loop
@@ -121,15 +132,15 @@ pub(super) async fn sendfile_region(
 /// verify the syscall semantics and the byte-exact wire output.
 #[krabka_macros::sendfile_cfg]
 fn sendfile_once(
-    out_fd: std::os::fd::BorrowedFd<'_>,
-    in_fd: std::os::fd::BorrowedFd<'_>,
+    out_fd: fd::BorrowedFd<'_>,
+    in_fd: fd::BorrowedFd<'_>,
     offset: u64,
     count: usize,
-) -> std::io::Result<usize> {
+) -> io::Result<usize> {
     #[cfg(target_os = "linux")]
     {
         let mut off = offset;
-        rustix::fs::sendfile(out_fd, in_fd, Some(&mut off), count).map_err(std::io::Error::from)
+        fs::sendfile(out_fd, in_fd, Some(&mut off), count).map_err(Error::from)
     }
     #[cfg(not(target_os = "linux"))]
     {

@@ -1,4 +1,4 @@
-use {super::*, assert2::assert};
+use {super::*, assert2::assert, proptest::collection};
 
 proptest! {
     #[test]
@@ -90,7 +90,7 @@ fn bounded_charge_and_repayment_restores_consume_budget() {
 proptest! {
     #[test]
     fn token_description_agrees_with_independent_acl_sets_and_session_gate(
-        entries in proptest::collection::vec((0usize..14, any::<bool>(), 0u16..1024), 0..20),
+        entries in collection::vec((0usize..14, any::<bool>(), 0u16..1024), 0..20),
         identity in (any::<bool>(), any::<bool>()),
         relationships in (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>()),
         policy in (any::<bool>(), any::<bool>(), any::<bool>()),
@@ -194,7 +194,7 @@ fn token_description_separates_create_permissions_defaults_and_privileged_token_
 proptest! {
     #[test]
     fn replayed_window_matches_first_sequence_match_and_physical_coordinates(
-        batches in proptest::collection::vec((0i64..=20, 0i32..=6, 0i32..=i32::MAX), 1..=5),
+        batches in collection::vec((0i64..=20, 0i32..=6, 0i32..=i32::MAX), 1..=5),
         epoch in 0i16..=14, sequence in any::<i32>(), delta in any::<i32>(),
         retry in any::<bool>(), probe in 0usize..5,
     ) {

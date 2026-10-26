@@ -3,7 +3,11 @@
 //! `LogSegment.append`, the offset is the **last** offset of the batch that
 //! starts at the position, not its base offset.
 
-use super::prelude::*;
+use {
+    super::prelude::*,
+    std::{mem, sync::Arc},
+    tracing::field,
+};
 
 /// 8 bytes per entry.
 pub const OFFSET_ENTRY_SIZE: usize = 8;
@@ -11,7 +15,7 @@ pub const OFFSET_ENTRY_SIZE: usize = 8;
 /// On-disk byte layout of one offset-index entry.
 type OffsetEntryRaw = super::IndexEntryRaw<U32<BigEndian>>;
 
-const _: [(); OFFSET_ENTRY_SIZE] = [(); std::mem::size_of::<OffsetEntryRaw>()];
+const _: [(); OFFSET_ENTRY_SIZE] = [(); mem::size_of::<OffsetEntryRaw>()];
 
 /// One entry of an [`OffsetIndex`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +46,7 @@ impl OffsetIndexEntry {
 #[sparse_index(kind = "offset")]
 pub struct OffsetIndex {
     file: File,
-    io: std::sync::Arc<dyn LogIo>,
+    io: Arc<dyn LogIo>,
     /// Entries currently in the file. The constructor loads them into memory
     /// lazily.
     entries: Vec<IndexEntry<u32, u32>>,
@@ -53,7 +57,7 @@ impl OffsetIndex {
     pub fn append(&mut self, relative_offset: u32, position: u32) -> Result<(), LogError> {
         let raw = OffsetEntryRaw {
             key: U32::new(relative_offset),
-            coordinate: zerocopy::byteorder::U32::new(position),
+            coordinate: U32::new(position),
         };
         super::append_index(
             &mut self.file,
@@ -79,15 +83,15 @@ impl OffsetIndex {
     #[must_use]
     pub fn floor_entry(&self, target: u32) -> Option<OffsetIndexEntry> {
         let above = self.entries.partition_point(|entry| entry.key <= target);
-        above.checked_sub(1).map(|index| {
-            let entry = self.entries[index];
-            OffsetIndexEntry::new(entry.key, entry.coordinate)
-        })
+        above
+            .checked_sub(1)
+            .and_then(|index| self.entries.get(index))
+            .map(|entry| OffsetIndexEntry::new(entry.key, entry.coordinate))
     }
 
     /// Truncate the entries, and the on-disk file, so that no entry with
     /// `position >= max_position_exclusive` remains.
-    #[instrument(level = "debug", skip(self), fields(entries = tracing::field::Empty), err)]
+    #[instrument(level = "debug", skip(self), fields(entries = field::Empty), err)]
     pub fn truncate_by_position(&mut self, max_position_exclusive: u32) -> Result<(), LogError> {
         super::truncate_index(
             &mut self.file,
@@ -124,7 +128,10 @@ mod tests {
             test_support::TempPath,
         },
         assert2::check,
-        std::{fs::OpenOptions, io::Write},
+        std::{
+            fs::{self, OpenOptions},
+            io::Write,
+        },
     };
 
     krabka_macros::index_seed_helpers!(OffsetIndex, u32);
@@ -168,13 +175,13 @@ mod tests {
         for i in 0..5u32 {
             idx.append(i * 10, i * 100).unwrap();
         }
-        check!(std::fs::metadata(&path).unwrap().len() == (5 * OFFSET_ENTRY_SIZE) as u64);
+        check!(fs::metadata(&path).unwrap().len() == (5 * OFFSET_ENTRY_SIZE) as u64);
 
         // Positions are 0, 100, 200, 300, 400; the bound is exclusive, so the
         // entry at 200 goes with everything past it.
         idx.truncate_by_position(200).unwrap();
         check!(
-            std::fs::metadata(&path).unwrap().len() == (2 * OFFSET_ENTRY_SIZE) as u64,
+            fs::metadata(&path).unwrap().len() == (2 * OFFSET_ENTRY_SIZE) as u64,
             "file should hold exactly the two surviving entries"
         );
         // Reopening reads the file back: the dropped entries must not return.

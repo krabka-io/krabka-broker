@@ -11,8 +11,8 @@ use {
     super::failure::Failure,
     clap::{Args, Parser, Subcommand, ValueEnum},
     krabka_protocol::krabka::freeze::{PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED},
-    krabka_units::Time,
-    std::path::PathBuf,
+    krabka_units::{Time, parse},
+    std::path::{Path, PathBuf},
 };
 
 /// The tool's command line.
@@ -238,13 +238,13 @@ impl Action {
     #[must_use]
     pub fn wire(self) -> i8 {
         match self {
-            Action::ThawTopicFreeze => 1,
-            Action::UncleanElectLeaders => 2,
-            Action::UncleanRecovery => 3,
-            Action::UnregisterBroker => 4,
-            Action::CancelReassignment => 5,
-            Action::DeleteTopic => 6,
-            Action::DeleteRecords => 7,
+            Self::ThawTopicFreeze => 1,
+            Self::UncleanElectLeaders => 2,
+            Self::UncleanRecovery => 3,
+            Self::UnregisterBroker => 4,
+            Self::CancelReassignment => 5,
+            Self::DeleteTopic => 6,
+            Self::DeleteRecords => 7,
         }
     }
 }
@@ -283,9 +283,7 @@ pub fn pattern_name(pattern_type: i8) -> &'static str {
 /// A number with no unit is refused, and only `0` is exempt. That is the units
 /// crate's rule and it is the right one here: `--ttl 30` from someone who meant
 /// minutes would otherwise open a proposal for thirty milliseconds.
-fn parse_time(raw: &str) -> Result<Time, String> {
-    krabka_units::parse::time(raw).map_err(|e| e.to_string())
-}
+fn parse_time(raw: &str) -> Result<Time, String> { parse::time(raw).map_err(|e| e.to_string()) }
 
 /// Parse a proposal id.
 fn parse_uuid(raw: &str) -> Result<uuid::Uuid, String> {
@@ -320,7 +318,7 @@ impl ScopeArgs {
 
 /// One resolved freeze scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Scope {
+pub struct Scope {
     /// A topic name, or a topic-name prefix.
     pub(super) name: String,
     /// `3` literal, `4` prefixed.
@@ -354,9 +352,9 @@ impl FreezeSigningArgs {
 
 /// The resolved signing material for one freeze or thaw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct FreezeSigning<'a> {
+pub struct FreezeSigning<'a> {
     /// The PKCS#8 key file, which never leaves this machine.
-    pub(super) key_path: &'a std::path::Path,
+    pub(super) key_path: &'a Path,
     /// The key id that the request carries.
     pub(super) key_id: &'a str,
     /// The author name the signed bytes carry.

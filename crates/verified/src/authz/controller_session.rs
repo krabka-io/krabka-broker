@@ -4,8 +4,9 @@ use {
 };
 
 /// Controller connections currently require reconnecting to reauthenticate.
-/// Expiry therefore fails the authentication phase before any API dispatch.
-/// A session expires only strictly after its deadline, as Kafka's
+///
+/// Expiry therefore fails the authentication phase before any API dispatch. A
+/// session expires only strictly after its deadline, as Kafka's
 /// `KafkaChannel.serverAuthenticationSessionExpired` decides, so a request at
 /// exactly `expiry_ms` is still admitted.
 #[ensures(result == match expiry_ms {

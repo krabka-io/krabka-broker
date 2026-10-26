@@ -1,5 +1,4 @@
-// rustc 1.95 clippy ICEs on annotate-snippets in pedantic lints on these
-// raw-wire test files; match the opt-out used by compaction.rs / elect_leaders.rs.
+#![cfg(test)]
 
 //! End-to-end test of JBOD, multi-log-dir, and `DescribeLogDirs` (KIP-113).
 //!
@@ -26,7 +25,7 @@ use {
         describe_log_dirs_request::DescribeLogDirsRequest,
         describe_log_dirs_response::DescribeLogDirsResponse,
     },
-    std::net::SocketAddr,
+    std::{fs, net::SocketAddr, path::Path},
     tokio::net::TcpStream,
 };
 
@@ -50,8 +49,8 @@ async fn describe_log_dirs(addr: SocketAddr) -> DescribeLogDirsResponse {
 }
 
 /// Count `topic-partition` subdirs for `topic` directly under `dir`.
-fn count_topic_dirs(dir: &std::path::Path, topic: &str) -> usize {
-    count_partition_dirs(std::fs::read_dir(dir).unwrap(), topic, true)
+fn count_topic_dirs(dir: &Path, topic: &str) -> usize {
+    count_partition_dirs(fs::read_dir(dir).unwrap(), topic, true)
 }
 
 #[tokio::test]

@@ -16,6 +16,7 @@ use {
     bytes::Bytes,
     krabka_log::{Log, LogConfig},
     krabka_protocol::records::{Record, RecordBatch, RecordHeader},
+    std::{ops::Range, path::Path},
 };
 
 fn audit_record_to_batch(rec: &AuditRecord, base_offset: i64) -> RecordBatch {
@@ -86,11 +87,11 @@ fn partition() -> TempPartition {
     TempPartition { dir, log }
 }
 
-fn untrusted_report(directory: &std::path::Path) -> VerifyReport {
+fn untrusted_report(directory: &Path) -> VerifyReport {
     verify_partition_dir(directory, &TrustedKeys::default()).unwrap()
 }
 
-fn trusted_report(directory: &std::path::Path, public_key: Vec<u8>) -> VerifyReport {
+fn trusted_report(directory: &Path, public_key: Vec<u8>) -> VerifyReport {
     verify_partition_dir(directory, &TrustedKeys::single("k1".into(), public_key)).unwrap()
 }
 
@@ -162,7 +163,7 @@ fn append_lifecycle_chain(
     log: &mut Log,
     chain: &mut ChainState,
     offset: &mut i64,
-    values: std::ops::Range<u8>,
+    values: Range<u8>,
 ) {
     for i in values {
         let mut record = lifecycle_record(format!("{{\"i\":{i}}}").into_bytes());
@@ -181,7 +182,7 @@ struct CheckpointedPartition {
     offset: i64,
 }
 
-fn checkpointed_partition(directory: &std::path::Path, time: i64) -> CheckpointedPartition {
+fn checkpointed_partition(directory: &Path, time: i64) -> CheckpointedPartition {
     let TestSigner { signer, public_key } = signer();
     let mut log = Log::open(directory, LogConfig::default()).unwrap();
     let mut chain = ChainState::new();
@@ -197,18 +198,14 @@ fn checkpointed_partition(directory: &std::path::Path, time: i64) -> Checkpointe
     }
 }
 
-fn append_and_verify(
-    log: &mut Log,
-    record: &AuditRecord,
-    directory: &std::path::Path,
-) -> VerifyReport {
+fn append_and_verify(log: &mut Log, record: &AuditRecord, directory: &Path) -> VerifyReport {
     append_record(log, record, 0);
     untrusted_report(directory)
 }
 
 /// Build a valid chained and checkpointed partition on disk, and return the
 /// public key.
-fn build_partition(tmp: &std::path::Path) -> Vec<u8> {
+fn build_partition(tmp: &Path) -> Vec<u8> {
     // checkpoint over the chain head
     checkpointed_partition(tmp, 123).public_key
 }

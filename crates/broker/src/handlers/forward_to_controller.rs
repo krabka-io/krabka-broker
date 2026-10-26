@@ -36,6 +36,7 @@ use {
     },
     krabka_raft::RaftError,
     std::{future::Future, ops::ControlFlow, sync::Arc, time::Duration},
+    tokio::time::{Instant, error::Elapsed, sleep, timeout_at},
 };
 
 /// `Errors.UNKNOWN_SERVER_ERROR.message()`, which the
@@ -50,16 +51,16 @@ const UNKNOWN_SERVER_ERROR_MESSAGE: &str =
 ///
 /// # Errors
 /// Returns the deadline error outside the operation's own result.
-pub(crate) async fn guarded_operation_on_source<T, F, Fut>(
+pub async fn guarded_operation_on_source<T, F, Fut>(
     source: &dyn MetadataSource,
-    deadline: tokio::time::Instant,
+    deadline: Instant,
     mut operation: F,
-) -> Result<Result<T, RaftError>, tokio::time::error::Elapsed>
+) -> Result<Result<T, RaftError>, Elapsed>
 where
     F: FnMut(Arc<MetadataImage>) -> Fut,
     Fut: Future<Output = Result<T, RaftError>> + Send,
 {
-    tokio::time::timeout_at(deadline, async {
+    timeout_at(deadline, async {
         loop {
             let mut images = source.watch_image();
             let image = images.borrow_and_update().clone();
@@ -70,7 +71,7 @@ where
                         changed = images.changed() => {
                             changed.map_err(|_| RaftError::LeaderUnknown)?;
                         }
-                        () = tokio::time::sleep(Duration::from_millis(10)) => {},
+                        () = sleep(Duration::from_millis(10)) => {},
                     }
                 }
                 other => return other,
@@ -130,7 +131,7 @@ pub(super) async fn forward_if_not_controller(
 /// `ControllerExceptions.newWrongControllerException`'s message, the one a
 /// request that only the active controller may run carries when it reaches
 /// another node.
-pub(crate) fn wrong_controller_message(leader: Option<krabka_metadata::NodeId>) -> String {
+pub fn wrong_controller_message(leader: Option<krabka_metadata::NodeId>) -> String {
     leader.map_or_else(
         || "No controller appears to be active.".to_owned(),
         |leader| format!("The active controller appears to be node {leader}."),
@@ -139,7 +140,7 @@ pub(crate) fn wrong_controller_message(leader: Option<krabka_metadata::NodeId>) 
 
 /// Whether this node is the active controller, the one node that may run a
 /// request that only the active controller answers.
-pub(crate) fn is_active_controller(broker: &Broker) -> bool {
+pub fn is_active_controller(broker: &Broker) -> bool {
     *broker.controller.watch_leader().borrow() == Some(broker.config.node_id)
 }
 
@@ -150,7 +151,7 @@ pub(crate) fn is_active_controller(broker: &Broker) -> bool {
 /// `refusal` encodes the API's own response for an error code and message, for
 /// the answers that `ForwardingManagerImpl` makes up when the controller gives
 /// none.
-pub(crate) async fn to_active_controller(
+pub async fn to_active_controller(
     broker: &Broker,
     api_key: ApiKeyCode,
     req_bytes: &[u8],
@@ -178,7 +179,7 @@ pub(crate) async fn to_active_controller(
 
 /// Forward a request to the active controller, or handle it locally when this
 /// broker is the active controller.
-pub(crate) async fn to_active_controller_or_handle<Request, Response, Refusal, Local, LocalFuture>(
+pub async fn to_active_controller_or_handle<Request, Response, Refusal, Local, LocalFuture>(
     broker: &Broker,
     request: Request,
     api_key: ApiKeyCode,
@@ -209,7 +210,7 @@ where
 ///
 /// # Errors
 /// Returns an error if the generated codec rejects the assembled envelope.
-pub(crate) fn build(
+pub fn build(
     broker: &Broker,
     api_key: ApiKeyCode,
     req_bytes: &[u8],

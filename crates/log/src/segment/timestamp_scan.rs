@@ -14,6 +14,7 @@ use {
     krabka_ids::Offset,
     krabka_protocol::records::{RecordBatch, TimestampType},
     krabka_units::prelude::{ByteSize, ByteSizeExt, bytes},
+    krabka_verified::timestamp::{first_timestamp_record_index, timestamp_record_time},
     std::ops::ControlFlow,
 };
 
@@ -166,22 +167,21 @@ impl Segment {
                 return best;
             }
             let batches = self.read(cursor, window).ok()?;
-            if batches.is_empty() {
+            let Some(last) = batches.last() else {
                 let current = u32::try_from(window.bytes_u64()).ok()?;
                 window = bytes(krabka_verified::timestamp_scan_window(current)?);
                 continue;
-            }
+            };
             for batch in &batches {
                 let records = Self::timestamp_records(batch)?;
                 let timestamps: Vec<_> = records.iter().map(|(_, timestamp)| *timestamp).collect();
-                if let Some(index) = krabka_verified::earliest_max_timestamp_index(&timestamps) {
-                    let candidate = records[index];
-                    if best.is_none_or(|(_, best_timestamp)| candidate.1 > best_timestamp) {
-                        best = Some((Offset(candidate.0), candidate.1));
-                    }
+                if let Some(&candidate) = krabka_verified::earliest_max_timestamp_index(&timestamps)
+                    .and_then(|index| records.get(index))
+                    && best.is_none_or(|(_, best_timestamp)| candidate.1 > best_timestamp)
+                {
+                    best = Some((Offset(candidate.0), candidate.1));
                 }
             }
-            let last = batches.last().expect("non-empty checked above");
             cursor = Offset(krabka_verified::timestamp_scan_next(
                 cursor.0,
                 last.base_offset,
@@ -243,7 +243,7 @@ impl Segment {
             let Ok(batches) = self.read(cursor, window) else {
                 return Ok(None);
             };
-            if batches.is_empty() {
+            let Some(last) = batches.last() else {
                 // The batch at `cursor` is larger than the window, so it
                 // could not be fully decoded. Grow the window and retry
                 // the same cursor; bounded by the largest batch size.
@@ -255,26 +255,23 @@ impl Segment {
                 };
                 window = bytes(grown);
                 continue;
-            }
+            };
             for batch in &batches {
                 let Some(records) = Self::timestamp_records(batch) else {
                     return Ok(None);
                 };
-                let found = krabka_verified::timestamp::first_timestamp_record_index(
-                    &records, minimum.0, target_ts,
-                );
+                let found = first_timestamp_record_index(&records, minimum.0, target_ts);
                 if batch.max_timestamp >= target_ts {
                     let read = found.map_or(batch.records.len(), |index| index + 1);
                     check_records_read(batch, read, limit)?;
                 }
-                if let Some(index) = found {
-                    return Ok(Some((Offset(records[index].0), records[index].1)));
+                if let Some(&(offset, timestamp)) = found.and_then(|index| records.get(index)) {
+                    return Ok(Some((Offset(offset), timestamp)));
                 }
             }
             // No match in this window; resume just past the last batch
             // read. `read` includes the batch covering `cursor`, so
             // `last_read` >= cursor and the cursor strictly advances.
-            let last = batches.last().expect("non-empty checked above");
             let Some(next) = krabka_verified::timestamp_scan_next(
                 cursor.0,
                 last.base_offset,
@@ -305,7 +302,7 @@ impl Segment {
             .records
             .iter()
             .map(|record| {
-                let timestamp = krabka_verified::timestamp::timestamp_record_time(
+                let timestamp = timestamp_record_time(
                     batch.base_timestamp,
                     record.timestamp_delta,
                     append_time,

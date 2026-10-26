@@ -57,10 +57,10 @@ async fn add_offsets_to_txn_checks_transactional_id_write_then_group_read() {
             let user = principal(grants);
             let ctx = request_context(&user, &address, "add-offsets-authorization");
             let request = AddOffsetsToTxnRequest {
-                transactional_id: "unknown-transactional-id".to_string(),
+                transactional_id: "unknown-transactional-id".to_owned(),
                 producer_id: 7,
                 producer_epoch: 0,
-                group_id: "offsets-group".to_string(),
+                group_id: "offsets-group".to_owned(),
                 ..Default::default()
             };
             let bytes = dispatch_context(
@@ -119,7 +119,7 @@ async fn write_txn_markers_needs_cluster_alter_or_cluster_action() {
                 transaction_result: true,
                 transaction_version: 1,
                 topics: vec![WritableTxnMarkerTopic {
-                    name: TOPIC.to_string(),
+                    name: TOPIC.to_owned(),
                     partition_indexes: vec![1, 2],
                     ..Default::default()
                 }],
@@ -131,7 +131,7 @@ async fn write_txn_markers_needs_cluster_alter_or_cluster_action() {
                 transaction_result: false,
                 transaction_version: 1,
                 topics: vec![WritableTxnMarkerTopic {
-                    name: "elsewhere".to_string(),
+                    name: "elsewhere".to_owned(),
                     partition_indexes: vec![0],
                     ..Default::default()
                 }],
@@ -145,7 +145,7 @@ async fn write_txn_markers_needs_cluster_alter_or_cluster_action() {
             WritableTxnMarkerResult {
                 producer_id,
                 topics: vec![WritableTxnMarkerTopicResult {
-                    name: TOPIC.to_string(),
+                    name: TOPIC.to_owned(),
                     partitions: vec![
                         WritableTxnMarkerPartitionResult {
                             partition_index: 1,
@@ -165,7 +165,7 @@ async fn write_txn_markers_needs_cluster_alter_or_cluster_action() {
             WritableTxnMarkerResult {
                 producer_id: producer_id + 1,
                 topics: vec![WritableTxnMarkerTopicResult {
-                    name: "elsewhere".to_string(),
+                    name: "elsewhere".to_owned(),
                     partitions: vec![WritableTxnMarkerPartitionResult {
                         partition_index: 0,
                         error_code: remote_row,

@@ -24,23 +24,26 @@
 //! | `OPERATOR_SIGNATURE_INVALID` (1009) | a signature check failed; the message says which |
 //! | `BREAK_GLASS_APPROVAL_REQUIRED` (1006) | a thaw named no approved proposal |
 
-pub(crate) mod describe_freezes;
-pub(crate) mod set_freeze;
+pub mod describe_freezes;
+pub mod set_freeze;
 
 // The `Describe` gate that `describe_freezes` applies. It lives in
 // `crate::handlers` beside its `Alter` twin, so the freeze control plane does
 // not reach into another subsystem for an ACL gate.
-pub(crate) use crate::handlers::cluster_describe_denied;
 use {
     crate::{
         break_glass::handlers::{PrivilegedAudit, privileged_event},
-        handlers::{DESCRIBE_TOPIC_FREEZES_API_KEY, RequestContext, SET_TOPIC_FREEZE_API_KEY},
+        handlers::{
+            DESCRIBE_TOPIC_FREEZES_API_KEY, RequestContext, SET_TOPIC_FREEZE_API_KEY,
+            cluster_describe_denied,
+        },
         operator_keys::approver_set_fingerprint,
     },
     krabka_audit::{AuditError, AuditEvent, AuditLog, AuditMode, AuditOutcome, PrivilegedPhase},
     krabka_metadata::PatternType,
     krabka_protocol::krabka::freeze::{
         PATTERN_TYPE_ANY, PATTERN_TYPE_LITERAL, PATTERN_TYPE_PREFIXED,
+        describe_topic_freezes::API_KEY, set_topic_freeze,
     },
 };
 
@@ -48,10 +51,8 @@ use {
 // reads the broker's constant and the framing reads the codec's, so a drift
 // between the two would register a handler under a key that no message
 // decodes.
-const _: [(); SET_TOPIC_FREEZE_API_KEY as usize] =
-    [(); krabka_protocol::krabka::freeze::set_topic_freeze::API_KEY as usize];
-const _: [(); DESCRIBE_TOPIC_FREEZES_API_KEY as usize] =
-    [(); krabka_protocol::krabka::freeze::describe_topic_freezes::API_KEY as usize];
+const _: [(); SET_TOPIC_FREEZE_API_KEY as usize] = [(); set_topic_freeze::API_KEY as usize];
+const _: [(); DESCRIBE_TOPIC_FREEZES_API_KEY as usize] = [(); API_KEY as usize];
 
 /// The pattern type that a request's `pattern_type` byte names, or `None` when
 /// the byte is not one this build knows.
@@ -59,7 +60,7 @@ const _: [(); DESCRIBE_TOPIC_FREEZES_API_KEY as usize] =
 /// The values are Kafka's ACL pattern types, so `kafka-acls` and a freeze use
 /// one vocabulary. A request that sets a freeze needs a concrete value, which
 /// `ANY` and `UNKNOWN` are not.
-pub(crate) fn pattern_type_concrete(byte: i8) -> Option<PatternType> {
+pub fn pattern_type_concrete(byte: i8) -> Option<PatternType> {
     match byte {
         PATTERN_TYPE_LITERAL => Some(PatternType::Literal),
         PATTERN_TYPE_PREFIXED => Some(PatternType::Prefixed),
@@ -74,7 +75,7 @@ pub(crate) fn pattern_type_concrete(byte: i8) -> Option<PatternType> {
 /// type, which is the shape an ACL filter already has. A byte this build does
 /// not know matches nothing, so an unknown filter returns an empty registry
 /// rather than the whole of it.
-pub(crate) fn pattern_type_filter(byte: i8) -> FreezeFilter {
+pub fn pattern_type_filter(byte: i8) -> FreezeFilter {
     const PATTERN_TYPE_UNKNOWN: i8 = 0;
 
     match byte {
@@ -87,7 +88,7 @@ pub(crate) fn pattern_type_filter(byte: i8) -> FreezeFilter {
 
 /// What a describe request's `pattern_type_filter` selects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FreezeFilter {
+pub enum FreezeFilter {
     /// Every entry, whatever its pattern type.
     EveryPatternType,
     /// Entries of one pattern type.
@@ -101,9 +102,9 @@ impl FreezeFilter {
     /// Whether an entry of `pattern_type` passes the filter.
     pub(crate) fn accepts(self, pattern_type: PatternType) -> bool {
         match self {
-            FreezeFilter::EveryPatternType => true,
-            FreezeFilter::One(wanted) => wanted == pattern_type,
-            FreezeFilter::Nothing => false,
+            Self::EveryPatternType => true,
+            Self::One(wanted) => wanted == pattern_type,
+            Self::Nothing => false,
         }
     }
 }
@@ -114,7 +115,7 @@ impl FreezeFilter {
 /// why one audit variant covers both. `counterparties` stays empty here,
 /// because a freeze has one actor and a thaw's approvers are named on the
 /// proposal's own approve events.
-pub(crate) struct FreezeAudit<'a> {
+pub struct FreezeAudit<'a> {
     /// `set_topic_freeze` for a freeze, `thaw_topic_freeze` for a thaw.
     pub action: &'static str,
     /// The scope, as `"<pattern>:<scope>"`.
@@ -145,7 +146,7 @@ pub(crate) struct FreezeAudit<'a> {
 /// result, so an auditor who holds the operator public keys re-verifies who
 /// set a freeze from the audit topic alone, with no broker and no metadata
 /// log.
-pub(crate) fn audit_freeze(
+pub fn audit_freeze(
     audit_log: &AuditLog,
     ctx: &RequestContext<'_>,
     outcome: AuditOutcome,
@@ -157,7 +158,7 @@ pub(crate) fn audit_freeze(
 }
 
 /// Durably record a fail-closed freeze or thaw before its raft append.
-pub(crate) async fn require_freeze(
+pub async fn require_freeze(
     audit_log: &AuditLog,
     ctx: &RequestContext<'_>,
     audit: &FreezeAudit<'_>,

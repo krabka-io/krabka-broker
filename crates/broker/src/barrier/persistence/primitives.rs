@@ -4,6 +4,7 @@
 //! array appear in all four decoders, so they live here rather than once per
 //! record kind.
 
+use std::iter;
 pub(super) use {
     super::RECORD_VERSION,
     crate::{coordinator::unified::persistence::put_string, error::BrokerError},
@@ -45,7 +46,7 @@ pub(super) fn decode_vec<T>(
     element: impl Fn(&mut &[u8]) -> Result<T, ProtocolError>,
 ) -> Result<Vec<T>, ProtocolError> {
     let len = get_array_len(cur, false)?;
-    (0..len).map(|_| element(cur)).collect()
+    iter::repeat_with(|| element(cur)).take(len).collect()
 }
 
 #[cfg(test)]

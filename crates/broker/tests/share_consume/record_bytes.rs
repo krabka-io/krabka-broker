@@ -15,7 +15,8 @@ use {
     },
     assert2::assert,
     krabka_client_core::Client,
-    std::time::Duration,
+    std::{collections::BTreeSet, time::Duration},
+    tokio::time,
 };
 
 async fn acknowledge_prefix_release(
@@ -25,18 +26,17 @@ async fn acknowledge_prefix_release(
     last: i64,
     starting_at: Option<krabka_ids::Offset>,
 ) {
-    let acknowledgement = ShareAck::prefix()
-        .group(session.group)
-        .member(session.member)
-        .topic_id(session.topic_id)
-        .partition(session.partition.0)
-        .epoch(epoch)
-        .last(last)
-        .call();
-    let acknowledgement = match starting_at {
-        Some(offset) => acknowledgement.starting_at(offset),
-        None => acknowledgement,
+    let prefix = || {
+        ShareAck::prefix()
+            .group(session.group)
+            .member(session.member)
+            .topic_id(session.topic_id)
+            .partition(session.partition.0)
+            .epoch(epoch)
+            .last(last)
+            .call()
     };
+    let acknowledgement = starting_at.map_or_else(prefix, |offset| prefix().starting_at(offset));
     acknowledge_success(client, acknowledgement.release()).await;
 }
 
@@ -113,7 +113,7 @@ async fn acquire_past_leading_batch_returns_bytes() {
 async fn produce_one(client: &Client, topic: &str, tid: uuid::Uuid, partition: i32, value: &str) {
     produce_values()
         .client(client)
-        .values(vec![bytes::Bytes::from(value.to_string())])
+        .values(vec![bytes::Bytes::from(value.to_owned())])
         .topic(topic)
         .topic_id(tid)
         .partition(partition)
@@ -162,11 +162,11 @@ async fn fragmented_window_records_match_acquired_offsets() {
         }
         // intentional: bounded RPC poll — re-acquiring the released disjoint set
         // {0, 2} happens only via this ShareFetch; no image/metric reflects it.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
         row2 = share_fetch(&client, session.fetch_at(ShareSessionEpoch(epoch))).await;
     }
     // The authoritative acquired offset set.
-    let acquired_offsets: std::collections::BTreeSet<i64> = row2
+    let acquired_offsets: BTreeSet<i64> = row2
         .acquired_records
         .iter()
         .flat_map(|r| r.first_offset..=r.last_offset)
@@ -182,7 +182,7 @@ async fn fragmented_window_records_match_acquired_offsets() {
         .as_ref()
         .and_then(|r| r.as_v2())
         .expect("disjoint acquired ranges must carry decodable v2 record bytes");
-    let record_offsets: std::collections::BTreeSet<i64> = batches
+    let record_offsets: BTreeSet<i64> = batches
         .iter()
         .flat_map(|b| {
             let base = b.base_offset;
@@ -199,7 +199,7 @@ async fn fragmented_window_records_match_acquired_offsets() {
     // Belt-and-suspenders: the gap offset's value (v1) must never appear.
     let values: Vec<String> = record_values(batches);
     assert!(
-        !values.contains(&"v1".to_string()),
+        !values.contains(&"v1".to_owned()),
         "the gap offset's value v1 must be excluded, got {values:?}"
     );
 }

@@ -17,7 +17,7 @@ pub const TOPIC: &str = "__transaction_state";
 ///
 /// `segment_bytes` is `transaction.state.log.segment.bytes` and `min_isr` is
 /// `transaction.state.log.min.isr`.
-pub(crate) fn topic_configs(segment_bytes: ByteSize, min_isr: i32) -> BTreeMap<String, String> {
+pub fn topic_configs(segment_bytes: ByteSize, min_isr: i32) -> BTreeMap<String, String> {
     use crate::config_keys::{
         CLEANUP_POLICY, COMPRESSION_TYPE, MIN_INSYNC_REPLICAS, SEGMENT_BYTES,
         UNCLEAN_LEADER_ELECTION_ENABLE,

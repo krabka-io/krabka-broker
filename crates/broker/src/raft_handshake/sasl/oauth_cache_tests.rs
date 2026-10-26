@@ -14,10 +14,11 @@ use {
     krabka_protocol::{Encode, owned::sasl_authenticate_response::SaslAuthenticateResponse},
     krabka_raft::RaftListenerHandshake as _,
     krabka_security::{JwksHandle, OAuthBearerValidator, SignedJwsValidator},
-    std::sync::atomic::Ordering,
+    std::{cell::Cell, sync::atomic::Ordering},
     tokio::{
         io::AsyncWriteExt,
         net::{TcpListener, TcpStream},
+        task::JoinHandle,
     },
 };
 
@@ -57,7 +58,7 @@ async fn signed_validation_rechecks_the_publication_after_crypto_success() {
     for (finished_generation, admitted) in [(2, true), (3, false), (4, false)] {
         let generation = AtomicU64::new(2);
         let fetched = AtomicI64::new(1000);
-        let calls = std::cell::Cell::new(0);
+        let calls = Cell::new(0);
         let mut auth = ConnectionAuth::Anonymous;
         let handshake = handle_handshake(
             &SaslHandshakeRequest {
@@ -228,7 +229,7 @@ async fn controller_listener_challenges_a_token_without_the_required_scope() {
 /// the task that runs the listener's side.
 struct ControllerExchange {
     client: TcpStream,
-    task: tokio::task::JoinHandle<Result<krabka_raft::RaftConnection, RaftHandshakeError>>,
+    task: JoinHandle<Result<krabka_raft::RaftConnection, RaftHandshakeError>>,
 }
 
 async fn start_oauthbearer_exchange(cfg: BrokerRaftHandshake) -> ControllerExchange {

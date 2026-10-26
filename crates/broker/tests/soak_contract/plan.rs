@@ -12,7 +12,7 @@ use {
 /// Where every node mounts the shared host directory that is the local object
 /// store: the remote tier of a tiered path and the flushed WAL objects of a
 /// diskless one.
-pub(crate) const REMOTE_TIER: &str = "/var/lib/krabka-remote";
+pub const REMOTE_TIER: &str = "/var/lib/krabka-remote";
 
 /// Segment size of a compacted topic. The default 1 GiB segment would never
 /// roll in a short run, and the cleaner only compacts sealed segments.
@@ -29,7 +29,7 @@ const TIERED_SEGMENT_MS: &str = "15000";
 const MAX_BROKERS: u32 = 5;
 
 /// Every reason this executor cannot run `contract`, one line each.
-pub(crate) fn unsupported(contract: &Contract) -> Vec<String> {
+pub fn unsupported(contract: &Contract) -> Vec<String> {
     let mut reasons = Vec::new();
     if contract.profile == Profile::DisasterRecovery {
         reasons.push(
@@ -59,7 +59,7 @@ pub(crate) fn unsupported(contract: &Contract) -> Vec<String> {
 /// The configuration every node adds to the fixture's file: top-level keys,
 /// then whole tables.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NodeToml {
+pub struct NodeToml {
     pub(crate) root: String,
     pub(crate) tables: String,
 }
@@ -75,7 +75,7 @@ pub(crate) struct NodeToml {
 /// metadata there, and the WAL keeps its flush index there. A diskless path
 /// also gets one WAL voter per broker. The listener and rack a diskless quorum
 /// needs are per node, so the fixture writes them; see [`diskless`].
-pub(crate) fn node_toml(contract: &Contract) -> NodeToml {
+pub fn node_toml(contract: &Contract) -> NodeToml {
     let cluster = &contract.cluster;
     let mut root = format!(
         "controller_fetch_timeout = \"{}ms\"\n\
@@ -127,11 +127,11 @@ pub(crate) fn node_toml(contract: &Contract) -> NodeToml {
 
 /// Whether any path of `contract` is diskless, so that the cluster has to run
 /// a diskless WAL quorum.
-pub(crate) fn diskless(contract: &Contract) -> bool { any_storage(contract, Storage::Diskless) }
+pub fn diskless(contract: &Contract) -> bool { any_storage(contract, Storage::Diskless) }
 
 /// Whether any path of `contract` is tiered or diskless, so that the nodes
 /// share a local object store at [`REMOTE_TIER`].
-pub(crate) fn object_store(contract: &Contract) -> bool {
+pub fn object_store(contract: &Contract) -> bool {
     any_storage(contract, Storage::Tiered) || diskless(contract)
 }
 
@@ -145,10 +145,7 @@ fn any_storage(contract: &Contract, storage: Storage) -> bool {
 /// every acknowledged record back from the earliest offset. A tiered topic
 /// keeps one byte locally, so that read is served from the remote tier. A
 /// diskless topic sets `krabka.diskless`, which is fixed at creation.
-pub(crate) fn topic_configs(
-    path: &LoadPath,
-    min_insync_replicas: i16,
-) -> Vec<(&'static str, String)> {
+pub fn topic_configs(path: &LoadPath, min_insync_replicas: i16) -> Vec<(&'static str, String)> {
     let mut configs = vec![("min.insync.replicas", min_insync_replicas.to_string())];
     let owned = |pairs: &[(&'static str, &str)]| -> Vec<(&'static str, String)> {
         pairs
@@ -194,11 +191,12 @@ mod tests {
         krabka_bench_driver::soak::contract::{Contract, Semantics, Storage},
         krabka_broker::config::{BrokerConfig, RemoteStorageBackend, RlmmKind},
         krabka_units::prelude::*,
+        std::{fs, path::Path},
     };
 
     fn checked_in(name: &str) -> Contract {
         let path = manifest_dir().join("../../bench/soak").join(name);
-        let text = std::fs::read_to_string(&path)
+        let text = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
         Contract::from_yaml(&text).unwrap_or_else(|error| panic!("{name}: {error}"))
     }
@@ -293,7 +291,7 @@ mod tests {
         let config = applied(&with_path(checked_in("self-check.yaml"), storage));
         check!(matches!(
             &config.remote_storage_backend,
-            Some(RemoteStorageBackend::Local { dir }) if dir.as_path() == std::path::Path::new(REMOTE_TIER)
+            Some(RemoteStorageBackend::Local { dir }) if dir.as_path() == Path::new(REMOTE_TIER)
         ));
         check!(config.remote_log_manager_interval == secs(1));
         let RlmmKind::TopicBacked(rlmm) = &config.remote_log_metadata else {

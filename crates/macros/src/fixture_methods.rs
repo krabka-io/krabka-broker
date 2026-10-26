@@ -4,7 +4,7 @@ use {
     crate::meta::{edit_native_body, no_arguments},
     moxy::{
         ast::{ItemImpl, ParseError},
-        token::{Spanner, TokenStream, TokenTree},
+        token::{Ident, Spanner, TokenStream, TokenTree},
     },
     proc_macro::TokenStream as NativeTokenStream,
 };
@@ -65,7 +65,7 @@ fn remote_methods(meta: &TokenStream, item: &TokenStream) -> Result<TokenStream,
     let delete_ok = if meta.is_empty() {
         false
     } else {
-        let policy: moxy::token::Ident = moxy::parse!({ meta })?;
+        let policy: Ident = moxy::parse!({ meta })?;
         if policy.text() != "delete_ok" {
             return Err(ParseError::new(
                 policy.span(),
@@ -107,7 +107,7 @@ fn append_methods(item: NativeTokenStream, methods: TokenStream) -> NativeTokenS
     })
 }
 
-pub(crate) fn authorizer(
+pub fn authorizer(
     meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {
@@ -115,7 +115,7 @@ pub(crate) fn authorizer(
     Ok(append_methods(item, methods))
 }
 
-pub(crate) fn remote(
+pub fn remote(
     meta: NativeTokenStream,
     item: NativeTokenStream,
 ) -> Result<NativeTokenStream, ParseError> {

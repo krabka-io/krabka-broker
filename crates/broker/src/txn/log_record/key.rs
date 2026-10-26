@@ -22,7 +22,7 @@ use {
 ///
 /// Returns [`BrokerError::Protocol`] when the transactional id is longer than
 /// 32767 bytes, which the key's `int16` string length cannot carry.
-pub(crate) fn encode_key(transactional_id: &str) -> Result<Vec<u8>, BrokerError> {
+pub fn encode_key(transactional_id: &str) -> Result<Vec<u8>, BrokerError> {
     let mut buf = BytesMut::new();
     put_i16(&mut buf, 0);
     put_string(&mut buf, transactional_id)?;
@@ -30,7 +30,7 @@ pub(crate) fn encode_key(transactional_id: &str) -> Result<Vec<u8>, BrokerError>
 }
 
 /// Decode a Kafka `TransactionLogKey` and return the transactional id.
-pub(crate) fn decode_key(bytes: &[u8]) -> Result<String, BrokerError> {
+pub fn decode_key(bytes: &[u8]) -> Result<String, BrokerError> {
     let mut buf = bytes;
     let version = get_i16(&mut buf)?;
     if version != 0 {

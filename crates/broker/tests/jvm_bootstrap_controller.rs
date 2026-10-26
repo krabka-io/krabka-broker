@@ -31,14 +31,19 @@
 //! Kafka 4.x tool can actually complete.
 //!
 //! Gated `#[ignore]` (requires Docker); run with `--ignored`.
+#![cfg(test)]
 
 mod support;
 
 use {
     crate::support::{controller_voters, init_jvm_tracing, jvm_broker_config},
     assert2::check,
-    krabka_broker::{Broker, BrokerConfig, BrokerHandle},
-    std::process::Command,
+    krabka_broker::{Broker, BrokerConfig, BrokerHandle, authorizer::SimpleAclAuthorizer},
+    std::{
+        iter,
+        process::Command,
+        sync::{Arc, OnceLock},
+    },
 };
 
 /// Kafka 4.3.1 is the compatibility oracle for KIP-919.
@@ -79,7 +84,7 @@ fn controller_listen() -> &'static str { &ports().controller }
 /// carries the same name, because `DescribeCluster` projects the voter
 /// endpoints and the tool reconnects to whatever comes back.
 fn controller_bootstrap() -> &'static str {
-    static ADDR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    static ADDR: OnceLock<String> = OnceLock::new();
     ADDR.get_or_init(|| controller_listen().replace("0.0.0.0", "host.docker.internal"))
 }
 
@@ -97,7 +102,7 @@ async fn start_host_broker_with(adjust: impl FnOnce(&mut BrokerConfig)) -> Start
     let mut config = BrokerConfig {
         controller_quorum_voters: vec![(
             krabka_broker::NodeId(1),
-            controller_bootstrap().to_string(),
+            controller_bootstrap().to_owned(),
         )],
         ..jvm_broker_config()
             .log_dir(dir.path().to_path_buf())
@@ -201,10 +206,9 @@ async fn kafka_acls_bootstrap_controller_add_list_remove() {
     let StartedBroker { broker, dir: _dir } = start_host_broker_with(|config| {
         // The PLAINTEXT controller listener carries `ANONYMOUS`, so that
         // principal is the super user, as Kafka's docs set it up.
-        config.authorizer =
-            std::sync::Arc::new(krabka_broker::authorizer::SimpleAclAuthorizer::new(
-                std::iter::once(CONTROLLER_PRINCIPAL.to_owned()).collect(),
-            ));
+        config.authorizer = Arc::new(SimpleAclAuthorizer::new(
+            iter::once(CONTROLLER_PRINCIPAL.to_owned()).collect(),
+        ));
     })
     .await;
 

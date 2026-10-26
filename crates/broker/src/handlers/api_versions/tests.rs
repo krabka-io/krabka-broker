@@ -19,6 +19,7 @@ use {
         cluster_id::encode,
         codes,
         config::{DEFAULT_BROKER_ID, ListenerSpec},
+        features,
         handlers::RequestContext,
         test_support::{
             self as broker_fixture_support, decode_response as decode_wire_response, peer,
@@ -31,9 +32,11 @@ use {
     krabka_protocol::{
         Encode,
         owned::{
-            api_versions_request::ApiVersionsRequest, api_versions_response::ApiVersionsResponse,
+            alter_partition_request, api_versions_request::ApiVersionsRequest,
+            api_versions_response::ApiVersionsResponse,
         },
     },
+    krabka_units::{Time, convert::TimeExt},
 };
 
 const API_VERSIONS_V3: i16 = 3;
@@ -206,22 +209,22 @@ async fn api_versions_answers_every_version_on_every_listener_shape(
         dir: _dir,
     } = start_broker_with(|cfg| {
         let external = ListenerSpec {
-            name: "EXTERNAL".to_string(),
+            name: "EXTERNAL".to_owned(),
             bind_addr: "127.0.0.1:0".parse().unwrap(),
-            advertised: "127.0.0.1:0".to_string(),
+            advertised: "127.0.0.1:0".to_owned(),
             protocol: krabka_security::ListenerProtocol::Plaintext,
             tls_config: None,
             sasl_mechanisms: None,
             principal_mapper: SslPrincipalMapper::default(),
         };
         let internal = ListenerSpec {
-            name: "INTERNAL".to_string(),
+            name: "INTERNAL".to_owned(),
             bind_addr: "127.0.0.2:0".parse().unwrap(),
-            advertised: "127.0.0.2:0".to_string(),
+            advertised: "127.0.0.2:0".to_owned(),
             ..external.clone()
         };
         cfg.listeners = vec![external, internal];
-        cfg.inter_broker_listener_name = "INTERNAL".to_string();
+        cfg.inter_broker_listener_name = "INTERNAL".to_owned();
         cfg.client_metrics_enable = telemetry;
     })
     .await;
@@ -395,10 +398,10 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
     // a client can reach it too.
     check!(
         resp.api_keys
-            == crate::api_catalog::supported_apis(
-                crate::api_catalog::ListenerKind::ClientAndInterBroker,
-                crate::api_catalog::ClientMetricsReceiver::Absent,
-                crate::api_catalog::VersionGates::default(),
+            == supported_apis(
+                ListenerKind::ClientAndInterBroker,
+                ClientMetricsReceiver::Absent,
+                VersionGates::default(),
             ),
         "{resp:?}"
     );
@@ -406,7 +409,7 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
         !resp
             .api_keys
             .iter()
-            .any(|api| api.api_key == krabka_protocol::owned::alter_partition_request::API_KEY),
+            .any(|api| api.api_key == alter_partition_request::API_KEY),
         "a client-reachable listener must not advertise AlterPartition: {resp:?}"
     );
     check!(!resp.supported_features.is_empty(), "{resp:?}");
@@ -415,10 +418,10 @@ async fn handle_accepts_valid_v3_and_surfaces_catalog_and_features() {
         .iter()
         .find(|f| f.name == "metadata.version")
         .expect("metadata.version supported");
-    check!(mv.min_version == crate::features::METADATA_VERSION_MIN);
+    check!(mv.min_version == features::METADATA_VERSION_MIN);
     // #784: 4.3.1's latest production level while
     // `unstable.feature.versions.enable` is off.
-    check!(mv.max_version == crate::features::LATEST_PRODUCTION_METADATA_VERSION);
+    check!(mv.max_version == features::LATEST_PRODUCTION_METADATA_VERSION);
     check!(resp.finalized_features_epoch == metadata_offset);
     let finalized_mv = resp
         .finalized_features
@@ -544,7 +547,7 @@ async fn handle_reports_and_records_a_request_quota_throttle() {
 
     check!(resp.error_code == codes::NONE, "{resp:?}");
     check!(resp.throttle_time_ms > 0, "{resp:?}");
-    check!(context.take_throttle() > <krabka_units::Time as krabka_units::convert::TimeExt>::ZERO);
+    check!(context.take_throttle() > <Time as TimeExt>::ZERO);
 
     broker_handle.shutdown().await;
 }

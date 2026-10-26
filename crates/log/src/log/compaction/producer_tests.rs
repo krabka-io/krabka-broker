@@ -19,6 +19,7 @@ use {
     },
     krabka_protocol::records::RecordBatch,
     krabka_units::prelude::{Time, mebibytes},
+    std::{iter, ops::Range},
     tempfile::tempdir,
 };
 
@@ -38,18 +39,14 @@ fn overwritten_producer_records(epoch: i16, sequence: i32) -> Vec<RecordBatch> {
 }
 
 /// Relocate the explicitly selected, unchanged batches to their expected offsets.
-fn whole_batches(batches: &[RecordBatch], offsets: std::ops::Range<usize>) -> Vec<Kept> {
+fn whole_batches(batches: &[RecordBatch], offsets: Range<usize>) -> Vec<Kept> {
     offsets
         .map(|offset| Kept::whole(i64::try_from(offset).unwrap(), &batches[offset]))
         .collect()
 }
 
-fn header_and_whole(
-    batches: &[RecordBatch],
-    header: usize,
-    whole: std::ops::Range<usize>,
-) -> Vec<Kept> {
-    std::iter::once(Kept::header(
+fn header_and_whole(batches: &[RecordBatch], header: usize, whole: Range<usize>) -> Vec<Kept> {
+    iter::once(Kept::header(
         i64::try_from(header).unwrap(),
         &batches[header],
     ))
@@ -155,7 +152,7 @@ fn compaction_keeps_the_last_record_of_each_producer_in_the_log() {
             }
             // The pass groups by `segment.bytes`; widen it so that a pass
             // merges the sealed segments.
-            set_segment_size(&mut log, mebibytes(1));
+            set_segment_size(&log, mebibytes(1));
             if expired {
                 log.remove_expired_producers(i64::MAX, 1);
             }

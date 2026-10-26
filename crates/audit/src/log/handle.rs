@@ -203,6 +203,8 @@ mod tests {
             spool::FILE_HEADER_LEN,
         },
         assert2::check,
+        krabka_units::prelude,
+        std::fs,
     };
 
     #[tokio::test]
@@ -239,11 +241,11 @@ mod tests {
     #[test]
     fn full_queue_does_not_persist_losses_on_the_emit_thread() {
         let dir = tempfile::tempdir().unwrap();
-        let spool = Spool::open(dir.path(), krabka_units::prelude::bytes(0)).unwrap();
+        let spool = Spool::open(dir.path(), prelude::bytes(0)).unwrap();
         let (log, _rx) = AuditLog::new_with_mode_and_spool(1, AuditMode::FailOpen, &spool);
         emit_lifecycle(&log, &[NodeId(1), NodeId(2)]);
 
-        let state = std::fs::read(dir.path().join("audit.losses")).unwrap();
+        let state = fs::read(dir.path().join("audit.losses")).unwrap();
         let count = &state[FILE_HEADER_LEN + 8..];
         check!(u64::from_be_bytes(count.try_into().unwrap()) == 0);
         check!(log.dropped() == 1);

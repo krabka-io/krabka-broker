@@ -23,19 +23,23 @@
 //! tasks.
 
 use {
-    crate::coordinator::unified::commit_validation_reply,
+    crate::{coordinator::unified::commit_validation_reply, time_util::sleep_until_opt},
     krabka_metadata::NodeId,
     krabka_protocol::owned::{
         streams_group_heartbeat_request::StreamsGroupHeartbeatRequest,
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
     },
     std::{
+        cmp::Ordering,
         collections::{BTreeMap, HashSet},
+        future,
         sync::Arc,
+        time::Instant,
     },
     tokio::{
-        sync::{mpsc, oneshot},
+        sync::{mpsc, oneshot, watch::Receiver},
         task::JoinHandle,
+        time::{self, Interval, MissedTickBehavior, interval},
     },
 };
 
@@ -290,8 +294,8 @@ async fn send_validate_commit(
     if handle
         .tx
         .send(StreamsGroupActorMessage::ValidateCommit {
-            member_id: identity.member_id.to_string(),
-            group_instance_id: identity.group_instance_id.map(str::to_string),
+            member_id: identity.member_id.to_owned(),
+            group_instance_id: identity.group_instance_id.map(str::to_owned),
             member_epoch: identity.member_epoch,
             fence: identity.fence,
             partitions,
@@ -325,7 +329,7 @@ pub(crate) async fn validate_streams_group_offset_fetch(
     if handle
         .tx
         .send(StreamsGroupActorMessage::ValidateFetch {
-            member_id: member_id.map(str::to_string),
+            member_id: member_id.map(str::to_owned),
             member_epoch,
             reply: tx,
         })
@@ -471,9 +475,9 @@ pub(crate) fn validate_offset_commit(
         return Err(codes::UNSUPPORTED_VERSION);
     }
     match member_epoch.cmp(&member.member_epoch) {
-        std::cmp::Ordering::Equal => Ok(()),
-        std::cmp::Ordering::Greater => Err(codes::STALE_MEMBER_EPOCH),
-        std::cmp::Ordering::Less => {
+        Ordering::Equal => Ok(()),
+        Ordering::Greater => Err(codes::STALE_MEMBER_EPOCH),
+        Ordering::Less => {
             assignment_epoch_error(member, topology, member_epoch, partitions).map_or(Ok(()), Err)
         }
     }
@@ -581,7 +585,7 @@ struct ActorState {
     /// When Kafka's initial rebalance delay of the group ends: set when the
     /// first member joins an empty group, and cleared when the delayed
     /// assignment runs.
-    initial_rebalance_deadline: Option<tokio::time::Instant>,
+    initial_rebalance_deadline: Option<time::Instant>,
     /// Kafka's `StreamsGroup.assignmentTimestamp`: the wall-clock time in
     /// milliseconds at which the last target assignment calculation
     /// finished, or 0 when there is no previous assignment or its time is
@@ -615,7 +619,7 @@ impl ActorState {
         defaults: &StreamsGroupConfig,
         (image, node): (&krabka_metadata::MetadataImage, Option<NodeId>),
         config: &mut StreamsGroupConfig,
-        tick: &mut tokio::time::Interval,
+        tick: &mut Interval,
     ) {
         let next = resolve_broker_and_group_config(defaults, image, node, &self.state.group_id);
         if next != *config {
@@ -663,7 +667,7 @@ enum Wake {
 #[derive(Default)]
 struct MetadataLink {
     source: Option<Arc<dyn MetadataSource>>,
-    images: Option<tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>>,
+    images: Option<Receiver<Arc<krabka_metadata::MetadataImage>>>,
 }
 
 impl MetadataLink {
@@ -691,9 +695,9 @@ impl MetadataLink {
 
 /// The session tick of `config`: the actor looks for expired sessions once
 /// per heartbeat interval.
-fn session_tick(config: &StreamsGroupConfig) -> tokio::time::Interval {
-    let mut tick = tokio::time::interval(config.heartbeat_interval);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+fn session_tick(config: &StreamsGroupConfig) -> Interval {
+    let mut tick = interval(config.heartbeat_interval);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     tick
 }
 
@@ -703,7 +707,7 @@ async fn actor_loop(
     coordinator: Arc<super::super::GroupCoordinator>,
     mut rx: mpsc::Receiver<StreamsGroupActorMessage>,
 ) {
-    let offsets_log = coordinator.offsets_log.clone();
+    let offsets_log = Arc::clone(&coordinator.offsets_log);
     let node = coordinator.node_id();
     let mut metadata = MetadataLink::default();
     let mut config = metadata.attach(&coordinator).map_or_else(
@@ -721,10 +725,10 @@ async fn actor_loop(
                 None => break,
             },
             _ = tick.tick() => Wake::SessionCheck,
-            () = crate::time_util::sleep_until_opt(actor.initial_rebalance_deadline) => {
+            () = sleep_until_opt(actor.initial_rebalance_deadline) => {
                 Wake::InitialDelayEnded
             }
-            () = crate::time_util::sleep_until_opt(actor.state.next_rebalance_deadline()) => {
+            () = sleep_until_opt(actor.state.next_rebalance_deadline()) => {
                 Wake::SessionCheck
             }
             image = wait_for_metadata_change(&mut metadata.images) => Wake::Image(image),
@@ -935,7 +939,7 @@ async fn handle_message(
                         &request,
                         version,
                         &mut response,
-                        std::time::Instant::now(),
+                        Instant::now(),
                     );
                     // Kafka answers the internal topics to create only with a
                     // response that the group accepted.
@@ -1069,14 +1073,14 @@ pub(crate) fn resolve_group_config_from_image(
 }
 
 async fn wait_for_metadata_change(
-    rx: &mut Option<tokio::sync::watch::Receiver<Arc<krabka_metadata::MetadataImage>>>,
+    rx: &mut Option<Receiver<Arc<krabka_metadata::MetadataImage>>>,
 ) -> Option<Arc<krabka_metadata::MetadataImage>> {
     match rx {
         Some(rx) => {
             rx.changed().await.ok()?;
             Some(rx.borrow_and_update().clone())
         }
-        None => std::future::pending().await,
+        None => future::pending().await,
     }
 }
 

@@ -31,6 +31,7 @@
 //! proposer and the approver are then the same name. The refusal that says so
 //! is asserted below; the completion belongs to the broker's own suite, which
 //! can mint two principals.
+#![cfg(test)]
 
 // Cargo compiles this file as its own test binary, so the crate root's module
 // directory is `tests/`. `#[path]` re-bases each declaration onto the sibling

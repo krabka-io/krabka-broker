@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use {
     assert2::assert,
     async_trait::async_trait,
@@ -176,7 +178,7 @@ async fn capture_reads_committed_index_state_to_the_high_watermarks_without_prod
         }),
     );
 
-    let capture = capture_projection(log.clone(), &orders(), 42)
+    let capture = capture_projection(Arc::<InternalTopicLog>::clone(&log), &orders(), 42)
         .await
         .unwrap();
 
@@ -202,7 +204,9 @@ async fn capture_reads_committed_index_state_to_the_high_watermarks_without_prod
 async fn capture_of_an_empty_index_completes_at_zero_cutoffs() {
     let log = InternalTopicLog::new(InProcessMetadataEventLog::new(2), None);
 
-    let capture = capture_projection(log.clone(), &orders(), 7).await.unwrap();
+    let capture = capture_projection(Arc::<InternalTopicLog>::clone(&log), &orders(), 7)
+        .await
+        .unwrap();
 
     assert!(
         capture

@@ -47,7 +47,7 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     // Send ElectLeaders to the current raft leader. Any broker answers it the
     // same way now that the election reads replicated state, but the leader is
     // the node whose view cannot lag, so it is the one this case drives.
-    let controller_id = cluster[0].0.wait_until_controller_leader().await;
+    let controller_id = cluster[0].0.wait_until_controller_leader().await.unwrap();
     let leader_index = cluster
         .iter()
         .position(|(_, cfg, _)| cfg.node_id == controller_id)
@@ -90,7 +90,7 @@ async fn unclean_election_via_wire_picks_alive_replica() {
     // auto-elects either: failover is transition-triggered on AliveToDead, and
     // 99 never went alive→dead.)
     let forged = MetadataRecord::V1Partition(PartitionRecord {
-        topic: "foo-unclean".to_string(),
+        topic: "foo-unclean".to_owned(),
         partition: 0,
         leader: krabka_broker::NodeId(99),
         isr: vec![krabka_broker::NodeId(99)],
@@ -116,7 +116,7 @@ async fn unclean_election_via_wire_picks_alive_replica() {
         .addr(addr)
         .client_id(CLIENT_ID)
         .election(ElectionSetup {
-            topic: ("foo-unclean").to_string(),
+            topic: ("foo-unclean").to_owned(),
             kind: ElectionKind::Unclean,
             ..Default::default()
         })

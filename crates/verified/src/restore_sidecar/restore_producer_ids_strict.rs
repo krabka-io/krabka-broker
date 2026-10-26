@@ -128,10 +128,7 @@ pub fn restore_txn_index_entry_valid(
         && entry.start_offset <= entry.last_offset
         && segment.base_offset <= entry.last_offset
         && entry.last_offset <= segment.last_offset
-        && match previous_last {
-            Some(previous) => previous < entry.last_offset,
-            None => true,
-        }
+        && !matches!(previous_last, Some(previous) if previous >= entry.last_offset)
 }
 
 /// Validate one segment-scoped leader-epoch checkpoint row.
@@ -176,7 +173,11 @@ pub fn restore_producer_ids_strict(producer_ids: &[i64]) -> bool {
         ==> producer_ids@[i - 1]@ < producer_ids@[i]@)]
     #[variant(producer_ids@.len() - index@)]
     while index < producer_ids.len() {
-        if index > 0 && producer_ids[index - 1] >= producer_ids[index] {
+        if index > 0
+            && let (Some(&previous), Some(&current)) =
+                (producer_ids.get(index - 1), producer_ids.get(index))
+            && previous >= current
+        {
             return false;
         }
         index += 1;

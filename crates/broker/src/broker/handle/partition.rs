@@ -8,19 +8,19 @@ use crate::error::BrokerError;
 use {
     crate::{broker::BrokerHandle, partition::Partition},
     krabka_ids::PartitionIndex,
+    krabka_protocol::records::{Record, RecordBatch},
     krabka_units::convert::TimeExt,
-    std::sync::atomic::Ordering,
+    std::{
+        sync::{Arc, atomic::Ordering},
+        time::Duration,
+    },
 };
 
 impl BrokerHandle {
     /// This broker's partition `topic-partition`, or a
     /// [`BrokerError::Replication`][crate::error::BrokerError::Replication]
     /// naming it when it is not hosted here.
-    fn local_partition(
-        &self,
-        topic: &str,
-        partition: i32,
-    ) -> Result<std::sync::Arc<Partition>, BrokerError> {
+    fn local_partition(&self, topic: &str, partition: i32) -> Result<Arc<Partition>, BrokerError> {
         self.maybe_local_partition(topic, partition).ok_or_else(|| {
             BrokerError::Replication(format!("partition {topic}-{partition} not local"))
         })
@@ -127,17 +127,12 @@ impl BrokerHandle {
     /// log. A compaction test compares the batches that each replica keeps.
     #[cfg(any(test, feature = "test-helpers"))]
     #[must_use]
-    pub fn local_batches_for_test(
-        &self,
-        topic: &str,
-        partition: i32,
-    ) -> Option<Vec<krabka_protocol::records::RecordBatch>> {
+    pub fn local_batches_for_test(&self, topic: &str, partition: i32) -> Option<Vec<RecordBatch>> {
         let part = self.maybe_local_partition(topic, partition)?;
         let log = part.log.lock().ok()?;
-        let read = log
-            .read(log.log_start_offset(), krabka_units::gibibytes(4))
-            .ok()?;
-        Some(read.batches)
+        let read = log.read(log.log_start_offset(), krabka_units::gibibytes(4));
+        drop(log);
+        Some(read.ok()?.batches)
     }
 
     /// Test-only: run one compaction pass on the local log of `(topic,
@@ -223,7 +218,7 @@ impl BrokerHandle {
         &self,
         topic: &str,
         partition: i32,
-    ) -> Option<Option<std::time::Duration>> {
+    ) -> Option<Option<Duration>> {
         let part = self
             .broker
             .partitions
@@ -276,9 +271,9 @@ impl BrokerHandle {
         let leader_epoch = part.current_leader_epoch.load(Ordering::Acquire);
         let mut last_offset = 0i64;
         for i in 0..n {
-            let batch = krabka_protocol::records::RecordBatch {
+            let batch = RecordBatch {
                 partition_leader_epoch: leader_epoch,
-                records: vec![krabka_protocol::records::Record {
+                records: vec![Record {
                     offset_delta: 0,
                     value: Some(bytes::Bytes::from(format!("test-record-{i}").into_bytes())),
                     ..Default::default()

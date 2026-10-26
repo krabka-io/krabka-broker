@@ -27,7 +27,7 @@ use {
 mod sweep;
 
 /// Tunables for [`run`], shared with the other local log-maintenance sweep.
-pub(crate) use crate::time_util::MetadataSweepConfig as LogRetentionConfig;
+pub use crate::time_util::MetadataSweepConfig as LogRetentionConfig;
 
 #[cfg(test)]
 mod test_support;
@@ -35,7 +35,7 @@ mod test_support;
 mod tests;
 
 /// Spawned task entry point.
-pub(crate) async fn run(
+pub async fn run(
     partitions: Arc<PartitionRegistry>,
     cfg: LogRetentionConfig,
     shutdown: CancellationToken,

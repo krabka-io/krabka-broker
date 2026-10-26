@@ -20,6 +20,7 @@
 //! the second test boots a three-node cluster, kills a broker, and asks a node
 //! that is *not* the controller the same question. Clients reach whichever
 //! broker they are bootstrapped at, so the two answers have to agree.
+#![cfg(test)]
 
 mod kafka_wire;
 
@@ -30,7 +31,7 @@ use {
     },
     assert2::assert,
     bytes::BytesMut,
-    krabka_broker::{Broker, BrokerHandle},
+    krabka_broker::{Broker, BrokerHandle, log_dir_id::LogDirIds},
     krabka_ids::{ApiKey as WireApiKey, ApiVersion as WireApiVersion},
     krabka_protocol::{
         Decode, Encode,
@@ -45,7 +46,10 @@ use {
     },
     std::{collections::HashSet, net::SocketAddr, time::Duration},
     tempfile::TempDir,
-    tokio::net::TcpStream,
+    tokio::{
+        net::{TcpListener, TcpStream},
+        time::{self, Instant},
+    },
 };
 
 const CLIENT_ID: &str = "krabka-offline-replicas-test";
@@ -90,8 +94,8 @@ async fn start_two_dir_broker() -> TwoDirBroker {
     let extra = tempfile::tempdir().unwrap();
     // Hold the listeners until `start_with_listeners` adopts them, so a
     // concurrently running test binary cannot steal the port in between.
-    let data_plane = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let controller = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let data_plane = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let controller = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = data_plane.local_addr().unwrap();
     let controller_addr = controller.local_addr().unwrap();
     let mut cfg = two_dir_config(primary.path(), extra.path());
@@ -133,7 +137,7 @@ async fn metadata_partitions(addr: SocketAddr) -> Vec<MetadataResponsePartition>
 async fn metadata_partitions_of(addr: SocketAddr, name: &str) -> Vec<MetadataResponsePartition> {
     let req = MetadataRequest {
         allow_auto_topic_creation: false,
-        ..named_topic_metadata(name.to_string())
+        ..named_topic_metadata(name.to_owned())
     };
     let mut body = BytesMut::new();
     req.encode(&mut body, METADATA_VERSION).unwrap();
@@ -166,7 +170,7 @@ async fn describe_topic_partitions(
 ) -> Vec<DescribeTopicPartitionsResponsePartition> {
     let req = DescribeTopicPartitionsRequest {
         topics: vec![TopicRequest {
-            name: TOPIC.to_string(),
+            name: TOPIC.to_owned(),
             ..Default::default()
         }],
         ..Default::default()
@@ -205,12 +209,12 @@ async fn wait_for_image(
     what: &str,
     condition: impl Fn(&krabka_metadata::MetadataImage) -> bool,
 ) {
-    let deadline = tokio::time::Instant::now() + CONVERGE_TIMEOUT;
-    while tokio::time::Instant::now() < deadline {
+    let deadline = Instant::now() + CONVERGE_TIMEOUT;
+    while Instant::now() < deadline {
         if condition(&handle.controller_image_for_test()) {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        time::sleep(Duration::from_millis(25)).await;
     }
     panic!("controller image never converged: {what}");
 }
@@ -244,7 +248,7 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
         extra,
         addr,
     } = start_two_dir_broker().await;
-    handle.wait_until_controller_leader().await;
+    handle.wait_until_controller_leader().await.unwrap();
     create_topic(addr).await;
     for partition in 0..PARTITIONS {
         handle.wait_until_partition_present(TOPIC, partition).await;
@@ -262,10 +266,7 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
     })
     .await;
 
-    let ids = krabka_broker::log_dir_id::LogDirIds::resolve(&[
-        primary.path().to_path_buf(),
-        extra.path().to_path_buf(),
-    ]);
+    let ids = LogDirIds::resolve(&[primary.path().to_path_buf(), extra.path().to_path_buf()]);
     let extra_id = ids.id_for(extra.path()).expect("extra dir id");
     let primary_id = ids.id_for(primary.path()).expect("primary dir id");
 
@@ -337,7 +338,7 @@ async fn offline_log_dir_is_reported_as_an_offline_replica() {
                 leader_epoch: epoch,
                 replica_nodes: vec![BROKER_ID],
                 isr_nodes: active_nodes,
-                eligible_leader_replicas: Some(elr_nodes.clone()),
+                eligible_leader_replicas: Some(elr_nodes),
                 last_known_elr: Some(if doomed { vec![BROKER_ID] } else { vec![] }),
                 offline_replicas: if doomed { vec![BROKER_ID] } else { vec![] },
                 ..Default::default()
@@ -417,7 +418,7 @@ async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
     victim.crash_for_test().await;
 
     let observer = &cluster[observer_index].0;
-    let deadline = tokio::time::Instant::now() + FENCING_TIMEOUT;
+    let deadline = Instant::now() + FENCING_TIMEOUT;
     loop {
         let expected = vec![expected_partition(observer, victim_id)];
         let actual = metadata_partitions_of(observer_addr, FENCED_TOPIC).await;
@@ -425,11 +426,11 @@ async fn a_follower_reports_the_replicas_of_a_fenced_broker_offline() {
             break;
         }
         assert!(
-            tokio::time::Instant::now() < deadline,
+            Instant::now() < deadline,
             "broker {victim_id} died but a non-controller node never reported \
              its replica offline: {actual:?}"
         );
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        time::sleep(Duration::from_millis(250)).await;
     }
 
     // The answer above is only worth anything if it came from a node that

@@ -5,6 +5,7 @@
 //! data plane, and asserts on the response shape. Single-broker tests stay
 //! unconditional, and this file uses only `support::start`, which is
 //! cross-platform, so it needs no platform gate.
+#![cfg(test)]
 
 use {
     crate::support::{

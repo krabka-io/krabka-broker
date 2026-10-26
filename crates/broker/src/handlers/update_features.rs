@@ -90,7 +90,7 @@ fn kraft_upgrade_refusal(
     skip_all,
     fields(api = "UpdateFeatures", version)
 )]
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: UpdateFeaturesRequest,
     version: ApiVersion,
@@ -101,7 +101,7 @@ pub(crate) async fn handle(
 
 /// Runs the `UpdateFeatures` request at `version` and returns the typed
 /// response.
-pub(crate) async fn answer(
+pub async fn answer(
     broker: &Broker,
     req: UpdateFeaturesRequest,
     version: i16,

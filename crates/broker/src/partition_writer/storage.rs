@@ -16,9 +16,12 @@ use {
     arc_swap::ArcSwap,
     krabka_log::{DueDeletions, FailedDeletion, Log},
     std::{
+        fmt, io,
         path::PathBuf,
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, MutexGuard, PoisonError},
+        time::{Duration, SystemTime},
     },
+    tokio::{sync, sync::oneshot},
 };
 
 /// The log and the owning directory's storage-failure registry.
@@ -36,7 +39,7 @@ pub(super) struct StorageStatus<'a> {
 }
 
 /// Completion of a maintenance pass after storage-error classification.
-pub(super) type MaintenanceAck = tokio::sync::oneshot::Sender<Result<(), BrokerError>>;
+pub(super) type MaintenanceAck = oneshot::Sender<Result<(), BrokerError>>;
 
 /// Mark a partition's log dir offline when a mutation hit a storage failure.
 ///
@@ -53,7 +56,7 @@ pub(super) type MaintenanceAck = tokio::sync::oneshot::Sender<Result<(), BrokerE
 /// availability. KIP-113 fail-over elsewhere on the cluster keeps the topic
 /// live. A false negative silently corrupts produce acks, and this slice
 /// exists to prevent that failure mode.
-pub(crate) fn flag_storage_failure(
+pub fn flag_storage_failure(
     err: &BrokerError,
     log_dir: &ArcSwap<PathBuf>,
     log_dir_status: &LogDirRegistry,
@@ -73,9 +76,8 @@ pub(crate) fn flag_storage_failure(
 /// serving after a poison. The alternative, `expect`, silently kills the writer
 /// task because its `JoinHandle` is discarded. That takes the whole partition
 /// offline. `into_inner` recovers the guard and keeps the partition live.
-pub(super) fn lock_log(log: &Mutex<Log>) -> std::sync::MutexGuard<'_, Log> {
-    log.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+pub(super) fn lock_log(log: &Mutex<Log>) -> MutexGuard<'_, Log> {
+    log.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Build a `BrokerError` that stands in for a panic in a storage closure.
@@ -84,8 +86,8 @@ pub(super) fn lock_log(log: &Mutex<Log>) -> std::sync::MutexGuard<'_, Log> {
 /// `fsync` is a credible disk-failure signal, so this function models it as a
 /// `LogError::Io`. `flag_storage_failure` recognizes that error and marks the
 /// owning log dir offline.
-pub(crate) fn storage_failure_error(context: &str, detail: impl std::fmt::Display) -> BrokerError {
-    let io = std::io::Error::other(format!("{context}: {detail}"));
+pub fn storage_failure_error(context: &str, detail: impl fmt::Display) -> BrokerError {
+    let io = io::Error::other(format!("{context}: {detail}"));
     BrokerError::Log(krabka_log::LogError::Io(io))
 }
 
@@ -106,7 +108,7 @@ pub(super) async fn run_log_mutation<T: Send + 'static>(
 
 /// How long the writer waits before it retries a failed maintenance pass or
 /// a failed deletion of retired files.
-pub(super) const MAINTENANCE_RETRY: std::time::Duration = std::time::Duration::from_millis(100);
+pub(super) const MAINTENANCE_RETRY: Duration = Duration::from_millis(100);
 
 /// Delete the retired segment files that a maintenance pass took out of the
 /// log, on the blocking pool and off the writer.
@@ -137,7 +139,7 @@ pub(super) fn delete_retired_files(
         let result = run_log_mutation(
             move || {
                 due.delete().map_err(|FailedDeletion { error, remaining }| {
-                    let retry_at = std::time::SystemTime::now() + MAINTENANCE_RETRY;
+                    let retry_at = SystemTime::now() + MAINTENANCE_RETRY;
                     lock_log(&log).restore_deletions(remaining, retry_at);
                     BrokerError::from(error)
                 })
@@ -180,20 +182,16 @@ pub(super) async fn run_log_append<T: Send + 'static>(
 /// under the log lock and apply the usual panic/storage-error classification.
 pub(super) async fn maintain_log(
     storage: LogStorage<'_>,
-    replica_state: &tokio::sync::Mutex<ReplicaState>,
+    replica_state: &sync::Mutex<ReplicaState>,
     ack: MaintenanceAck,
     panic_context: &'static str,
-    operation: impl FnOnce(
-        &mut Log,
-        std::time::SystemTime,
-        krabka_log::Offset,
-    ) -> Result<(), krabka_log::LogError>
+    operation: impl FnOnce(&mut Log, SystemTime, krabka_log::Offset) -> Result<(), krabka_log::LogError>
     + Send
     + 'static,
 ) {
     let (log, log_dir, log_dir_status) = storage;
     let high_watermark = replica_state.lock().await.hw;
-    let now = std::time::SystemTime::now();
+    let now = SystemTime::now();
     let log = Arc::clone(log);
     let result = run_log_mutation(
         move || operation(&mut lock_log(&log), now, high_watermark).map_err(BrokerError::from),
@@ -219,7 +217,7 @@ mod tests {
     struct StorageFixture {
         dir: tempfile::TempDir,
         status: LogDirRegistry,
-        log_dir: ArcSwap<std::path::PathBuf>,
+        log_dir: ArcSwap<PathBuf>,
     }
 
     fn storage_fixture() -> StorageFixture {
@@ -247,7 +245,7 @@ mod tests {
         assert!(status.is_offline(dir.path()));
         let expected_offline = vec![(
             dir.path().to_path_buf(),
-            "partition write/fsync failed: append failed: synthetic EIO".to_string(),
+            "partition write/fsync failed: append failed: synthetic EIO".to_owned(),
         )];
         assert!(status.offline() == expected_offline);
     }

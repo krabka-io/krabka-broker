@@ -2,14 +2,14 @@
 //! client-instance registry, the OTLP decode, and the Prometheus and OTLP
 //! sinks.
 
-pub(crate) mod config;
-pub(crate) mod ingestion;
-pub(crate) mod manager;
-pub(crate) mod otlp_sink;
-pub(crate) mod prometheus_sink;
+pub mod config;
+pub mod ingestion;
+pub mod manager;
+pub mod otlp_sink;
+pub mod prometheus_sink;
 #[cfg(test)]
-pub(crate) mod test_support;
-pub(crate) use manager::ClientMetricsManager;
+pub mod test_support;
+pub use manager::ClientMetricsManager;
 use {
     self::{
         otlp_sink::OtlpForwarder,
@@ -23,7 +23,7 @@ use {
 /// Broker-held bundle. It holds the manager, which owns the instance state and
 /// the matching, plus the two sinks. The metrics registry shares the Prometheus
 /// collector.
-pub(crate) struct ClientMetrics {
+pub struct ClientMetrics {
     pub manager: ClientMetricsManager,
     pub prometheus: Arc<ClientMetricsCollector>,
     pub otlp: OtlpForwarder,
@@ -44,16 +44,15 @@ impl ClientMetrics {
         #[builder(default)] otlp_dropped: Counter,
         #[builder(default)] otlp_failed: Counter,
     ) -> Self {
-        let otlp = match otlp_endpoint {
-            Some(ep) => OtlpForwarder::spawn(
+        let otlp = otlp_endpoint.map_or_else(OtlpForwarder::disabled, |ep| {
+            OtlpForwarder::spawn(
                 ep,
                 otlp_protocol,
                 otlp_queue_capacity,
                 otlp_dropped,
                 otlp_failed,
-            ),
-            None => OtlpForwarder::disabled(),
-        };
+            )
+        });
         Self {
             manager,
             prometheus: Arc::new(

@@ -22,17 +22,21 @@ use {
         test_support::FakeMetadataSource,
     },
     assert2::{assert, check},
-    krabka_protocol::owned::{
-        share_group_heartbeat_request::ShareGroupHeartbeatRequest,
-        share_group_heartbeat_response::ShareGroupHeartbeatResponse,
+    krabka_protocol::{
+        owned::{
+            share_group_heartbeat_request::ShareGroupHeartbeatRequest,
+            share_group_heartbeat_response::ShareGroupHeartbeatResponse,
+        },
+        primitives::uuid::Uuid,
     },
     std::{sync::Arc, time::Duration},
+    tokio::time::sleep,
 };
 
 /// A coordinator, and the id of the topic `t` it runs over.
 struct TopicCoordinator {
     coordinator: Arc<GroupCoordinator>,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
+    topic_id: Uuid,
 }
 
 /// A coordinator over topic `t` with four partitions, whose metadata image
@@ -64,13 +68,13 @@ async fn a_heartbeat_runs_with_the_group_config_of_the_moment_it_arrives() {
         .share(ShareGroupConfig::assigning_at_once())
         .call();
     let source = Arc::new(FakeMetadataSource::builder().build());
-    coordinator.set_metadata_source(source.clone());
+    coordinator.set_metadata_source(Arc::<FakeMetadataSource>::clone(&source));
     let handle = coordinator.get_or_create_share("g");
     let joined = join(&handle, "m1", 0).await;
     check!(joined.heartbeat_interval_ms == 5000);
 
     // The override lands while the actor waits for its next message.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
     source.set_image(group_image(&[("g", &[(
         "share.heartbeat.interval.ms",
         "7000",

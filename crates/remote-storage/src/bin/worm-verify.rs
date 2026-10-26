@@ -22,7 +22,9 @@ use {
         ArchiveVerifyReport, ChainHead, PartitionVerifyReport, TrustedManifestKeys, VerifyBreak,
         VerifyDepth, VerifyRequest, verify_archive,
     },
-    std::{collections::BTreeSet, fmt::Write as _, path::PathBuf, process::ExitCode, sync::Arc},
+    std::{
+        collections::BTreeSet, fmt::Write as _, fs, io, path::PathBuf, process::ExitCode, sync::Arc,
+    },
 };
 
 /// Orphan keys listed before the output is truncated.
@@ -125,7 +127,7 @@ async fn main() -> ExitCode {
     // The subscriber writes to stderr so the graded verdict on stdout stays
     // clean for a script that reads it.
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
+        .with_writer(io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -202,7 +204,7 @@ fn trusted_keys(args: &VerifyArgs) -> Result<TrustedManifestKeys, String> {
     let mut pairs = Vec::with_capacity(args.key_id.len());
     for (key_id, path) in args.key_id.iter().zip(&args.public_key) {
         let public_key =
-            std::fs::read(path).map_err(|e| format!("read public key {}: {e}", path.display()))?;
+            fs::read(path).map_err(|e| format!("read public key {}: {e}", path.display()))?;
         pairs.push((key_id.clone(), public_key));
     }
     Ok(TrustedManifestKeys::from_pairs(pairs))
@@ -227,7 +229,7 @@ fn open_store(args: &VerifyArgs) -> Result<OpenedStore, String> {
             ..Default::default()
         }),
         // clap enforces that one of the two is present.
-        (None, None) => return Err("give either --local-dir or --bucket".to_string()),
+        (None, None) => return Err("give either --local-dir or --bucket".to_owned()),
     };
     let s3 = match &config {
         ObjectStoreConfig::S3(s3) => Some(s3.clone()),
@@ -368,7 +370,7 @@ fn render_grade(report: &ArchiveVerifyReport, outcome: &Grade<'_>) -> ExitCode {
         Verdict::Tampered(found) => {
             let seq = found
                 .seq
-                .map_or_else(|| "unknown".to_string(), |seq| seq.to_string());
+                .map_or_else(|| "unknown".to_owned(), |seq| seq.to_string());
             eprintln!(
                 "TAMPER DETECTED at {} (seq {seq}): {}",
                 found.manifest_key, found.reason
@@ -383,13 +385,13 @@ fn render_grade(report: &ArchiveVerifyReport, outcome: &Grade<'_>) -> ExitCode {
             partition,
         } => {
             let (name, tip) = partition.map_or_else(
-                || ("(none found)".to_string(), "none".to_string()),
+                || ("(none found)".to_owned(), "none".to_owned()),
                 |partition| {
                     (
                         partition.partition_dir.clone(),
                         partition
                             .head
-                            .map_or_else(|| "none".to_string(), |head| head.to_string()),
+                            .map_or_else(|| "none".to_owned(), |head| head.to_string()),
                     )
                 },
             );
@@ -555,7 +557,7 @@ fn summary(report: &ArchiveVerifyReport) -> Vec<String> {
     for partition in &report.partitions {
         let tip = partition
             .head
-            .map_or_else(|| "none".to_string(), |head| head.to_string());
+            .map_or_else(|| "none".to_owned(), |head| head.to_string());
         let start = partition
             .epochs
             .iter()
@@ -564,7 +566,7 @@ fn summary(report: &ArchiveVerifyReport) -> Vec<String> {
         let end = partition.epochs.iter().map(|epoch| epoch.end_offset).max();
         let offsets = match (start, end) {
             (Some(start), Some(end)) => format!("offsets {start}..{end}"),
-            _ => "no offsets".to_string(),
+            _ => "no offsets".to_owned(),
         };
         let mut line = format!(
             "  {}: tip {tip}, {} manifest(s), {} object(s), {offsets}, {} epoch(s)",
@@ -598,7 +600,7 @@ fn summary(report: &ArchiveVerifyReport) -> Vec<String> {
 
 fn protection(report: &krabka_remote_storage::ObjectProtectionReport) -> String {
     if report.count == 0 {
-        "none".to_string()
+        "none".to_owned()
     } else {
         format!(
             "{} object(s), sample: {}",
@@ -614,6 +616,7 @@ mod tests {
         super::*,
         assert2::assert,
         krabka_remote_storage::{EpochId, EpochSpan, ManifestSeq},
+        std::fs,
     };
 
     fn args(topic: Option<&str>) -> VerifyArgs {
@@ -624,7 +627,7 @@ mod tests {
             endpoint: None,
             allow_http: false,
             prefix: None,
-            topic: topic.map(str::to_string),
+            topic: topic.map(str::to_owned),
             partition: None,
             key_id: Vec::new(),
             public_key: Vec::new(),
@@ -826,7 +829,7 @@ mod tests {
     fn unequal_key_flag_counts_are_a_usage_error() {
         let dir = tempfile::tempdir().unwrap();
         let key_path = dir.path().join("worm.pub");
-        std::fs::write(&key_path, [7u8; 32]).unwrap();
+        fs::write(&key_path, [7u8; 32]).unwrap();
 
         let mut too_many_ids = args(None);
         too_many_ids.key_id = vec!["k1".into(), "k2".into()];
@@ -850,8 +853,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let first = dir.path().join("first.pub");
         let second = dir.path().join("second.pub");
-        std::fs::write(&first, [1u8; 32]).unwrap();
-        std::fs::write(&second, [2u8; 32]).unwrap();
+        fs::write(&first, [1u8; 32]).unwrap();
+        fs::write(&second, [2u8; 32]).unwrap();
 
         let mut args = args(None);
         args.key_id = vec!["first-id".into(), "second-id".into()];

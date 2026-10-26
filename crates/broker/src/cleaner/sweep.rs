@@ -35,7 +35,8 @@ use {
     krabka_verified::FreezeMutationKind,
     std::{
         collections::{BTreeMap, BTreeSet},
-        sync::Arc,
+        sync::{Arc, PoisonError},
+        time::SystemTime,
     },
     tracing::warn,
 };
@@ -83,7 +84,7 @@ impl Cause {
 /// succeeds, and the sweep retries it each time, because a disk that comes
 /// back needs no operator step.
 #[derive(Debug, Default)]
-pub(crate) struct UncleanablePartitions {
+pub struct UncleanablePartitions {
     inner: BTreeMap<PartitionKey, Cause>,
 }
 
@@ -134,7 +135,7 @@ fn freeze_stops_compaction(image: Option<&MetadataImage>, topic: &str) -> bool {
     mutation_is_frozen(image, topic, FreezeMutationKind::Compaction)
 }
 
-pub(crate) async fn tick_all(
+pub async fn tick_all(
     partitions: &PartitionRegistry,
     image: Option<&MetadataImage>,
     metrics: &BrokerMetrics,
@@ -160,10 +161,7 @@ pub(crate) async fn tick_all(
             // Recover the guard if the mutex was poisoned by a panic
             // elsewhere rather than killing the (discarded-JoinHandle)
             // cleaner task. The config snapshot stays readable.
-            let mut log = partition
-                .log
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
             // A policy list containing `compact` is what makes a partition the
             // cleaner's work, so `compact,delete` is swept exactly as `compact`
             // is; the delete half is the local-retention sweep's, in
@@ -178,7 +176,7 @@ pub(crate) async fn tick_all(
                 // Kafka's `min.cleanable.dirty.ratio`, `min.compaction.lag.ms`
                 // and `max.compaction.lag.ms`, which say whether this
                 // partition has earned a pass yet.
-                compacted && log.compaction_due(std::time::SystemTime::now(), last_stable_offset),
+                compacted && log.compaction_due(SystemTime::now(), last_stable_offset),
             )
         };
         if !compacted {

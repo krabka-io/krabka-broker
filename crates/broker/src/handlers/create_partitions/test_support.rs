@@ -12,8 +12,11 @@ use {
         },
     },
     krabka_metadata::{MetadataRecord, TopicRecord},
-    krabka_protocol::owned::create_partitions_request::{
-        CreatePartitionsAssignment, CreatePartitionsRequest, CreatePartitionsTopic,
+    krabka_protocol::owned::{
+        create_partitions_request::{
+            CreatePartitionsAssignment, CreatePartitionsRequest, CreatePartitionsTopic,
+        },
+        create_partitions_response::{CreatePartitionsResponse, CreatePartitionsTopicResult},
     },
     krabka_raft::NodeId,
 };
@@ -31,7 +34,7 @@ pub fn assn(broker_ids: &[i32]) -> CreatePartitionsAssignment {
 pub struct PartitionTopicSetup<'a> {
     #[default("t")]
     pub name: &'a str,
-    #[default(crate::handlers::test_support::TopicPartitionCount(3))]
+    #[default(TopicPartitionCount(3))]
     pub count: TopicPartitionCount,
     pub assignments: Option<Vec<CreatePartitionsAssignment>>,
 }
@@ -39,8 +42,7 @@ pub struct PartitionTopicSetup<'a> {
 #[bon::builder]
 pub fn topic_req(
     #[builder(default = "t")] name: &'_ str,
-    #[builder(into, default = crate :: handlers :: test_support :: TopicPartitionCount (3))]
-    count: TopicPartitionCount,
+    #[builder(into, default = TopicPartitionCount (3))] count: TopicPartitionCount,
     assignments: Option<Vec<CreatePartitionsAssignment>>,
 ) -> CreatePartitionsTopic {
     let setup = PartitionTopicSetup {
@@ -91,9 +93,9 @@ pub fn request(
 pub struct SeedTopicSetup<'a> {
     #[default("t")]
     pub name: &'a str,
-    #[default(crate::handlers::test_support::TopicPartitionCount(2))]
+    #[default(TopicPartitionCount(2))]
     pub partitions: TopicPartitionCount,
-    #[default(crate::handlers::test_support::TopicReplicationFactor(1))]
+    #[default(TopicReplicationFactor(1))]
     pub rf: TopicReplicationFactor,
 }
 
@@ -101,10 +103,8 @@ pub struct SeedTopicSetup<'a> {
 pub async fn seed_topic(
     handle: &BrokerHandle,
     #[builder(default = "t")] name: &'_ str,
-    #[builder(into, default = crate :: handlers :: test_support :: TopicPartitionCount (2))]
-    partitions: TopicPartitionCount,
-    #[builder(into, default = crate :: handlers :: test_support :: TopicReplicationFactor (1))]
-    rf: TopicReplicationFactor,
+    #[builder(into, default = TopicPartitionCount (2))] partitions: TopicPartitionCount,
+    #[builder(into, default = TopicReplicationFactor (1))] rf: TopicReplicationFactor,
 ) {
     let setup = SeedTopicSetup {
         name,
@@ -146,20 +146,14 @@ pub fn expected_result(
     name: &str,
     error_code: i16,
     error_message: Option<String>,
-) -> krabka_protocol::owned::create_partitions_response::CreatePartitionsTopicResult {
-    krabka_macros::tagged_wire!(
-        krabka_protocol::owned::create_partitions_response::CreatePartitionsTopicResult {
-            name: name.into(),
-            error_code,
-            error_message,
-        }
-    )
+) -> CreatePartitionsTopicResult {
+    krabka_macros::tagged_wire!(CreatePartitionsTopicResult {
+        name: name.into(),
+        error_code,
+        error_message,
+    })
 }
 
-pub fn expected_response(
-    results: Vec<krabka_protocol::owned::create_partitions_response::CreatePartitionsTopicResult>,
-) -> krabka_protocol::owned::create_partitions_response::CreatePartitionsResponse {
-    krabka_macros::unthrottled_wire!(
-        krabka_protocol::owned::create_partitions_response::CreatePartitionsResponse { results }
-    )
+pub fn expected_response(results: Vec<CreatePartitionsTopicResult>) -> CreatePartitionsResponse {
+    krabka_macros::unthrottled_wire!(CreatePartitionsResponse { results })
 }

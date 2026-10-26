@@ -10,7 +10,10 @@ use {
     crate::coordinator::unified::streams::persistence::{
         StoredCopartitionGroup, StoredSubtopology, StoredTopicInfo, StreamsGroupTopologyValue,
     },
-    krabka_protocol::owned::streams_group_heartbeat_request as wire,
+    krabka_protocol::owned::{
+        common::streams_group_heartbeat_request::topic_info::TopicInfo,
+        streams_group_heartbeat_request as wire,
+    },
 };
 
 /// Converts a client-supplied [`wire::Topology`] into a persisted
@@ -54,9 +57,7 @@ fn to_stored_subtopology(s: &wire::Subtopology) -> StoredSubtopology {
     }
 }
 
-fn to_stored_topic_info(
-    t: &krabka_protocol::owned::common::streams_group_heartbeat_request::topic_info::TopicInfo,
-) -> StoredTopicInfo {
+fn to_stored_topic_info(t: &TopicInfo) -> StoredTopicInfo {
     StoredTopicInfo {
         name: t.name.clone(),
         partitions: t.partitions,

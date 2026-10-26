@@ -69,19 +69,22 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-use self::{
-    authz::{Admission, admit_row, topic_access},
-    operation::{delete_topic_once, generation_refusal, vanished_code},
-    request::{ValidatedTopics, resolve_topic_names},
-    wire::{
-        delete_topic_result, delete_topics_response, random_seed, request_error_results,
-        shuffle_rows,
+use {
+    self::{
+        authz::{Admission, admit_row, topic_access},
+        operation::{delete_topic_once, generation_refusal, vanished_code},
+        request::{ValidatedTopics, resolve_topic_names},
+        wire::{
+            delete_topic_result, delete_topics_response, random_seed, request_error_results,
+            shuffle_rows,
+        },
     },
+    tokio::time::Instant,
 };
 
 krabka_macros::decoded_dispatch! {
     /// Resolve topic identifiers and per-topic authorization on the active controller.
-    pub(crate) async fn dispatch(
+    pub async fn dispatch(
         broker: &Broker,
         version: ApiVersion,
         req_bytes: &[u8],
@@ -109,7 +112,7 @@ krabka_macros::decoded_dispatch! {
     }
 }
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     req: DeleteTopicsRequest,
     version: ApiVersion,
@@ -180,8 +183,8 @@ pub(crate) async fn handle(
     // every topic after it.
     let mut quota = ctx.controller_mutation_quota(broker, &image, version >= 5);
 
-    let deadline = tokio::time::Instant::now()
-        + Duration::from_millis(u64::try_from(req.timeout_ms).unwrap_or(0));
+    let deadline =
+        Instant::now() + Duration::from_millis(u64::try_from(req.timeout_ms).unwrap_or(0));
     for (name, wire_topic_id, requested_by_id) in admitted {
         let image = controller.current_image();
         if let Some(row) = generation_refusal(&image, &name, wire_topic_id, requested_by_id) {

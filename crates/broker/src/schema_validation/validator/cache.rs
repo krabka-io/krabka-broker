@@ -21,8 +21,9 @@ use {
     qubit_clock::WallClock as _,
     std::{
         collections::{HashMap, HashSet},
-        sync::{Arc, OnceLock},
+        sync::{Arc, OnceLock, PoisonError},
     },
+    tokio::time,
 };
 
 /// What the registry said about one schema id.
@@ -135,7 +136,7 @@ impl SchemaValidator {
         // them. Lazy eviction is good enough at LRU capacities in the tens of
         // thousands, and it is what the OPA cache does.
         let hit = {
-            let mut cache = self.cache.lock().expect("schema cache mutex poisoned");
+            let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
             cache
                 .get(&id)
                 .filter(|cached| cached.expires_at_ms > now)
@@ -165,7 +166,7 @@ impl SchemaValidator {
         }
 
         metrics.record_schema_cache_miss();
-        let fetched = tokio::time::timeout(self.operation_timeout, self.fetch(id, subject, mode))
+        let fetched = time::timeout(self.operation_timeout, self.fetch(id, subject, mode))
             .await
             .unwrap_or_else(|_| {
                 Err(RejectReason::RegistryUnavailable(format!(
@@ -184,7 +185,7 @@ impl SchemaValidator {
         };
         let expires_at_ms = now.saturating_add(ttl_ms);
         {
-            let mut cache = self.cache.lock().expect("schema cache mutex poisoned");
+            let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
             cache.put(id, Cached {
                 entry: fetched.clone(),
                 expires_at_ms,

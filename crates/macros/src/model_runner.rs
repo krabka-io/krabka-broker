@@ -95,7 +95,7 @@ fn statements(runner: Runner, signature: &Signature) -> Result<RunnerStatements,
     Ok(RunnerStatements { before, after })
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let BracketedFunction {
         header,
         metadata,

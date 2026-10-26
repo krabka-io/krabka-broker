@@ -13,7 +13,7 @@ struct LoadTasks {
     failure_message: String,
 }
 
-pub(crate) fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn expand(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let fields = named_fields(&item, "ScheduledLoads")?;
     if fields.len() != 1
         || fields

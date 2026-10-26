@@ -40,7 +40,7 @@ fn arguments(input: TokenStream) -> Result<Arguments, ParseError> {
     })
 }
 
-pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
     let Arguments {
         name,
         projection,

@@ -13,7 +13,7 @@ use {
     krabka_remote_storage::{
         InmemoryRemoteLogMetadataManager, RemoteLogMetadataManager, RemoteStorageError,
     },
-    std::sync::Arc,
+    std::sync::{Arc, Mutex, PoisonError},
     tokio_util::sync::CancellationToken,
     tracing::warn,
 };
@@ -21,7 +21,7 @@ use {
 pub async fn pump_loop(
     mut stream: MetadataEventStream,
     inner: Arc<InmemoryRemoteLogMetadataManager>,
-    applied: Arc<std::sync::Mutex<Vec<i64>>>,
+    applied: Arc<Mutex<Vec<i64>>>,
     mutation_waiters: Arc<MutationWaiters>,
     shutdown: CancellationToken,
 ) {
@@ -68,11 +68,14 @@ pub async fn pump_loop(
                     "topic-based RLMM: replay rejected"
                 );
             }
-            if let Ok(idx) = usize::try_from(record.partition) {
-                let mut a = applied.lock().expect("applied mutex poisoned");
-                if idx < a.len() && record.offset > a[idx] {
-                    a[idx] = record.offset;
-                }
+            if let Ok(idx) = usize::try_from(record.partition)
+                && let Some(slot) = applied
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get_mut(idx)
+                    .filter(|slot| record.offset > **slot)
+            {
+                *slot = record.offset;
             }
             outcome
         });
@@ -91,34 +94,38 @@ mod tests {
         assert2::assert,
         krabka_ids::LeaderEpoch,
         krabka_remote_storage::RemoteLogMetadataManager,
-        std::sync::Arc,
+        std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        },
+        tokio::task,
         uuid::Uuid,
     };
 
     #[tokio::test(flavor = "multi_thread")]
     async fn two_managers_sharing_a_log_converge() {
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
-        let a = start_manager_all(log.clone()).await;
-        let b = start_manager_all(log.clone()).await;
+        let a = start_manager_all(Arc::clone(&log)).await;
+        let b = start_manager_all(Arc::clone(&log)).await;
 
-        let a2 = a.clone();
+        let a2 = Arc::clone(&a);
         on_blocking(move || {
             a2.add_remote_log_segment_metadata(started(10, 0, 99))
                 .unwrap();
         })
         .await;
-        let a2 = a.clone();
+        let a2 = Arc::clone(&a);
         on_blocking(move || a2.update_remote_log_segment_metadata(finish(10)).unwrap()).await;
 
         // `b` must observe `a`'s writes once its pump has applied
         // them. Poll up to 2s for the in-process broadcast to fan out.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(2);
         while b.highest_offset_for_epoch(&tp(), LeaderEpoch(0)).unwrap() != Some(99) {
             assert!(
-                std::time::Instant::now() < deadline,
+                Instant::now() < deadline,
                 "manager B did not converge within 2s"
             );
-            tokio::task::yield_now().await;
+            task::yield_now().await;
         }
         assert!(b.highest_offset_for_epoch(&tp(), LeaderEpoch(0)).unwrap() == Some(99));
         let got = b
@@ -135,7 +142,7 @@ mod tests {
     async fn restart_rehydrates_from_log() {
         let log: Arc<dyn MetadataEventLog> = InProcessMetadataEventLog::new(4);
         {
-            let m = start_manager_all(log.clone()).await;
+            let m = start_manager_all(Arc::clone(&log)).await;
             seed_finished(&m, &[
                 seed(10, 0, 99),
                 seed(11, 100, 199),

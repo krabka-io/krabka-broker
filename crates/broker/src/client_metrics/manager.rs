@@ -16,7 +16,7 @@ use {
     krabka_units::{ByteSize, convert::ByteSizeExt as _},
     std::{
         collections::{HashMap, hash_map::Entry},
-        sync::Mutex,
+        sync::{Mutex, PoisonError},
         time::{Duration, Instant},
     },
     uuid::Uuid,
@@ -27,14 +27,14 @@ mod subscription;
 mod test_support;
 
 #[cfg(test)]
-pub(crate) use self::subscription::compute_subscription;
-pub(crate) use self::subscription::{Subscriptions, subscription_id};
+pub use self::subscription::compute_subscription;
+pub use self::subscription::{Subscriptions, subscription_id};
 
 /// Connection-derived attributes: the ones subscription matching reads, and
 /// the id of the connection that carried the request, which
 /// [`ClientMetricsManager::connection_closed`] keys on.
 #[derive(Debug, Clone)]
-pub(crate) struct ClientAttributes {
+pub struct ClientAttributes {
     pub connection_id: String,
     pub client_instance_id: Uuid,
     pub client_id: String,
@@ -50,7 +50,7 @@ pub(crate) struct ClientAttributes {
 /// The broker enforces the interval on each request. It does not inspect the
 /// payload, so the prefixes are advisory.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ComputedSubscription {
+pub struct ComputedSubscription {
     pub metrics: Vec<String>,
     pub push_interval_ms: i32,
 }
@@ -89,9 +89,8 @@ impl ClientInstance {
         let subscription_id = subscription_id(&subscription, attrs.client_instance_id);
         // `interval.ms` is validated in [100, 3_600_000], and the default is
         // positive, so the interval is always positive.
-        let push_interval = Duration::from_millis(
-            u64::try_from(subscription.push_interval_ms).expect("validated positive push interval"),
-        );
+        let push_interval =
+            Duration::from_millis(u64::from(subscription.push_interval_ms.unsigned_abs()));
         Self {
             attrs,
             subscription_version,
@@ -134,7 +133,7 @@ impl ClientInstance {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SubscriptionAssignment {
+pub struct SubscriptionAssignment {
     pub client_instance_id: Uuid,
     pub subscription_id: i32,
     pub push_interval_ms: i32,
@@ -145,14 +144,14 @@ pub(crate) struct SubscriptionAssignment {
 /// throttle time: Kafka answers with `throttle_time_ms` 0 and only the request
 /// quota can raise it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SubscriptionDecision {
+pub enum SubscriptionDecision {
     Assign(SubscriptionAssignment),
     Reject { error_code: i16 },
 }
 
 /// The fields of a `PushTelemetry` request that the checks read.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PushCheck {
+pub struct PushCheck {
     pub subscription_id: i32,
     pub terminating: bool,
     pub compression_supported: bool,
@@ -167,7 +166,7 @@ pub(crate) struct PushCheck {
 /// The outcome of the `PushTelemetry` checks. A rejection carries no throttle
 /// time, for the same reason as [`SubscriptionDecision::Reject`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PushDecision {
+pub enum PushDecision {
     /// The push passed the checks. `metrics` are the metric-name prefixes of
     /// the subscription the instance holds, which the payload must stay
     /// within: the subscription built from the instance's first attributes,
@@ -250,9 +249,112 @@ impl State {
         inst.last_seen = now;
         inst
     }
+
+    /// [`ClientMetricsManager::get_subscription`] under the state lock.
+    fn subscription_decision(
+        &mut self,
+        image: &MetadataImage,
+        attrs: &ClientAttributes,
+        now: Instant,
+    ) -> SubscriptionDecision {
+        let mut attrs = attrs.clone();
+        if attrs.client_instance_id.is_nil() {
+            attrs.client_instance_id = loop {
+                let fresh = Uuid::new_v4();
+                if !self.instances.contains_key(&fresh) {
+                    break fresh;
+                }
+            };
+        }
+        let inst = self.client_instance(image, &attrs, now);
+
+        // Kafka's `validateGetRequest`: the timestamp check runs first and
+        // moves the timestamp only when it passes. A client that the last push
+        // told to fetch again may do so early.
+        if !inst.maybe_update_get_timestamp(now)
+            && !matches!(
+                inst.last_error,
+                codes::UNKNOWN_SUBSCRIPTION_ID | codes::UNSUPPORTED_COMPRESSION_TYPE
+            )
+        {
+            return SubscriptionDecision::Reject {
+                error_code: codes::THROTTLING_QUOTA_EXCEEDED,
+            };
+        }
+
+        inst.last_error = codes::NONE;
+        SubscriptionDecision::Assign(SubscriptionAssignment {
+            client_instance_id: attrs.client_instance_id,
+            subscription_id: inst.subscription_id,
+            push_interval_ms: inst.subscription.push_interval_ms,
+            metrics: inst.subscription.metrics.clone(),
+        })
+    }
+
+    /// [`ClientMetricsManager::authorize_push`] under the state lock, after
+    /// the reserved id check.
+    fn push_decision(
+        &mut self,
+        image: &MetadataImage,
+        attrs: &ClientAttributes,
+        push: &PushCheck,
+        max_payload_len: usize,
+        now: Instant,
+    ) -> PushDecision {
+        let inst = self.client_instance(image, attrs, now);
+
+        let error_code = if inst.terminating {
+            codes::INVALID_REQUEST
+        } else if !inst.maybe_update_push_timestamp(now) && !push.terminating {
+            codes::THROTTLING_QUOTA_EXCEEDED
+        } else if push.subscription_id != inst.subscription_id {
+            codes::UNKNOWN_SUBSCRIPTION_ID
+        } else if !push.compression_supported {
+            codes::UNSUPPORTED_COMPRESSION_TYPE
+        } else if push.payload_len > max_payload_len {
+            codes::TELEMETRY_TOO_LARGE
+        } else {
+            codes::NONE
+        };
+
+        // Kafka 4.3.1 records the flag in a `finally` after the checks, so
+        // every push sets it, a rejected one included: a rejected terminating
+        // push locks the instance out until it expires, and a later push
+        // resets the flag to its own. Trunk (KAFKA-20898) records it only for
+        // a push that passes the checks, so that a rejected push cannot lock
+        // the client out.
+        if push.unstable == UnstableApiVersions::Disabled || error_code == codes::NONE {
+            inst.terminating = push.terminating;
+        }
+        if error_code != codes::NONE {
+            inst.last_error = error_code;
+            return PushDecision::Reject { error_code };
+        }
+        // Kafka records the export's outcome as the last error. The only
+        // errors the next `GetTelemetrySubscriptions` reads are the two the
+        // checks above give, so an accepted push leaves none behind.
+        inst.last_error = codes::NONE;
+        PushDecision::Accept {
+            metrics: inst.subscription.metrics.clone(),
+        }
+    }
+
+    /// [`ClientMetricsManager::evict_stale`] under the state lock.
+    fn evict_stale(&mut self, factor: u32, floor: Duration, now: Instant) {
+        let Self {
+            instances,
+            connections,
+            ..
+        } = self;
+        instances.retain(|_, inst| {
+            let ttl = (inst.push_interval * factor).max(floor);
+            now.duration_since(inst.last_seen) < ttl
+        });
+        connections.retain(|_, id| instances.contains_key(id));
+    }
 }
 
-pub(crate) struct ClientMetricsManager {
+pub struct ClientMetricsManager {
     state: Mutex<State>,
     telemetry_max: ByteSize,
 }
@@ -260,7 +362,7 @@ pub(crate) struct ClientMetricsManager {
 /// Compression codecs that the broker advertises, in Kafka's fixed order:
 /// ZSTD(4), LZ4(3), GZIP(1), and SNAPPY(2). The broker deliberately does not
 /// advertise NONE.
-pub(crate) const ACCEPTED_COMPRESSION_TYPES: [i8; 4] = [4, 3, 1, 2];
+pub const ACCEPTED_COMPRESSION_TYPES: [i8; 4] = [4, 3, 1, 2];
 
 /// Kafka's `Uuid.RESERVED`: the zero UUID and `Uuid.ONE_UUID`, which no
 /// client instance may use.
@@ -305,39 +407,10 @@ impl ClientMetricsManager {
         attrs: &ClientAttributes,
         now: Instant,
     ) -> SubscriptionDecision {
-        let mut state = self.state.lock().expect("client-metrics mutex poisoned");
-        let mut attrs = attrs.clone();
-        if attrs.client_instance_id.is_nil() {
-            attrs.client_instance_id = loop {
-                let fresh = Uuid::new_v4();
-                if !state.instances.contains_key(&fresh) {
-                    break fresh;
-                }
-            };
-        }
-        let inst = state.client_instance(image, &attrs, now);
-
-        // Kafka's `validateGetRequest`: the timestamp check runs first and
-        // moves the timestamp only when it passes. A client that the last push
-        // told to fetch again may do so early.
-        if !inst.maybe_update_get_timestamp(now)
-            && !matches!(
-                inst.last_error,
-                codes::UNKNOWN_SUBSCRIPTION_ID | codes::UNSUPPORTED_COMPRESSION_TYPE
-            )
-        {
-            return SubscriptionDecision::Reject {
-                error_code: codes::THROTTLING_QUOTA_EXCEEDED,
-            };
-        }
-
-        inst.last_error = codes::NONE;
-        SubscriptionDecision::Assign(SubscriptionAssignment {
-            client_instance_id: attrs.client_instance_id,
-            subscription_id: inst.subscription_id,
-            push_interval_ms: inst.subscription.push_interval_ms,
-            metrics: inst.subscription.metrics.clone(),
-        })
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .subscription_decision(image, attrs, now)
     }
 
     /// Kafka's `processPushTelemetryRequest` up to the export: the reserved
@@ -366,43 +439,10 @@ impl ClientMetricsManager {
             };
         }
         let max_payload_len = self.telemetry_max.bytes_usize();
-        let mut state = self.state.lock().expect("client-metrics mutex poisoned");
-        let inst = state.client_instance(image, attrs, now);
-
-        let error_code = if inst.terminating {
-            codes::INVALID_REQUEST
-        } else if !inst.maybe_update_push_timestamp(now) && !push.terminating {
-            codes::THROTTLING_QUOTA_EXCEEDED
-        } else if push.subscription_id != inst.subscription_id {
-            codes::UNKNOWN_SUBSCRIPTION_ID
-        } else if !push.compression_supported {
-            codes::UNSUPPORTED_COMPRESSION_TYPE
-        } else if push.payload_len > max_payload_len {
-            codes::TELEMETRY_TOO_LARGE
-        } else {
-            codes::NONE
-        };
-
-        // Kafka 4.3.1 records the flag in a `finally` after the checks, so
-        // every push sets it, a rejected one included: a rejected terminating
-        // push locks the instance out until it expires, and a later push
-        // resets the flag to its own. Trunk (KAFKA-20898) records it only for
-        // a push that passes the checks, so that a rejected push cannot lock
-        // the client out.
-        if push.unstable == UnstableApiVersions::Disabled || error_code == codes::NONE {
-            inst.terminating = push.terminating;
-        }
-        if error_code != codes::NONE {
-            inst.last_error = error_code;
-            return PushDecision::Reject { error_code };
-        }
-        // Kafka records the export's outcome as the last error. The only
-        // errors the next `GetTelemetrySubscriptions` reads are the two the
-        // checks above give, so an accepted push leaves none behind.
-        inst.last_error = codes::NONE;
-        PushDecision::Accept {
-            metrics: inst.subscription.metrics.clone(),
-        }
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push_decision(image, attrs, &push, max_payload_len, now)
     }
 
     /// Drops an instance that has been idle for longer than
@@ -417,17 +457,10 @@ impl ClientMetricsManager {
     }
 
     fn evict_stale_at(&self, factor: u32, floor: Duration, now: Instant) {
-        let mut state = self.state.lock().expect("client-metrics mutex poisoned");
-        let State {
-            instances,
-            connections,
-            ..
-        } = &mut *state;
-        instances.retain(|_, inst| {
-            let ttl = (inst.push_interval * factor).max(floor);
-            now.duration_since(inst.last_seen) < ttl
-        });
-        connections.retain(|_, id| instances.contains_key(id));
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .evict_stale(factor, floor, now);
     }
 
     /// Kafka's `ClientConnectionDisconnectListener.onDisconnect`: closing the
@@ -435,7 +468,7 @@ impl ClientMetricsManager {
     /// that reconnects starts from a new one and its first
     /// `GetTelemetrySubscriptions` passes the throttle check.
     pub(crate) fn connection_closed(&self, connection_id: &str) -> Option<Uuid> {
-        let mut state = self.state.lock().expect("client-metrics mutex poisoned");
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let id = state.connections.remove(connection_id);
         if let Some(id) = id {
             state.instances.remove(&id);
@@ -575,7 +608,7 @@ mod tests {
 
     fn accept() -> Outcome {
         Outcome::Push(PushDecision::Accept {
-            metrics: vec![ALL_METRICS.to_string()],
+            metrics: vec![ALL_METRICS.to_owned()],
         })
     }
 
@@ -819,7 +852,7 @@ mod tests {
                 "Uuid.ONE_UUID",
                 ClientAttributes {
                     client_instance_id: Uuid::from_u128(1),
-                    ..attrs.clone()
+                    ..attrs
                 },
                 current,
                 reject_push(KafkaErrorCode(codes::INVALID_REQUEST)),
@@ -960,7 +993,7 @@ mod tests {
                 }),
                 reject_push(KafkaErrorCode(codes::UNSUPPORTED_COMPRESSION_TYPE)),
             ),
-            ("early get after 76", ms(401), Step::Get, assigned.clone()),
+            ("early get after 76", ms(401), Step::Get, assigned),
         ];
         for (name, at, step, expected) in steps {
             assert!(
@@ -1126,7 +1159,7 @@ mod tests {
         m.connection_closed("a");
         assert!(
             push_on("b", 201, push(TelemetrySubscriptionId(id)))
-                == reject_push(crate::test_support::KafkaErrorCode(codes::INVALID_REQUEST)),
+                == reject_push(KafkaErrorCode(codes::INVALID_REQUEST)),
             "the rebuilt instance is still locked after a closed"
         );
     }

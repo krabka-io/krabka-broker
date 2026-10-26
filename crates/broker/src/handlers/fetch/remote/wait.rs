@@ -17,11 +17,11 @@
 use {
     crate::{broker::Broker, config_keys::node_or_cluster_default},
     std::{future::Future, time::Duration},
-    tokio::time::Instant,
+    tokio::time::{Instant, timeout_at},
 };
 
 /// Kafka's `remote.fetch.max.wait.ms`.
-pub(crate) const REMOTE_FETCH_MAX_WAIT_MS: &str = "remote.fetch.max.wait.ms";
+pub const REMOTE_FETCH_MAX_WAIT_MS: &str = "remote.fetch.max.wait.ms";
 
 /// Kafka's `DEFAULT_REMOTE_FETCH_MAX_WAIT_MS`. krabka has no static setting
 /// for the key, so this is also the static value.
@@ -31,7 +31,7 @@ const DEFAULT_REMOTE_FETCH_MAX_WAIT: Duration = Duration::from_millis(500);
 /// value, else the cluster default, else Kafka's 500 ms. A value that does
 /// not parse as a positive `Int` falls back as well; the alter path refuses
 /// one, so only a hand-written record could carry it.
-pub(crate) fn remote_fetch_max_wait(
+pub fn remote_fetch_max_wait(
     image: &krabka_metadata::MetadataImage,
     node: krabka_metadata::NodeId,
 ) -> Duration {
@@ -44,7 +44,7 @@ pub(crate) fn remote_fetch_max_wait(
 
 /// The remote-read deadline of one `Fetch` request.
 #[derive(Debug, Default)]
-pub(crate) struct RemoteFetchWait {
+pub struct RemoteFetchWait {
     /// Armed by the first cold read: Kafka starts the `DelayedRemoteFetch`
     /// timer when the first remote read is handed to the pool.
     deadline: Option<Instant>,
@@ -54,7 +54,7 @@ impl RemoteFetchWait {
     /// Whether this request has handed a read to the remote tier. Such a
     /// fetch answers once its cold reads finish or expire, without a
     /// `min.bytes` long poll.
-    pub(crate) fn dispatched(&self) -> bool { self.deadline.is_some() }
+    pub fn dispatched(&self) -> bool { self.deadline.is_some() }
 
     /// Runs `read` until it finishes or the request's deadline passes, and
     /// answers `None` on expiry.
@@ -66,7 +66,7 @@ impl RemoteFetchWait {
     /// read still waiting for a reader slot. One whose SPI call already runs
     /// on the blocking pool runs to its end there, as Kafka lets a started
     /// `RemoteLogReader` finish, but its result is discarded.
-    pub(crate) async fn bound<F: Future>(&mut self, broker: &Broker, read: F) -> Option<F::Output> {
+    pub async fn bound<F: Future>(&mut self, broker: &Broker, read: F) -> Option<F::Output> {
         self.bound_with(
             || remote_fetch_max_wait(&broker.controller.current_image(), broker.config.node_id),
             read,
@@ -82,7 +82,7 @@ impl RemoteFetchWait {
         read: F,
     ) -> Option<F::Output> {
         let deadline = *self.deadline.get_or_insert_with(|| Instant::now() + wait());
-        tokio::time::timeout_at(deadline, read).await.ok()
+        timeout_at(deadline, read).await.ok()
     }
 }
 

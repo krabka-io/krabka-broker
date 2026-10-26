@@ -6,7 +6,11 @@
 //! the sentinel needs a function of its own rather than the log end offset the
 //! rest of the handler reads.
 
-use {crate::partition::Partition, krabka_log::DeliveryPolicy};
+use {
+    crate::partition::Partition,
+    krabka_log::DeliveryPolicy,
+    std::sync::{PoisonError, atomic},
+};
 
 /// The offset the `LATEST` sentinel reports for one partition, before the
 /// fetchable bound is applied to it.
@@ -56,7 +60,7 @@ pub(super) fn scheduled_latest_offset(
 }
 
 pub(super) fn leader_epoch_for_offset(partition: &Partition, offset: i64) -> i32 {
-    let log = partition.log.lock().expect("log mutex poisoned");
+    let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
     log.epoch_checkpoint()
         .epoch_for_offset(krabka_log::Offset(offset))
         .map_or(-1, |epoch| epoch.0)
@@ -73,8 +77,8 @@ pub(super) fn leader_epoch_for_offset(partition: &Partition, offset: i64) -> i32
 pub(super) fn epoch_start_offset(partition: &Partition) -> Option<i64> {
     let current = partition
         .current_leader_epoch
-        .load(std::sync::atomic::Ordering::Acquire);
-    let log = partition.log.lock().expect("log mutex poisoned");
+        .load(atomic::Ordering::Acquire);
+    let log = partition.log.lock().unwrap_or_else(PoisonError::into_inner);
     log.epoch_checkpoint()
         .entries()
         .iter()
@@ -105,14 +109,14 @@ mod tests {
                 test_support::replicated_partition,
             },
             test_support::{UnixMillis, start_broker_with_authorizer_no_audit as start_broker},
+            testing::list_offsets_request,
         },
         assert2::{assert, check},
-        krabka_protocol::owned::{
-            list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-            list_offsets_response::ListOffsetsPartitionResponse,
+        krabka_protocol::owned::list_offsets_response::{
+            ListOffsetsPartitionResponse, MAX_VERSION,
         },
         krabka_units::convert::ByteSizeExt as _,
-        std::sync::Arc,
+        std::{collections::BTreeMap, sync::Arc, time::Duration},
     };
 
     // Activation time of a batch that has long since come due.
@@ -170,7 +174,7 @@ mod tests {
     ) {
         // Reconciliation must retain the policy and retention settings of the fixture.
         let config = partition.log.lock().unwrap().config_snapshot();
-        let mut overrides = std::collections::BTreeMap::from([
+        let mut overrides = BTreeMap::from([
             (
                 "delivery.mode".into(),
                 match config.delivery_policy {
@@ -194,7 +198,7 @@ mod tests {
         handle
             .submit_metadata_record_for_test(krabka_metadata::MetadataRecord::V1Topic(
                 krabka_metadata::TopicRecord {
-                    name: topic.to_string(),
+                    name: topic.to_owned(),
                     topic_id: uuid::Uuid::new_v4(),
                     partitions: 1,
                     replication_factor: 1,
@@ -253,23 +257,14 @@ mod tests {
         timestamp: i64,
         ctx: &RequestContext<'_>,
     ) -> ListOffsetsPartitionResponse {
-        let version = krabka_protocol::owned::list_offsets_response::MAX_VERSION;
+        let version = MAX_VERSION;
         let req = encode_request(
-            &ListOffsetsRequest {
-                replica_id: -1,
-                topics: vec![ListOffsetsTopic {
-                    name: topic.to_string(),
-                    partitions: vec![ListOffsetsPartition {
-                        partition_index: 0,
-                        current_leader_epoch: -1,
-                        timestamp,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                timeout_ms: 5_000,
-                ..Default::default()
-            },
+            &list_offsets_request()
+                .topic(topic.to_owned())
+                .partition_index(0)
+                .current_leader_epoch(-1)
+                .timestamp(timestamp)
+                .call(),
             version,
         );
         let bytes = handle(broker, version, &req, ctx).await.expect("handle");
@@ -488,7 +483,7 @@ mod tests {
         };
         assert_listed_latest(&broker, TOPIC, &ctx, 2).await;
         timeline
-            .advance(std::time::Duration::from_millis(
+            .advance(Duration::from_millis(
                 u64::try_from(10_000 + BOUND_MS).unwrap(),
             ))
             .unwrap();
@@ -521,7 +516,8 @@ mod tests {
             // This fixture drives local delivery-mode changes with a manual clock.
             // Join reconciliation before it can replace those synthetic settings.
             broker.supervisor_shutdown.cancel();
-            if let Some(supervisor) = broker.supervisor_handle.lock().await.take() {
+            let supervisor = broker.supervisor_handle.lock().await.take();
+            if let Some(supervisor) = supervisor {
                 supervisor.await.expect("supervisor stopped");
             }
             let logs = tempfile::tempdir().unwrap();
@@ -604,6 +600,7 @@ mod tests {
                 let log = partition.log.lock().unwrap();
                 assert!(log.config_snapshot().delivery_policy == DeliveryPolicy::Immediate);
                 assert!(log.log_end_offset() == Offset(6));
+                drop(log);
             }
             assert!(partition.high_watermark().await == Offset(6));
             assert_listed_latest(&broker, TOPIC, &ctx, 6).await;
@@ -620,14 +617,12 @@ mod tests {
             });
             assert_listed_latest(&broker, TOPIC, &ctx, 2).await;
             timeline
-                .advance(std::time::Duration::from_millis(
+                .advance(Duration::from_millis(
                     u64::try_from(10_000 + BOUND_MS - 1).unwrap(),
                 ))
                 .unwrap();
             assert_listed_latest(&broker, TOPIC, &ctx, 2).await;
-            timeline
-                .advance(std::time::Duration::from_millis(1))
-                .unwrap();
+            timeline.advance(Duration::from_millis(1)).unwrap();
             assert_listed_latest(&broker, TOPIC, &ctx, 6).await;
             drop(client);
             broker_handle.shutdown().await;
@@ -659,8 +654,8 @@ mod tests {
             .clock(&clock)
             .topic(TOPIC)
             .activations(vec![
-                crate::test_support::UnixMillis(NOW_MS - 60_000),
-                crate::test_support::UnixMillis(NOW_MS + 10_000),
+                UnixMillis(NOW_MS - 60_000),
+                UnixMillis(NOW_MS + 10_000),
             ])
             .leader(OTHER_BROKER)
             .call();
@@ -686,7 +681,7 @@ mod tests {
         // alone: no append and no scheduler sweep publishes the new watermark,
         // so the mirror still reports the old one.
         timeline
-            .advance(std::time::Duration::from_millis(
+            .advance(Duration::from_millis(
                 u64::try_from(10_000 + BOUND_MS).expect("a positive delay"),
             ))
             .expect("manual time moves forward");

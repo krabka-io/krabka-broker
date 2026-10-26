@@ -12,6 +12,7 @@ use {
         Cli, format::output::ZERO_CHECKPOINT_NAME, meta_properties::META_PROPERTIES, run_from_args,
     },
     assert2::check,
+    std::{collections::HashSet, fs, path},
 };
 
 /// What a run leaves in one directory.
@@ -45,7 +46,7 @@ fn find_directory_case<'case, 'data, Expected>(
 /// A temporary root and the data directory path inside it.
 struct DataDirectory {
     root: tempfile::TempDir,
-    path: std::path::PathBuf,
+    path: path::PathBuf,
 }
 
 fn fresh_data_directory() -> DataDirectory {
@@ -57,7 +58,7 @@ fn fresh_data_directory() -> DataDirectory {
     }
 }
 
-fn format_argv(log_dir: &std::path::Path, node_id: &str, extra: &[&str]) -> Vec<String> {
+fn format_argv(log_dir: &path::Path, node_id: &str, extra: &[&str]) -> Vec<String> {
     let mut argv = vec![
         "krabka-format".to_owned(),
         "--log-dir".to_owned(),
@@ -147,12 +148,12 @@ fn the_first_error_follows_kafkas_order(extra: &[&str], want: &str) {
 /// The exit code of a run, and the directory it formatted.
 struct FormatRun {
     code: i32,
-    log_dir: std::path::PathBuf,
+    log_dir: path::PathBuf,
 }
 
 /// Formatting into a fresh directory as node `node_id`, returning its path
 /// for inspection.
-async fn format_into(tmp: &std::path::Path, node_id: &str, extra: &[&str]) -> FormatRun {
+async fn format_into(tmp: &path::Path, node_id: &str, extra: &[&str]) -> FormatRun {
     let log_dir = tmp.join("data");
     let argv = format_argv(&log_dir, node_id, extra);
     FormatRun {
@@ -161,9 +162,9 @@ async fn format_into(tmp: &std::path::Path, node_id: &str, extra: &[&str]) -> Fo
     }
 }
 
-fn checkpoint_len(log_dir: &std::path::Path) -> u64 {
+fn checkpoint_len(log_dir: &path::Path) -> u64 {
     let path = krabka_raft::metadata_partition_dir(log_dir).join(ZERO_CHECKPOINT_NAME);
-    std::fs::metadata(path).map_or(0, |m| m.len())
+    fs::metadata(path).map_or(0, |m| m.len())
 }
 
 /// Any one of the three quorum flags selects a dynamic format, and their
@@ -302,8 +303,8 @@ async fn a_non_empty_log_dir_is_refused() {
         root: _tmp,
         path: log_dir,
     } = fresh_data_directory();
-    std::fs::create_dir_all(&log_dir).expect("mkdir");
-    std::fs::write(log_dir.join("someone-elses.txt"), b"x").expect("write");
+    fs::create_dir_all(&log_dir).expect("mkdir");
+    fs::write(log_dir.join("someone-elses.txt"), b"x").expect("write");
 
     let code = run_from_args([
         "krabka-format",
@@ -331,7 +332,7 @@ async fn a_standalone_format_writes_what_a_boot_reads() {
 
     for name in [META_PROPERTIES, "bootstrap.records.bin", "bootstrap.json"] {
         let path = log_dir.join(name);
-        let len = std::fs::metadata(&path).map_or(0, |m| m.len());
+        let len = fs::metadata(&path).map_or(0, |m| m.len());
         check!(len > 0, "{name} should exist and carry bytes, got {len}");
     }
 
@@ -341,7 +342,7 @@ async fn a_standalone_format_writes_what_a_boot_reads() {
     check!(len > 0, "offset-zero checkpoint should carry the voter set");
 }
 
-fn standalone_argv(log_dir: &std::path::Path, extra: &[&str]) -> Vec<String> {
+fn standalone_argv(log_dir: &path::Path, extra: &[&str]) -> Vec<String> {
     let mut argv = [
         "krabka-format",
         "--log-dir",
@@ -371,7 +372,7 @@ async fn ignore_formatted_makes_a_second_format_a_no_op() {
     let argv = |extra: &[&str]| standalone_argv(&log_dir, extra);
 
     check!(crate::run_from_args(argv(&[])).await == EXIT_OK);
-    let formatted = std::fs::read(log_dir.join(META_PROPERTIES)).expect("meta properties");
+    let formatted = fs::read(log_dir.join(META_PROPERTIES)).expect("meta properties");
 
     // Without the flag the same directory is still a dirty log dir.
     check!(crate::run_from_args(argv(&[])).await == EXIT_DIRTY_LOG_DIR);
@@ -379,7 +380,7 @@ async fn ignore_formatted_makes_a_second_format_a_no_op() {
     // With it the run succeeds and rewrites nothing: a regenerated cluster or
     // directory id would strand the node's replicated identity.
     check!(crate::run_from_args(argv(&["--ignore-formatted"])).await == EXIT_OK);
-    let after = std::fs::read(log_dir.join(META_PROPERTIES)).expect("meta properties");
+    let after = fs::read(log_dir.join(META_PROPERTIES)).expect("meta properties");
     check!(after == formatted);
 }
 
@@ -434,11 +435,11 @@ async fn a_failed_format_is_not_mistaken_for_a_finished_one() {
 #[tokio::test]
 async fn an_unreadable_marker_is_skipped_unless_it_is_the_metadata_directory() {
     let (tmp, meta_dir, data_dir) = metadata_and_data_directories();
-    let unreadable = |dir: &std::path::Path| {
-        std::fs::create_dir_all(dir).expect("mkdir");
-        std::fs::write(dir.join(META_PROPERTIES), UNREADABLE).expect("write");
+    let unreadable = |dir: &path::Path| {
+        fs::create_dir_all(dir).expect("mkdir");
+        fs::write(dir.join(META_PROPERTIES), UNREADABLE).expect("write");
     };
-    let run = |first: &std::path::Path, second: &std::path::Path| {
+    let run = |first: &path::Path, second: &path::Path| {
         run_from_args([
             "krabka-format".to_owned(),
             "--log-dir".to_owned(),
@@ -453,7 +454,7 @@ async fn an_unreadable_marker_is_skipped_unless_it_is_the_metadata_directory() {
     unreadable(&data_dir);
     check!(run(&meta_dir, &data_dir).await == EXIT_OK);
     check!(meta_dir.join(META_PROPERTIES).is_file());
-    check!(std::fs::read(data_dir.join(META_PROPERTIES)).expect("left alone") == UNREADABLE);
+    check!(fs::read(data_dir.join(META_PROPERTIES)).expect("left alone") == UNREADABLE);
 
     let other = tmp.path().join("other");
     check!(run(&data_dir, &other).await == EXIT_DIRTY_LOG_DIR);
@@ -673,7 +674,7 @@ fn the_metadata_log_directory_leads_the_directory_set(scenario: &str) {
         })
         .collect();
     check!(got == want, "{}", case.what);
-    let ids: std::collections::HashSet<DirectoryId> = plan
+    let ids: HashSet<DirectoryId> = plan
         .targets
         .iter()
         .map(|target| target.directory_id)
@@ -965,8 +966,8 @@ fn an_unreadable_metadata_log_directory_is_named(scenario: &str) {
         .expect("named yare case exists");
     let tmp = tempfile::tempdir().expect("tempdir");
     let broken = tmp.path().join(unreadable);
-    std::fs::create_dir_all(&broken).expect("mkdir");
-    std::fs::write(broken.join(META_PROPERTIES), UNREADABLE).expect("write");
+    fs::create_dir_all(&broken).expect("mkdir");
+    fs::write(broken.join(META_PROPERTIES), UNREADABLE).expect("write");
 
     let got = plan_of(
         argv_under()

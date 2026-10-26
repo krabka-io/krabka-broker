@@ -277,9 +277,11 @@ pub use {
     error::BrokerError,
 };
 /// Benchmark seam over the zero-copy fetch drain, driven by
-/// `benches/fetch_drain.rs`. It is the drain the connection writer calls, with
-/// the two records resolvers that decide whether a records region reaches the
-/// socket through the kernel or through a buffer.
+/// `benches/fetch_drain.rs`.
+///
+/// It is the drain the connection writer calls, with the two records resolvers
+/// that decide whether a records region reaches the socket through the kernel
+/// or through a buffer.
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod fetch_drain {
     #[krabka_macros::sendfile_cfg]

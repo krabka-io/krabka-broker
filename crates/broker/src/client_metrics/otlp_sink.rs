@@ -17,24 +17,33 @@ use opentelemetry_proto::tonic::{
 use {
     opentelemetry_proto::tonic::metrics::v1::MetricsData,
     prometheus_client::metrics::counter::Counter,
-    tokio::sync::mpsc::{self, error::TrySendError},
+    std::{
+        sync::{Mutex, PoisonError},
+        time::Duration,
+    },
+    tokio::{
+        sync,
+        sync::mpsc::{self, error::TrySendError},
+        task::JoinHandle,
+        time,
+    },
 };
 
-const FORWARD_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const FORWARD_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Build an OTLP export request from decoded metrics. This function tags
 /// every resource with the originating client's instance id.
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn build_export_request(
+pub fn build_export_request(
     mut md: MetricsData,
     client_instance_id: &str,
 ) -> ExportMetricsServiceRequest {
     for rm in &mut md.resource_metrics {
         let resource = rm.resource.get_or_insert_with(Default::default);
         resource.attributes.push(KeyValue {
-            key: "client_instance_id".to_string(),
+            key: "client_instance_id".to_owned(),
             value: Some(AnyValue {
-                value: Some(Value::StringValue(client_instance_id.to_string())),
+                value: Some(Value::StringValue(client_instance_id.to_owned())),
             }),
             ..Default::default()
         });
@@ -51,9 +60,9 @@ struct QueuedExport {
     client_instance_id: String,
 }
 
-pub(crate) struct OtlpForwarder {
-    tx: std::sync::Mutex<Option<mpsc::Sender<QueuedExport>>>,
-    task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+pub struct OtlpForwarder {
+    tx: Mutex<Option<mpsc::Sender<QueuedExport>>>,
+    task: sync::Mutex<Option<JoinHandle<()>>>,
     dropped: Counter,
 }
 
@@ -62,8 +71,8 @@ impl OtlpForwarder {
     /// calls no-op.
     pub(crate) fn disabled() -> Self {
         Self {
-            tx: std::sync::Mutex::new(None),
-            task: tokio::sync::Mutex::new(None),
+            tx: Mutex::new(None),
+            task: sync::Mutex::new(None),
             dropped: Counter::default(),
         }
     }
@@ -122,8 +131,8 @@ impl OtlpForwarder {
             }
         });
         Self {
-            tx: std::sync::Mutex::new(Some(tx)),
-            task: tokio::sync::Mutex::new(Some(task)),
+            tx: Mutex::new(Some(tx)),
+            task: sync::Mutex::new(Some(task)),
             dropped,
         }
     }
@@ -146,7 +155,7 @@ impl OtlpForwarder {
     pub(crate) fn is_enabled(&self) -> bool {
         self.tx
             .lock()
-            .expect("OTLP forwarder mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .is_some()
     }
 
@@ -157,11 +166,11 @@ impl OtlpForwarder {
         if let Some(tx) = self
             .tx
             .lock()
-            .expect("OTLP forwarder mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             && let Err(error) = tx.try_send(QueuedExport {
                 metrics: md,
-                client_instance_id: client_instance_id.to_string(),
+                client_instance_id: client_instance_id.to_owned(),
             })
         {
             self.dropped.inc();
@@ -179,13 +188,15 @@ impl OtlpForwarder {
     /// Closes the queue and waits until every accepted batch has been sent.
     pub(crate) async fn shutdown(&self) { self.shutdown_with_timeout(FORWARD_DRAIN_TIMEOUT).await; }
 
-    async fn shutdown_with_timeout(&self, drain_timeout: std::time::Duration) {
+    async fn shutdown_with_timeout(&self, drain_timeout: Duration) {
         self.tx
             .lock()
-            .expect("OTLP forwarder mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .take();
-        if let Some(mut task) = self.task.lock().await.take() {
-            match tokio::time::timeout(drain_timeout, &mut task).await {
+        // Held through the drain, so a second caller waits for the first.
+        let mut slot = self.task.lock().await;
+        if let Some(mut task) = slot.take() {
+            match time::timeout(drain_timeout, &mut task).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     tracing::warn!(%error, "client-metrics OTLP forward worker join failed");
@@ -196,6 +207,7 @@ impl OtlpForwarder {
                 }
             }
         }
+        drop(slot);
     }
 }
 
@@ -205,6 +217,8 @@ mod tests {
         super::*,
         opentelemetry_proto::tonic::metrics::v1::{MetricsData, ResourceMetrics},
         prometheus_client::metrics::counter::Counter,
+        std::time::Duration,
+        tokio::time,
         wiremock::{Mock, MockServer, ResponseTemplate, matchers::path},
     };
 
@@ -226,7 +240,7 @@ mod tests {
                 .value
                 .as_ref()
                 .and_then(|value| value.value.as_ref()))
-                == (Some(&Value::StringValue("abc-123".to_string())))
+                == (Some(&Value::StringValue("abc-123".to_owned())))
         );
     }
 
@@ -266,7 +280,7 @@ mod tests {
     async fn shutdown_aborts_a_stalled_export() {
         let server = MockServer::start().await;
         Mock::given(path("/v1/metrics"))
-            .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(1)))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(1)))
             .mount(&server)
             .await;
         let forwarder = OtlpForwarder::spawn(
@@ -278,9 +292,9 @@ mod tests {
         );
         forwarder.forward(MetricsData::default(), "client-a");
 
-        tokio::time::timeout(
-            std::time::Duration::from_millis(200),
-            forwarder.shutdown_with_timeout(std::time::Duration::from_millis(10)),
+        time::timeout(
+            Duration::from_millis(200),
+            forwarder.shutdown_with_timeout(Duration::from_millis(10)),
         )
         .await
         .expect("shutdown must remain bounded");

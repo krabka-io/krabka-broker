@@ -112,7 +112,7 @@ impl KerberosRule {
                 to: to.to_owned(),
                 global,
             });
-            rest = if global { &after[1..] } else { after };
+            rest = after.strip_prefix('g').unwrap_or(after);
         }
 
         rest = rest.strip_prefix('/').unwrap_or(rest);
@@ -121,8 +121,8 @@ impl KerberosRule {
             Some('U') => Case::Upper,
             _ => Case::Preserve,
         };
-        if !matches!(case, Case::Preserve) {
-            rest = &rest[1..];
+        if let Some(stripped) = rest.strip_prefix(['L', 'U']) {
+            rest = stripped;
         }
         if !rest.is_empty() {
             return Err(invalid());
@@ -146,7 +146,10 @@ impl KerberosRule {
     ) -> Result<Option<String>, KerberosNameError> {
         let (result, case) = match self {
             Self::Default => (
-                (default_realm == params[0]).then(|| params[1].to_owned()),
+                match params {
+                    [realm, first, ..] if *realm == default_realm => Some((*first).to_owned()),
+                    _ => None,
+                },
                 Case::Preserve,
             ),
             Self::Translate(translation) => (translation.apply(params)?, translation.case),

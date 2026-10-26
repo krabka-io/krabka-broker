@@ -69,7 +69,10 @@ pub(super) fn validated_retained_time_scan_agrees(
     #[invariant(forall<j: Int, k: Int> 0 <= j && j < k && k < i@ ==> offsets@[j]@ < offsets@[k]@)]
     #[variant(offsets@.len() - i@)]
     while i < offsets.len() {
-        if i64::from(offsets[i]) > max_relative || (i > 0 && offsets[i - 1] >= offsets[i]) {
+        let &offset = offsets.get(i).ok_or(())?;
+        if i64::from(offset) > max_relative
+            || (i > 0 && matches!(offsets.get(i - 1), Some(&previous) if previous >= offset))
+        {
             return Err(());
         }
         i += 1;
@@ -85,7 +88,11 @@ pub(super) fn validated_retained_time_scan_agrees(
         #[invariant(forall<k: Int> 0 <= k && k < j@ && offsets@[k]@ < entries@[i@].coordinate@ ==> times@[k]@ <= entries@[i@].key@)]
         #[variant(offsets@.len() - j@)]
         while j < offsets.len() {
-            if offsets[j] < entries[i].coordinate && times[j] > entries[i].key {
+            if let (Some(&offset), Some(&time), Some(entry)) =
+                (offsets.get(j), times.get(j), entries.get(i))
+                && offset < entry.coordinate
+                && time > entry.key
+            {
                 return Err(());
             }
             j += 1;
@@ -96,12 +103,12 @@ pub(super) fn validated_retained_time_scan_agrees(
     #[invariant(start@ <= offsets@.len())]
     #[invariant(forall<i: Int> 0 <= i && i < start@ ==> offsets@[i]@ < minimum@)]
     #[variant(offsets@.len() - start@)]
-    while start < offsets.len() && offsets[start] < minimum {
+    while start < offsets.len() && matches!(offsets.get(start), Some(&offset) if offset < minimum) {
         start += 1;
     }
     proof_assert!(forall<i: Int> start@ <= i && i < offsets@.len() ==> offsets@[i]@ >= minimum@);
-    let retained_offsets = &offsets[start..];
-    let retained_times = &times[start..];
+    let retained_offsets = offsets.get(start..).ok_or(())?;
+    let retained_times = times.get(start..).ok_or(())?;
     proof_assert!(forall<i: Int> start@ <= i && i < times@.len()
         ==> times@[i] == retained_times@[i - start@]);
     let (remote_count, remote_floor, selected) =
@@ -109,14 +116,10 @@ pub(super) fn validated_retained_time_scan_agrees(
     let _local_selected =
         indexed_timestamp_scan_finds_first(entries, retained_offsets, retained_times, target);
     proof_assert!(remote_count == _count && remote_floor == local && selected == _local_selected);
-    match selected {
-        None => {
-            proof_assert!(forall<i: Int> start@ <= i && i < times@.len() ==> times@[i]@ < target@);
-            Ok((remote_count, remote_floor, local, None))
-        }
-        Some(index) => {
-            proof_assert!(forall<i: Int> start@ <= i && i < start@ + index@ ==> times@[i]@ < target@);
-            Ok((remote_count, remote_floor, local, Some(start + index)))
-        }
-    }
+    let Some(index) = selected else {
+        proof_assert!(forall<i: Int> start@ <= i && i < times@.len() ==> times@[i]@ < target@);
+        return Ok((remote_count, remote_floor, local, None));
+    };
+    proof_assert!(forall<i: Int> start@ <= i && i < start@ + index@ ==> times@[i]@ < target@);
+    Ok((remote_count, remote_floor, local, Some(start + index)))
 }

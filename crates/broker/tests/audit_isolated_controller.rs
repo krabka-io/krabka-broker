@@ -5,6 +5,7 @@
 //! nothing. Kafka never places a replica on a controller-only node. The first
 //! broker-only node to start creates the topic on itself, and its audit writer
 //! then records the broker start in that partition.
+#![cfg(test)]
 
 use {
     crate::support::controller_voters,
@@ -39,7 +40,7 @@ async fn only_a_broker_holds_the_audit_partition_under_an_isolated_controller() 
     )
     .await
     .expect("controller-only start");
-    controller.wait_until_controller_leader().await;
+    controller.wait_until_controller_leader().await.unwrap();
     let controller_created = controller
         .controller_image_for_test()
         .topic(AUDIT_TOPIC)

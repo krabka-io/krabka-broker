@@ -129,7 +129,7 @@ fn take_operation(input: NativeTokenStream) -> Group {
     operation
 }
 
-pub(crate) fn snapshot(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn snapshot(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let header = Snapshot::parse(&input.clone().into())?;
     let native = take_operation(input);
     Ok(edit_native_body(header.statements().into(), |mut body| {
@@ -139,7 +139,7 @@ pub(crate) fn snapshot(input: NativeTokenStream) -> Result<NativeTokenStream, Pa
     }))
 }
 
-pub(crate) fn hydrate(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn hydrate(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let header = Hydration::parse(&input.clone().into())?;
     let native = take_operation(input);
     Ok(edit_native_body(header.statements().into(), |body| {

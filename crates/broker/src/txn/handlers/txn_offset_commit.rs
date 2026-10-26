@@ -65,10 +65,15 @@
 use {
     krabka_ids::PartitionIndex,
     krabka_metadata::{AclOperation, ResourceType},
-    krabka_protocol::owned::{
-        txn_offset_commit_request::TxnOffsetCommitRequest,
-        txn_offset_commit_response::TxnOffsetCommitResponse,
+    krabka_protocol::{
+        owned::{
+            txn_offset_commit_request::TxnOffsetCommitRequest,
+            txn_offset_commit_response::TxnOffsetCommitResponse,
+        },
+        primitives::uuid::Uuid,
     },
+    std::{collections::HashSet, sync::Arc},
+    tokio::sync::oneshot,
 };
 
 mod batch;
@@ -113,13 +118,13 @@ use {
     },
 };
 
-pub(crate) async fn handle(
+pub async fn handle(
     broker: &Broker,
     mut req: TxnOffsetCommitRequest,
     version: i16,
     ctx: &RequestContext<'_>,
 ) -> Result<TxnOffsetCommitResponse, BrokerError> {
-    let partitions = broker.partitions.clone();
+    let partitions = Arc::clone(&broker.partitions);
 
     // ── ACL preamble: Write on TransactionalId, Read on the group ──
     if let Some(code) = preamble_refusal(broker, ctx, &req) {
@@ -147,15 +152,10 @@ pub(crate) async fn handle(
             AclOperation::Read,
             topic_names,
         );
-        let denied_topics: std::collections::HashSet<String> = topic_decisions
+        let denied_topics: HashSet<String> = topic_decisions
             .into_iter()
-            .filter_map(|(name, r)| {
-                if r == AuthorizationResult::Deny {
-                    Some(name.to_string())
-                } else {
-                    None
-                }
-            })
+            .filter(|&(_, r)| r == AuthorizationResult::Deny)
+            .map(|(name, _)| name.to_owned())
             .collect();
         let unknown_rows = unknown_partitions(&req.topics, &denied_topics, &image);
         (denied_topics, unknown_rows)
@@ -462,12 +462,12 @@ fn resolve_topics(
             if !id.is_nil()
                 && let Some(name) = image.topic_name_by_id(&id)
             {
-                topic.name = name.to_string();
+                name.clone_into(&mut topic.name);
             }
         } else {
-            topic.topic_id = image.topic(&topic.name).map_or_else(Default::default, |t| {
-                krabka_protocol::primitives::uuid::Uuid(t.topic_id.into_bytes())
-            });
+            topic.topic_id = image
+                .topic(&topic.name)
+                .map_or_else(Default::default, |t| Uuid(t.topic_id.into_bytes()));
         }
     }
 }
@@ -490,8 +490,8 @@ fn fencing_code(code: i16, version: i16) -> i16 {
 /// existence check flagged as unknown.
 fn reserved_keys(
     req: &TxnOffsetCommitRequest,
-    denied_topics: &std::collections::HashSet<String>,
-    unknown_rows: &std::collections::HashSet<TopicPartition>,
+    denied_topics: &HashSet<String>,
+    unknown_rows: &HashSet<TopicPartition>,
 ) -> Vec<TopicPartition> {
     req.topics
         .iter()
@@ -511,10 +511,7 @@ fn reserved_keys(
 /// The topic id [`resolve_topics`] gave `name`, or the zero id for a topic the
 /// request does not name. The per-partition validator of Kafka's
 /// `commitTransactionalOffset` sees this id for every `reserved` key.
-fn topic_id_of(
-    req: &TxnOffsetCommitRequest,
-    name: &str,
-) -> krabka_protocol::primitives::uuid::Uuid {
+fn topic_id_of(req: &TxnOffsetCommitRequest, name: &str) -> Uuid {
     req.topics
         .iter()
         .find(|topic| topic.name == name)
@@ -529,7 +526,7 @@ async fn reserve_offsets(
     keys: Vec<TopicPartition>,
     reserve: bool,
 ) -> Result<(), ()> {
-    let (reply, ack) = tokio::sync::oneshot::channel();
+    let (reply, ack) = oneshot::channel();
     handle
         .tx
         .send(GroupActorMessage::TxnOffsetReservation(
@@ -561,7 +558,7 @@ async fn mark_offsets_pending(
     appended: AppendedTxnOffsets,
     group_id: &str,
 ) -> Result<(), i16> {
-    let (reply, ack) = tokio::sync::oneshot::channel();
+    let (reply, ack) = oneshot::channel();
     if handle
         .tx
         .send(GroupActorMessage::AddPendingTxnOffsets {
@@ -591,8 +588,11 @@ async fn mark_offsets_pending(
 #[cfg(test)]
 mod tests {
     use {
-        super::*, crate::coordinator::unified::test_support::make_coord, assert2::check,
-        std::collections::HashSet, tokio::sync::oneshot,
+        super::*,
+        crate::coordinator::unified::test_support::make_coord,
+        assert2::check,
+        std::{collections::HashSet, time::Duration},
+        tokio::{sync::oneshot, time::timeout},
     };
 
     /// `validateTransactionalOffsetCommit` passes a `StaleMemberEpochException`
@@ -630,7 +630,7 @@ mod tests {
             AppendedTxnOffsets {
                 written_at: 4,
                 keys: vec![TopicPartition {
-                    topic: "orders".to_string(),
+                    topic: "orders".to_owned(),
                     partition: PartitionIndex(0),
                 }],
             },
@@ -647,7 +647,7 @@ mod tests {
             .expect("send FetchOffsets");
         check!(
             offsets.await.expect("FetchOffsets reply").pending_txn
-                == HashSet::from([("orders".to_string(), 0)])
+                == HashSet::from([("orders".to_owned(), 0)])
         );
 
         let (reply, ack) = oneshot::channel();
@@ -657,7 +657,7 @@ mod tests {
             .await
             .expect("send Shutdown");
         ack.await.expect("Shutdown ack");
-        tokio::time::timeout(std::time::Duration::from_secs(1), handle.tx.closed())
+        timeout(Duration::from_secs(1), handle.tx.closed())
             .await
             .expect("the actor's handle closes");
 
@@ -667,7 +667,7 @@ mod tests {
             AppendedTxnOffsets {
                 written_at: 5,
                 keys: vec![TopicPartition {
-                    topic: "orders".to_string(),
+                    topic: "orders".to_owned(),
                     partition: PartitionIndex(1),
                 }],
             },

@@ -47,10 +47,7 @@ fn body(item: &TokenStream, decision: &str) -> Result<TokenStream, ParseError> {
     })
 }
 
-pub(crate) fn expand(
-    meta: TokenStream,
-    item: NativeTokenStream,
-) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let decision = mode(meta, ["Allow", "Deny"])?;
     let generated = body(&item.clone().into(), decision)?;
     Ok(edit_native_body(item, |_| generated.into()))

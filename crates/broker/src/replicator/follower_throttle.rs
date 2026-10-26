@@ -34,7 +34,7 @@ use {
 /// not in sync. An empty response leaves a known lag as it was, because Kafka
 /// recomputes it only when the response carried bytes.
 #[derive(Debug, krabka_macros::FieldDefaults)]
-pub(crate) struct ReplicaLag {
+pub struct ReplicaLag {
     /// The lag in offsets, never below zero, or [`Self::UNKNOWN`].
     #[default(AtomicI64::new(Self::UNKNOWN))]
     lag: AtomicI64,
@@ -135,6 +135,7 @@ mod tests {
         },
         assert2::{assert, check},
         krabka_units::{bytes, bytes_per_sec},
+        std::{thread, time::Duration},
     };
 
     #[test]
@@ -327,7 +328,7 @@ mod tests {
                 fetched_rounds += 1;
                 record_replicated(&cfg, 5_000);
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            thread::sleep(Duration::from_millis(5));
         }
 
         check!(fetched_rounds == 1);

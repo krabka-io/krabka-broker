@@ -6,6 +6,7 @@ use {
     assert2::{assert, check},
     krabka_protocol::krabka::freeze::PATTERN_TYPE_ANY,
     krabka_units::convert::TimeExt as _,
+    std::iter,
 };
 
 krabka_macros::duration_parser_fixture!(
@@ -109,7 +110,7 @@ fn the_signing_flags_travel_together(extra: &[&str], parses: bool) {
 fn verifying_signatures_needs_a_local_key_file() {
     let base = ["krabka-guard", "-b", "localhost:9092", "freeze", "list"];
     assert!(
-        Cli::try_parse_from(base.iter().chain(["--verify-signatures"].iter())).is_err(),
+        Cli::try_parse_from(base.iter().chain(iter::once(&"--verify-signatures"))).is_err(),
         "verifying with no key file is refused"
     );
     assert!(

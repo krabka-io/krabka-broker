@@ -11,6 +11,8 @@ use {
         boot, connect, create_topic, describe, heartbeat, join_share_group, rejoin, total_assigned,
     },
     assert2::{assert, check},
+    std::time::Duration,
+    tokio::time,
 };
 
 /// A single member joins and advances to epoch 1 with an empty assignment,
@@ -37,7 +39,7 @@ async fn single_member_join_assignment() {
     );
     check!(resp.assignment.is_some() && total_assigned(&resp) == 0);
 
-    let assigned = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let assigned = time::timeout(Duration::from_secs(30), async {
         let mut epoch = resp.member_epoch;
         loop {
             let resp = client
@@ -49,7 +51,7 @@ async fn single_member_join_assignment() {
             if resp.assignment.is_some() {
                 return resp;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(100)).await;
         }
     })
     .await

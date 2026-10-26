@@ -35,17 +35,20 @@
 //!
 //! Gated `#[ignore]` (requires Docker); the Bazel target that owns this suite
 //! runs it with `--ignored`.
+#![cfg(test)]
 
 mod support;
 
 use {
     assert2::assert,
-    krabka_broker::BrokerHandle,
+    krabka_broker::{BrokerHandle, log_dir_id::LogDirIds},
     std::{
         collections::BTreeSet,
-        process::Command,
+        process::{Command, Output},
+        thread,
         time::{Duration, Instant},
     },
+    tokio::{task, time},
 };
 
 /// The release both halves of the differential use: krabka's client is this
@@ -93,7 +96,7 @@ fn parse_rows(stdout: &str) -> Vec<Row> {
                 let prefix = format!("{key}:");
                 line.split('\t')
                     .filter_map(|part| part.trim().strip_prefix(&prefix).map(str::trim))
-                    .map(str::to_string)
+                    .map(str::to_owned)
                     .next()
                     .unwrap_or_default()
             };
@@ -199,7 +202,7 @@ fn wait_until_a_partition_is_leaderless(side: &str, describe_one: &dyn Fn(&[&str
             Instant::now() < deadline,
             "{side}: no partition of {TOPIC} lost its leader within {CONVERGE_BUDGET:?}: {rows:?}",
         );
-        std::thread::sleep(POLL_GAP);
+        thread::sleep(POLL_GAP);
     }
 }
 
@@ -277,7 +280,7 @@ impl KrabkaCluster {
         // Until the replicator supervisor has reported every local replica's
         // owning directory, `directories` holds the unassigned sentinel and no
         // replica can be attributed to a disk.
-        let deadline = tokio::time::Instant::now() + CONVERGE_BUDGET;
+        let deadline = time::Instant::now() + CONVERGE_BUDGET;
         while handle
             .controller_image_for_test()
             .partitions_of(TOPIC)
@@ -286,18 +289,15 @@ impl KrabkaCluster {
             != usize::try_from(PARTITIONS).unwrap()
         {
             assert!(
-                tokio::time::Instant::now() < deadline,
+                time::Instant::now() < deadline,
                 "krabka: replica directories were never assigned",
             );
-            tokio::time::sleep(POLL_GAP).await;
+            time::sleep(POLL_GAP).await;
         }
 
-        let extra_id = krabka_broker::log_dir_id::LogDirIds::resolve(&[
-            primary.path().into(),
-            extra.path().into(),
-        ])
-        .id_for(extra.path())
-        .expect("extra dir id");
+        let extra_id = LogDirIds::resolve(&[primary.path().into(), extra.path().into()])
+            .id_for(extra.path())
+            .expect("extra dir id");
         let doomed: BTreeSet<i32> = handle
             .controller_image_for_test()
             .partitions_of(TOPIC)
@@ -392,7 +392,7 @@ impl OracleCluster {
     /// The tool, aimed at the oracle's own loopback listener from inside its
     /// container, so the oracle needs no published port and cannot collide
     /// with a concurrent suite.
-    fn exec(&self, args: &[&str]) -> std::process::Output { support::docker_exec(&self.name, args) }
+    fn exec(&self, args: &[&str]) -> Output { support::docker_exec(&self.name, args) }
 
     fn wait_ready(&self) {
         let deadline = Instant::now() + CONVERGE_BUDGET;
@@ -406,7 +406,7 @@ impl OracleCluster {
                 "{KAFKA_IMAGE} did not answer within {CONVERGE_BUDGET:?}:\n{}",
                 self.logs(),
             );
-            std::thread::sleep(POLL_GAP);
+            thread::sleep(POLL_GAP);
         }
     }
 
@@ -549,7 +549,7 @@ impl Drop for OracleCluster {
 async fn both_health_filters_print_a_partition_on_a_failed_log_dir() {
     // Kafka first: if the rule below is wrong about Kafka, this is where the
     // suite says so, before krabka is blamed for missing it.
-    let oracle = tokio::task::spawn_blocking(OracleCluster::start)
+    let oracle = task::spawn_blocking(OracleCluster::start)
         .await
         .expect("oracle boot");
     assert_health_filters_agree("apache/kafka:4.3.1", &oracle.health_report());

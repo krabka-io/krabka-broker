@@ -1,10 +1,12 @@
 //! Shared lifecycle for the broker's auxiliary HTTP listeners.
 
-pub(crate) fn spawn(
-    listener: tokio::net::TcpListener,
+use {std::io::Error, tokio::net::TcpListener, tokio_util::sync::CancellationToken};
+
+pub fn spawn(
+    listener: TcpListener,
     app: axum::Router,
-    shutdown: tokio_util::sync::CancellationToken,
-    on_error: impl FnOnce(std::io::Error) + Send + 'static,
+    shutdown: CancellationToken,
+    on_error: impl FnOnce(Error) + Send + 'static,
 ) {
     tokio::spawn(async move {
         let server = axum::serve(listener, app).with_graceful_shutdown(async move {

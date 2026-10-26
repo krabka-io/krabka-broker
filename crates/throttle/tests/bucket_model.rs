@@ -93,6 +93,7 @@
 //! consume from starting while a reset ran, and claimed the refill with a swap
 //! on an abstract `pending` counter. It could not reach either bug, and
 //! production shipped both.
+#![cfg(test)]
 
 use {
     krabka_throttle::whole_token_request,
@@ -100,6 +101,7 @@ use {
         AvailableTokens, BurstCapacity, RefillTokens, RequestedTokens, plan_consume,
     },
     stateright::{Checker, Model, Path, Property},
+    std::iter,
 };
 
 const TARGET_STATE_COUNT: usize = 4_000_000;
@@ -683,7 +685,7 @@ impl Model for BucketModel {
             Property::always("claimed_refill_conserved", |_, s: &BucketState| {
                 claimed_refill_conserved(s)
             }),
-            Property::always("grants_whole_tokens", |m: &BucketModel, s: &BucketState| {
+            Property::always("grants_whole_tokens", |m: &Self, s: &BucketState| {
                 s.granted.is_multiple_of(m.units_per_token)
             }),
             Property::sometimes("consumers_overlap", |_, s: &BucketState| {
@@ -700,7 +702,7 @@ impl Model for BucketModel {
             Property::sometimes("refill_in_flight", |_, s: &BucketState| s.in_flight() > 0),
             Property::sometimes("refill_granted", |_, s: &BucketState| s.granted > s.burst),
             Property::sometimes("refill_capped", |_, s: &BucketState| s.capped > 0),
-            Property::sometimes("burst_shrunk", |m: &BucketModel, s: &BucketState| {
+            Property::sometimes("burst_shrunk", |m: &Self, s: &BucketState| {
                 s.resets > 0 && s.burst < m.configs[0].burst
             }),
             Property::sometimes("bucket_drained", |_, s: &BucketState| {
@@ -886,7 +888,7 @@ fn replay(model: &BucketModel, schedule: &[Vec<Act>]) -> Option<BucketState> {
 /// its second step to its last.
 fn consume(consumer: usize, req: u64, steps: usize) -> Vec<Act> {
     let mut acts = vec![Act::StartConsume { consumer, req }];
-    acts.extend(std::iter::repeat_n(Act::StepConsumer(consumer), steps));
+    acts.extend(iter::repeat_n(Act::StepConsumer(consumer), steps));
     acts
 }
 
@@ -894,7 +896,7 @@ fn consume(consumer: usize, req: u64, steps: usize) -> Vec<Act> {
 /// under the lock.
 fn reset(steps: usize) -> Vec<Act> {
     let mut acts = vec![Act::StartReset { config: 1 }];
-    acts.extend(std::iter::repeat_n(Act::StepResetter, steps));
+    acts.extend(iter::repeat_n(Act::StepResetter, steps));
     acts
 }
 

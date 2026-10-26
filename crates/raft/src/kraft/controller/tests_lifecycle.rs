@@ -18,6 +18,7 @@ use {
     assert2::{assert, check},
     krabka_units::prelude::{millis, secs},
     std::time::Duration as StdDuration,
+    tokio::time,
 };
 
 #[test]
@@ -82,7 +83,7 @@ async fn engine_following_leader_reflects_current_role() {
 #[tokio::test(start_paused = true)]
 async fn sleep_until_opt_waits_for_some_and_never_completes_for_none() {
     assert2::assert!(
-        tokio::time::timeout(StdDuration::from_millis(1), sleep_until_opt(None))
+        time::timeout(StdDuration::from_millis(1), sleep_until_opt(None))
             .await
             .is_err()
     );
@@ -90,13 +91,13 @@ async fn sleep_until_opt_waits_for_some_and_never_completes_for_none() {
     let deadline = Instant::now() + Duration::from_millis(50);
     let mut sleep = Box::pin(sleep_until_opt(Some(deadline)));
     assert2::assert!(
-        tokio::time::timeout(StdDuration::from_millis(1), &mut sleep)
+        time::timeout(StdDuration::from_millis(1), &mut sleep)
             .await
             .is_err()
     );
-    tokio::time::advance(Duration::from_millis(50)).await;
+    time::advance(Duration::from_millis(50)).await;
     assert2::assert!(
-        tokio::time::timeout(StdDuration::from_millis(1), sleep)
+        time::timeout(StdDuration::from_millis(1), sleep)
             .await
             .is_ok()
     );
@@ -150,7 +151,7 @@ async fn single_voter_auto_elects_on_election_timeout() {
         .election_timeout(millis(80))
         .call();
     // The election timer is armed at construction; wait for it to fire.
-    tokio::time::timeout(
+    time::timeout(
         StdDuration::from_secs(5),
         await_leader(&ctrl, Some(NodeId(1))),
     )
@@ -179,7 +180,7 @@ async fn follower_with_live_leader_does_not_elect() {
     // Keep re-announcing leader 2 faster than the fetch watchdog would
     // accumulate the configured number of misses; the leader must remain 2.
     for _ in 0..6 {
-        tokio::time::sleep(StdDuration::from_millis(40)).await;
+        time::sleep(StdDuration::from_millis(40)).await;
         ctrl.inject_event(Event::ReceiveBeginQuorumEpoch {
             leader_id: NodeId(2),
             leader_epoch: 1,

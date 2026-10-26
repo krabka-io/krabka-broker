@@ -22,12 +22,14 @@ struct ExtraArgument {
     ty: Type,
 }
 
-fn extra_arguments(extra: &[Field]) -> Vec<ExtraArgument> {
+fn extra_arguments(extra: &[Field]) -> Result<Vec<ExtraArgument>, ParseError> {
     extra
         .iter()
-        .map(|field| ExtraArgument {
-            name: field.ident.clone().expect("named field"),
-            ty: field.ty.clone(),
+        .map(|field| {
+            Ok(ExtraArgument {
+                name: field_ident(field, "reconciliation projection")?.clone(),
+                ty: field.ty.clone(),
+            })
         })
         .collect()
 }
@@ -65,7 +67,7 @@ fn extra_fields(item: &ItemStruct, common: &[&str]) -> Result<Vec<Field>, ParseE
     Ok(extra)
 }
 
-pub(crate) fn member(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn member(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let extra = extra_fields(&item, &[
         "id",
         "member_epoch",
@@ -74,7 +76,7 @@ pub(crate) fn member(item: ItemStruct) -> Result<TokenStream, ParseError> {
         "pending_revocation",
         "target",
     ])?;
-    let arguments = extra_arguments(&extra);
+    let arguments = extra_arguments(&extra)?;
     let visibility = &item.vis;
     let members = moxy::template! {
         {{ visibility }} fn from_member(
@@ -96,7 +98,7 @@ pub(crate) fn member(item: ItemStruct) -> Result<TokenStream, ParseError> {
     Ok(impl_block(item, &TokenStream::new(), &members))
 }
 
-pub(crate) fn group(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn group(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let extra = extra_fields(&item, &[
         "group_epoch",
         "metadata_hash",
@@ -105,7 +107,7 @@ pub(crate) fn group(item: ItemStruct) -> Result<TokenStream, ParseError> {
         "client_owned",
         "advertised",
     ])?;
-    let arguments = extra_arguments(&extra);
+    let arguments = extra_arguments(&extra)?;
     let member_list = named_fields(&item, "ReconciliationGroup")?
         .iter()
         .find(|field| {
@@ -114,7 +116,7 @@ pub(crate) fn group(item: ItemStruct) -> Result<TokenStream, ParseError> {
                 .as_ref()
                 .is_some_and(|ident| ident.text() == "members")
         })
-        .expect("validated member field")
+        .ok_or_else(|| ParseError::new(item.ident.span(), "expected a `members` field"))?
         .ty
         .clone();
     let visibility = &item.vis;
@@ -160,7 +162,7 @@ pub(crate) fn group(item: ItemStruct) -> Result<TokenStream, ParseError> {
     Ok(impl_block(item, &TokenStream::new(), &members))
 }
 
-pub(crate) fn action(item: ItemEnum) -> Result<TokenStream, ParseError> {
+pub fn action(item: ItemEnum) -> Result<TokenStream, ParseError> {
     if !item.generics.params.is_empty() {
         return Err(ParseError::new(
             item.ident.span(),
@@ -206,7 +208,7 @@ pub(crate) fn action(item: ItemEnum) -> Result<TokenStream, ParseError> {
     })
 }
 
-pub(crate) fn epoch(item: ItemStruct) -> Result<TokenStream, ParseError> {
+pub fn epoch(item: ItemStruct) -> Result<TokenStream, ParseError> {
     let fields = named_fields(&item, "ModelEpochLedger")?;
     let epoch = fields.iter().find(|field| {
         field

@@ -1,6 +1,7 @@
 use {
     super::*,
     crate::{jwks::*, oauth::*},
+    proptest::collection,
 };
 
 // A wide integer closed-form oracle, independent of the incremental publisher.
@@ -98,7 +99,7 @@ fn publication_history_and_cache_age_control_controller_admission() {
 proptest! {
     #[test]
     fn arbitrary_publication_traces_match_wide_integer_count(
-        raw in any::<u64>(), fetches in proptest::collection::vec(any::<bool>(), 0..128),
+        raw in any::<u64>(), fetches in collection::vec(any::<bool>(), 0..128),
     ) {
         let initial = raw & !1;
         let actual = super::super::jwks_publication::publication_trace(initial, &fetches);

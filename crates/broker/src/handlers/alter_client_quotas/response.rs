@@ -21,6 +21,7 @@ use {
             },
         },
     },
+    std::fmt,
 };
 
 fn entity_rows(entity: &[(String, Option<String>)]) -> Vec<RespEntity> {
@@ -52,7 +53,7 @@ pub(super) fn err_entry(entity: &[(String, Option<String>)], code: i16, msg: Str
     }
 }
 
-pub(super) fn apply_submit_error(entry_results: &mut [RespEntry], error: impl std::fmt::Display) {
+pub(super) fn apply_submit_error(entry_results: &mut [RespEntry], error: impl fmt::Display) {
     stamp_unset(
         entry_results,
         COORDINATOR_NOT_AVAILABLE,

@@ -1,5 +1,6 @@
 //! The flags `#[krabka_env]` gives a clap argument struct, read back from the
 //! command clap builds and from what that command parses.
+#![cfg(test)]
 
 use {
     assert2::assert,

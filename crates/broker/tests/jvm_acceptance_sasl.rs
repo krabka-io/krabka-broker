@@ -20,6 +20,7 @@
 //! file. Each child therefore carries an explicit `#[path]` onto the sibling
 //! `jvm_acceptance_sasl/` directory. `jvm_acceptance` and `support` are
 //! `tests/<name>/mod.rs` helpers, which the crate-root rule already resolves.
+#![cfg(test)]
 
 #[path = "jvm_acceptance_sasl/acl_authorized.rs"]
 mod acl_authorized;

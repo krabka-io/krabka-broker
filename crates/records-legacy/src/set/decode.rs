@@ -87,13 +87,12 @@ fn decode_into(
         }
         let offset = cur.get_i64();
         let size = cur.get_i32();
-        if size < 0 {
+        let Ok(size) = usize::try_from(size) else {
             return Err(LegacyRecordsError::NegativeLength {
                 label: "message_size",
                 len: size,
             });
-        }
-        let size = usize::try_from(size).expect("nonnegative i32 fits usize");
+        };
         if cur.remaining() < size {
             return Err(LegacyRecordsError::Truncated {
                 needed: size - cur.remaining(),
@@ -128,10 +127,11 @@ fn decode_into(
             // offset. Retained records can have gaps after compaction.
             // An empty wrapper has no offsets to reconstruct.
             if matches!(msg.magic, Magic::V1)
-                && let Some(last) = out[start_len..].last()
+                && let Some(inner) = out.get_mut(start_len..)
+                && let Some(last) = inner.last()
             {
                 let base_abs = i128::from(offset) - i128::from(last.offset.0);
-                for rec in &mut out[start_len..] {
+                for rec in inner {
                     let absolute = base_abs + i128::from(rec.offset.0);
                     rec.offset = Offset(i64::try_from(absolute).map_err(|_| {
                         LegacyRecordsError::Malformed("absolute inner offset exceeds i64".into())
@@ -157,6 +157,7 @@ mod tests {
         bytes::{BufMut, Bytes, BytesMut},
         krabka_compression::CompressionError,
         krabka_units::prelude::{bytes, kibibytes},
+        std::iter,
     };
 
     fn record_at(offset: i64) -> ParsedRecord {
@@ -351,7 +352,7 @@ mod tests {
             offset: Offset(0),
             timestamp: Some(5),
             key: None,
-            value: Some(Bytes::from(big.clone())),
+            value: Some(Bytes::from(big)),
         }];
         let buf = compressed_bytes(&recs, Magic::V1, CompressionType::Gzip);
         let decoded = decode_bytes(&buf);
@@ -388,7 +389,7 @@ mod tests {
         encode_compressed_message_set(&inner, Magic::V1, CompressionType::Gzip, &mut buf).unwrap();
 
         let decoded = decode_bytes(&buf);
-        let expected = std::iter::once(flat).chain(inner).collect::<Vec<_>>();
+        let expected = iter::once(flat).chain(inner).collect::<Vec<_>>();
         assert2::assert!(decoded == expected);
     }
 }

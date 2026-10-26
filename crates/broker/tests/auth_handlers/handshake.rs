@@ -42,8 +42,10 @@ use {
         },
     },
     krabka_security::SaslMechanism,
+    krabka_units::{ByteSize, convert::ByteSizeExt},
     std::{
         fmt::Debug,
+        path::Path,
         time::{Duration, Instant},
     },
     tokio::{
@@ -65,7 +67,7 @@ async fn api_versions_reachable_pre_auth_on_sasl_listener() {
         handle,
         addr: _addr,
         mut stream,
-    } = alice_plain_socket("alice-secret".to_string()).await;
+    } = alice_plain_socket("alice-secret".to_owned()).await;
 
     let av_resp: ApiVersionsResponse = exchange()
         .stream(&mut stream)
@@ -107,7 +109,7 @@ async fn metadata_rejected_pre_auth_on_sasl_listener() {
         handle,
         addr: _addr,
         mut stream,
-    } = alice_plain_socket("alice-secret".to_string()).await;
+    } = alice_plain_socket("alice-secret".to_owned()).await;
 
     // Send Metadata (api_key=3, v12, flexible) WITHOUT any auth.
     let md_req = MetadataRequest::default();
@@ -121,11 +123,9 @@ async fn metadata_rejected_pre_auth_on_sasl_listener() {
         .header(RequestHeaderEncoding::Flexible)
         .client_id("krabka-t19-test")
         .body(&md_body)
-        .maybe_capacity(Some(
-            <krabka_units::ByteSize as krabka_units::convert::ByteSizeExt>::from_bytes(
-                u64::try_from(32 + md_body.len()).expect("frame capacity fits u64"),
-            ),
-        ))
+        .maybe_capacity(Some(<ByteSize as ByteSizeExt>::from_bytes(
+            u64::try_from(32 + md_body.len()).expect("frame capacity fits u64"),
+        )))
         .call();
 
     write_frame(&mut stream, &frame, None).await.unwrap();
@@ -152,12 +152,12 @@ async fn unsupported_mechanism_answers_33_then_closes() {
         handle,
         addr,
         mut stream,
-    } = alice_plain_socket("alice-secret".to_string()).await;
+    } = alice_plain_socket("alice-secret".to_owned()).await;
 
     // ── 1. SaslHandshake with "GSSAPI" (not in enabled list).
     let mut sh_body = BytesMut::new();
     SaslHandshakeRequest {
-        mechanism: "GSSAPI".to_string(),
+        mechanism: "GSSAPI".to_owned(),
         ..Default::default()
     }
     .encode(&mut sh_body, 1)
@@ -191,7 +191,7 @@ async fn unsupported_mechanism_answers_33_then_closes() {
     // the connection is closed: a retry on it gets no answer.
     let mut plain_body = BytesMut::new();
     SaslHandshakeRequest {
-        mechanism: "PLAIN".to_string(),
+        mechanism: "PLAIN".to_owned(),
         ..Default::default()
     }
     .encode(&mut plain_body, 1)
@@ -234,10 +234,10 @@ async fn unsupported_mechanism_answers_33_then_closes() {
     handle.shutdown().await;
 }
 
-async fn start_plain_sasl_broker(log_dir: &std::path::Path) -> krabka_broker::BrokerHandle {
+async fn start_plain_sasl_broker(log_dir: &Path) -> krabka_broker::BrokerHandle {
     let mut cfg = sasl_plaintext_mechanisms(log_dir.to_path_buf(), vec![SaslMechanism::Plain]);
     cfg.plain_credentials
-        .insert("alice".to_string(), alice_password());
+        .insert("alice".to_owned(), alice_password());
     krabka_broker::Broker::start(cfg)
         .await
         .expect("broker must start")
@@ -246,7 +246,7 @@ async fn start_plain_sasl_broker(log_dir: &std::path::Path) -> krabka_broker::Br
 async fn plain_handshake(stream: &mut TcpStream, version: i16) -> SaslHandshakeResponse {
     let mut body = BytesMut::new();
     SaslHandshakeRequest {
-        mechanism: "PLAIN".to_string(),
+        mechanism: "PLAIN".to_owned(),
         ..Default::default()
     }
     .encode(&mut body, version)
@@ -622,7 +622,7 @@ async fn a_request_after_the_handshake_answers_illegal_sasl_state_when_kafka_can
     let mut cfg =
         sasl_plaintext_mechanisms(log_dir.path().to_path_buf(), vec![SaslMechanism::Plain]);
     cfg.plain_credentials
-        .insert("alice".to_string(), alice_password());
+        .insert("alice".to_owned(), alice_password());
     cfg.connection_failed_authentication_delay = krabka_units::millis(MID_EXCHANGE_DELAY_MS);
     let delay = Duration::from_millis(u64::from(MID_EXCHANGE_DELAY_MS));
     let handle = krabka_broker::Broker::start(cfg)

@@ -2,9 +2,13 @@
 
 pub use super::share::{FetchByteLimit, RequestWaitMillis};
 use {
+    crate::support::records,
     krabka_ids::{Offset, PartitionIndex},
     krabka_protocol::{
-        owned::fetch_request::{FetchPartition, FetchRequest, FetchTopic, ForgottenTopic},
+        owned::{
+            fetch_request::{FetchPartition, FetchRequest, FetchTopic, ForgottenTopic},
+            fetch_response::PartitionData,
+        },
         primitives::uuid::Uuid,
     },
 };
@@ -216,10 +220,7 @@ pub fn incremental_session_fetch(
 }
 
 /// Check a successful partition's v2 record count against the caller's expected count.
-pub fn check_record_count(
-    partition: &krabka_protocol::owned::fetch_response::PartitionData,
-    expected: usize,
-) {
+pub fn check_record_count(partition: &PartitionData, expected: usize) {
     assert2::assert!(partition.error_code == 0);
-    assert2::assert!(crate::support::records::record_count(partition.records.as_ref()) == expected);
+    assert2::assert!(records::record_count(partition.records.as_ref()) == expected);
 }

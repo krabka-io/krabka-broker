@@ -4,7 +4,9 @@
 use {
     super::{QuorumWalStore, engine::WalShardEngine},
     crate::{
-        error::BrokerError, partition::AppendedBatch, partition_writer::run_produce_append_batch,
+        error::BrokerError,
+        partition::{AppendedBatch, ProduceData},
+        partition_writer::run_produce_append_batch,
         test_support::default_records_batch,
     },
     krabka_ids::{Offset, PartitionIndex},
@@ -12,7 +14,8 @@ use {
     krabka_log::{Log, LogConfig},
     krabka_protocol::records::RecordBatch,
     std::{
-        path::Path,
+        iter,
+        path::{Path, PathBuf},
         sync::{Arc, Mutex},
     },
     uuid::Uuid,
@@ -25,8 +28,8 @@ pub(super) fn open_log(path: &Path) -> Arc<Mutex<Log>> {
 pub(super) fn source_log(root: &Path) -> Arc<Mutex<Log>> { open_log(&root.join("source")) }
 
 pub(super) fn local_replicas(count: usize) -> (Vec<tempfile::TempDir>, Arc<WalShardEngine>) {
-    let dirs = (0..count)
-        .map(|_| tempfile::tempdir().unwrap())
+    let dirs = iter::repeat_with(|| tempfile::tempdir().unwrap())
+        .take(count)
         .collect::<Vec<_>>();
     let logs = dirs
         .iter()
@@ -78,10 +81,7 @@ pub(super) async fn append_source(
     let (results, leo, _) = run_produce_append_batch(
         &store.source,
         None,
-        (
-            vec![crate::partition::ProduceData::Owned(batch(records))],
-            Vec::new(),
-        ),
+        (vec![ProduceData::Owned(batch(records))], Vec::new()),
     )
     .await
     .unwrap();
@@ -107,7 +107,7 @@ pub(super) fn fresh_distributed_store(root: &Path) -> QuorumWalStore {
 
 /// A source log's directory and its open handle.
 pub(super) struct ReopenableSource {
-    pub(super) dir: std::path::PathBuf,
+    pub(super) dir: PathBuf,
     pub(super) log: Arc<Mutex<Log>>,
 }
 

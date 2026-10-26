@@ -23,7 +23,7 @@ use {
     krabka_protocol::{
         UnknownTaggedFields, owned::describe_transactions_response::TransactionState,
     },
-    krabka_units::mebibytes,
+    krabka_units::{Time, convert::TimeExt, mebibytes},
     std::sync::Arc,
     tempfile::{TempDir, tempdir},
 };
@@ -250,7 +250,7 @@ async fn an_expired_completed_transaction_is_tombstoned_and_dropped() {
     check!(
         describe_transactions_row(&coordinator).await
             == TransactionState {
-                error_code: crate::codes::NONE,
+                error_code: codes::NONE,
                 transactional_id: TID.to_owned(),
                 transaction_state: "CompleteCommit".to_owned(),
                 transaction_timeout_ms: 60_000,
@@ -266,7 +266,7 @@ async fn an_expired_completed_transaction_is_tombstoned_and_dropped() {
         .expire_transactional_ids(EXPIRY_MS + 1, EXPIRY_MS)
         .await;
 
-    check!(expired == vec![TID.to_string()]);
+    check!(expired == vec![TID.to_owned()]);
     // `DescribeTransactions` no longer returns the id: the coordinator holds
     // no entry, so the handler answers TRANSACTIONAL_ID_NOT_FOUND.
     check!(
@@ -286,7 +286,7 @@ async fn an_expired_completed_transaction_is_tombstoned_and_dropped() {
     check!(
         after[1]
             == StateRecord {
-                transactional_id: TID.to_string(),
+                transactional_id: TID.to_owned(),
                 value: None,
             }
     );
@@ -323,7 +323,7 @@ async fn a_prepared_two_pc_transaction_survives_indefinitely() {
         check!(
             describe_transactions_row(&coordinator).await
                 == TransactionState {
-                    error_code: crate::codes::NONE,
+                    error_code: codes::NONE,
                     transactional_id: TID.to_owned(),
                     transaction_state: "PrepareCommit".to_owned(),
                     transaction_timeout_ms: NO_TIMEOUT_MS,
@@ -391,7 +391,7 @@ async fn replaying_a_tombstone_reclaims_the_producer_id_index() {
     let expired = coordinator
         .expire_transactional_ids(EXPIRY_MS + 1, EXPIRY_MS)
         .await;
-    assert!(expired == vec![TID.to_string()]);
+    assert!(expired == vec![TID.to_owned()]);
 
     // The broker is elected again and replays the log: the value record, then
     // the tombstone that follows it.
@@ -488,12 +488,7 @@ async fn a_sweep_tick_refreshes_leadership_before_expiring() {
             krabka_metadata::LeaderEpoch(2),
         ))
         .build();
-    sweep_once(
-        &coordinator,
-        &source,
-        <krabka_units::Time as krabka_units::convert::TimeExt>::from_millis(1),
-    )
-    .await;
+    sweep_once(&coordinator, &source, <Time as TimeExt>::from_millis(1)).await;
 
     check!(coordinator.get(TID).is_none());
     check!(
@@ -509,7 +504,7 @@ async fn a_sweep_tick_refreshes_leadership_before_expiring() {
     check!(
         records[1]
             == StateRecord {
-                transactional_id: TID.to_string(),
+                transactional_id: TID.to_owned(),
                 value: None,
             }
     );

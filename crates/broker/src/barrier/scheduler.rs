@@ -15,17 +15,18 @@ use {
     },
     krabka_units::convert::TimeExt as _,
     std::sync::Arc,
+    tokio::time,
     tokio_util::sync::CancellationToken,
     tracing::{debug, info},
 };
 
 /// Entry point of the spawned task. It returns when `shutdown` is cancelled.
-pub(crate) async fn run(
+pub async fn run(
     coordinator: Arc<BarrierCoordinator>,
     controller: Arc<dyn MetadataSource>,
     shutdown: CancellationToken,
 ) {
-    let tick = tokio::time::interval(coordinator.scheduler_tick().to_std());
+    let tick = time::interval(coordinator.scheduler_tick().to_std());
     run_every(tick, &shutdown, || {
         inject_due(&coordinator, controller.as_ref())
     })
@@ -52,6 +53,8 @@ mod tests {
         super::*,
         crate::barrier::coordinator::test_support::{Fixture, GROUP, spec},
         krabka_units::millis,
+        std::time::Duration,
+        tokio::time,
     };
 
     /// A coordinator that holds one periodic group, and the metadata source it
@@ -89,7 +92,7 @@ mod tests {
             controller,
         } = periodic_group(&fixture).await;
 
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        time::sleep(Duration::from_millis(5)).await;
 
         let before = coordinator.list_cuts(GROUP).await.expect("list cuts");
         assert2::check!(before.is_empty());
@@ -116,7 +119,7 @@ mod tests {
             shutdown.clone(),
         ));
 
-        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        time::sleep(Duration::from_millis(15)).await;
         assert2::check!(!task.is_finished());
         shutdown.cancel();
         task.await.expect("task completes on shutdown");

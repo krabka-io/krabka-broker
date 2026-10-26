@@ -14,7 +14,7 @@
 //! The certificate reaches this module after rustls has verified it, so a
 //! small DER reader over the few structures a Subject needs is enough.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, mem};
 
 /// Returns the Subject DN of the DER certificate `cert_der` in the RFC 2253
 /// form `X500Principal.getName()` gives, or `None` when the bytes are not a
@@ -285,7 +285,7 @@ impl<'a> Tlv<'a> {
             usize::from(first)
         } else {
             let octets = usize::from(first & 0x7F);
-            if octets == 0 || octets > std::mem::size_of::<usize>() || rest.len() < octets {
+            if octets == 0 || octets > mem::size_of::<usize>() || rest.len() < octets {
                 return None;
             }
             let (length, after) = rest.split_at(octets);
@@ -302,7 +302,7 @@ impl<'a> Tlv<'a> {
         let tlv = Self {
             tag: found,
             value,
-            whole: &input[..header + length],
+            whole: input.get(..header + length)?,
         };
         Some(TlvAndRest { tlv, rest: after })
     }

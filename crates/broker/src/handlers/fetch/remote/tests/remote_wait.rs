@@ -26,6 +26,7 @@ use {
         incremental_alter_configs_response::IncrementalAlterConfigsResponse,
     },
     std::time::{Duration, Instant},
+    tokio::time,
 };
 
 /// A tiered broker that reads the tier with one reader thread, so a test that
@@ -84,7 +85,7 @@ pub(super) async fn eventually(mut done: impl FnMut() -> bool) {
             Instant::now() <= deadline,
             "the alter never reached the image"
         );
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -99,7 +100,7 @@ async fn the_remote_fetch_wait_bounds_a_read_that_cannot_start_and_follows_an_al
     let held = reader.pool.acquire().await.expect("the only reader slot");
     let mut queued_read = out_of_range_at(&part, 0);
     let started = Instant::now();
-    let served = tokio::time::timeout(
+    let served = time::timeout(
         Duration::from_secs(20),
         try_remote_read(
             &broker,
@@ -135,7 +136,7 @@ async fn the_remote_fetch_wait_bounds_a_read_that_cannot_start_and_follows_an_al
     let (served, ()) = tokio::join!(
         try_remote_read(&broker, &mut waiting, &part, &mut wait),
         async {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            time::sleep(Duration::from_millis(500)).await;
             drop(held);
         }
     );

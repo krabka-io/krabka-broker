@@ -2,11 +2,14 @@
 
 use {
     crate::api_names::{Section, parse_sections, section},
-    moxy::{ast::ParseError, token::TokenStream},
+    moxy::{
+        ast::ParseError,
+        token::{Ident, TokenStream},
+    },
 };
 
 /// Expands `throttle_probes! { ... }` into an array of `(API_KEY, Probe)`.
-pub(crate) fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let sections: Vec<Section> =
         parse_sections(tokens, "=", &["throttled", "unthrottled", "legacy_split"])?;
 
@@ -71,7 +74,7 @@ pub(crate) fn expand(tokens: TokenStream) -> Result<TokenStream, ParseError> {
 }
 
 /// Both canonical and legacy probes share the registry entry and schema alias.
-fn probe_entry(module: &moxy::token::Ident, body: &TokenStream) -> TokenStream {
+fn probe_entry(module: &Ident, body: &TokenStream) -> TokenStream {
     moxy::template! {
         (krabka_protocol::owned::{{ module }}::API_KEY, {
             fn probe(version: ApiVersion) -> ThrottlePosition {

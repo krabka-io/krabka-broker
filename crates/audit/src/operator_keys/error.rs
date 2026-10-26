@@ -4,7 +4,7 @@
 //! so one unusable entry fails the load. It never shrinks the set that the
 //! later signature checks run against.
 
-use std::path::PathBuf;
+use std::{io::Error, path::PathBuf};
 
 /// Failures that stop [`OperatorKeys::load`](crate::operator_keys::OperatorKeys::load),
 /// and with it the broker.
@@ -33,7 +33,7 @@ pub enum OperatorKeyError {
         path: PathBuf,
         /// The underlying I/O failure.
         #[source]
-        source: std::io::Error,
+        source: Error,
     },
     /// The file does not hold a raw Ed25519 public key.
     #[error(

@@ -1,6 +1,6 @@
 //! Snapshot-transfer chunk admission.
 
-use creusot_std::prelude::*;
+use {creusot_std::prelude::*, std::cmp::Ordering};
 
 /// Pure decision for one snapshot response chunk.
 #[krabka_macros::model_type]
@@ -107,9 +107,9 @@ pub fn snapshot_chunk_admission(
         return SnapshotChunkDecision::Restart;
     };
     match next_position.cmp(&declared_size) {
-        std::cmp::Ordering::Greater => SnapshotChunkDecision::Restart,
-        std::cmp::Ordering::Equal => SnapshotChunkDecision::Complete,
-        std::cmp::Ordering::Less => SnapshotChunkDecision::Continue { next_position },
+        Ordering::Greater => SnapshotChunkDecision::Restart,
+        Ordering::Equal => SnapshotChunkDecision::Complete,
+        Ordering::Less => SnapshotChunkDecision::Continue { next_position },
     }
 }
 

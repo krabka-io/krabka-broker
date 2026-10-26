@@ -24,8 +24,16 @@ use {
     },
     assert2::{assert, check},
     krabka_broker::BrokerHandle,
-    std::sync::OnceLock,
-    tokio::sync::{Mutex, MutexGuard},
+    std::{
+        collections::HashSet,
+        fs,
+        sync::OnceLock,
+        time::{Duration, Instant},
+    },
+    tokio::{
+        sync::{Mutex, MutexGuard},
+        time,
+    },
 };
 
 async fn shutdown_three(h1: BrokerHandle, h2: BrokerHandle, h3: BrokerHandle) {
@@ -90,12 +98,12 @@ async fn preplacement_log_dir_preference_survives_until_reassignment_materialize
     .await;
     assert!(response[0].1 == vec![(0, 0)]);
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let described = describe_log_dirs(target_addr).await;
         let materialized = described.results.iter().any(|result| {
-            std::fs::canonicalize(&result.log_dir).ok().as_deref()
-                == std::fs::canonicalize(target_dir).ok().as_deref()
+            fs::canonicalize(&result.log_dir).ok().as_deref()
+                == fs::canonicalize(target_dir).ok().as_deref()
                 && result.topics.iter().any(|topic| {
                     topic.name == "preplaced"
                         && topic.partitions.iter().any(|partition| {
@@ -107,10 +115,10 @@ async fn preplacement_log_dir_preference_survives_until_reassignment_materialize
             break;
         }
         assert!(
-            std::time::Instant::now() <= deadline,
+            Instant::now() <= deadline,
             "replica was not materialized in the preferred log dir"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        time::sleep(Duration::from_millis(100)).await;
     }
     assert!(target_dir.join("preplaced-0").is_dir());
 
@@ -194,8 +202,8 @@ async fn alter_then_complete_via_isr_catchup() {
     })
     .await;
     let pr = h1.partition_record_for_test("foo", 0).expect("partition");
-    let actual: std::collections::HashSet<u64> = pr.replicas.iter().map(|n| n.0).collect();
-    let expected: std::collections::HashSet<u64> = target.iter().map(|n| node_id(*n).0).collect();
+    let actual: HashSet<u64> = pr.replicas.iter().map(|n| n.0).collect();
+    let expected: HashSet<u64> = target.iter().map(|n| node_id(*n).0).collect();
     assert!(
         actual == expected,
         "replicas after completion should match target; pr={pr:?}"
@@ -301,7 +309,7 @@ async fn cancel_via_null_replicas_reverts() {
         })
         .expect("live original replica");
     let mut leader_rx = observer.watch_leader_for_test();
-    let leader = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let leader = time::timeout(Duration::from_secs(30), async {
         loop {
             if let Some(leader) = *leader_rx.borrow_and_update()
                 && handles

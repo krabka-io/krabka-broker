@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 mod support;
 
 use {
@@ -6,6 +8,7 @@ use {
     krabka_client_admin::DeleteRecordsOp,
     krabka_client_core::{ClientError, Connection, ConnectionOptions, fetch_partition},
     krabka_protocol::primitives::uuid::Uuid as WireUuid,
+    tokio::net,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -13,7 +16,7 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
     let (_dir, _broker, bootstrap, mut admin) = standalone_admin().await;
     admin
         .create_topics(
-            &[topic_spec("wal".to_string(), 1, 1)],
+            &[topic_spec("wal".to_owned(), 1, 1)],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(5)),
         )
         .await
@@ -24,7 +27,7 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
         producer
             .send(
                 producer_record()
-                    .topic("wal".to_string())
+                    .topic("wal".to_owned())
                     .maybe_partition(Some(0))
                     .maybe_value(Some(Some(format!("frame-{offset}").into_bytes().into())))
                     .call(),
@@ -33,11 +36,12 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
             .unwrap();
     }
     producer.flush().await.unwrap();
+    drop(producer);
 
     let outcomes = admin
         .delete_records(
             &[DeleteRecordsOp {
-                topic: "wal".to_string(),
+                topic: "wal".to_owned(),
                 partition: 0,
                 offset: 50,
             }],
@@ -49,7 +53,7 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
     assert!(
         outcomes
             == vec![krabka_client_admin::DeleteRecordsOutcome {
-                topic: "wal".to_string(),
+                topic: "wal".to_owned(),
                 partition: 0,
                 error_code: 0,
                 low_watermark: 50,
@@ -85,13 +89,13 @@ async fn delete_records_truncates_wal_and_maps_outcome() {
 }
 
 async fn connect_reader(bootstrap: &str) -> Connection {
-    let addr = tokio::net::lookup_host(bootstrap)
+    let addr = net::lookup_host(bootstrap)
         .await
         .expect("resolve bootstrap")
         .next()
         .expect("bootstrap address");
     Connection::connect_with_options(addr, ConnectionOptions {
-        client_id: "delete-records-test-reader".to_string(),
+        client_id: "delete-records-test-reader".to_owned(),
         ..Default::default()
     })
     .await

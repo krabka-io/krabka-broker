@@ -115,28 +115,28 @@ pub struct SimSnapshot {
 /// A short, stable label for an [`Event`] used in the rendered sequence diagram.
 pub(super) fn event_label(event: &Event) -> String {
     match event {
-        Event::ElectionTimeout => "ElectionTimeout".to_string(),
-        Event::FetchTimeout => "FetchTimeout".to_string(),
-        Event::CheckQuorumTimeout => "CheckQuorumTimeout".to_string(),
+        Event::ElectionTimeout => "ElectionTimeout".to_owned(),
+        Event::FetchTimeout => "FetchTimeout".to_owned(),
+        Event::CheckQuorumTimeout => "CheckQuorumTimeout".to_owned(),
         Event::ReceiveVoteRequest { pre_vote, .. } => {
             if *pre_vote {
-                "PreVoteRequest".to_string()
+                "PreVoteRequest".to_owned()
             } else {
-                "VoteRequest".to_string()
+                "VoteRequest".to_owned()
             }
         }
         Event::ReceiveVoteResponse { vote_granted, .. } => {
             if *vote_granted {
-                "VoteResponse(granted)".to_string()
+                "VoteResponse(granted)".to_owned()
             } else {
-                "VoteResponse(denied)".to_string()
+                "VoteResponse(denied)".to_owned()
             }
         }
-        Event::ReceiveBeginQuorumEpoch { .. } => "BeginQuorumEpoch".to_string(),
-        Event::ReceiveEndQuorumEpoch { .. } => "EndQuorumEpoch".to_string(),
-        Event::ReceiveFetch { .. } => "Fetch".to_string(),
-        Event::ReceiveFetchSnapshot { .. } => "FetchSnapshot".to_string(),
-        Event::ReceiveFetchResponse { .. } => "FetchResponse".to_string(),
-        Event::ReceiveLeaderlessEpoch { .. } => "LeaderlessEpoch".to_string(),
+        Event::ReceiveBeginQuorumEpoch { .. } => "BeginQuorumEpoch".to_owned(),
+        Event::ReceiveEndQuorumEpoch { .. } => "EndQuorumEpoch".to_owned(),
+        Event::ReceiveFetch { .. } => "Fetch".to_owned(),
+        Event::ReceiveFetchSnapshot { .. } => "FetchSnapshot".to_owned(),
+        Event::ReceiveFetchResponse { .. } => "FetchResponse".to_owned(),
+        Event::ReceiveLeaderlessEpoch { .. } => "LeaderlessEpoch".to_owned(),
     }
 }

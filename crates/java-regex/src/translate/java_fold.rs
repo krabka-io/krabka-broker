@@ -104,7 +104,7 @@ pub(super) enum Escape {
 /// How Java's `CIBackRef` compares a char of the text a backreference refers
 /// to with a char of the input, by the case flags in force at the reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BackrefFold {
+pub enum BackrefFold {
     /// `(?i)`: the two agree under `ASCII.toLower`, which leaves every char
     /// that is not an ASCII letter as it is.
     Ascii,
@@ -185,14 +185,13 @@ fn quote(chars: &[char], mut at: usize, out: &mut Vec<char>) -> usize {
 /// An escape Java's `Pattern.compile` refuses, such as `\x` without digits, is
 /// [`Escape::Other`] with the length of the backslash and the char after it.
 pub(super) fn read_escape(chars: &[char], at: usize, in_class: bool) -> Consumed<Escape> {
-    let rest = &chars[at + 1..];
-    let Some(&kind) = rest.first() else {
+    let rest = chars.get(at + 1..).unwrap_or_default();
+    let Some((&kind, after)) = rest.split_first() else {
         return Consumed {
             value: Escape::Other,
             len: 1,
         };
     };
-    let after = &rest[1..];
     let taking = |value, len| Some(Consumed { value, len });
     let read = match kind {
         't' => taking(Escape::Char(0x09), 2),
@@ -250,7 +249,7 @@ fn parse_hex(digits: &[char]) -> Option<u32> {
 fn hex_escape(after: &[char]) -> Option<Consumed<u32>> {
     if after.first() == Some(&'{') {
         let close = after.iter().position(|&c| c == '}')?;
-        let digits = &after[1..close];
+        let digits = after.get(1..close)?;
         if digits.is_empty() {
             return None;
         }
@@ -269,7 +268,10 @@ fn hex_escape(after: &[char]) -> Option<Consumed<u32>> {
 /// One to three octal digits after `\0`, and the chars they take: the third
 /// digit only when the first is at most 3, as Java's `Pattern.o` reads it.
 fn octal_escape(after: &[char]) -> Option<Consumed<u32>> {
-    let digit = |at: usize| after.get(at).and_then(|c| c.to_digit(8));
+    let digit = |at: usize| {
+        let c = after.get(at)?;
+        c.to_digit(8)
+    };
     let first = digit(0)?;
     let taking = |value, len| Consumed { value, len };
     Some(match (digit(1), digit(2)) {
@@ -284,8 +286,9 @@ fn octal_escape(after: &[char]) -> Option<Consumed<u32>> {
 fn property_name(after: &[char]) -> Option<Consumed<String>> {
     if after.first() == Some(&'{') {
         let close = after.iter().position(|&c| c == '}')?;
+        let name = after.get(1..close)?;
         (close > 1).then(|| Consumed {
-            value: after[1..close].iter().collect(),
+            value: name.iter().collect(),
             len: close + 1,
         })
     } else {

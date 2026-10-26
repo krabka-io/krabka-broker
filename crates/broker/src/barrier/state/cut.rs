@@ -24,7 +24,7 @@ use {
 /// stable order and the cut record is byte-identical across two runs of the
 /// same injection.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct TargetPartition {
+pub struct TargetPartition {
     pub(crate) topic: String,
     pub(crate) partition: PartitionIndex,
 }
@@ -32,7 +32,7 @@ pub(crate) struct TargetPartition {
 /// Expand a frozen target set into the partitions the injection marks.
 ///
 /// A topic with a partition count of zero or below contributes nothing.
-pub(crate) fn expand_targets(targets: &[TopicTarget]) -> Vec<TargetPartition> {
+pub fn expand_targets(targets: &[TopicTarget]) -> Vec<TargetPartition> {
     let mut out = Vec::new();
     let mut total = 0;
     for target in targets {
@@ -58,7 +58,7 @@ pub(crate) fn expand_targets(targets: &[TopicTarget]) -> Vec<TargetPartition> {
 /// `placed` holds the offset that each marker took. A target partition that is
 /// absent from `placed` carries no marker, so the cut names it in `missing`
 /// and its status is [`CutStatus::Partial`]. The epoch is consumed either way.
-pub(crate) fn build_cut(
+pub fn build_cut(
     triggered_at: i64,
     completed_at: i64,
     targets: &[TopicTarget],

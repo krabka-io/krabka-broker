@@ -19,7 +19,7 @@ use {
     krabka_ids::PartitionIndex,
     krabka_metadata::PartitionRecord,
     krabka_units::convert::ByteSizeExt as _,
-    std::{collections::BTreeMap, sync::Arc},
+    std::{collections::BTreeMap, fs::create_dir_all, io::Error, sync::Arc},
 };
 
 mod apply;
@@ -47,10 +47,9 @@ mod unknown_record_tests;
 #[cfg(test)]
 mod upgrade_downgrade_tests;
 
-pub use self::audit::bootstrap_audit_topic;
 use self::replay::{Replayed, finalize, replay_records};
-pub(crate) use self::{
-    audit::{hosted_audit_partition, spawn_audit_placement},
+pub use self::{
+    audit::{bootstrap_audit_topic, hosted_audit_partition, spawn_audit_placement},
     replay::replay_partition,
 };
 
@@ -76,7 +75,7 @@ pub const AUDIT_TOPIC: &str = DEFAULT_AUDIT_TOPIC;
 /// (`GroupCoordinatorService.groupMetadataTopicConfigs`). Offsets and group
 /// metadata are keyed records, so the topic is compacted, never deleted by
 /// time.
-pub(crate) fn offsets_topic_configs(config: &BrokerConfig) -> BTreeMap<String, String> {
+pub fn offsets_topic_configs(config: &BrokerConfig) -> BTreeMap<String, String> {
     use crate::config_keys::{CLEANUP_POLICY, COMPRESSION_TYPE, SEGMENT_BYTES};
     BTreeMap::from([
         (CLEANUP_POLICY.to_owned(), "compact".to_owned()),
@@ -116,7 +115,7 @@ pub async fn bootstrap(
     // unable to bootstrap the group coordinator.
     let placement_dirs = log_dir_status.online_subset(&config.all_log_dirs());
     if placement_dirs.is_empty() {
-        return Err(BrokerError::Io(std::io::Error::other(
+        return Err(BrokerError::Io(Error::other(
             "every configured log.dir failed the startup writability probe; \
              cannot bootstrap the group-coordinator partition",
         )));
@@ -150,24 +149,30 @@ pub async fn bootstrap(
             OFFSETS_TOPIC,
             record.partition,
         );
-        std::fs::create_dir_all(&topic_dir)?;
+        create_dir_all(&topic_dir)?;
         let log = krabka_log::Log::open(&topic_dir, config.log_config.clone())?;
         if record.leader == config.node_id {
             replayed.merge(replay_records(&log, coordinator)?);
         }
         let owning_dir = topic_dir
             .parent()
-            .expect("placed partition dir always has a parent log.dir")
+            .ok_or_else(|| {
+                BrokerError::Startup(format!(
+                    "{OFFSETS_TOPIC}-{} partition dir {} has no parent log.dir",
+                    record.partition,
+                    topic_dir.display()
+                ))
+            })?
             .to_path_buf();
         let partition = spawn_partition(
-            OFFSETS_TOPIC.to_string(),
+            OFFSETS_TOPIC.to_owned(),
             partition_id,
             owning_dir,
             log,
             log_dir_status.clone(),
-            producer_state.clone(),
+            Arc::clone(producer_state),
             false,
-        );
+        )?;
         partitions.insert(OFFSETS_TOPIC.into(), partition_id, partition);
     }
     finalize(coordinator, replayed).await;

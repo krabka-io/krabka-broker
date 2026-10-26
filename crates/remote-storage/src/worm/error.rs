@@ -1,5 +1,7 @@
 //! Errors raised by the write-once (WORM) archive layer.
 
+use crate::worm::chain::WORM_CHAIN_RECORD_VERSION;
+
 /// A failure in the WORM archive layer.
 ///
 /// The variants split into four groups: a broken or absent chain stamp, a
@@ -29,7 +31,7 @@ pub enum WormError {
     #[error(
         "unsupported WORM chain record version {}: this build reads version {}{}",
         found.as_deref().unwrap_or("(none)"),
-        crate::worm::chain::WORM_CHAIN_RECORD_VERSION,
+        WORM_CHAIN_RECORD_VERSION,
         if found.is_none() {
             "; the record predates krabka 1.0, whose data a 1.x broker does not read"
         } else {

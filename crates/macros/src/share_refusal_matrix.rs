@@ -2,7 +2,7 @@
 
 use {
     crate::{
-        meta::{expect_name, grouped_value, native_groups},
+        meta::{expect_name, grouped_value, native_groups, next_group},
         sweep_loop::{SpliceValue, splice},
     },
     moxy::{
@@ -55,10 +55,13 @@ fn declaration(input: &TokenStream) -> Result<Matrix, ParseError> {
         return Err(parser.error("unexpected refusal matrix clause"));
     }
     let mut declarations = declarations.into_iter();
-    Ok(Matrix {
-        case: declarations.next().unwrap().remove(0),
-        bindings: declarations.next().unwrap(),
-    })
+    let (Some(case), Some(bindings)) = (
+        declarations.next().and_then(|case| case.into_iter().next()),
+        declarations.next(),
+    ) else {
+        return Err(parser.error("expected case and bind clauses"));
+    };
+    Ok(Matrix { case, bindings })
 }
 
 fn template(matrix: &Matrix) -> TokenStream {
@@ -80,13 +83,13 @@ fn template(matrix: &Matrix) -> TokenStream {
     }
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let matrix = declaration(&input.clone().into())?;
     let mut groups = native_groups(input);
     let _case_bindings = groups.next();
-    let cases = groups.next().expect("validated case expression");
+    let cases = next_group(&mut groups, "a case expression")?;
     let _fixture_bindings = groups.next();
-    let invoke = groups.next().expect("validated handler expression");
+    let invoke = next_group(&mut groups, "a handler expression")?;
     Ok(splice(
         template(&matrix).into(),
         &[

@@ -14,10 +14,17 @@
 
 use {
     krabka_units::prelude::ByteSizeExt as _,
-    std::{net::SocketAddr, sync::Arc, time::Instant},
+    krabka_verified::authz,
+    std::{
+        future::Future,
+        net::SocketAddr,
+        sync::Arc,
+        time::{Duration, Instant},
+    },
     tokio::{
         io::{AsyncRead, AsyncWrite},
         net::TcpListener,
+        time,
     },
     tokio_util::sync::CancellationToken,
     tracing::{error, info},
@@ -26,7 +33,7 @@ use {
 mod api_versions;
 mod authorization;
 mod describe_cluster;
-pub(crate) mod describe_quorum;
+pub mod describe_quorum;
 mod dispatch;
 mod framing;
 mod kip853;
@@ -84,7 +91,7 @@ struct ListenerApiVersions {
 /// governs the controller's `UpdateFeatures` validation, not the listener's
 /// `ApiVersions` answer.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Unstable {
+pub struct Unstable {
     /// `unstable.api.versions.enable`.
     pub(crate) api_versions: UnstableApiVersions,
 }
@@ -150,7 +157,7 @@ const CONTROLLER_LISTENER: AcceptingListener<'static> = AcceptingListener {
     protected: false,
 };
 
-pub(crate) async fn run(
+pub async fn run(
     listener: TcpListener,
     engine: KraftController,
     shutdown: CancellationToken,
@@ -191,7 +198,7 @@ pub(crate) async fn run(
                         );
                         if !delay.is_zero() {
                             tokio::select! {
-                                () = tokio::time::sleep(delay) => {}
+                                () = time::sleep(delay) => {}
                                 () = shutdown.cancelled() => break 'accept,
                             }
                         }
@@ -275,7 +282,7 @@ pub(crate) async fn run(
                                     unstable,
                                     limits,
                                 },
-                                crate::kraft::KraftController::wall_clock_ms,
+                                KraftController::wall_clock_ms,
                             ).await {
                                 error!(%peer, error = %e, "controller connection error");
                             }
@@ -300,12 +307,12 @@ pub(crate) async fn run(
 /// request loop's own idle window is the only one that applies after.
 async fn upgrade_within_idle_window<S, F, Fut>(
     stream: S,
-    window: Option<std::time::Duration>,
+    window: Option<Duration>,
     upgrade: F,
 ) -> Option<Fut::Output>
 where
     F: FnOnce(HandshakeStream<S>) -> Fut,
-    Fut: std::future::Future,
+    Fut: Future,
 {
     let Some(window) = window else {
         return Some(upgrade(HandshakeStream::from(stream)).await);
@@ -470,11 +477,7 @@ async fn answer_request(
         flexible: response_flexible,
     } = frame;
     if let Some(expiry) = context.expires_at_ms
-        && !krabka_verified::authz::controller_request_admission(
-            Some(expiry),
-            api_key_n.get(),
-            clock_ms(),
-        )
+        && !authz::controller_request_admission(Some(expiry), api_key_n.get(), clock_ms())
     {
         tracing::debug!(peer = %context.peer, "controller credential expired, closing");
         return Ok(None);

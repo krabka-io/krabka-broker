@@ -18,10 +18,12 @@ use {
     krabka_broker::{BootstrapMode, Broker, BrokerConfig, BrokerHandle},
     krabka_metadata::MetadataRecord,
     std::{
+        fs,
         process::Command,
         time::{Duration, Instant},
     },
     tempfile::TempDir,
+    tokio::task,
 };
 
 /// A running broker and the directory that backs it.
@@ -218,7 +220,7 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
             Instant::now() <= epoch_deadline,
             "wire-probe leader epoch did not reach metadata"
         );
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
     produce_lines_via_jvm(
         bootstrap.as_str(),
@@ -262,7 +264,7 @@ async fn kip320_wire_conformance_offset_for_leader_epoch() {
     //    byte-exactness signal.
     let helper_dir = TempDir::new().unwrap();
     let helper_path = helper_dir.path().join("Kip320Probe.java");
-    std::fs::write(&helper_path, OFFSET_FOR_LEADER_EPOCH_HELPER_JAVA).unwrap();
+    fs::write(&helper_path, OFFSET_FOR_LEADER_EPOCH_HELPER_JAVA).unwrap();
     // The helper image runs as a non-root uid, while `TempDir` is 0700.
     #[cfg(unix)]
     {

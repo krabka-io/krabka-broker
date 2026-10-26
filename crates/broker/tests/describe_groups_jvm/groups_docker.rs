@@ -5,10 +5,10 @@
 use {
     crate::{CONTAINER, HOST_PORT},
     assert2::assert,
-    std::process::Command,
+    std::process::{Command, Output},
 };
 
-pub(crate) fn docker_pull(image: &str) {
+pub fn docker_pull(image: &str) {
     eprintln!("CAPTURE docker pull {image} (large; may take minutes)...");
     let out = Command::new("docker")
         .args(["pull", image])
@@ -28,7 +28,7 @@ fn docker_rm_f(name: &str) { let _ = Command::new("docker").args(["rm", "-f", na
 ///
 /// Docker publishes the `EXTERNAL` listener to the fixed host port, so the host
 /// `Client` can dial it directly.
-pub(crate) fn docker_run_kafka(image: &str, enable_consumer_protocol: bool) {
+pub fn docker_run_kafka(image: &str, enable_consumer_protocol: bool) {
     docker_rm_f(CONTAINER);
     let mut command = Command::new("docker");
     command.args([
@@ -89,7 +89,7 @@ pub(crate) fn docker_run_kafka(image: &str, enable_consumer_protocol: bool) {
 }
 
 /// Run a command inside the broker container and return its `Output`.
-pub(crate) fn exec(args: &[&str]) -> std::process::Output {
+pub fn exec(args: &[&str]) -> Output {
     Command::new("docker")
         .arg("exec")
         .arg(CONTAINER)
@@ -99,7 +99,7 @@ pub(crate) fn exec(args: &[&str]) -> std::process::Output {
 }
 
 /// Detach a long-running command inside the container with `docker exec -d`.
-pub(crate) fn exec_detached(script: &str) {
+pub fn exec_detached(script: &str) {
     let out = Command::new("docker")
         .args(["exec", "-d", CONTAINER, "bash", "-c", script])
         .output()
@@ -111,7 +111,7 @@ pub(crate) fn exec_detached(script: &str) {
     );
 }
 
-pub(crate) fn docker_logs() -> String {
+pub fn docker_logs() -> String {
     let out = Command::new("docker")
         .args(["logs", CONTAINER])
         .output()
@@ -123,7 +123,7 @@ pub(crate) fn docker_logs() -> String {
     )
 }
 
-pub(crate) struct ContainerGuard;
+pub struct ContainerGuard;
 impl Drop for ContainerGuard {
     fn drop(&mut self) {
         docker_rm_f(CONTAINER);

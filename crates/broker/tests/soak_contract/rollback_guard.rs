@@ -38,9 +38,11 @@ use {
     krabka_protocol::owned::create_topics_request::CreatableTopic,
     std::{
         collections::BTreeMap,
+        fs,
         path::Path,
         time::{Duration, Instant},
     },
+    tokio::time,
 };
 
 /// The `metadata.version` the candidate finalizes: Kafka trunk's `4.4-IV2`.
@@ -61,7 +63,7 @@ const TOPIC: &str = "rollback-guard";
 
 /// What the refused rollback left, for the evidence.
 #[derive(Debug, serde::Serialize)]
-pub(crate) struct RefusedRollback {
+pub struct RefusedRollback {
     pub(crate) source_exit_code: i64,
     pub(crate) refusal: String,
     /// Files whose bytes changed, appeared or disappeared, other than what
@@ -75,18 +77,18 @@ pub(crate) struct RefusedRollback {
 
 /// The bytes of every file under `dir`, by path relative to it. The guard's
 /// node holds one record, so its directory is small.
-pub(crate) fn file_contents(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+pub fn file_contents(dir: &Path) -> BTreeMap<String, Vec<u8>> {
     let mut contents = BTreeMap::new();
     let mut pending = vec![dir.to_path_buf()];
     while let Some(next) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(&next) else {
+        let Ok(entries) = fs::read_dir(&next) else {
             continue;
         };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
                 pending.push(path);
-            } else if let Ok(bytes) = std::fs::read(&path) {
+            } else if let Ok(bytes) = fs::read(&path) {
                 let relative = path.strip_prefix(dir).map_or_else(
                     |_| path.display().to_string(),
                     |relative| relative.display().to_string(),
@@ -110,7 +112,7 @@ fn derived(name: &str) -> bool {
 
 /// The files `before` and `after` disagree on: those whose change is not
 /// [`derived`], and those whose change is.
-pub(crate) fn changed_files(
+pub fn changed_files(
     before: &BTreeMap<String, Vec<u8>>,
     after: &BTreeMap<String, Vec<u8>>,
 ) -> (Vec<String>, Vec<String>) {
@@ -126,7 +128,7 @@ pub(crate) fn changed_files(
 
 /// The message the source must refuse the level with, given its declared
 /// `metadata.version` range: Kafka's, from `FeatureControlManager.replay`.
-pub(crate) fn refusal_message(range: LevelRange) -> String {
+pub fn refusal_message(range: LevelRange) -> String {
     format!(
         "Tried to apply FeatureLevelRecord FeatureLevelRecord(name='metadata.version', \
          featureLevel={UNSTABLE_LEVEL}), but this controller only supports versions {range}"
@@ -144,25 +146,29 @@ fn guard_path(contract: &Contract) -> LoadPath {
 
 /// Write one record, acknowledged by every replica.
 async fn write_record(bootstrap: &str, path: &LoadPath) -> Result<(), String> {
-    let producer = Producer::builder()
-        .bootstrap(bootstrap.to_owned())
-        .client_id("rollback-guard".to_owned())
-        .acks(Acks::All)
-        .enable_idempotence(true)
-        .build()
-        .await
-        .map_err(|error| error.to_string())?;
-    let name = producer_name(&path.name);
-    let delivery = producer
-        .enqueue(ProducerRecord {
-            topic: path.name.clone(),
-            value: Some(record_value(&name, 0, 64)),
-            ..Default::default()
-        })
-        .await
-        .map_err(|error| error.to_string())?;
-    let written = delivery.await.map(drop).map_err(|error| error.to_string());
-    let _ = producer.close().await;
+    // The close ends the producer's block, so the producer is gone before the
+    // write's outcome is returned. A failed close does not change that outcome.
+    let (written, _closed) = {
+        let producer = Producer::builder()
+            .bootstrap(bootstrap.to_owned())
+            .client_id("rollback-guard".to_owned())
+            .acks(Acks::All)
+            .enable_idempotence(true)
+            .build()
+            .await
+            .map_err(|error| error.to_string())?;
+        let name = producer_name(&path.name);
+        let delivery = producer
+            .enqueue(ProducerRecord {
+                topic: path.name.clone(),
+                value: Some(record_value(&name, 0, 64)),
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        let written = delivery.await.map(drop).map_err(|error| error.to_string());
+        (written, producer.close().await)
+    };
     written
 }
 
@@ -196,12 +202,12 @@ async fn exit_code(broker: &SoakBroker, limit: Duration) -> Option<i64> {
         if Instant::now() >= deadline {
             return None;
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        time::sleep(Duration::from_millis(500)).await;
     }
 }
 
 /// Run the refused rollback of `contract`'s source under `target`.
-pub(crate) async fn refuse_unsupported_rollback(
+pub async fn refuse_unsupported_rollback(
     contract: &Contract,
     target: &str,
 ) -> Result<RefusedRollback, String> {
@@ -237,12 +243,11 @@ pub(crate) async fn refuse_unsupported_rollback(
     write_record(&broker.bootstrap(), &path).await?;
 
     let config = broker.root.path().join("broker.toml");
-    let unstable = std::fs::read_to_string(&config).map_err(|error| error.to_string())?;
+    let unstable = fs::read_to_string(&config).map_err(|error| error.to_string())?;
     take_down(broker)?;
     let before = file_contents(&broker.host_log_dir());
     // The operator's rollback: the source, with its own configuration.
-    std::fs::write(&config, unstable.replace(UNSTABLE_TOML, ""))
-        .map_err(|error| error.to_string())?;
+    fs::write(&config, unstable.replace(UNSTABLE_TOML, "")).map_err(|error| error.to_string())?;
     bring_up(broker, &source_image(lifecycle))?;
     let Some(source_exit_code) = exit_code(broker, REFUSAL_LIMIT).await else {
         let log = broker.container_log();
@@ -269,7 +274,7 @@ pub(crate) async fn refuse_unsupported_rollback(
     }
 
     // The candidate, with the switch on again, opens what the source left.
-    std::fs::write(&config, unstable).map_err(|error| error.to_string())?;
+    fs::write(&config, unstable).map_err(|error| error.to_string())?;
     bring_up(broker, target)?;
     let reader = read_back(
         &Endpoint::plaintext(broker.bootstrap()),
@@ -301,7 +306,7 @@ mod tests {
         super::{changed_files, file_contents, refusal_message},
         assert2::check,
         krabka_bench_driver::soak::lifecycle::LevelRange,
-        std::collections::BTreeMap,
+        std::{collections::BTreeMap, fs},
     };
 
     fn files(files: &[(&str, &[u8])]) -> BTreeMap<String, Vec<u8>> {
@@ -346,8 +351,8 @@ mod tests {
     #[test]
     fn a_directory_is_read_file_by_file() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("p-0")).unwrap();
-        std::fs::write(dir.path().join("p-0").join("0.log"), b"x").unwrap();
+        fs::create_dir(dir.path().join("p-0")).unwrap();
+        fs::write(dir.path().join("p-0").join("0.log"), b"x").unwrap();
         check!(
             file_contents(dir.path()) == BTreeMap::from([("p-0/0.log".to_owned(), b"x".to_vec())])
         );

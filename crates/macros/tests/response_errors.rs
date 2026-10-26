@@ -1,4 +1,5 @@
 //! Generated error helpers preserve the protocol type's other fields.
+#![cfg(test)]
 
 use assert2::assert;
 

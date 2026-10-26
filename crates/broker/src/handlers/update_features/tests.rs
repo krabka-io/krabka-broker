@@ -8,7 +8,7 @@ use {
     crate::{
         authorizer::AllowAllAuthorizer,
         broker::Broker,
-        features::{LATEST_PRODUCTION_METADATA_VERSION, METADATA_VERSION},
+        features::{LATEST_PRODUCTION_METADATA_VERSION, METADATA_VERSION, METADATA_VERSION_MAX},
         handlers::update_features::test_support::{
             apply_request, call, call_with, metadata_update, named_update, start_broker,
             validate_only, wait_for_finalized_feature,
@@ -17,7 +17,8 @@ use {
     },
     assert2::assert,
     krabka_protocol::owned::update_features_response::UpdatableFeatureResult,
-    std::sync::Arc,
+    std::{sync::Arc, time::Duration},
+    tokio::time,
 };
 
 const PREFIX: &str =
@@ -50,16 +51,13 @@ fn accepted(features: &[&str]) -> UpdateFeaturesResponse {
 
 #[tokio::test]
 async fn handle_denies_cluster_alter_with_top_level_error() {
-    let req = validate_only(vec![metadata_update(
-        crate::features::METADATA_VERSION_MAX,
-        1,
-    )]);
+    let req = validate_only(vec![metadata_update(METADATA_VERSION_MAX, 1)]);
 
     let (resp, broker_handle, _dir) = Box::pin(call_with(Arc::new(DenyAll), req)).await;
 
     let expected = krabka_macros::unthrottled_wire!(UpdateFeaturesResponse {
         error_code: codes::CLUSTER_AUTHORIZATION_FAILED,
-        error_message: Some("Cluster authorization failed.".to_string()),
+        error_message: Some("Cluster authorization failed.".to_owned()),
         results: vec![],
     });
     assert!(resp == expected);
@@ -165,14 +163,14 @@ async fn requests_apply_atomically_with_kafkas_response_shape() {
 }
 
 async fn wait_for_group_version_off(broker: &Broker) {
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    time::timeout(Duration::from_secs(5), async {
         while broker
             .controller
             .current_image()
             .finalized_feature("group.version")
             .is_some()
         {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -200,7 +198,7 @@ async fn handle_persists_a_lossless_metadata_downgrade() {
         1,
     ))
     .await;
-    assert!(up == accepted(&[crate::features::METADATA_VERSION]));
+    assert!(up == accepted(&[METADATA_VERSION]));
     let broker = broker_handle.broker_arc_for_test();
     wait_for_finalized_feature(&broker, METADATA_VERSION, target + 2).await;
 
@@ -211,7 +209,7 @@ async fn handle_persists_a_lossless_metadata_downgrade() {
     ))
     .await;
 
-    assert!(down == accepted(&[crate::features::METADATA_VERSION]));
+    assert!(down == accepted(&[METADATA_VERSION]));
     wait_for_finalized_feature(&broker, METADATA_VERSION, target + 1).await;
     broker_handle.shutdown().await;
 }

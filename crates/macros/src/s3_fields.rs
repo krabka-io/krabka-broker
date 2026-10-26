@@ -8,7 +8,7 @@ use {
     },
 };
 
-pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
+pub fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream, ParseError> {
     let [endpoint_doc, access_doc, secret_doc] = mode_docs(
         meta,
         [
@@ -40,8 +40,9 @@ pub(crate) fn expand(meta: TokenStream, item: TokenStream) -> Result<TokenStream
             .ok_or_else(|| {
                 ParseError::new(Span::call_site(), "s3_fields requires an allow_http field")
             })?;
-        let insertion = fields[..marker]
+        let insertion = fields
             .iter()
+            .take(marker)
             .rposition(TokenTree::is_punct_comma)
             .map_or(0, |comma| comma + 1);
         fields.splice(insertion..insertion, new_fields);

@@ -29,7 +29,7 @@ use {
 };
 
 /// The one broker id a single-node cluster registers.
-pub(super) const BROKER_ID: i32 = 1;
+pub const BROKER_ID: i32 = 1;
 
 /// One privileged transition, in the shape a request makes it.
 ///
@@ -37,7 +37,7 @@ pub(super) const BROKER_ID: i32 = 1;
 /// future per row. Each variant answers the error code the broker returned for
 /// the one row that the request names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Transition {
+pub enum Transition {
     /// `ElectLeaders` with the unclean election type. Preferred election is not
     /// gated.
     UncleanElection,
@@ -57,22 +57,22 @@ impl Transition {
     /// transition on `topic`.
     pub(super) fn target(self, topic: &str) -> String {
         match self {
-            Transition::UncleanElection
-            | Transition::CancelReassignment
-            | Transition::TrimRecords => format!("{topic}-0"),
-            Transition::Unregister => BROKER_ID.to_string(),
-            Transition::DeleteTopic => topic.to_owned(),
+            Self::UncleanElection | Self::CancelReassignment | Self::TrimRecords => {
+                format!("{topic}-0")
+            }
+            Self::Unregister => BROKER_ID.to_string(),
+            Self::DeleteTopic => topic.to_owned(),
         }
     }
 
     /// Send the request, and answer the error code of the row it names.
     pub(super) async fn run(self, client: &Client, topic: &str) -> i16 {
         match self {
-            Transition::UncleanElection => unclean_election(client, topic).await,
-            Transition::Unregister => unregister(client, BROKER_ID).await,
-            Transition::CancelReassignment => cancel_reassignment(client, topic).await,
-            Transition::DeleteTopic => delete_topic(client, topic).await,
-            Transition::TrimRecords => trim_records(client, topic).await,
+            Self::UncleanElection => unclean_election(client, topic).await,
+            Self::Unregister => unregister(client, BROKER_ID).await,
+            Self::CancelReassignment => cancel_reassignment(client, topic).await,
+            Self::DeleteTopic => delete_topic(client, topic).await,
+            Self::TrimRecords => trim_records(client, topic).await,
         }
     }
 }
@@ -100,7 +100,7 @@ async fn unclean_election(client: &Client, topic: &str) -> i16 {
 }
 
 /// `UnregisterBroker(broker_id)`.
-pub(super) async fn unregister(client: &Client, broker_id: i32) -> i16 {
+pub async fn unregister(client: &Client, broker_id: i32) -> i16 {
     client
         .send(UnregisterBrokerRequest {
             broker_id,
@@ -155,7 +155,7 @@ async fn trim_records(client: &Client, topic: &str) -> i16 {
 }
 
 /// How many gated transitions this broker refused for `action`.
-pub(super) fn refusals(broker: &BrokerHandle, action: GatedAction) -> u64 {
+pub fn refusals(broker: &BrokerHandle, action: GatedAction) -> u64 {
     broker
         .metrics()
         .break_glass_refusals
@@ -166,7 +166,7 @@ pub(super) fn refusals(broker: &BrokerHandle, action: GatedAction) -> u64 {
 }
 
 /// How many privileged transitions this broker ran with no approval at all.
-pub(super) fn bypassed(broker: &BrokerHandle, action: GatedAction) -> u64 {
+pub fn bypassed(broker: &BrokerHandle, action: GatedAction) -> u64 {
     broker
         .metrics()
         .break_glass_bypassed

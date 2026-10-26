@@ -23,6 +23,6 @@ pub use self::{
 };
 
 #[cfg(test)]
-pub(crate) fn test_topic_partition() -> TopicIdPartition {
+pub fn test_topic_partition() -> TopicIdPartition {
     TopicIdPartition::new(uuid::Uuid::from_u128(1), "orders", 0)
 }

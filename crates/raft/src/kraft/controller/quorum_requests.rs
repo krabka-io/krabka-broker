@@ -33,8 +33,9 @@ use {
     bytes::Bytes,
     krabka_protocol::owned::{
         begin_quorum_epoch_request::BeginQuorumEpochRequest,
-        end_quorum_epoch_request::EndQuorumEpochRequest,
-        fetch_snapshot_request::FetchSnapshotRequest, vote_request::VoteRequest,
+        end_quorum_epoch_request::{EndQuorumEpochRequest, ReplicaInfo},
+        fetch_snapshot_request::FetchSnapshotRequest,
+        vote_request::VoteRequest,
     },
 };
 
@@ -204,10 +205,7 @@ impl Engine {
 
     /// Where this replica stands in `PreferredCandidates`, as Kafka's
     /// `endEpochElectionBackoff` walks the list.
-    fn successor_rank(
-        &self,
-        candidates: &[krabka_protocol::owned::end_quorum_epoch_request::ReplicaInfo],
-    ) -> SuccessorRank {
+    fn successor_rank(&self, candidates: &[ReplicaInfo]) -> SuccessorRank {
         let local_directory_id = self.local_directory_id();
         let position = candidates
             .iter()
@@ -245,7 +243,13 @@ impl Engine {
         })) {
             return refuse(self, INVALID_REQUEST, 0);
         }
-        let partition = &request.topics[0].partitions[0];
+        let Some(partition) = request
+            .topics
+            .first()
+            .and_then(|topic| topic.partitions.first())
+        else {
+            return refuse(self, INVALID_REQUEST, 0);
+        };
         // A standard vote's candidate has bumped its epoch past its log, so its
         // last epoch must be below the replica epoch. A pre-vote does not bump.
         let illegal_epoch = if partition.pre_vote {
@@ -334,9 +338,12 @@ impl Engine {
                 partition: 0,
             });
         }
-        let RequestedLeader { id: leader, epoch } = request
-            .leader()
-            .expect("one metadata partition validated above");
+        let Some(RequestedLeader { id: leader, epoch }) = request.leader() else {
+            return Err(EpochRequestRefusal {
+                top_level: INVALID_REQUEST,
+                partition: 0,
+            });
+        };
         if let Some(error) = self.voter_only_request_error(leader, epoch) {
             return Err(EpochRequestRefusal {
                 top_level: 0,
@@ -362,7 +369,13 @@ impl Engine {
             version,
             wire::encode_begin_quorum_epoch_response,
             |engine, request: &BeginQuorumEpochRequest, leader_id, leader_epoch| {
-                let partition = &request.topics[0].partitions[0];
+                let Some(partition) = request
+                    .topics
+                    .first()
+                    .and_then(|topic| topic.partitions.first())
+                else {
+                    return INVALID_REQUEST;
+                };
                 engine.on_event(Event::ReceiveBeginQuorumEpoch {
                     leader_id,
                     leader_epoch,
@@ -387,7 +400,13 @@ impl Engine {
             version,
             wire::encode_end_quorum_epoch_response,
             |engine, request: &EndQuorumEpochRequest, leader_id, leader_epoch| {
-                let partition = &request.topics[0].partitions[0];
+                let Some(partition) = request
+                    .topics
+                    .first()
+                    .and_then(|topic| topic.partitions.first())
+                else {
+                    return INVALID_REQUEST;
+                };
                 engine.on_event(Event::ReceiveEndQuorumEpoch {
                     leader_id,
                     leader_epoch,

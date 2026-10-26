@@ -2,11 +2,11 @@
 
 use moxy::{
     ast::ParseError,
-    token::{Lit, Span, TokenStream, TokenTree},
+    token::{Ident, Lit, Span, TokenStream, TokenTree},
 };
 
-pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
-    let mut input = input.into_iter().peekable();
+pub fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let mut input = input.into_iter();
     let mut prefix = TokenStream::new();
     let mut output = TokenStream::new();
     let mut selected = Vec::new();
@@ -21,7 +21,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, ParseError> {
         let name = name.clone();
         if selected
             .iter()
-            .any(|selected: &moxy::token::Ident| selected.text() == name.text())
+            .any(|selected: &Ident| selected.text() == name.text())
         {
             return Err(ParseError::new(
                 name.span(),

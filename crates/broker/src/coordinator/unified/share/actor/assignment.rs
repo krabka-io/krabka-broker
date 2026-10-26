@@ -177,7 +177,7 @@ mod tests {
         },
         crate::coordinator::unified::share::state::share_partition,
         assert2::{assert, check},
-        std::{collections::HashSet, time::Duration},
+        std::{collections::HashSet, sync::Arc, time::Duration},
     };
 
     #[derive(Debug)]
@@ -187,8 +187,8 @@ mod tests {
     }
 
     impl MetadataProvider for Metadata {
-        fn snapshot(&self) -> std::sync::Arc<ReconcileInput> {
-            std::sync::Arc::new(ReconcileInput {
+        fn snapshot(&self) -> Arc<ReconcileInput> {
+            Arc::new(ReconcileInput {
                 topic_id_by_name: [("t".to_owned(), self.topic)].into(),
                 partitions_per_topic: [(self.topic, self.partitions)].into(),
                 ..Default::default()

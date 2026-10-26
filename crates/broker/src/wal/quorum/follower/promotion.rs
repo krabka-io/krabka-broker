@@ -15,14 +15,14 @@ use {
     krabka_ids::Offset,
     krabka_log::{Log, LogConfig},
     krabka_raft::NodeId,
-    krabka_verified::broker::DeleteRecordsTrimApplication,
+    krabka_verified::{broker, broker::DeleteRecordsTrimApplication, wal},
     std::path::PathBuf,
 };
 
 /// Copy this broker's checkpointed follower prefix into a newly promoted
 /// partition log. The follower retains the reconciled logical floor durably
 /// before physical rebasing, so a restart can retry from the same source.
-pub(crate) fn hydrate_on_promotion(
+pub fn hydrate_on_promotion(
     log_dirs: &[PathBuf],
     topic: &str,
     shard: ShardId,
@@ -43,20 +43,17 @@ pub(crate) fn hydrate_on_promotion(
     let destination_start = destination.log_start_offset();
     let destination_end = destination.log_end_offset();
 
-    let floor = match krabka_verified::broker::delete_records_trim_application(
-        0,
-        source_start.0,
-        destination_start.0,
-    ) {
-        DeleteRecordsTrimApplication::RejectMalformed => {
-            return Err(BrokerError::Replication(
-                "promoted WAL has a malformed logical floor".into(),
-            ));
-        }
-        DeleteRecordsTrimApplication::TrimWal { frontier }
-        | DeleteRecordsTrimApplication::TrimLocal { frontier }
-        | DeleteRecordsTrimApplication::Complete { frontier } => Offset(frontier),
-    };
+    let floor =
+        match broker::delete_records_trim_application(0, source_start.0, destination_start.0) {
+            DeleteRecordsTrimApplication::RejectMalformed => {
+                return Err(BrokerError::Replication(
+                    "promoted WAL has a malformed logical floor".into(),
+                ));
+            }
+            DeleteRecordsTrimApplication::TrimWal { frontier }
+            | DeleteRecordsTrimApplication::TrimLocal { frontier }
+            | DeleteRecordsTrimApplication::Complete { frontier } => Offset(frontier),
+        };
 
     if destination_start == destination_end && destination_end < source_end {
         // Preserve the logical floor in the durable source before rebasing the
@@ -80,7 +77,7 @@ pub(crate) fn hydrate_on_promotion(
             let current = read_log_batches_covering(destination, overlap_start, overlap_end)?;
             if source.len() != current.len()
                 || source.iter().zip(&current).any(|(source, current)| {
-                    !krabka_verified::wal::wal_batch_equal(
+                    !wal::wal_batch_equal(
                         (
                             source.base_offset.0,
                             source.last_offset.0,
@@ -141,6 +138,7 @@ mod tests {
         krabka_ids::PartitionIndex,
         krabka_protocol::records::{Record, RecordBatch},
         krabka_units::mebibytes,
+        std::{fs, fs::File, io, path::Path, sync::Arc},
     };
 
     struct FollowerFixture {
@@ -164,7 +162,7 @@ mod tests {
             source,
         }
     }
-    fn checkpoint_follower(directory: &std::path::Path, range: DurableRange) {
+    fn checkpoint_follower(directory: &Path, range: DurableRange) {
         write_durable_offset(&directory.join(DURABLE_OFFSET_FILE), range).unwrap();
     }
     fn hydrate_follower(
@@ -184,7 +182,7 @@ mod tests {
 
     fn append_and_checkpoint(
         follower: &mut Log,
-        directory: &std::path::Path,
+        directory: &Path,
         batch: &mut RecordBatch,
         end: Offset,
     ) {
@@ -281,16 +279,12 @@ mod tests {
         #[derive(Debug)]
         struct InterruptedCopy;
         impl krabka_log::LogIo for InterruptedCopy {
-            fn write(&self, _file: &std::fs::File, _buf: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::other("promotion copy interrupted"))
+            fn write(&self, _file: &File, _buf: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("promotion copy interrupted"))
             }
 
-            fn write_vectored(
-                &self,
-                _file: &std::fs::File,
-                _buf: &[std::io::IoSlice<'_>],
-            ) -> std::io::Result<usize> {
-                Err(std::io::Error::other("promotion copy interrupted"))
+            fn write_vectored(&self, _file: &File, _buf: &[io::IoSlice<'_>]) -> io::Result<usize> {
+                Err(io::Error::other("promotion copy interrupted"))
             }
         }
         for (copied_batches, destination_floor) in [(0, 0), (0, 2), (0, 4), (1, 0), (1, 2), (2, 0)]
@@ -343,11 +337,11 @@ mod tests {
             drop(follower);
 
             if copied_batches == 0 && destination_floor > 1 {
-                destination.test_set_io(std::sync::Arc::new(InterruptedCopy));
+                destination.test_set_io(Arc::new(InterruptedCopy));
                 let error = hydrate_follower(&root, shard, &mut destination).unwrap_err();
                 assert!(error.to_string().contains("promotion copy interrupted"));
                 assert!(
-                    std::fs::read_to_string(follower_dir.join(DURABLE_OFFSET_FILE)).unwrap()
+                    fs::read_to_string(follower_dir.join(DURABLE_OFFSET_FILE)).unwrap()
                         == format!("0\n{destination_floor} 6\n")
                 );
                 drop(destination);

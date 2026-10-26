@@ -34,8 +34,12 @@ use {
         },
         time_util::duration_millis,
     },
+    futures_util::future::join_all,
     krabka_protocol::primitives::uuid::Uuid,
-    std::collections::{HashMap, HashSet},
+    std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    },
 };
 
 /// The share partitions that a heartbeat initializes, and the group epoch
@@ -106,8 +110,8 @@ pub(super) fn start_initialize(
         return;
     };
     spawn_initialize(
-        std::sync::Arc::clone(persister),
-        std::sync::Arc::clone(&coordinator.share_groups),
+        Arc::clone(persister),
+        Arc::clone(&coordinator.share_groups),
         state.group_id.clone(),
         initialize.state_epoch,
         initialize.calls,
@@ -142,16 +146,16 @@ pub(super) async fn cleanup_deleted_topics(
 /// metadata against: the broker's current image, or the provider's snapshot
 /// for a coordinator that runs without a metadata source.
 pub(super) enum TopicImage {
-    Image(std::sync::Arc<krabka_metadata::MetadataImage>),
-    Snapshot(std::sync::Arc<ReconcileInput>),
+    Image(Arc<krabka_metadata::MetadataImage>),
+    Snapshot(Arc<ReconcileInput>),
 }
 
 impl TopicImage {
     pub(super) fn current(coordinator: &GroupCoordinator) -> Self {
-        match coordinator.metadata_source() {
-            Some(source) => Self::Image(source.current_image()),
-            None => Self::Snapshot(coordinator.metadata.snapshot()),
-        }
+        coordinator.metadata_source().map_or_else(
+            || Self::Snapshot(coordinator.metadata.snapshot()),
+            |source| Self::Image(source.current_image()),
+        )
     }
 
     /// Whether the image holds any topic. Before the broker loads an image it
@@ -244,14 +248,14 @@ pub struct InitializeOutcome {
 /// loads the group next retries the partitions that are still initializing,
 /// once `initialize_retry_interval` has passed.
 fn spawn_initialize(
-    persister: std::sync::Arc<SharePersister>,
-    actors: std::sync::Arc<dashmap::DashMap<String, std::sync::Arc<super::ShareGroupActorHandle>>>,
+    persister: Arc<SharePersister>,
+    actors: Arc<dashmap::DashMap<String, Arc<super::ShareGroupActorHandle>>>,
     group_id: String,
     state_epoch: i32,
     calls: Vec<InitializeCall>,
 ) {
     tokio::spawn(async move {
-        let outcomes = futures_util::future::join_all(calls.into_iter().map(|call| {
+        let outcomes = join_all(calls.into_iter().map(|call| {
             let (persister, group_id) = (&persister, &group_id);
             async move {
                 let topic_uuid = uuid::Uuid::from_bytes(call.topic_id.0);
@@ -283,9 +287,7 @@ fn spawn_initialize(
             }
         }))
         .await;
-        let actor = actors
-            .get(&group_id)
-            .map(|entry| std::sync::Arc::clone(entry.value()));
+        let actor = actors.get(&group_id).map(|entry| Arc::clone(entry.value()));
         if let Some(actor) = actor {
             let _ = actor
                 .tx
@@ -419,6 +421,8 @@ mod tests {
             },
         },
         assert2::assert,
+        std::{sync::Arc, time::Duration},
+        tokio::{sync::oneshot, time::timeout},
     };
 
     /// Kafka's `subscribedTopicsChangeMap`: every partition of a subscribed
@@ -512,8 +516,8 @@ mod tests {
         let (coordinator, log, topic_id) = unavailable_persister_coordinator().partitions(2).call();
         let handle = coordinator.get_or_create_share("g");
 
-        let response = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
+        let response = timeout(
+            Duration::from_secs(2),
             heartbeat(&handle, subscribed_request().call()),
         )
         .await
@@ -592,7 +596,7 @@ mod tests {
                 ]))
                 .await
                 .expect("send the outcome");
-            let (reply, described) = tokio::sync::oneshot::channel();
+            let (reply, described) = oneshot::channel();
             handle
                 .tx
                 .send(ShareGroupActorMessage::Describe { reply })
@@ -681,7 +685,7 @@ mod tests {
         let kept = Uuid([5; 16]);
         let gone = Uuid([6; 16]);
         let image = || {
-            TopicImage::Snapshot(std::sync::Arc::new(ReconcileInput {
+            TopicImage::Snapshot(Arc::new(ReconcileInput {
                 topic_id_by_name: HashMap::from([("kept".to_owned(), kept)]),
                 partitions_per_topic: HashMap::from([(kept, 2)]),
                 ..ReconcileInput::default()
@@ -698,7 +702,7 @@ mod tests {
             },
             Row {
                 name: "an unloaded image deletes nothing",
-                image: TopicImage::Snapshot(std::sync::Arc::new(ReconcileInput::default())),
+                image: TopicImage::Snapshot(Arc::new(ReconcileInput::default())),
                 initialized: HashSet::from([share_partition(kept, 0), share_partition(gone, 0)]),
                 initializing: vec![share_partition(kept, 1), share_partition(gone, 1)],
                 deleting: vec![gone],

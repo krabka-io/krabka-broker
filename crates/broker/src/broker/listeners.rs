@@ -21,7 +21,7 @@ use {
     },
     dashmap::DashMap,
     krabka_ids::PartitionIndex,
-    std::{net::SocketAddr, sync::Arc},
+    std::{fs, net::SocketAddr, sync::Arc},
     tokio::net::TcpListener,
 };
 
@@ -153,7 +153,7 @@ pub(super) async fn bind_listeners_and_recover_moves(
             let partition = PartitionIndex(partition_id);
             if !partitions.contains(&topic, partition) {
                 let path = log_dir::future_partition_dir(&log_dir, &topic, partition_id);
-                if let Err(error) = std::fs::remove_dir_all(&path) {
+                if let Err(error) = fs::remove_dir_all(&path) {
                     tracing::warn!(path = %path.display(), %error, "failed to remove stranded future log");
                 }
                 continue;
@@ -168,7 +168,7 @@ pub(super) async fn bind_listeners_and_recover_moves(
                 MovePolicy {
                     retry_backoff: config.future_log_move_retry_backoff,
                     read_chunk: config.future_log_move_read_chunk,
-                    throttle: throttle_state.alter_log_dirs.clone(),
+                    throttle: Arc::clone(&throttle_state.alter_log_dirs),
                 },
             ) {
                 tracing::warn!(%topic, partition = partition_id, ?error,
@@ -244,6 +244,7 @@ mod tests {
         },
         assert2::assert,
         krabka_security::ListenerProtocol,
+        tokio::net::TcpStream,
     };
 
     fn spec(name: &str, bind_addr: SocketAddr) -> ListenerSpec {
@@ -424,7 +425,7 @@ mod tests {
             .iter()
             .map(|bound| bound.spec.name.clone())
             .collect();
-        let answers = tokio::net::TcpStream::connect(address).await.is_ok();
+        let answers = TcpStream::connect(address).await.is_ok();
         let expected = if opens {
             DataPlane {
                 listener_names: vec!["PLAINTEXT".to_owned()],

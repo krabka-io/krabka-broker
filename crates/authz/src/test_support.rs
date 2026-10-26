@@ -3,7 +3,7 @@
 use krabka_metadata::{AclEntry, AclOperation, PatternType, PermissionType, ResourceType};
 
 #[derive(Clone, Copy)]
-pub(crate) struct AclSetup<'a> {
+pub struct AclSetup<'a> {
     pub rt: ResourceType,
     pub permission: PermissionType,
     pub op: AclOperation,
@@ -28,7 +28,7 @@ impl Default for AclSetup<'_> {
 }
 
 #[bon::builder]
-pub(crate) fn acl(
+pub fn acl(
     #[builder(default = AclSetup::default().rt)] rt: ResourceType,
     #[builder(default = AclSetup::default().permission)] permission: PermissionType,
     #[builder(default = AclSetup::default().op)] op: AclOperation,

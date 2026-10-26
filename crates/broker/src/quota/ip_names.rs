@@ -22,19 +22,21 @@
 //! next metadata change.
 
 use {
+    krabka_client_core::transport,
     krabka_metadata::MetadataImage,
     std::{
         collections::{BTreeSet, HashMap, HashSet},
         future::Future,
-        net::IpAddr,
+        net::{IpAddr, Ipv4Addr},
         sync::{Mutex, MutexGuard, PoisonError},
         time::Duration,
     },
-    tokio::time::Instant,
+    tokio::{time, time::Instant},
 };
 
 /// The address an IP literal names, with an IPv4-mapped IPv6 address as the
 /// IPv4 address it maps to, as Java's `InetAddress.getByName` returns it.
+///
 /// `None` for anything that is not a literal, such as a host name.
 ///
 /// A bracketed IPv6 literal such as `[::1]` is a literal, as it is to Java,
@@ -58,7 +60,7 @@ pub fn parse_ip_literal(name: &str) -> Option<IpAddr> {
 /// `IPAddressUtil.textToNumericFormatV4` reads it: the last part fills the
 /// bytes that the parts before it leave, so `127.1` is `127.0.0.1` and a lone
 /// `2130706433` is too.
-fn short_ipv4(text: &str) -> Option<std::net::Ipv4Addr> {
+fn short_ipv4(text: &str) -> Option<Ipv4Addr> {
     let parts = text
         .split('.')
         .map(|part| {
@@ -76,12 +78,12 @@ fn short_ipv4(text: &str) -> Option<std::net::Ipv4Addr> {
     if *last >> (8 * last_bytes) != 0 {
         return None;
     }
-    let address = leading
+    let address = (leading
         .iter()
         .fold(0_u64, |address, part| (address << 8) | part)
-        << (8 * last_bytes)
+        << (8 * last_bytes))
         | last;
-    u32::try_from(address).ok().map(std::net::Ipv4Addr::from)
+    u32::try_from(address).ok().map(Ipv4Addr::from)
 }
 
 /// The resolved host names of the image's `ip` entities, and the entity names
@@ -139,9 +141,7 @@ impl Failure {
 /// The first address the system resolver returns for `host`, as
 /// `InetAddress.getByName` does.
 pub(super) async fn system_lookup(host: String) -> Option<IpAddr> {
-    let addrs = krabka_client_core::transport::resolve(&format!("{host}:0"))
-        .await
-        .ok()?;
+    let addrs = transport::resolve(&format!("{host}:0")).await.ok()?;
     addrs.first().map(|addr| addr.ip().to_canonical())
 }
 
@@ -244,7 +244,7 @@ impl IpNames {
         Found: Future<Output = Option<IpAddr>>,
     {
         for host in hosts {
-            let found = tokio::time::timeout(timeout, lookup(host.clone()))
+            let found = time::timeout(timeout, lookup(host.clone()))
                 .await
                 .ok()
                 .flatten();
@@ -276,6 +276,8 @@ mod tests {
             QuotaEntityInput, image_with_quota, image_with_quotas, quota_record,
         },
         assert2::check,
+        std::future,
+        tokio::{net, time},
     };
 
     /// An IP literal names one address whatever its spelling, and an
@@ -415,7 +417,7 @@ mod tests {
             .await;
         let unresolved_after = names.update(&image);
 
-        let listed: Vec<IpAddr> = tokio::net::lookup_host("localhost:0")
+        let listed: Vec<IpAddr> = net::lookup_host("localhost:0")
             .await
             .expect("localhost resolves")
             .map(|addr| addr.ip().to_canonical())
@@ -442,10 +444,10 @@ mod tests {
     /// Runs a lookup of `hosts` that never answers, with a short timeout, and
     /// fails the test if the timeout does not cut it off.
     async fn hang_until_timeout(names: &IpNames, hosts: &[String]) {
-        tokio::time::timeout(
+        time::timeout(
             Duration::from_secs(5),
             names.resolve_with(hosts, Duration::from_millis(10), |_host| {
-                std::future::pending::<Option<IpAddr>>()
+                future::pending::<Option<IpAddr>>()
             }),
         )
         .await
@@ -563,7 +565,7 @@ mod tests {
 
         let a = names.claim(vec!["a".to_owned()], start);
         hang_until_timeout(&names, &a).await;
-        tokio::time::advance(Duration::from_secs(10)).await;
+        time::advance(Duration::from_secs(10)).await;
         let b = names.claim(vec!["b".to_owned()], Instant::now());
         hang_until_timeout(&names, &b).await;
         let _ = names.update(&both);

@@ -17,6 +17,7 @@ use {
         streams,
     },
     crate::error::BrokerError,
+    std::collections::BTreeMap,
 };
 
 /// The fields of a member that Kafka's replay creates from a current
@@ -100,13 +101,20 @@ impl GroupCoordinator {
     }
 
     /// Reads the replayed group, which must exist.
-    fn streams_seed<T>(&self, group_id: &str, read: impl FnOnce(&StreamsGroupSeed) -> T) -> T {
-        read(
-            self.streams_seeds
-                .get(group_id)
-                .expect("the caller looked the group up")
-                .value(),
-        )
+    ///
+    /// # Errors
+    ///
+    /// Returns Kafka's `IllegalStateException` for a group with no replayed
+    /// state.
+    fn streams_seed<T>(
+        &self,
+        group_id: &str,
+        read: impl FnOnce(&StreamsGroupSeed) -> T,
+    ) -> Result<T, BrokerError> {
+        self.streams_seeds
+            .get(group_id)
+            .map(|seed| read(seed.value()))
+            .ok_or_else(|| BrokerError::Startup(format!("Group {group_id} has no replayed state.")))
     }
 
     /// Applies a `StreamsGroupMetadataValue`, as Kafka's
@@ -128,7 +136,7 @@ impl GroupCoordinator {
         value: streams::persistence::StreamsGroupMetadataValue,
     ) -> Result<(), BrokerError> {
         self.persisted_streams_group(group_id, true)?;
-        let mut last_assignment_configs = std::collections::BTreeMap::new();
+        let mut last_assignment_configs = BTreeMap::new();
         for config in value.last_assignment_configs.into_iter().flatten() {
             if let Some(first) = last_assignment_configs.get(&config.key) {
                 return Err(BrokerError::Startup(format!(
@@ -284,14 +292,14 @@ impl GroupCoordinator {
                         seed.target_per_member.len(),
                         seed.assignment_epoch,
                     )
-                })?;
+                })??;
                 self.streams_seeds.remove(group_id);
                 self.streams_seeds_cache.remove(group_id);
                 self.group_types.remove(group_id);
             }
             K::MemberMetadata { member_id, .. } => {
                 let remove =
-                    self.streams_seed(group_id, |seed| seed.member_tombstone(member_id))?;
+                    self.streams_seed(group_id, |seed| seed.member_tombstone(member_id))??;
                 if remove {
                     self.update_streams_seed(group_id, |seed| {
                         seed.remove_replayed_member(member_id);
@@ -302,7 +310,7 @@ impl GroupCoordinator {
             K::TargetAssignmentMetadata { .. } => {
                 self.streams_seed(group_id, |seed| {
                     target_metadata_tombstone(group_id, seed.target_per_member.len())
-                })?;
+                })??;
                 self.update_streams_seed(group_id, |seed| {
                     seed.assignment_epoch = -1;
                     seed.assignment_timestamp_ms = 0;
@@ -314,7 +322,7 @@ impl GroupCoordinator {
                 });
             }
             K::CurrentMemberAssignment { member_id, .. } => {
-                if self.streams_seed(group_id, |seed| seed.members.contains_key(member_id)) {
+                if self.streams_seed(group_id, |seed| seed.members.contains_key(member_id))? {
                     self.update_streams_seed(group_id, |seed| {
                         let state = seed.current_per_member.get(member_id).map_or(
                             streams::persistence::StreamsMemberWireState::Stable,
@@ -402,7 +410,7 @@ mod tests {
 
     fn target() -> StreamsGroupTargetAssignmentMemberValue {
         StreamsGroupTargetAssignmentMemberValue {
-            active: maplit::btreemap! {"0".to_string() => vec![0, 1]},
+            active: maplit::btreemap! {"0".to_owned() => vec![0, 1]},
             ..Default::default()
         }
     }
@@ -412,8 +420,8 @@ mod tests {
             member_epoch: epoch,
             previous_member_epoch: epoch - 1,
             state: StreamsMemberWireState::UnrevokedTasks,
-            active: maplit::btreemap! {"0".to_string() => vec![0, 1]},
-            active_epochs: maplit::btreemap! {"0".to_string() => vec![epoch, epoch]},
+            active: maplit::btreemap! {"0".to_owned() => vec![0, 1]},
+            active_epochs: maplit::btreemap! {"0".to_owned() => vec![epoch, epoch]},
             ..Default::default()
         }
     }

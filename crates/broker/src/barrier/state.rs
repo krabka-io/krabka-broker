@@ -16,7 +16,7 @@ mod schedule;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use self::{
+pub use self::{
     cut::{TargetPartition, build_cut, expand_targets},
     group::{GroupEntry, GroupSpec, PendingInjection, next_epoch},
     record::{StateRecord, apply_record},
@@ -27,4 +27,4 @@ pub(crate) use self::{
 /// The epoch of a group that has never injected.
 ///
 /// The first injection allocates epoch 1.
-pub(crate) const NO_EPOCH_YET: i64 = 0;
+pub const NO_EPOCH_YET: i64 = 0;

@@ -9,8 +9,11 @@
 use {
     crate::kraft::types::NodeId,
     async_trait::async_trait,
-    krabka_client_core::{ClientError, Connection, ConnectionOptions},
-    std::net::SocketAddr,
+    krabka_client_core::{ClientError, Connection, ConnectionOptions, transport},
+    std::{
+        io::{Error, ErrorKind},
+        net::SocketAddr,
+    },
 };
 
 /// Outbound dialer the controller hands to the peer sender.
@@ -54,14 +57,14 @@ impl OutboundDialer for PlaintextDialer {
         // resolving here (rather than once at startup) reaches the new IP.
         // A literal `ip:port` resolves to itself with no lookup, which is
         // what keeps this usable on WASI, where a host name is an error.
-        let sock: SocketAddr = krabka_client_core::transport::resolve(addr)
+        let sock: SocketAddr = transport::resolve(addr)
             .await
             .map_err(ClientError::Io)?
             .into_iter()
             .next()
             .ok_or_else(|| {
-                ClientError::Io(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
+                ClientError::Io(Error::new(
+                    ErrorKind::NotFound,
                     format!("raft peer address {addr:?} resolved to no addresses"),
                 ))
             })?;

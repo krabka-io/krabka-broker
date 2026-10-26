@@ -1,8 +1,15 @@
 //! Builders for requests shared by integration and unit tests.
 
-use crate::{
-    barrier::marker::{BarrierMarker, build_barrier_batch},
-    error::BrokerError,
+use {
+    crate::{
+        barrier::marker::{BarrierMarker, build_barrier_batch},
+        error::BrokerError,
+    },
+    krabka_protocol::{
+        owned::{list_offsets_request, produce_request},
+        primitives::uuid::Uuid,
+        records,
+    },
 };
 
 /// Build a barrier marker batch using the broker's production wire encoder.
@@ -15,7 +22,7 @@ pub fn barrier_marker_batch(
     epoch: i64,
     triggered_at: i64,
     base_offset: i64,
-) -> Result<krabka_protocol::records::RecordBatch, BrokerError> {
+) -> Result<records::RecordBatch, BrokerError> {
     build_barrier_batch(
         &BarrierMarker {
             group: group.to_owned(),
@@ -34,10 +41,10 @@ pub fn single_partition_produce_request(
     topic: impl Into<String>,
     topic_id: uuid::Uuid,
     partition_index: i32,
-    batch: krabka_protocol::records::RecordBatch,
+    batch: records::RecordBatch,
     acks: i16,
     timeout_ms: i32,
-) -> krabka_protocol::owned::produce_request::ProduceRequest {
+) -> produce_request::ProduceRequest {
     use krabka_protocol::{
         owned::produce_request::{PartitionProduceData, ProduceRequest, TopicProduceData},
         primitives::uuid::Uuid as WireUuid,
@@ -69,7 +76,7 @@ pub fn single_value_batch(
     #[builder(default)] base_offset: i64,
     #[builder(default)] leader_epoch: i32,
     #[builder(default)] timestamp_ms: i64,
-) -> krabka_protocol::records::RecordBatch {
+) -> records::RecordBatch {
     use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
     RecordBatch {
@@ -102,7 +109,7 @@ pub fn list_offsets_request(
     timestamp: i64,
     #[builder(default)] current_leader_epoch: i32,
     #[builder(default)] isolation_level: i8,
-) -> krabka_protocol::owned::list_offsets_request::ListOffsetsRequest {
+) -> list_offsets_request::ListOffsetsRequest {
     use krabka_protocol::owned::list_offsets_request::{
         ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic,
     };
@@ -131,9 +138,9 @@ pub fn produce_partitions_request(
     acks: i16,
     timeout_ms: i32,
     topic: String,
-    topic_id: krabka_protocol::primitives::uuid::Uuid,
-    partitions: Vec<krabka_protocol::owned::produce_request::PartitionProduceData>,
-) -> krabka_protocol::owned::produce_request::ProduceRequest {
+    topic_id: Uuid,
+    partitions: Vec<produce_request::PartitionProduceData>,
+) -> produce_request::ProduceRequest {
     use krabka_protocol::owned::produce_request::{ProduceRequest, TopicProduceData};
 
     ProduceRequest {

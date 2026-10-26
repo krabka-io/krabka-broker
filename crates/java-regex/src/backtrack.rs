@@ -91,14 +91,18 @@ const BACKTRACK_LIMIT: usize = 1_000_000;
 /// A search the machine did not answer, which Java answers by a result or an
 /// exception, and a caller rejects.
 #[derive(Debug, thiserror::Error)]
-pub(super) enum SearchError {
+pub enum SearchError {
     #[error("the search ran past the backtrack limit of {BACKTRACK_LIMIT} steps")]
     BacktrackLimit,
+    /// The compiled program named an instruction or a slot it does not have,
+    /// or the search started off the input.
+    #[error("the compiled program addressed an instruction, slot or position it does not have")]
+    Program,
 }
 
 /// A pattern compiled for the machine.
 #[derive(Debug)]
-pub(super) struct Program {
+pub struct Program {
     /// The instructions of the pattern, then those of each look-around,
     /// atomic group and iteration of a `GroupCurly`. Each block ends in
     /// [`Inst::Match`].
@@ -228,7 +232,7 @@ impl Class {
         let regex = Regex::new(&format!("\\A(?:{class})\\z")).ok()?;
         let ascii = (0..128_u8)
             .filter(|&byte| regex.is_match(char::from(byte).encode_utf8(&mut [0; 4])))
-            .fold(0, |table, byte| table | 1 << byte);
+            .fold(0, |table, byte| table | (1 << byte));
         Some(Self {
             ascii,
             surrogates: class_has_surrogates(class),
@@ -238,7 +242,7 @@ impl Class {
 
     fn matches(&self, c: char) -> bool {
         if c.is_ascii() {
-            self.ascii >> u32::from(c) & 1 == 1
+            (self.ascii >> u32::from(c)) & 1 == 1
         } else {
             self.regex.is_match(c.encode_utf8(&mut [0; 4]))
         }
@@ -355,8 +359,8 @@ fn item_has_surrogates(item: &ClassSetItem) -> bool {
 /// no `is` before it, no space, `_` or `-`, and no char past ASCII, in lower
 /// case. `regex_syntax` reads `isc` as itself, not as `c`.
 fn normalize_property_name(name: &str) -> String {
-    let (rest, is) = match name.get(..2) {
-        Some(prefix) if prefix.eq_ignore_ascii_case("is") => (&name[2..], true),
+    let (rest, is) = match name.split_at_checked(2) {
+        Some((prefix, rest)) if prefix.eq_ignore_ascii_case("is") => (rest, true),
         _ => (name, false),
     };
     let normalized: String = rest
@@ -523,7 +527,7 @@ impl Program {
         let mut main = Vec::new();
         compiler.compile(&tree.expr, &mut main)?;
         main.push(Inst::Match);
-        compiler.blocks[0] = main;
+        *compiler.blocks.first_mut()? = main;
         // Every group, fold and `\R` the rewrite wrote is in the tree.
         if compiler.next_group != groups
             || compiler.folds.next().is_some()
@@ -565,7 +569,9 @@ impl Program {
         last: usize,
     ) -> Result<Option<Vec<Option<Range<usize>>>>, SearchError> {
         let mut machine = Machine::new(self, input, last);
-        let starts = input[from..]
+        let starts = input
+            .get(from..)
+            .ok_or(SearchError::Program)?
             .char_indices()
             .map(|(offset, _)| from + offset)
             .chain([input.len()]);
@@ -575,13 +581,17 @@ impl Program {
         let mut slots = vec![None; self.slot_count];
         for start in starts {
             if let Some(end) = machine.run(0, start, None, &mut slots)? {
-                slots[0] = Some(start);
-                slots[1] = Some(end);
+                let [whole_start, whole_end, ..] = slots.as_mut_slice() else {
+                    return Err(SearchError::Program);
+                };
+                (*whole_start, *whole_end) = (Some(start), Some(end));
                 return Ok(Some(
                     slots
-                        .chunks(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .take(self.groups)
-                        .map(|pair| Some(pair[0]?..pair[1]?))
+                        .map(|&[start, end]| Some(start?..end?))
                         .collect(),
                 ));
             }
@@ -752,14 +762,14 @@ impl Compiler<'_> {
             jumps.push(code.len());
             code.push(Inst::Jump(0));
             let next = code.len();
-            if let Inst::Split { second, .. } = &mut code[split] {
+            if let Inst::Split { second, .. } = code.get_mut(split)? {
                 *second = next;
             }
         }
         self.compile(last, code)?;
         let end = code.len();
         for jump in jumps {
-            code[jump] = Inst::Jump(end);
+            *code.get_mut(jump)? = Inst::Jump(end);
         }
         Some(())
     }
@@ -836,7 +846,7 @@ impl Compiler<'_> {
             exit,
             group_curly,
         });
-        if let Inst::Repeat { exit: target, .. } = &mut code[head] {
+        if let Inst::Repeat { exit: target, .. } = code.get_mut(head)? {
             *target = exit;
         }
         Some(())
@@ -863,7 +873,7 @@ fn takes_first_way(child: &Expr, lo: usize, hi: usize, linebreak_atom: bool) -> 
 
 /// `TreeInfo.deterministic` after Java studies `expr`: no alternation, and
 /// no quantifier with a range of counts. A look-around is not studied.
-pub(super) fn deterministic(expr: &Expr) -> bool {
+pub fn deterministic(expr: &Expr) -> bool {
     match expr {
         Expr::Alt(_) => false,
         Expr::Repeat { child, lo, hi, .. } => lo == hi && deterministic(child),
@@ -971,11 +981,11 @@ impl<'a> Machine<'a> {
         slots: &mut [Option<usize>],
     ) -> Result<Option<usize>, SearchError> {
         let program = self.program;
-        let code = &program.blocks[block];
+        let code = program.blocks.get(block).ok_or(SearchError::Program)?;
         let base = self.stack.len();
         let (mut pc, mut pos) = (0, at);
         loop {
-            let next = match &code[pc] {
+            let next = match code.get(pc).ok_or(SearchError::Program)? {
                 Inst::Char(expected) => self
                     .next_unit(pos)
                     .filter(|&(actual, _)| actual == Unit::Char(*expected))
@@ -1025,16 +1035,16 @@ impl<'a> Machine<'a> {
                 }
                 &Inst::Jump(target) => Some((target, pos)),
                 &Inst::Save(slot) => {
-                    set(&mut self.stack, slots, slot, Some(pos));
+                    set(&mut self.stack, slots, slot, Some(pos))?;
                     Some((pc + 1, pos))
                 }
                 &Inst::Close { group, open } => {
-                    set(&mut self.stack, slots, 2 * group, slots[open]);
-                    set(&mut self.stack, slots, 2 * group + 1, Some(pos));
+                    set(&mut self.stack, slots, 2 * group, slot_value(slots, open)?)?;
+                    set(&mut self.stack, slots, 2 * group + 1, Some(pos))?;
                     Some((pc + 1, pos))
                 }
-                &Inst::Backref { group, fold } => slots[2 * group]
-                    .zip(slots[2 * group + 1])
+                &Inst::Backref { group, fold } => slot_value(slots, 2 * group)?
+                    .zip(slot_value(slots, 2 * group + 1)?)
                     .and_then(|(start, stop)| self.backref(pos, start..stop, fold))
                     .map(|after| (pc + 1, after)),
                 Inst::Assert(check) => self.holds(check, pos).then_some((pc + 1, pos)),
@@ -1064,7 +1074,7 @@ impl<'a> Machine<'a> {
                     after.map(|after| (pc + 1, after))
                 }
                 &Inst::RepeatStart { count } => {
-                    set(&mut self.stack, slots, count, Some(0));
+                    set(&mut self.stack, slots, count, Some(0))?;
                     Some((pc + 1, pos))
                 }
                 &Inst::Repeat {
@@ -1074,7 +1084,7 @@ impl<'a> Machine<'a> {
                     greedy,
                     exit,
                 } => {
-                    let done = slots[count].unwrap_or(0);
+                    let done = slot_value(slots, count)?.unwrap_or(0);
                     if done < lo {
                         Some((pc + 1, pos))
                     } else if done >= hi {
@@ -1099,9 +1109,9 @@ impl<'a> Machine<'a> {
                     // matches nothing, such as `(){1000000000}`, stops at the limit
                     // and does not grow the stack by a billion frames.
                     self.spend()?;
-                    let done = slots[count].unwrap_or(0) + 1;
-                    set(&mut self.stack, slots, count, Some(done));
-                    let empty = slots[start] == Some(pos);
+                    let done = slot_value(slots, count)?.unwrap_or(0) + 1;
+                    set(&mut self.stack, slots, count, Some(done))?;
+                    let empty = slot_value(slots, start)? == Some(pos);
                     match (group_curly, empty) {
                         (true, true) if done > lo => None,
                         (false, true) if done >= lo => Some((exit, pos)),
@@ -1130,7 +1140,9 @@ impl<'a> Machine<'a> {
     ) -> Result<Option<(usize, usize)>, SearchError> {
         while self.stack.len() > base {
             match self.stack.pop() {
-                Some(Frame::Undo { slot, value }) => slots[slot] = value,
+                Some(Frame::Undo { slot, value }) => {
+                    *slots.get_mut(slot).ok_or(SearchError::Program)? = value;
+                }
                 Some(Frame::Alternative { pc, pos }) => {
                     self.spend()?;
                     return Ok(Some((pc, pos)));
@@ -1308,7 +1320,12 @@ impl<'a> Machine<'a> {
         } else {
             (pos - 2, 1)
         };
-        let units: usize = self.input[..boundary].chars().map(char::len_utf16).sum();
+        let units: usize = self
+            .input
+            .char_indices()
+            .take_while(|&(at, _)| at < boundary)
+            .map(|(_, c)| c.len_utf16())
+            .sum();
         i32::try_from(units + inside).unwrap_or(i32::MAX)
     }
 
@@ -1327,13 +1344,16 @@ impl<'a> Machine<'a> {
         let private = 2 * self.program.groups;
         let mut kept = base;
         for index in base..self.stack.len() {
-            if let Frame::Undo { slot, value } = self.stack[index]
+            if let Some(&Frame::Undo { slot, value }) = self.stack.get(index)
                 && (slot >= private || group.is_some_and(|group| slot / 2 == group))
-                && self.kept[slot] != self.keeps
+                && let Some(mark) = self.kept.get_mut(slot)
+                && *mark != self.keeps
             {
-                self.kept[slot] = self.keeps;
-                if slots[slot] != value {
-                    self.stack[kept] = Frame::Undo { slot, value };
+                *mark = self.keeps;
+                if slots.get(slot) != Some(&value)
+                    && let Some(frame) = self.stack.get_mut(kept)
+                {
+                    *frame = Frame::Undo { slot, value };
                     kept += 1;
                 }
             }
@@ -1358,8 +1378,10 @@ impl<'a> Machine<'a> {
             .into_iter()
             .all(|at| input.is_char_boundary(at));
         match fold {
-            None if whole => input[pos..]
-                .starts_with(&input[group.clone()])
+            None if whole => input
+                .get(pos..)
+                .zip(input.get(group.clone()))
+                .is_some_and(|(rest, text)| rest.starts_with(text))
                 .then_some(pos + group.len()),
             None => {
                 let (mut at, mut from) = (pos, group.start);
@@ -1381,7 +1403,7 @@ impl<'a> Machine<'a> {
     /// What Java reads at `pos`, and the position after it.
     fn next_unit(&self, pos: usize) -> Option<(Unit, usize)> {
         if self.input.is_char_boundary(pos) {
-            let c = self.input[pos..].chars().next()?;
+            let c = self.input.get(pos..)?.chars().next()?;
             Some((Unit::Char(c), pos + c.len_utf8()))
         } else {
             let (unit, after) = unit_at(self.input, pos)?;
@@ -1419,7 +1441,7 @@ impl<'a> Machine<'a> {
 /// The UTF-16 unit at `pos`, and the position after it.
 fn unit_at(input: &str, pos: usize) -> Option<(u16, usize)> {
     if input.is_char_boundary(pos) {
-        let c = input[pos..].chars().next()?;
+        let c = input.get(pos..)?.chars().next()?;
         let [first, _] = utf16_units(c);
         let after = if c.len_utf16() == 2 {
             pos + 2
@@ -1428,15 +1450,16 @@ fn unit_at(input: &str, pos: usize) -> Option<(u16, usize)> {
         };
         Some((first, after))
     } else {
-        let c = input[pos - 2..].chars().next()?;
-        Some((utf16_units(c)[1], pos + 2))
+        let c = input.get(pos.checked_sub(2)?..)?.chars().next()?;
+        let [_, second] = utf16_units(c);
+        Some((second, pos + 2))
     }
 }
 
 /// The UTF-16 unit before `pos`, and the position it starts at.
 fn unit_before(input: &str, pos: usize) -> Option<(u16, usize)> {
     if input.is_char_boundary(pos) {
-        let c = input[..pos].chars().next_back()?;
+        let c = input.get(..pos)?.chars().next_back()?;
         let [first, second] = utf16_units(c);
         Some(if c.len_utf16() == 2 {
             (second, pos - 2)
@@ -1444,8 +1467,9 @@ fn unit_before(input: &str, pos: usize) -> Option<(u16, usize)> {
             (first, pos - c.len_utf8())
         })
     } else {
-        let c = input[pos - 2..].chars().next()?;
-        Some((utf16_units(c)[0], pos - 2))
+        let c = input.get(pos.checked_sub(2)?..)?.chars().next()?;
+        let [first, _] = utf16_units(c);
+        Some((first, pos - 2))
     }
 }
 
@@ -1460,13 +1484,25 @@ const fn is_high_surrogate(unit: u16) -> bool { matches!(unit, 0xD800..=0xDBFF) 
 
 const fn is_low_surrogate(unit: u16) -> bool { matches!(unit, 0xDC00..=0xDFFF) }
 
+/// The value of a slot.
+fn slot_value(slots: &[Option<usize>], slot: usize) -> Result<Option<usize>, SearchError> {
+    slots.get(slot).copied().ok_or(SearchError::Program)
+}
+
 /// Sets a slot, and records its old value on the stack.
-fn set(stack: &mut Vec<Frame>, slots: &mut [Option<usize>], slot: usize, value: Option<usize>) {
+fn set(
+    stack: &mut Vec<Frame>,
+    slots: &mut [Option<usize>],
+    slot: usize,
+    value: Option<usize>,
+) -> Result<(), SearchError> {
+    let current = slots.get_mut(slot).ok_or(SearchError::Program)?;
     stack.push(Frame::Undo {
         slot,
-        value: slots[slot],
+        value: *current,
     });
-    slots[slot] = value;
+    *current = value;
+    Ok(())
 }
 
 /// `CIBackRef.match` at `at`, for the text in `group`: the position after the
@@ -1480,9 +1516,9 @@ fn set(stack: &mut Vec<Frame>, slots: &mut [Option<usize>], slot: usize, value: 
 /// as long in UTF-16 units as in code points, and Java's `i + groupSizeChars`
 /// is the end of the last pair.
 fn folded_backref(input: &str, at: usize, group: Range<usize>, fold: BackrefFold) -> Option<usize> {
-    let mut rest = input[at..].chars();
+    let mut rest = input.get(at..)?.chars();
     let mut after = at;
-    for c2 in input[group].chars() {
+    for c2 in input.get(group)?.chars() {
         let c1 = rest.next()?;
         if !fold.chars_match(c2, c1) {
             return None;
@@ -1641,10 +1677,10 @@ mod tests {
     /// A `GroupCurly` keeps `fancy_regex` unless a group inside its atom or
     /// an empty iteration of its repeated group shows.
     #[yare::parameterized(
-        one_char_group = { r"(a)*", &[false, true], false },
-        two_char_group = { r"(ab)+", &[false, true], false },
+        one_char_group = { "(a)*", &[false, true], false },
+        two_char_group = { "(ab)+", &[false, true], false },
         restored_group = { r"(?:(a)*y|a)\1", &[false, true], false },
-        empty_group = { r"()*", &[false, true], true },
+        empty_group = { "()*", &[false, true], true },
         nested_group = { r"(?:((a))*y|a)\2", &[false, true, false], true },
     )]
     fn a_group_curly_differs_from_fancy_only_where_it_shows(
@@ -1666,11 +1702,11 @@ mod tests {
         // (pattern, input, linebreak_atoms, matches)
         let cases = [
             (r"y(?:(?<!z)x|\R)*", after_y.as_str(), &[false][..], true),
-            (r"x*(?<!x)", &xs, &[], false),
-            (r"x*(?<=y)", &xs, &[], false),
-            (r"x*(?<!y|x{1,3})", &xs, &[], false),
-            (r"x*(?<!x{1,3}y)", &xs, &[], true),
-            (r"x*(?<=x{2,4})", &xs, &[], true),
+            ("x*(?<!x)", &xs, &[], false),
+            ("x*(?<=y)", &xs, &[], false),
+            ("x*(?<!y|x{1,3})", &xs, &[], false),
+            ("x*(?<!x{1,3}y)", &xs, &[], true),
+            ("x*(?<=x{2,4})", &xs, &[], true),
         ];
         for (pattern, input, linebreak_atoms, expected) in cases {
             check_matches([row(pattern, input, &[false], expected)], linebreak_atoms);
@@ -1681,10 +1717,10 @@ mod tests {
     /// units, so a start that far back is tried. Each row is
     /// `Pattern.matches` on JDK 25.0.4.
     #[yare::parameterized(
-        any = { r".(?<=.)x", "😀x", true },
-        class = { r".(?<=[^a])x", "😀x", true },
-        negated = { r".(?<!.)x", "😀x", false },
-        variable_length = { r"a.(?<=a.{0,2})x", "a😀x", true },
+        any = { ".(?<=.)x", "😀x", true },
+        class = { ".(?<=[^a])x", "😀x", true },
+        negated = { ".(?<!.)x", "😀x", false },
+        variable_length = { "a.(?<=a.{0,2})x", "a😀x", true },
     )]
     fn a_look_behind_reaches_back_over_a_supplementary_char(
         pattern: &str,
@@ -1788,14 +1824,14 @@ mod tests {
             let Some(whole) = groups[0].clone() else {
                 break;
             };
-            out.push_str(&input[copied..whole.start]);
+            out.push_str(input.get(copied..whole.start).unwrap());
             out.push('<');
-            out.push_str(&input[whole.clone()]);
+            out.push_str(input.get(whole.clone()).unwrap());
             out.push('>');
             copied = whole.end;
             from = next_search_start(input, &whole);
         }
-        out.push_str(&input[copied..]);
+        out.push_str(input.get(copied..).unwrap());
         out
     }
 
@@ -1806,46 +1842,46 @@ mod tests {
     /// of supplementary chars does not. Each row is `replaceAll("<$0>")` on
     /// JDK 25.0.4, with the window of each look-behind from Java's study.
     #[yare::parameterized(
-        dot_after_a_char = { r"a.(?<=a.)x", &[units(2, 2)], "a😀x", "a😀x" },
-        two_dots_over_two_pairs = { r".(?<=..)x", &[units(2, 2)], "😀😀x", "😀😀x" },
-        two_dots_over_a_pair_and_a_char = { r".(?<=..)x", &[units(2, 2)], "😀bx", "😀<bx>" },
-        two_dots_alone = { r"(?<=..)x", &[units(2, 2)], "a😀x", "a😀x" },
-        two_dots_alone_over_bmp = { r"(?<=..)x", &[units(2, 2)], "😀bx", "😀b<x>" },
-        counted_dots = { r"(?<=.{2})x", &[units(2, 2)], "😀x𝄞x", "😀x𝄞x" },
-        dots_with_a_range_of_counts = { r"(?<=.{1,2})x", &[units(1, 2)], "😀x𝄞x", "😀<x>𝄞<x>" },
+        dot_after_a_char = { "a.(?<=a.)x", &[units(2, 2)], "a😀x", "a😀x" },
+        two_dots_over_two_pairs = { ".(?<=..)x", &[units(2, 2)], "😀😀x", "😀😀x" },
+        two_dots_over_a_pair_and_a_char = { ".(?<=..)x", &[units(2, 2)], "😀bx", "😀<bx>" },
+        two_dots_alone = { "(?<=..)x", &[units(2, 2)], "a😀x", "a😀x" },
+        two_dots_alone_over_bmp = { "(?<=..)x", &[units(2, 2)], "😀bx", "😀b<x>" },
+        counted_dots = { "(?<=.{2})x", &[units(2, 2)], "😀x𝄞x", "😀x𝄞x" },
+        dots_with_a_range_of_counts = { "(?<=.{1,2})x", &[units(1, 2)], "😀x𝄞x", "😀<x>𝄞<x>" },
         symbol_class = { r"(?<=\p{So})x", &[units(1, 1)], "😀x𝄞x", "😀x𝄞x" },
         dot_then_symbol_class = { r".(?<=\p{So})x", &[units(1, 1)], "😀x", "😀x" },
         supplementary_escape = { r".(?<=\x{1F600})x", &[units(1, 1)], "😀😀x", "😀😀x" },
         supplementary_class = { r"(?<=[\x{1F600}])x", &[units(1, 1)], "a😀x", "a😀x" },
         negated_symbol_class = { r"(?<!\p{So})x", &[units(1, 1)], "😀x𝄞x", "😀<x>𝄞<x>" },
         dot_then_negated_symbol_class = { r".(?<!\p{So})x", &[units(1, 1)], "😀😀x", "😀<😀x>" },
-        char_then_dot = { r"(?<=a.)x", &[units(2, 2)], "a😀x", "a😀x" },
-        negated_char_then_dot = { r"(?<!a.)x", &[units(2, 2)], "a😀x", "a😀<x>" },
-        start_then_dot = { r"(?<=^.)x", &[units(1, 1)], "😀x", "😀x" },
-        start_then_two_dots = { r"(?<=^..)x", &[units(2, 2)], "😀bx", "😀bx" },
+        char_then_dot = { "(?<=a.)x", &[units(2, 2)], "a😀x", "a😀x" },
+        negated_char_then_dot = { "(?<!a.)x", &[units(2, 2)], "a😀x", "a😀<x>" },
+        start_then_dot = { "(?<=^.)x", &[units(1, 1)], "😀x", "😀x" },
+        start_then_two_dots = { "(?<=^..)x", &[units(2, 2)], "😀bx", "😀bx" },
         dot_then_escape = { r"(?<=.\x{1F600})x", &[units(2, 2)], "😀😀x", "😀😀x" },
-        two_negated_classes = { r"(?<=[^a][^a])x", &[units(2, 2)], "😀x𝄞x", "😀x𝄞x" },
-        two_negated_classes_over_bmp = { r"(?<=[^a][^a])x", &[units(2, 2)], "😀bx", "😀b<x>" },
-        dot_inside_a_pair = { r".(?<=.)x", &[units(1, 1)], "😀x𝄞x", "<😀x><𝄞x>" },
-        dot_alone_inside_a_pair = { r"(?<=.)x", &[units(1, 1)], "a😀x", "a😀<x>" },
-        negated_class_inside_a_pair = { r".(?<=[^a])x", &[units(1, 1)], "a😀x", "a<😀x>" },
-        non_word_inside_a_pair = { r"(?<=[^0-9A-Za-z_])x", &[units(1, 1)], "😀x", "😀<x>" },
+        two_negated_classes = { "(?<=[^a][^a])x", &[units(2, 2)], "😀x𝄞x", "😀x𝄞x" },
+        two_negated_classes_over_bmp = { "(?<=[^a][^a])x", &[units(2, 2)], "😀bx", "😀b<x>" },
+        dot_inside_a_pair = { ".(?<=.)x", &[units(1, 1)], "😀x𝄞x", "<😀x><𝄞x>" },
+        dot_alone_inside_a_pair = { "(?<=.)x", &[units(1, 1)], "a😀x", "a😀<x>" },
+        negated_class_inside_a_pair = { ".(?<=[^a])x", &[units(1, 1)], "a😀x", "a<😀x>" },
+        non_word_inside_a_pair = { "(?<=[^0-9A-Za-z_])x", &[units(1, 1)], "😀x", "😀<x>" },
         non_letter_inside_a_pair = { r"(?<=\P{L})x", &[units(1, 1)], "😀x", "😀<x>" },
         letter_inside_a_pair = { r"(?<=\p{L})x", &[units(1, 1)], "😀x", "😀x" },
         surrogate_range_inside_a_pair = { r"(?<=[\x{D000}-\x{E000}])x", &[units(1, 1)], "😀x", "😀<x>" },
         surrogate_category_inside_a_pair = { r"(?<=\p{Cs})x", &[units(1, 1)], "😀x", "😀<x>" },
         not_surrogate_inside_a_pair = { r"(?<=\P{Cs})x", &[units(1, 1)], "😀x", "😀x" },
-        intersection_inside_a_pair = { r"(?<=[[[a]&&[[^b]]]])x", &[units(1, 1)], "😀x", "😀x" },
-        negated_intersection_inside_a_pair = { r"(?<=[^[[a]&&[[^b]]]])x", &[units(1, 1)], "😀x", "😀<x>" },
-        negated_dot = { r"(?<!.)x", &[units(1, 1)], "😀x", "😀x" },
-        dot_then_negated_dot = { r".(?<!.)x", &[units(1, 1)], "😀x", "😀x" },
-        greedy_class = { r"(?<=[^x]+)x", &[units(1, i32::MAX)], "😀x𝄞x", "😀<x>𝄞<x>" },
-        empty_after_a_dot = { r"(?<=.)", &[units(1, 1)], "😀x𝄞x", "😀<>x<>𝄞<>x<>" },
-        two_look_behinds = { r"(?<=.)(?<=.)x", &[units(1, 1), units(1, 1)], "a😀x", "a😀<x>" },
-        nested_look_behind_before = { r"(?<=(?<=.).)x", &[units(1, 1), units(1, 1)], "😀x", "😀x" },
-        nested_look_behind_after = { r"(?<=.(?<=.))x", &[units(1, 1), units(1, 1)], "😀x", "😀<x>" },
-        look_ahead_inside_a_pair = { r"(?<=(?=.).)x", &[units(1, 1)], "😀x", "😀<x>" },
-        look_ahead_at_x_inside_a_pair = { r"(?<=(?=x).)x", &[units(1, 1)], "😀x", "😀x" },
+        intersection_inside_a_pair = { "(?<=[[[a]&&[[^b]]]])x", &[units(1, 1)], "😀x", "😀x" },
+        negated_intersection_inside_a_pair = { "(?<=[^[[a]&&[[^b]]]])x", &[units(1, 1)], "😀x", "😀<x>" },
+        negated_dot = { "(?<!.)x", &[units(1, 1)], "😀x", "😀x" },
+        dot_then_negated_dot = { ".(?<!.)x", &[units(1, 1)], "😀x", "😀x" },
+        greedy_class = { "(?<=[^x]+)x", &[units(1, i32::MAX)], "😀x𝄞x", "😀<x>𝄞<x>" },
+        empty_after_a_dot = { "(?<=.)", &[units(1, 1)], "😀x𝄞x", "😀<>x<>𝄞<>x<>" },
+        two_look_behinds = { "(?<=.)(?<=.)x", &[units(1, 1), units(1, 1)], "a😀x", "a😀<x>" },
+        nested_look_behind_before = { "(?<=(?<=.).)x", &[units(1, 1), units(1, 1)], "😀x", "😀x" },
+        nested_look_behind_after = { "(?<=.(?<=.))x", &[units(1, 1), units(1, 1)], "😀x", "😀<x>" },
+        look_ahead_inside_a_pair = { "(?<=(?=.).)x", &[units(1, 1)], "😀x", "😀<x>" },
+        look_ahead_at_x_inside_a_pair = { "(?<=(?=x).)x", &[units(1, 1)], "😀x", "😀x" },
         start_of_text_inside_a_pair = { r"(?<=\A.)x", &[units(1, 1)], "😀x", "😀x" },
         end_of_text_inside_a_pair = { r"(?<=\z.)x", &[units(1, 1)], "😀x", "😀x" },
         word_boundary_inside_a_pair = { r"(?<=\b.)x", &[units(1, 1)], "😀x", "😀x" },
@@ -1868,17 +1904,17 @@ mod tests {
     /// or a line terminator. Each row is `replaceAll("<$0>")` on JDK 25.0.4.
     #[yare::parameterized(
         word_boundary = {
-            r"(?<=(?:(?<=[0-9A-Za-z_])(?![0-9A-Za-z_])|(?<![0-9A-Za-z_])(?=[0-9A-Za-z_])).)x",
+            "(?<=(?:(?<=[0-9A-Za-z_])(?![0-9A-Za-z_])|(?<![0-9A-Za-z_])(?=[0-9A-Za-z_])).)x",
             "b😀x",
             "b😀x",
         },
         word_boundary_after_a_pair = {
-            r"(?<=(?:(?<=[0-9A-Za-z_])(?![0-9A-Za-z_])|(?<![0-9A-Za-z_])(?=[0-9A-Za-z_])).)x",
+            "(?<=(?:(?<=[0-9A-Za-z_])(?![0-9A-Za-z_])|(?<![0-9A-Za-z_])(?=[0-9A-Za-z_])).)x",
             "😀bx",
             "😀b<x>",
         },
         not_word_boundary = {
-            r"(?<=(?:(?<=[0-9A-Za-z_])(?=[0-9A-Za-z_])|(?<![0-9A-Za-z_])(?![0-9A-Za-z_])).)x",
+            "(?<=(?:(?<=[0-9A-Za-z_])(?=[0-9A-Za-z_])|(?<![0-9A-Za-z_])(?![0-9A-Za-z_])).)x",
             "😀x𝄞x",
             "😀<x>𝄞<x>",
         },
@@ -1910,25 +1946,25 @@ mod tests {
     /// Java's `BehindS` counts its window back in code points and steps by
     /// them. Each row is `replaceAll("<$0>")` on JDK 25.0.4.
     #[yare::parameterized(
-        pair = { r"(?<=😀)x", &[code_points(1, 1)], "😀x𝄞x", "😀<x>𝄞x" },
-        pair_before_a_char = { r"(?<=😀)x", &[code_points(1, 1)], "😀bx", "😀bx" },
-        dot_then_pair = { r".(?<=😀)x", &[code_points(1, 1)], "😀😀x", "😀<😀x>" },
-        char_then_pair = { r"(?<=a😀)x", &[code_points(2, 2)], "a😀x", "a😀<x>" },
-        pair_then_dot = { r"(?<=😀.)x", &[code_points(2, 2)], "😀😀x", "😀😀<x>" },
-        pair_then_dot_over_bmp = { r"(?<=😀.)x", &[code_points(2, 2)], "😀a😀x", "😀a😀x" },
-        dot_then_pair_alone = { r"(?<=.😀)x", &[code_points(2, 2)], "a😀x", "a😀<x>" },
-        dot_then_pair_at_the_start = { r"(?<=.😀)x", &[code_points(2, 2)], "😀x", "😀x" },
-        negated_class_then_pair = { r"(?<=[^a]😀)x", &[code_points(2, 2)], "😀😀x", "😀😀<x>" },
-        negated_class_then_pair_over_a = { r"(?<=[^a]😀)x", &[code_points(2, 2)], "😀a😀x", "😀a😀x" },
-        negated_pair = { r"(?<!😀)x", &[code_points(1, 1)], "😀x𝄞x", "😀x𝄞<x>" },
-        negated_dot_then_pair = { r"(?<!.😀)x", &[code_points(2, 2)], "😀x", "😀<x>" },
-        negated_dot_then_pair_after_a = { r"(?<!.😀)x", &[code_points(2, 2)], "a😀x", "a😀x" },
-        two_dots_then_pair = { r"(?<=..😀)x", &[code_points(3, 3)], "😀a😀x", "😀a😀<x>" },
-        two_dots_then_pair_over_pairs = { r"(?<=..😀)x", &[code_points(3, 3)], "😀😀x", "😀😀x" },
-        counted_dots_then_pair = { r"(?<=.{1,2}😀)x", &[code_points(2, 3)], "😀a😀x", "😀a😀<x>" },
-        counted_dots_then_pair_at_the_start = { r"(?<=.{1,2}😀)x", &[code_points(2, 3)], "😀x", "😀x" },
-        alternation = { r"(?<=😀|a)x", &[code_points(1, 1)], "😀x𝄞x", "😀<x>𝄞x" },
-        two_look_behinds = { r"(?<=😀)(?<=.)x", &[code_points(1, 1), code_points(1, 1)], "a😀x", "a😀<x>" },
+        pair = { "(?<=😀)x", &[code_points(1, 1)], "😀x𝄞x", "😀<x>𝄞x" },
+        pair_before_a_char = { "(?<=😀)x", &[code_points(1, 1)], "😀bx", "😀bx" },
+        dot_then_pair = { ".(?<=😀)x", &[code_points(1, 1)], "😀😀x", "😀<😀x>" },
+        char_then_pair = { "(?<=a😀)x", &[code_points(2, 2)], "a😀x", "a😀<x>" },
+        pair_then_dot = { "(?<=😀.)x", &[code_points(2, 2)], "😀😀x", "😀😀<x>" },
+        pair_then_dot_over_bmp = { "(?<=😀.)x", &[code_points(2, 2)], "😀a😀x", "😀a😀x" },
+        dot_then_pair_alone = { "(?<=.😀)x", &[code_points(2, 2)], "a😀x", "a😀<x>" },
+        dot_then_pair_at_the_start = { "(?<=.😀)x", &[code_points(2, 2)], "😀x", "😀x" },
+        negated_class_then_pair = { "(?<=[^a]😀)x", &[code_points(2, 2)], "😀😀x", "😀😀<x>" },
+        negated_class_then_pair_over_a = { "(?<=[^a]😀)x", &[code_points(2, 2)], "😀a😀x", "😀a😀x" },
+        negated_pair = { "(?<!😀)x", &[code_points(1, 1)], "😀x𝄞x", "😀x𝄞<x>" },
+        negated_dot_then_pair = { "(?<!.😀)x", &[code_points(2, 2)], "😀x", "😀<x>" },
+        negated_dot_then_pair_after_a = { "(?<!.😀)x", &[code_points(2, 2)], "a😀x", "a😀x" },
+        two_dots_then_pair = { "(?<=..😀)x", &[code_points(3, 3)], "😀a😀x", "😀a😀<x>" },
+        two_dots_then_pair_over_pairs = { "(?<=..😀)x", &[code_points(3, 3)], "😀😀x", "😀😀x" },
+        counted_dots_then_pair = { "(?<=.{1,2}😀)x", &[code_points(2, 3)], "😀a😀x", "😀a😀<x>" },
+        counted_dots_then_pair_at_the_start = { "(?<=.{1,2}😀)x", &[code_points(2, 3)], "😀x", "😀x" },
+        alternation = { "(?<=😀|a)x", &[code_points(1, 1)], "😀x𝄞x", "😀<x>𝄞x" },
+        two_look_behinds = { "(?<=😀)(?<=.)x", &[code_points(1, 1), code_points(1, 1)], "a😀x", "a😀<x>" },
     )]
     fn a_look_behind_with_a_supplementary_char_counts_code_points(
         pattern: &str,
@@ -1945,13 +1981,13 @@ mod tests {
     /// Each row is the first `Matcher.find()` on JDK 25.0.4, its spans in
     /// UTF-16 units taken to bytes, and no spans for no match.
     #[yare::parameterized(
-        dot_starts_inside_a_pair = { r"(?<=(.))x", "😀x", &[Some(4..5), Some(2..4)] },
-        dot_after_a_pair_and_a_char = { r"(?<=(.))x", "😀x𝄞x", &[Some(4..5), Some(2..4)] },
-        empty_group_inside_a_pair = { r"(?<=().)x", "😀x", &[Some(4..5), Some(2..2)] },
+        dot_starts_inside_a_pair = { "(?<=(.))x", "😀x", &[Some(4..5), Some(2..4)] },
+        dot_after_a_pair_and_a_char = { "(?<=(.))x", "😀x𝄞x", &[Some(4..5), Some(2..4)] },
+        empty_group_inside_a_pair = { "(?<=().)x", "😀x", &[Some(4..5), Some(2..2)] },
         reference_to_an_empty_group = { r"(?<=().)x\1", "😀x", &[Some(4..5), Some(2..2)] },
         reference_to_a_low_surrogate = { r"(?<=(.))x\1", "😀x", &[] },
-        group_before_the_match = { r"(?<=(.)).", "😀a😀x", &[Some(4..5), Some(2..4)] },
-        group_of_a_char = { r"(?<=(.)).", "a😀x", &[Some(1..5), Some(0..1)] },
+        group_before_the_match = { "(?<=(.)).", "😀a😀x", &[Some(4..5), Some(2..4)] },
+        group_of_a_char = { "(?<=(.)).", "a😀x", &[Some(1..5), Some(0..1)] },
     )]
     fn a_look_behind_sets_a_group_inside_a_pair(
         pattern: &str,
@@ -1993,7 +2029,7 @@ mod tests {
     fn a_wrapped_window_counts_as_javas_int(window: JavaWindow, input: &str, expected: bool) {
         // `a` before the end, or nothing: `(?<=a|)` at the end of `ab`
         // matches only from the start `i`, 0 units back.
-        let program = windowed(r"ab(?<=b|)", 1, &[window]);
+        let program = windowed("ab(?<=b|)", 1, &[window]);
         check!(program.matches(input).ok() == Some(expected));
     }
 
@@ -2053,14 +2089,14 @@ mod tests {
         negated_supplementary = { r"[^\x{1F600}]", true },
         supplementary = { r"[\x{1F600}]", false },
         supplementary_escape = { r"\x{1F600}", false },
-        intersection = { r"[[[a]&&[[^b]]]]", false },
-        negated_intersection = { r"[^[[a]&&[[^b]]]]", true },
-        negated_range_intersection = { r"[^[[a-z]&&[[^m]]]]", true },
+        intersection = { "[[[a]&&[[^b]]]]", false },
+        negated_intersection = { "[^[[a]&&[[^b]]]]", true },
+        negated_range_intersection = { "[^[[a-z]&&[[^m]]]]", true },
         intersection_with_surrogates = { r"[[[\p{L}]&&[\p{Cs}]]]", false },
         surrogates_in_a_class = { r"[[[\P{L}]&&[\p{Cs}]]]", true },
         intersection_of_negations = { r"[[[\P{L}]&&[[^a]]]]", true },
         negated_union = { r"[^\p{L}\p{N}]", true },
-        union_with_a_negation = { r"[[^0-9A-Za-z_]0-9]", true },
+        union_with_a_negation = { "[[^0-9A-Za-z_]0-9]", true },
         upper_under_a_case_flag = { r"[\p{Lu}\p{Ll}\p{Lt}]", false },
     )]
     fn a_class_matches_a_lone_low_surrogate_as_javas(class: &str, expected: bool) {
@@ -2093,8 +2129,8 @@ mod tests {
     /// The parts of a class that the rewrite does not write are read by the
     /// same rules, and a text that is not one class matches no surrogate.
     #[yare::parameterized(
-        group_with_a_flag = { r"(?i:[^a])", true },
-        flag_before = { r"(?i)[^a]", true },
+        group_with_a_flag = { "(?i:[^a])", true },
+        flag_before = { "(?i)[^a]", true },
         perl_digit = { r"\d", false },
         perl_non_space = { r"\S", true },
         one_letter = { r"\pC", true },
@@ -2107,8 +2143,8 @@ mod tests {
         difference_of_all = { r"[\p{Cs}--\p{C}]", false },
         symmetric_difference = { r"[\p{Cs}~~a]", true },
         symmetric_difference_of_both = { r"[\p{Cs}~~\p{C}]", false },
-        ascii_class = { r"[[:alpha:]]", false },
-        negated_ascii_class = { r"[[:^alpha:]]", true },
+        ascii_class = { "[[:alpha:]]", false },
+        negated_ascii_class = { "[[:^alpha:]]", true },
         two_classes = { "[^a][^b]", false },
         alternation = { "[^a]|b", false },
         unparsed = { "[^a", false },

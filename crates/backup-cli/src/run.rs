@@ -30,7 +30,14 @@ use {
     krabka_raft::{deserialize_metadata_snapshot, metadata_snapshot_last_contained_log_timestamp},
     krabka_remote_storage::{ObjectEntry, Sha256Digest, diskless::capture::DisklessWalCapture},
     krabka_remote_storage_topic::{KafkaMetadataEventLog, KafkaMetadataLogConfig},
-    std::collections::{BTreeMap, BTreeSet},
+    std::{
+        collections::{BTreeMap, BTreeSet, HashMap},
+        io::{Error, ErrorKind},
+        path::Path,
+        sync::Arc,
+        time::{self, SystemTime},
+    },
+    tokio::fs,
 };
 
 const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
@@ -49,8 +56,8 @@ fn artifact_byte_limit(name: &str) -> u64 {
 
 fn check_capture_size(name: &str, size: u64, max_bytes: u64) -> Result<(), BackupError> {
     if size > max_bytes {
-        return Err(BackupError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
+        return Err(BackupError::Io(Error::new(
+            ErrorKind::InvalidData,
             format!(
                 "capture artifact `{name}` is {size} bytes, exceeds restore limit of {max_bytes} bytes"
             ),
@@ -59,13 +66,13 @@ fn check_capture_size(name: &str, size: u64, max_bytes: u64) -> Result<(), Backu
     Ok(())
 }
 
-async fn read_capture_file(path: &std::path::Path, name: &str) -> Result<Vec<u8>, BackupError> {
+async fn read_capture_file(path: &Path, name: &str) -> Result<Vec<u8>, BackupError> {
     check_capture_size(
         name,
-        tokio::fs::metadata(path).await?.len(),
+        fs::metadata(path).await?.len(),
         artifact_byte_limit(name),
     )?;
-    let bytes = tokio::fs::read(path).await?;
+    let bytes = fs::read(path).await?;
     // The file can grow between its metadata check and the read.
     check_capture_size(name, bytes.len() as u64, artifact_byte_limit(name))?;
     Ok(bytes)
@@ -76,8 +83,8 @@ async fn read_capture_file(path: &std::path::Path, name: &str) -> Result<Vec<u8>
 /// nonsensical clock produces an odd name rather than a failure.
 fn now_ms() -> u64 {
     u64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_millis()),
     )
     .unwrap_or(0)
@@ -91,7 +98,7 @@ fn now_ms() -> u64 {
 /// artifact exceeds its restore size limit, and the archive's or the cluster's
 /// own error otherwise.
 pub async fn capture(
-    log_dir: Option<&std::path::Path>,
+    log_dir: Option<&Path>,
     bootstrap_server: Option<&str>,
     archive: &ArchiveArgs,
 ) -> OperationReport<String> {
@@ -115,7 +122,7 @@ pub async fn capture(
 /// The report result returns the same errors as [`capture`], plus command-config read or parse
 /// failures.
 pub async fn capture_configured(
-    log_dir: Option<&std::path::Path>,
+    log_dir: Option<&Path>,
     bootstrap_server: Option<&str>,
     security: &SecurityArgs,
     signing: &CaptureSigningArgs,
@@ -142,7 +149,7 @@ pub async fn capture_configured(
 }
 
 async fn capture_secured_inner(
-    log_dir: Option<&std::path::Path>,
+    log_dir: Option<&Path>,
     bootstrap_server: Option<&str>,
     security: Option<ClientSecurity>,
     signing: &CaptureSigningArgs,
@@ -163,7 +170,7 @@ async fn capture_secured_inner(
 
 #[cfg(test)]
 async fn capture_secured_at(
-    log_dir: Option<&std::path::Path>,
+    log_dir: Option<&Path>,
     bootstrap_server: Option<&str>,
     security: Option<ClientSecurity>,
     signing: &CaptureSigningArgs,
@@ -185,7 +192,7 @@ async fn capture_secured_at(
 }
 
 async fn capture_secured_at_inner(
-    log_dir: Option<&std::path::Path>,
+    log_dir: Option<&Path>,
     bootstrap_server: Option<&str>,
     security: Option<ClientSecurity>,
     signing: &CaptureSigningArgs,
@@ -230,7 +237,7 @@ async fn capture_secured_at_inner(
                     .await?,
                 );
             }
-            Err(BackupError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(BackupError::Io(error)) if error.kind() == ErrorKind::NotFound => {
                 absent.push(format!("{} is absent", rlmm.display()));
             }
             Err(error) => return Err(error),
@@ -285,8 +292,8 @@ async fn capture_secured_at_inner(
     }
 
     if artifacts.is_empty() {
-        return Err(BackupError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
+        return Err(BackupError::Io(Error::new(
+            ErrorKind::NotFound,
             format!(
                 "captured nothing: {}",
                 if absent.is_empty() {
@@ -456,13 +463,15 @@ async fn capture_diskless_index(
     let log = KafkaMetadataEventLog::open_read_only(config)
         .await
         .map_err(|error| BackupError::Cluster(format!("diskless WAL index: {error}")))?;
-    let mut capture = capture_projection(log.clone(), &topics, now_ms())
-        .await
-        .map_err(BackupError::Integrity)?;
+    let mut capture =
+        capture_projection(Arc::<KafkaMetadataEventLog>::clone(&log), &topics, now_ms())
+            .await
+            .map_err(BackupError::Integrity)?;
     capture.metadata_snapshot_sha256 = digests.metadata_snapshot;
     capture.rlmm_snapshot_sha256 = digests.rlmm_snapshot;
     capture.group_offsets_sha256 = digests.group_offsets;
     log.shutdown().await;
+    drop(log);
     if let (Some(key_id), Some(key_path)) = (
         signing.worm_signing_key_id.as_ref(),
         signing.worm_signing_key.as_ref(),
@@ -481,7 +490,7 @@ async fn capture_diskless_index(
                 .get_absolute_capped(&key, MAX_WAL_OBJECT_BYTES)
                 .await?;
             claims.push(ObjectEntry {
-                suffix: std::path::Path::new(&key)
+                suffix: Path::new(&key)
                     .extension()
                     .map_or_else(String::new, |extension| {
                         format!(".{}", extension.to_string_lossy())
@@ -511,8 +520,8 @@ fn diskless_topic_topology(
     metadata: &TopicMetadata,
     configs: &BTreeMap<String, BTreeMap<String, String>>,
     index_topic: &str,
-) -> Result<std::collections::HashMap<uuid::Uuid, (String, i32)>, BackupError> {
-    let mut topics = std::collections::HashMap::new();
+) -> Result<HashMap<uuid::Uuid, (String, i32)>, BackupError> {
+    let mut topics = HashMap::new();
     for topic in metadata
         .topics
         .iter()
@@ -640,10 +649,7 @@ mod diskless_tests {
 
         check!(
             diskless_topic_topology(&metadata, &configs, "__diskless_wal_index").unwrap()
-                == std::collections::HashMap::from([(
-                    uuid::Uuid::from_u128(7),
-                    ("orders".to_owned(), 3)
-                )])
+                == HashMap::from([(uuid::Uuid::from_u128(7), ("orders".to_owned(), 3))])
         );
     }
 }
@@ -919,7 +925,7 @@ async fn verify_offsets_boundary(
     let expected_head = trust.worm_expect_head.as_deref().ok_or_else(|| {
         BackupError::Integrity("signed offset restore requires --worm-expect-head".to_owned())
     })?;
-    let public_key = tokio::fs::read(key_path).await?;
+    let public_key = fs::read(key_path).await?;
     let trusted = krabka_remote_storage::TrustedManifestKeys::single(key_id.clone(), public_key);
     capture
         .authenticate(&trusted, Some(expected_head))
@@ -1045,6 +1051,13 @@ mod tests {
         assert2::{assert, check},
         krabka_ids::PartitionIndex,
         krabka_metadata::{MetadataImage, MetadataRecord, NodeId, PartitionRecord, TopicRecord},
+        std::{
+            fs,
+            fs::OpenOptions,
+            io::ErrorKind,
+            net::TcpListener,
+            path::{Path, PathBuf},
+        },
     };
 
     /// The RLMM snapshot bytes a fixture node holds. The capture copies bytes
@@ -1054,7 +1067,7 @@ mod tests {
     /// The newest checkpoint's bytes.
     const CHECKPOINT_BYTES: &[u8] = b"the newest controller checkpoint";
 
-    fn archive_args(root: &std::path::Path) -> ArchiveArgs {
+    fn archive_args(root: &Path) -> ArchiveArgs {
         ArchiveArgs {
             local: Some(root.to_path_buf()),
             ..ArchiveArgs::default()
@@ -1118,7 +1131,7 @@ mod tests {
         } else {
             let error = result.unwrap_err();
             check!(
-                matches!(&error, BackupError::Io(error) if error.kind() == std::io::ErrorKind::InvalidData)
+                matches!(&error, BackupError::Io(error) if error.kind() == ErrorKind::InvalidData)
             );
             check!(error.to_string().contains(name));
             check!(matches!(
@@ -1149,7 +1162,7 @@ mod tests {
         } else {
             newest_metadata_checkpoint(node.path()).unwrap().path
         };
-        std::fs::OpenOptions::new()
+        OpenOptions::new()
             .write(true)
             .open(path)
             .unwrap()
@@ -1181,7 +1194,7 @@ mod tests {
         let first = node_with_rlmm();
         let second = node_with_rlmm();
         let snapshot = second.path().join(super::RLMM_SNAPSHOT_RELATIVE);
-        std::fs::write(snapshot, b"second node snapshot").unwrap();
+        fs::write(snapshot, b"second node snapshot").unwrap();
         let ArchiveFixture {
             root: _root,
             args: archive,
@@ -1274,8 +1287,8 @@ mod tests {
         }
     }
 
-    fn set_file_len(root: &std::path::Path, key: &str, len: u64) {
-        std::fs::OpenOptions::new()
+    fn set_file_len(root: &Path, key: &str, len: u64) {
+        OpenOptions::new()
             .write(true)
             .open(root.join(key))
             .unwrap()
@@ -1330,10 +1343,10 @@ mod tests {
     }
 
     /// The newest controller checkpoint, in the directory a controller writes.
-    fn write_checkpoint(log_dir: &std::path::Path) {
+    fn write_checkpoint(log_dir: &Path) {
         let metadata = log_dir.join("__cluster_metadata-0");
-        std::fs::create_dir_all(&metadata).expect("create the metadata dir");
-        std::fs::write(
+        fs::create_dir_all(&metadata).expect("create the metadata dir");
+        fs::write(
             metadata.join("00000000000000000042-0000000001.checkpoint"),
             CHECKPOINT_BYTES,
         )
@@ -1343,7 +1356,7 @@ mod tests {
     /// An address on the loopback interface that nothing is listening on, so
     /// a connection attempt is refused rather than timing out.
     fn closed_address() -> String {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a probe listener");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a probe listener");
         let port = listener.local_addr().expect("the probe's address").port();
         drop(listener);
         format!("127.0.0.1:{port}")
@@ -1423,7 +1436,7 @@ mod tests {
         let capture_bytes = serde_json::to_vec(&capture).unwrap();
         let root = tempfile::tempdir().unwrap();
         let public_key = root.path().join("capture.pub");
-        std::fs::write(&public_key, signer.public_key()).unwrap();
+        fs::write(&public_key, signer.public_key()).unwrap();
         let archive = Archive::open(&archive_args(root.path())).unwrap();
         let id = "0000000000000042";
         archive
@@ -1520,7 +1533,7 @@ mod tests {
     async fn formatted_node(
         seeded: Vec<MetadataRecord>,
         subdir: &str,
-    ) -> (tempfile::TempDir, std::path::PathBuf) {
+    ) -> (tempfile::TempDir, PathBuf) {
         let parent = tempfile::tempdir().expect("parent dir");
         // The formatter refuses a directory that already exists.
         let log_dir = parent.path().join("node");
@@ -1540,12 +1553,12 @@ mod tests {
             .join("__cluster_metadata-0")
             .join(FORMAT_TIME_CHECKPOINT);
         let target = log_dir.join(subdir);
-        std::fs::create_dir_all(&target).expect("create the checkpoint dir");
-        std::fs::rename(&formatted, target.join(FORMAT_TIME_CHECKPOINT))
+        fs::create_dir_all(&target).expect("create the checkpoint dir");
+        fs::rename(&formatted, target.join(FORMAT_TIME_CHECKPOINT))
             .expect("move the format-time checkpoint");
         let rlmm = log_dir.join(RLMM_SNAPSHOT_RELATIVE);
-        std::fs::create_dir_all(rlmm.parent().expect("a parent")).expect("create the rlmm dir");
-        std::fs::write(rlmm, RLMM_BYTES).expect("write the rlmm snapshot");
+        fs::create_dir_all(rlmm.parent().expect("a parent")).expect("create the rlmm dir");
+        fs::write(rlmm, RLMM_BYTES).expect("write the rlmm snapshot");
         (parent, log_dir)
     }
 
@@ -1574,7 +1587,7 @@ mod tests {
             "got: {message}"
         );
         check!(
-            std::fs::read_dir(root.path()).unwrap().next().is_none(),
+            fs::read_dir(root.path()).unwrap().next().is_none(),
             "the refused capture wrote no artifact"
         );
     }
@@ -1583,8 +1596,8 @@ mod tests {
     async fn an_undecodable_format_time_checkpoint_is_an_integrity_failure_that_writes_nothing() {
         let log_dir = node_with_rlmm();
         let metadata = log_dir.path().join("__cluster_metadata-0");
-        std::fs::create_dir_all(&metadata).expect("create the checkpoint dir");
-        std::fs::write(metadata.join(FORMAT_TIME_CHECKPOINT), CHECKPOINT_BYTES)
+        fs::create_dir_all(&metadata).expect("create the checkpoint dir");
+        fs::write(metadata.join(FORMAT_TIME_CHECKPOINT), CHECKPOINT_BYTES)
             .expect("write a damaged format-time checkpoint");
         let ArchiveFixture { root, args, .. } = archive_fixture();
 
@@ -1599,7 +1612,7 @@ mod tests {
             "got: {error}"
         );
         check!(
-            std::fs::read_dir(root.path()).unwrap().next().is_none(),
+            fs::read_dir(root.path()).unwrap().next().is_none(),
             "the failed capture wrote no artifact"
         );
     }
@@ -1611,7 +1624,7 @@ mod tests {
     #[test_macro(tokio::test(flavor = "multi_thread"))]
     async fn a_capture_takes_the_format_time_checkpoint_a_restore_seeded(subdir: &str) {
         let (_parent, log_dir) = formatted_node(restored_topic(), subdir).await;
-        let checkpoint = std::fs::read(log_dir.join(subdir).join(FORMAT_TIME_CHECKPOINT))
+        let checkpoint = fs::read(log_dir.join(subdir).join(FORMAT_TIME_CHECKPOINT))
             .expect("read the seeded checkpoint");
         let ArchiveFixture {
             root: _root,
@@ -1670,8 +1683,8 @@ mod tests {
     async fn a_capture_takes_a_controller_checkpoint_past_the_format_time_one() {
         let log_dir = node_with_rlmm();
         let metadata = log_dir.path().join("__cluster_metadata-0");
-        std::fs::create_dir_all(&metadata).expect("create the checkpoint dir");
-        std::fs::write(
+        fs::create_dir_all(&metadata).expect("create the checkpoint dir");
+        fs::write(
             metadata.join("00000000000000000000-0000000000.checkpoint"),
             b"format-time",
         )
@@ -1742,7 +1755,7 @@ mod tests {
         let log_dir = tempfile::tempdir().expect("log dir");
         // A directory where the snapshot file belongs: the read fails with
         // something other than `NotFound`, which is not "the node has none".
-        std::fs::create_dir_all(log_dir.path().join("remote-log-metadata/snapshot"))
+        fs::create_dir_all(log_dir.path().join("remote-log-metadata/snapshot"))
             .expect("create a directory in the snapshot's place");
         let archive_root = tempfile::tempdir().expect("archive root");
 
@@ -1845,7 +1858,7 @@ mod tests {
 
         // What a half-finished upload leaves behind, and exactly what a
         // restore must not be handed.
-        std::fs::write(
+        fs::write(
             archive_root.path().join(capture_key(&id, RLMM_SNAPSHOT)),
             b"rlmm snapshot byt",
         )

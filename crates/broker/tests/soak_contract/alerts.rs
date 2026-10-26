@@ -22,11 +22,13 @@ use {
     serde::{Deserialize, Serialize},
     std::{
         collections::BTreeMap,
-        fs::Permissions,
+        fs::{self, Permissions},
         io::{Read as _, Write as _},
+        iter,
         net::TcpStream,
         os::unix::fs::PermissionsExt as _,
         path::{Path, PathBuf},
+        process, thread,
         time::{Duration, Instant},
     },
     tempfile::TempDir,
@@ -75,7 +77,7 @@ const MAX_POINTS: i64 = 10_000;
 fn alert_rules_source() -> PathBuf { manifest_dir().join("../../docs/operations/alert-rules.yaml") }
 
 /// The port of a `http://host:port/path` URL.
-pub(crate) fn url_port(url: &str) -> Result<u16, String> {
+pub fn url_port(url: &str) -> Result<u16, String> {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let authority = rest.split('/').next().unwrap_or(rest);
     authority
@@ -87,7 +89,7 @@ pub(crate) fn url_port(url: &str) -> Result<u16, String> {
 /// `prometheus.yml` for one job that scrapes each `(node id, metrics port)`
 /// at `host.docker.internal`, labelled with its node id, and evaluates the
 /// rules copy.
-pub(crate) fn prometheus_config(targets: &[(i32, u16)]) -> String {
+pub fn prometheus_config(targets: &[(i32, u16)]) -> String {
     let header = format!(
         "global:\n  scrape_interval: {INTERVAL_SECS}s\n  scrape_timeout: \
          {SCRAPE_TIMEOUT_SECS}s\n  evaluation_interval: {INTERVAL_SECS}s\nrule_files:\n  - \
@@ -100,11 +102,11 @@ pub(crate) fn prometheus_config(targets: &[(i32, u16)]) -> String {
              node: \"{node}\"\n"
         )
     });
-    std::iter::once(header).chain(static_configs).collect()
+    iter::once(header).chain(static_configs).collect()
 }
 
 /// The host port of a `docker port` line such as `127.0.0.1:32768`.
-pub(crate) fn published_port(output: &str) -> Result<u16, String> {
+pub fn published_port(output: &str) -> Result<u16, String> {
     output
         .lines()
         .find_map(|line| line.trim().rsplit_once(':')?.1.parse().ok())
@@ -112,7 +114,7 @@ pub(crate) fn published_port(output: &str) -> Result<u16, String> {
 }
 
 /// Whether a raw HTTP response is a `200`.
-pub(crate) fn is_ok_response(response: &str) -> bool {
+pub fn is_ok_response(response: &str) -> bool {
     response
         .split_whitespace()
         .nth(1)
@@ -121,13 +123,13 @@ pub(crate) fn is_ok_response(response: &str) -> bool {
 }
 
 /// Unix milliseconds as the decimal seconds the Prometheus API takes.
-pub(crate) fn api_seconds(ms: i64) -> String {
+pub fn api_seconds(ms: i64) -> String {
     format!("{}.{:03}", ms.div_euclid(1000), ms.rem_euclid(1000))
 }
 
 /// The decimal seconds the Prometheus API returns, as Unix milliseconds.
 /// Digits past the millisecond are dropped.
-pub(crate) fn api_millis(seconds: &str) -> Option<i64> {
+pub fn api_millis(seconds: &str) -> Option<i64> {
     let (whole, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
     let whole: i64 = whole.parse().ok()?;
     if !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -139,7 +141,7 @@ pub(crate) fn api_millis(seconds: &str) -> Option<i64> {
 
 /// The `[start, end]` ranges, each at most [`MAX_POINTS`] steps, that cover
 /// `[start_ms, end_ms]` at `step_ms` without overlap.
-pub(crate) fn query_ranges(start_ms: i64, end_ms: i64, step_ms: i64) -> Vec<(i64, i64)> {
+pub fn query_ranges(start_ms: i64, end_ms: i64, step_ms: i64) -> Vec<(i64, i64)> {
     let mut ranges = Vec::new();
     let mut from = start_ms;
     while from <= end_ms {
@@ -153,14 +155,14 @@ pub(crate) fn query_ranges(start_ms: i64, end_ms: i64, step_ms: i64) -> Vec<(i64
 /// A rule state Prometheus records in `ALERTS{alertstate}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum AlertState {
+pub enum AlertState {
     Pending,
     Firing,
 }
 
 /// One stretch of an alert instance in one state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct Interval {
+pub struct Interval {
     pub(crate) state: AlertState,
     /// The first evaluation that saw the state.
     pub(crate) from_ms: i64,
@@ -171,7 +173,7 @@ pub(crate) struct Interval {
 
 /// One alert instance and its intervals, in time order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct AlertSeries {
+pub struct AlertSeries {
     pub(crate) alertname: String,
     pub(crate) severity: Option<String>,
     /// Every other label of the instance: `instance`, `job`, `node`, and any
@@ -193,7 +195,7 @@ impl AlertSeries {
 
 /// One alerting rule as Prometheus loaded it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct LoadedRule {
+pub struct LoadedRule {
     pub(crate) group: String,
     pub(crate) alert: String,
     /// `ok`, `err`, or `unknown` before the first evaluation.
@@ -203,7 +205,7 @@ pub(crate) struct LoadedRule {
 
 /// `alerts.json`: the rules Prometheus loaded and what each did over the run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct AlertHistory {
+pub struct AlertHistory {
     pub(crate) start_ms: i64,
     pub(crate) end_ms: i64,
     pub(crate) step_ms: i64,
@@ -270,7 +272,7 @@ impl AlertHistory {
 }
 
 /// Milliseconds as `1h02m03s`.
-pub(crate) fn span(ms: i64) -> String {
+pub fn span(ms: i64) -> String {
     let seconds = ms.max(0) / 1000;
     let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
     if hours > 0 {
@@ -338,10 +340,10 @@ struct Rule {
 }
 
 /// The sample timestamps of every `ALERTS` series, keyed by its labels.
-pub(crate) type Samples = BTreeMap<BTreeMap<String, String>, Vec<i64>>;
+pub type Samples = BTreeMap<BTreeMap<String, String>, Vec<i64>>;
 
 /// Add the series of one `query_range` answer to `samples`.
-pub(crate) fn add_matrix(samples: &mut Samples, body: serde_json::Value) -> Result<(), String> {
+pub fn add_matrix(samples: &mut Samples, body: serde_json::Value) -> Result<(), String> {
     let response: ApiResponse<Matrix> =
         serde_json::from_value(body).map_err(|error| format!("query_range answer: {error}"))?;
     let matrix = response.into_data()?;
@@ -367,7 +369,7 @@ type AlertKey = (String, Option<String>, BTreeMap<String, String>);
 /// Fold `samples`, evaluated every `step_ms` from `start_ms` to `end_ms`,
 /// into one [`AlertSeries`] per alert instance. A gap of more than one step
 /// ends an interval.
-pub(crate) fn fold(samples: Samples, start_ms: i64, end_ms: i64, step_ms: i64) -> Vec<AlertSeries> {
+pub fn fold(samples: Samples, start_ms: i64, end_ms: i64, step_ms: i64) -> Vec<AlertSeries> {
     let last_step = start_ms + (end_ms - start_ms).max(0) / step_ms * step_ms;
     let mut alerts: BTreeMap<AlertKey, Vec<Interval>> = BTreeMap::new();
     for (mut labels, mut times) in samples {
@@ -409,7 +411,7 @@ pub(crate) fn fold(samples: Samples, start_ms: i64, end_ms: i64, step_ms: i64) -
 }
 
 /// The alerting rules of a `/api/v1/rules` answer.
-pub(crate) fn loaded_rules(body: serde_json::Value) -> Result<Vec<LoadedRule>, String> {
+pub fn loaded_rules(body: serde_json::Value) -> Result<Vec<LoadedRule>, String> {
     let response: ApiResponse<RuleGroups> =
         serde_json::from_value(body).map_err(|error| format!("rules answer: {error}"))?;
     Ok(response
@@ -433,7 +435,7 @@ pub(crate) fn loaded_rules(body: serde_json::Value) -> Result<Vec<LoadedRule>, S
 
 /// A Prometheus container that scrapes the cluster and evaluates the shipped
 /// alert rules. Dropping it removes the container.
-pub(crate) struct AlertSidecar {
+pub struct AlertSidecar {
     name: String,
     /// `http://127.0.0.1:<port>`, the API on the host.
     url: String,
@@ -454,7 +456,7 @@ impl AlertSidecar {
             .collect::<Result<Vec<_>, String>>()?;
         let config = prometheus_config(&targets);
         let rules_source = alert_rules_source();
-        let rules = std::fs::read_to_string(&rules_source)
+        let rules = fs::read_to_string(&rules_source)
             .map_err(|error| format!("read {}: {error}", rules_source.display()))?;
         let config_dir = tempfile::Builder::new()
             .prefix("soak-prometheus-")
@@ -463,16 +465,16 @@ impl AlertSidecar {
         // The image runs as `nobody`, which must read what the test wrote.
         for (name, text) in [(CONFIG_FILE, &config), (RULES_FILE, &rules)] {
             let path = config_dir.path().join(name);
-            std::fs::write(&path, text)
-                .and_then(|()| std::fs::set_permissions(&path, Permissions::from_mode(0o644)))
+            fs::write(&path, text)
+                .and_then(|()| fs::set_permissions(&path, Permissions::from_mode(0o644)))
                 .map_err(|error| format!("write {}: {error}", path.display()))?;
         }
-        std::fs::set_permissions(config_dir.path(), Permissions::from_mode(0o755))
+        fs::set_permissions(config_dir.path(), Permissions::from_mode(0o755))
             .map_err(|error| format!("open the Prometheus directory: {error}"))?;
-        std::fs::write(dir.join(CONFIG_FILE), &config)
+        fs::write(dir.join(CONFIG_FILE), &config)
             .map_err(|error| format!("write {CONFIG_FILE} evidence: {error}"))?;
 
-        let name = format!("krabka-soak-prometheus-{}-{}", std::process::id(), now_ms());
+        let name = format!("krabka-soak-prometheus-{}-{}", process::id(), now_ms());
         let mount = format!("{}:{CONTAINER_CONFIG_DIR}:ro", config_dir.path().display());
         let config_flag = format!("--config.file={CONTAINER_CONFIG_DIR}/{CONFIG_FILE}");
         let retention = format!("--storage.tsdb.retention.time={RETENTION}");
@@ -514,7 +516,7 @@ impl AlertSidecar {
                 Ok(response) => last = response,
                 Err(error) => last = error,
             }
-            std::thread::sleep(Duration::from_millis(500));
+            thread::sleep(Duration::from_millis(500));
         }
         let logs = docker_try(&["logs", "--tail", "20", &self.name]).unwrap_or_else(|e| e);
         Err(format!(

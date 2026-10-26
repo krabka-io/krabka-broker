@@ -17,6 +17,7 @@ use {
         },
         quota::QuotaDelay,
     },
+    krabka_protocol::api_key,
     krabka_units::{Time, convert::TimeExt},
 };
 
@@ -120,7 +121,7 @@ impl BrokerMetrics {
 
 /// A single quota charge evaluated by [`BrokerMetrics::record_applied_throttle`].
 #[derive(Debug, Clone)]
-pub(crate) struct QuotaCharge {
+pub struct QuotaCharge {
     pub quota_type: QuotaType,
     pub delay: Time,
     pub user: Option<String>,
@@ -225,7 +226,7 @@ impl BrokerMetrics {
 /// key resolves through [`krabka_private_api_key_label_name`]. Anything else
 /// folds under [`UNKNOWN_LABEL`].
 fn api_key_label_name(api_key: ApiKeyCode) -> &'static str {
-    match krabka_protocol::api_key::ApiKey::from_i16(api_key) {
+    match api_key::ApiKey::from_i16(api_key) {
         Some(k) => k.into(),
         None if api_key >= KRABKA_PRIVATE_API_KEY_FLOOR => {
             krabka_private_api_key_label_name(api_key)

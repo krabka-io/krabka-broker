@@ -1,13 +1,17 @@
-use {super::*, crate::restore::RestoreTimestampType};
+use {
+    super::*,
+    crate::restore::RestoreTimestampType,
+    proptest::{collection, option},
+};
 
 proptest! {
     #[test]
     fn filtered_rewrites_preserve_an_independent_record_and_retry_oracle(
-        rows in proptest::collection::btree_map(0_i32..=64, (any::<i64>(), any::<bool>()), 0..16),
+        rows in collection::btree_map(0_i32..=64, (any::<i64>(), any::<bool>()), 0..16),
         base in 0_i64..=i64::MAX - 65,
         sequence in 0_i32..=i32::MAX, epoch in 0_i16..=i16::MAX,
-        append_time in any::<bool>(), offset_bound in proptest::option::of(any::<i64>()),
-        timestamp_bound in proptest::option::of(any::<i64>()),
+        append_time in any::<bool>(), offset_bound in option::of(any::<i64>()),
+        timestamp_bound in option::of(any::<i64>()),
     ) {
         let frame = RestoreBatchFrame {
             base_offset: base, last_offset_delta: 64,

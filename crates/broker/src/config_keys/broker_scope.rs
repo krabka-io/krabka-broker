@@ -4,7 +4,7 @@
 
 use {
     super::parse::{check_range, parse_long},
-    std::time::Duration,
+    std::{collections::HashSet, time::Duration},
 };
 
 /// Marks a node as a data-bearing witness. The broker publishes this key for
@@ -18,7 +18,7 @@ use {
 ///
 /// A witness replicates partition data and votes in `KRaft`, so it counts
 /// toward `min.insync.replicas`. It serves no client and leads no partition.
-pub(crate) const BROKER_WITNESS: &str = "broker.witness";
+pub const BROKER_WITNESS: &str = "broker.witness";
 
 /// Names the site that should hold partition leadership in a stretch
 /// cluster. The controller leader publishes it as a cluster-default broker
@@ -29,16 +29,16 @@ pub(crate) const BROKER_WITNESS: &str = "broker.witness";
 /// is `replicas[0]`, so that ordering is what pins leadership.
 ///
 /// The key is controller-managed and read-only, like [`BROKER_WITNESS`].
-pub(crate) const STRETCH_PREFERRED_LEADER_SITE: &str = "stretch.preferred.leader.site";
+pub const STRETCH_PREFERRED_LEADER_SITE: &str = "stretch.preferred.leader.site";
 
 /// KIP-211: how long a committed offset outlives the group that owns it, in
 /// whole minutes. The value is static for the life of the process, so
 /// `DescribeConfigs` reports it read-only against `STATIC_BROKER_CONFIG`.
-pub(crate) const OFFSETS_RETENTION_MINUTES: &str = "offsets.retention.minutes";
+pub const OFFSETS_RETENTION_MINUTES: &str = "offsets.retention.minutes";
 
 /// Cadence of the offset-retention sweep, in milliseconds. Static and
 /// read-only for the same reason as [`OFFSETS_RETENTION_MINUTES`].
-pub(crate) const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.check.interval.ms";
+pub const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.check.interval.ms";
 
 /// How long a client connection may go with no socket activity before the
 /// broker closes it. The process reads it from its static configuration at
@@ -51,7 +51,7 @@ pub(crate) const OFFSETS_RETENTION_CHECK_INTERVAL_MS: &str = "offsets.retention.
 /// rather than a registry row. `DescribeConfigs` reports each override under
 /// this row's type and documentation, because it is the same config under
 /// Kafka's `ListenerName.configPrefix`.
-pub(crate) const CONNECTIONS_MAX_IDLE_MS: &str = "connections.max.idle.ms";
+pub const CONNECTIONS_MAX_IDLE_MS: &str = "connections.max.idle.ms";
 
 /// KIP-368: how long an authenticated SASL session may live before the client
 /// must re-authenticate in band. The process reads it from its static
@@ -62,26 +62,26 @@ pub(crate) const CONNECTIONS_MAX_IDLE_MS: &str = "connections.max.idle.ms";
 /// `listener.name.<name>.<mechanism>.connections.max.reauth.ms`; krabka keys
 /// its own override by listener alone, because the window is a property of
 /// the listener rather than of the mechanism a client picks on it.
-pub(crate) const CONNECTIONS_MAX_REAUTH_MS: &str = "connections.max.reauth.ms";
+pub const CONNECTIONS_MAX_REAUTH_MS: &str = "connections.max.reauth.ms";
 
 /// The value krabka writes for [`BROKER_WITNESS`] on a witness node.
-pub(crate) const WITNESS_TRUE: &str = "true";
+pub const WITNESS_TRUE: &str = "true";
 
 /// Broker-scoped config keys that only the controller writes. `AlterConfigs`
 /// and `IncrementalAlterConfigs` must reject every key in this list, and
 /// `DescribeConfigs` must report each one as read-only.
-pub(crate) const CONTROLLER_MANAGED_BROKER_CONFIGS: [&str; 2] =
+pub const CONTROLLER_MANAGED_BROKER_CONFIGS: [&str; 2] =
     [BROKER_WITNESS, STRETCH_PREFERRED_LEADER_SITE];
 
 /// `true` when `key` is a broker config that only the controller writes.
-pub(crate) fn is_controller_managed_broker_config(key: &str) -> bool {
+pub fn is_controller_managed_broker_config(key: &str) -> bool {
     CONTROLLER_MANAGED_BROKER_CONFIGS.contains(&key)
 }
 
 /// Resolve [`BROKER_WITNESS`] for one node. A missing or unparseable value
 /// resolves to `false`, so a cluster with no witness behaves as it did
 /// before the role existed.
-pub(crate) fn resolve_broker_witness(
+pub fn resolve_broker_witness(
     image: &krabka_metadata::MetadataImage,
     node_id: krabka_metadata::NodeId,
 ) -> bool {
@@ -97,9 +97,9 @@ pub(crate) fn resolve_broker_witness(
 /// The controller builds this set once for each scan and then excludes its
 /// members from leader selection. Building it once keeps the scan a single
 /// walk over the image rather than a lookup for each partition replica.
-pub(crate) fn witness_node_ids(
+pub fn witness_node_ids(
     image: &krabka_metadata::MetadataImage,
-) -> std::collections::HashSet<krabka_metadata::NodeId> {
+) -> HashSet<krabka_metadata::NodeId> {
     image
         .brokers()
         .filter(|broker| resolve_broker_witness(image, broker.node_id))
@@ -109,9 +109,7 @@ pub(crate) fn witness_node_ids(
 
 /// Resolve [`STRETCH_PREFERRED_LEADER_SITE`] from the cluster defaults.
 /// `None` means the cluster pins leadership to no site.
-pub(crate) fn resolve_preferred_leader_site(
-    image: &krabka_metadata::MetadataImage,
-) -> Option<&str> {
+pub fn resolve_preferred_leader_site(image: &krabka_metadata::MetadataImage) -> Option<&str> {
     image
         .default_broker_config()?
         .get(STRETCH_PREFERRED_LEADER_SITE)
@@ -126,7 +124,7 @@ pub(crate) fn resolve_preferred_leader_site(
 /// its `ReplicationControlManager`. `DescribeConfigs` reports it read-only
 /// from the node's own configuration, out of
 /// [`crate::config::BrokerConfig::num_partitions`].
-pub(crate) const NUM_PARTITIONS: &str = "num.partitions";
+pub const NUM_PARTITIONS: &str = "num.partitions";
 
 /// KIP-464: the replication factor `CreateTopics` gives a topic that asks for
 /// `replication_factor = -1`. Kafka's
@@ -134,7 +132,7 @@ pub(crate) const NUM_PARTITIONS: &str = "num.partitions";
 ///
 /// Static in Kafka, as [`NUM_PARTITIONS`] is. `DescribeConfigs` reports it
 /// read-only out of [`crate::config::BrokerConfig::default_replication_factor`].
-pub(crate) const DEFAULT_REPLICATION_FACTOR: &str = "default.replication.factor";
+pub const DEFAULT_REPLICATION_FACTOR: &str = "default.replication.factor";
 
 /// Whether `DeleteTopics` may delete a topic. Kafka's
 /// `ServerConfigs.DELETE_TOPIC_ENABLE_CONFIG`, a boolean that defaults to
@@ -143,7 +141,7 @@ pub(crate) const DEFAULT_REPLICATION_FACTOR: &str = "default.replication.factor"
 ///
 /// Static in Kafka. `DescribeConfigs` reports it read-only out of
 /// [`crate::config::BrokerConfig::delete_topic_enable`].
-pub(crate) const DELETE_TOPIC_ENABLE: &str = "delete.topic.enable";
+pub const DELETE_TOPIC_ENABLE: &str = "delete.topic.enable";
 
 /// Whether `Metadata` may create a topic it is asked about and that does not
 /// exist. Kafka's `ServerConfigs.AUTO_CREATE_TOPICS_ENABLE_CONFIG`, a boolean
@@ -154,7 +152,7 @@ pub(crate) const DELETE_TOPIC_ENABLE: &str = "delete.topic.enable";
 ///
 /// Static in Kafka. `DescribeConfigs` reports it read-only out of
 /// [`crate::config::BrokerConfig::auto_create_topics_enable`].
-pub(crate) const AUTO_CREATE_TOPICS_ENABLE: &str = "auto.create.topics.enable";
+pub const AUTO_CREATE_TOPICS_ENABLE: &str = "auto.create.topics.enable";
 
 /// The record time a segment may span before it rolls, for a topic that sets
 /// no `segment.ms`. Kafka's `ServerLogConfigs.LOG_ROLL_TIME_MILLIS_CONFIG`, a
@@ -163,7 +161,7 @@ pub(crate) const AUTO_CREATE_TOPICS_ENABLE: &str = "auto.create.topics.enable";
 /// A node reads it from its `server.properties` keys into
 /// [`crate::config::BrokerConfig::log_config`]. `DescribeConfigs` reports it
 /// at `STATIC_BROKER_CONFIG` when the operator named it.
-pub(crate) const LOG_ROLL_MS: &str = "log.roll.ms";
+pub const LOG_ROLL_MS: &str = "log.roll.ms";
 
 /// The listener that a broker sends inter-broker traffic on. Kafka's
 /// `ReplicationConfigs.INTER_BROKER_LISTENER_NAME_CONFIG`, a string with no
@@ -174,7 +172,7 @@ pub(crate) const LOG_ROLL_MS: &str = "log.roll.ms";
 /// [`crate::config::BrokerConfig::inter_broker_listener_name`].
 /// `DescribeConfigs` reports it at `STATIC_BROKER_CONFIG` when the operator
 /// named it, and as null at `DEFAULT_CONFIG` when they did not.
-pub(crate) const INTER_BROKER_LISTENER_NAME: &str = "inter.broker.listener.name";
+pub const INTER_BROKER_LISTENER_NAME: &str = "inter.broker.listener.name";
 
 /// KIP-98: how long a transactional id may sit in a terminal or idle state
 /// before the transaction coordinator tombstones it out of
@@ -184,31 +182,30 @@ pub(crate) const INTER_BROKER_LISTENER_NAME: &str = "inter.broker.listener.name"
 /// `Cannot update these configs dynamically`, and `DescribeConfigs` reports it
 /// read-only from the node's own configuration. krabka reports it the same
 /// way, out of [`crate::config::BrokerConfig::txn_id_expiration`].
-pub(crate) const TRANSACTIONAL_ID_EXPIRATION_MS: &str = "transactional.id.expiration.ms";
+pub const TRANSACTIONAL_ID_EXPIRATION_MS: &str = "transactional.id.expiration.ms";
 
 /// KIP-98: how often the transactional-id expiry sweep runs. Kafka defaults it
 /// to 3600000 ms (1 hour). Static and read-only, like
 /// [`TRANSACTIONAL_ID_EXPIRATION_MS`].
-pub(crate) const TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS: &str =
+pub const TRANSACTION_REMOVE_EXPIRED_CLEANUP_INTERVAL_MS: &str =
     "transaction.remove.expired.transaction.cleanup.interval.ms";
 
 /// KIP-1075: server-side deadline for remote `ListOffsets` work when an older
 /// request does not carry `timeout_ms`. Kafka exposes this as a dynamic broker
 /// config and defaults it to 30 seconds.
-pub(crate) const REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS: &str =
-    "remote.list.offsets.request.timeout.ms";
-pub(crate) const DEFAULT_REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub const REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS: &str = "remote.list.offsets.request.timeout.ms";
+pub const DEFAULT_REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Parse KIP-1075's dynamic broker timeout: Kafka's `LONG` with
 /// `atLeast(1)`.
-pub(crate) fn parse_remote_list_offsets_timeout(value: &str) -> Result<Duration, String> {
+pub fn parse_remote_list_offsets_timeout(value: &str) -> Result<Duration, String> {
     let key = REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS;
     let millis = check_range(key, parse_long(key, value)?, Some(1), None)?;
     Ok(Duration::from_millis(millis.unsigned_abs()))
 }
 
 /// Resolve the per-broker KIP-1075 timeout over the cluster default.
-pub(crate) fn resolve_remote_list_offsets_timeout(
+pub fn resolve_remote_list_offsets_timeout(
     image: &krabka_metadata::MetadataImage,
     node_id: krabka_metadata::NodeId,
 ) -> Duration {
@@ -216,9 +213,8 @@ pub(crate) fn resolve_remote_list_offsets_timeout(
         .broker_config(node_id)
         .and_then(|configs| configs.get(REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS))
         .or_else(|| {
-            image
-                .default_broker_config()
-                .and_then(|configs| configs.get(REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS))
+            let configs = image.default_broker_config()?;
+            configs.get(REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT_MS)
         })
         .and_then(|value| parse_remote_list_offsets_timeout(value).ok())
         .unwrap_or(DEFAULT_REMOTE_LIST_OFFSETS_REQUEST_TIMEOUT)

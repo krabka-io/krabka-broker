@@ -7,7 +7,7 @@ use {
     },
     moxy::{
         ast::{Parse, ParseError, Parser, Path, PathArguments, Token},
-        token::{Spanner, TokenStream},
+        token::{Span, Spanner, TokenStream},
     },
     proc_macro::{Delimiter, Group, TokenStream as NativeTokenStream},
 };
@@ -83,12 +83,9 @@ fn header(input: &TokenStream) -> Result<Vec<Path>, ParseError> {
     Ok(types)
 }
 
-fn scaffold(types: &[Path]) -> TokenStream {
-    let envelope = &types[0];
-    let topic = &types[1];
-    if types.len() == 3 {
-        let partition = &types[2];
-        moxy::template! {
+fn scaffold(types: &[Path]) -> Result<TokenStream, ParseError> {
+    match types {
+        [envelope, topic, partition] => Ok(moxy::template! {
             {{ envelope }} {
                 group_id: __share_group.to_string(),
                 topics: vec![{{ topic }} {
@@ -98,9 +95,8 @@ fn scaffold(types: &[Path]) -> TokenStream {
                 }],
                 ..Default::default()
             }
-        }
-    } else {
-        moxy::template! {
+        }),
+        [envelope, topic] => Ok(moxy::template! {
             {{ envelope }} {
                 group_id: __share_group.to_string(),
                 topics: vec![{{ topic }} {
@@ -110,11 +106,15 @@ fn scaffold(types: &[Path]) -> TokenStream {
                 }],
                 ..Default::default()
             }
-        }
+        }),
+        _ => Err(ParseError::new(
+            Span::call_site(),
+            "expected envelope, topic and optional partition types",
+        )),
     }
 }
 
-pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+pub fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
     let types = header(&input.clone().into())?;
     let names: &[&str] = if types.len() == 3 {
         &["__share_group", "__share_topic", "__share_fields"]
@@ -122,9 +122,11 @@ pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, Pars
         &["__share_group", "__share_topic", "__share_partitions"]
     };
     let mut names = names.iter();
-    let values: Vec<_> = native_groups(input)
+    let values = native_groups(input)
         .map(|group| {
-            let name = names.next().expect("validated share-state clause");
+            let name = names.next().ok_or_else(|| {
+                ParseError::new(Span::call_site(), "unexpected share-state clause")
+            })?;
             let delimiter = if *name == "__share_fields" {
                 Delimiter::None
             } else {
@@ -132,13 +134,13 @@ pub(crate) fn expand(input: NativeTokenStream) -> Result<NativeTokenStream, Pars
             };
             let mut native = Group::new(delimiter, group.stream());
             native.set_span(group.span());
-            SpliceValue {
+            Ok(SpliceValue {
                 name: (*name).to_owned(),
                 group: native,
-            }
+            })
         })
-        .collect();
-    Ok(splice(scaffold(&types).into(), &values, &[]))
+        .collect::<Result<Vec<_>, ParseError>>()?;
+    Ok(splice(scaffold(&types)?.into(), &values, &[]))
 }
 
 #[cfg(test)]
@@ -154,12 +156,12 @@ mod tests {
         let request = "Request, Topic, Partition; group [group()]; topic [topic()]; fields { partition: choose!(|&Row { x, y }| x + y), };".parse().unwrap();
         let types = header(&request).unwrap();
         assert!(types.len() == 3);
-        assert!(compact(&scaffold(&types)).contains("group_id:__share_group.to_string()"));
+        assert!(compact(&scaffold(&types).unwrap()).contains("group_id:__share_group.to_string()"));
         let rows = "Request, Topic; group [group]; topic [id]; partitions [rows()];"
             .parse()
             .unwrap();
         let types = header(&rows).unwrap();
-        assert!(compact(&scaffold(&types)).contains("partitions:__share_partitions"));
+        assert!(compact(&scaffold(&types).unwrap()).contains("partitions:__share_partitions"));
     }
 
     #[yare::parameterized(

@@ -64,11 +64,9 @@ fn decode_legacy_batch(
     }
 }
 
-fn exactly_one_v2_batch(mut batches: Vec<RecordBatch>) -> Result<RecordBatch, i16> {
-    if batches.len() != 1 {
-        return Err(codes::INVALID_RECORD);
-    }
-    Ok(batches.pop().expect("length checked"))
+fn exactly_one_v2_batch(batches: Vec<RecordBatch>) -> Result<RecordBatch, i16> {
+    let [batch] = <[RecordBatch; 1]>::try_from(batches).map_err(|_| codes::INVALID_RECORD)?;
+    Ok(batch)
 }
 
 #[cfg(test)]
@@ -76,6 +74,7 @@ mod tests {
     use {
         super::*,
         crate::{
+            codes,
             handlers::produce::{
                 framing::PartitionPayload,
                 hot_path::TimestampPolicy,
@@ -133,7 +132,7 @@ mod tests {
             RecordDecompressionPolicy::default(),
         )
         .unwrap_err();
-        assert!(err == crate::codes::INVALID_RECORD);
+        assert!(err == codes::INVALID_RECORD);
     }
 
     #[test]

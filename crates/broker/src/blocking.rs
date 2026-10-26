@@ -25,27 +25,32 @@
 use {
     std::{
         future::Future,
+        hint,
         panic::{AssertUnwindSafe, catch_unwind},
         pin::Pin,
         sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError},
         task::{Context, Poll},
+        time::{Duration, Instant},
     },
     tokio::{
         runtime::{Handle, RuntimeFlavor},
-        task::JoinHandle,
+        task::{self, JoinError, JoinHandle},
     },
 };
 
 /// Blocking work that did not return its value.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum BlockingError {
+pub enum BlockingError {
     /// The work panicked inline, on the runtime thread.
     #[error("inline blocking panic")]
     PanickedInline,
     /// The blocking pool did not return the value: the work panicked there,
     /// or the runtime shut down before it ran.
     #[error(transparent)]
-    Join(tokio::task::JoinError),
+    Join(JoinError),
+    /// The handle was polled again after it had returned its outcome.
+    #[error("blocking handle polled after it completed")]
+    PolledAfterCompletion,
 }
 
 /// Where one piece of blocking work runs.
@@ -82,15 +87,13 @@ impl Placement {
 ///
 /// Returns [`BlockingError::Join`] when the blocking pool does not return the
 /// value, and [`BlockingError::PanickedInline`] when the work panics inline.
-pub(crate) async fn run_blocking<R>(
-    work: impl FnOnce() -> R + Send + 'static,
-) -> Result<R, BlockingError>
+pub async fn run_blocking<R>(work: impl FnOnce() -> R + Send + 'static) -> Result<R, BlockingError>
 where
     R: Send + 'static,
 {
     match Placement::for_current_runtime() {
-        Placement::InPlace => Ok(tokio::task::block_in_place(work)),
-        Placement::Pool => tokio::task::spawn_blocking(work)
+        Placement::InPlace => Ok(task::block_in_place(work)),
+        Placement::Pool => task::spawn_blocking(work)
             .await
             .map_err(BlockingError::Join),
         Placement::Inline => run_inline(work),
@@ -115,7 +118,7 @@ where
 ///
 /// Returns [`BlockingError::PanickedInline`] when the work panics, and
 /// [`BlockingError::Join`] when the blocking pool does not return it.
-pub(crate) async fn run_page_cache_io<T, R>(
+pub async fn run_page_cache_io<T, R>(
     lock: &Arc<Mutex<T>>,
     stays_in_cache: impl FnOnce(&mut T) -> bool,
     work: impl FnOnce(&mut T) -> R + Send + 'static,
@@ -140,7 +143,7 @@ where
 /// running inline. The hot paths hold the log lock for a page-cache copy, a
 /// few microseconds; a holder still there after this is likely fsyncing or
 /// reading the disk.
-const LOCK_SPIN: std::time::Duration = std::time::Duration::from_micros(20);
+const LOCK_SPIN: Duration = Duration::from_micros(20);
 
 /// Runs `work` here under `lock` when the lock comes free within
 /// [`LOCK_SPIN`] and `stays_in_cache` agrees, and hands `work` back
@@ -166,13 +169,13 @@ fn run_if_cached<T, R, W: FnOnce(&mut T) -> R>(
 
 /// `lock`'s guard, if it comes free within `spin`. A poisoned lock is
 /// recovered, as the log's own lock helper does.
-fn lock_within<T>(lock: &Mutex<T>, spin: std::time::Duration) -> Option<MutexGuard<'_, T>> {
-    let started = std::time::Instant::now();
+fn lock_within<T>(lock: &Mutex<T>, spin: Duration) -> Option<MutexGuard<'_, T>> {
+    let started = Instant::now();
     loop {
         match lock.try_lock() {
             Ok(guard) => return Some(guard),
             Err(TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
-            Err(TryLockError::WouldBlock) if started.elapsed() < spin => std::hint::spin_loop(),
+            Err(TryLockError::WouldBlock) if started.elapsed() < spin => hint::spin_loop(),
             Err(TryLockError::WouldBlock) => return None,
         }
     }
@@ -185,14 +188,14 @@ fn lock_within<T>(lock: &Mutex<T>, spin: std::time::Duration) -> Option<MutexGua
 /// function is called, not when the handle is first polled; inline, the call
 /// itself does the work, so a deadline put around the handle cannot cut it
 /// short.
-pub(crate) fn spawn_blocking<R>(work: impl FnOnce() -> R + Send + 'static) -> BlockingHandle<R>
+pub fn spawn_blocking<R>(work: impl FnOnce() -> R + Send + 'static) -> BlockingHandle<R>
 where
     R: Send + 'static,
 {
     if runs_inline() {
         BlockingHandle::Done(Some(run_inline(work)))
     } else {
-        BlockingHandle::Spawned(tokio::task::spawn_blocking(work))
+        BlockingHandle::Spawned(task::spawn_blocking(work))
     }
 }
 
@@ -206,7 +209,7 @@ fn run_inline<R>(work: impl FnOnce() -> R) -> Result<R, BlockingError> {
 
 /// The value of work that [`spawn_blocking`] started.
 #[must_use = "a blocking handle does nothing unless polled"]
-pub(crate) enum BlockingHandle<R> {
+pub enum BlockingHandle<R> {
     /// The work runs on the blocking pool.
     Spawned(JoinHandle<R>),
     /// The work ran inline; its outcome until it is taken.
@@ -226,7 +229,7 @@ impl<R> Future for BlockingHandle<R> {
             Self::Done(outcome) => Poll::Ready(
                 outcome
                     .take()
-                    .expect("a blocking handle is not polled after it completes"),
+                    .unwrap_or(Err(BlockingError::PolledAfterCompletion)),
             ),
         }
     }
@@ -235,9 +238,12 @@ impl<R> Future for BlockingHandle<R> {
 /// Whether blocking work runs inline on this thread.
 fn runs_inline() -> bool { cfg!(target_os = "wasi") || forced_inline::active() }
 
-#[cfg(any(test, feature = "test-helpers"))]
+/// The per-thread switch that forces blocking work inline. Production never
+/// sets it, and reading it costs one thread-local load.
 mod forced_inline {
-    use std::{cell::Cell, marker::PhantomData};
+    use std::cell::Cell;
+    #[cfg(any(test, feature = "test-helpers"))]
+    use std::marker::PhantomData;
 
     thread_local! {
         static ACTIVE: Cell<bool> = const { Cell::new(false) };
@@ -246,6 +252,7 @@ mod forced_inline {
     pub(super) fn active() -> bool { ACTIVE.with(Cell::get) }
 
     /// Makes the blocking work of this thread run inline until it drops.
+    #[cfg(any(test, feature = "test-helpers"))]
     #[must_use = "blocking work runs inline only while the guard lives"]
     pub struct InlineBlockingGuard {
         /// The value the flag had before this guard set it, put back on drop.
@@ -254,6 +261,7 @@ mod forced_inline {
         _thread: PhantomData<*const ()>,
     }
 
+    #[cfg(any(test, feature = "test-helpers"))]
     impl Drop for InlineBlockingGuard {
         fn drop(&mut self) { ACTIVE.with(|active| active.set(self.previous)); }
     }
@@ -264,17 +272,13 @@ mod forced_inline {
     /// A test drives the WASI path on a native target with it. Every task of
     /// a current-thread runtime runs on the thread that drives the runtime,
     /// so the guard covers the whole runtime when that thread holds it.
+    #[cfg(any(test, feature = "test-helpers"))]
     pub fn inline_blocking_on_this_thread() -> InlineBlockingGuard {
         InlineBlockingGuard {
             previous: ACTIVE.with(|active| active.replace(true)),
             _thread: PhantomData,
         }
     }
-}
-
-#[cfg(not(any(test, feature = "test-helpers")))]
-mod forced_inline {
-    pub(super) const fn active() -> bool { false }
 }
 
 #[cfg(any(test, feature = "test-helpers"))]
@@ -289,9 +293,11 @@ mod tests {
             sync::{
                 Arc,
                 atomic::{AtomicUsize, Ordering},
+                mpsc,
             },
-            thread::ThreadId,
+            thread::{self, ThreadId, spawn},
         },
+        tokio::runtime::{Builder, Runtime},
     };
 
     /// A runtime that counts the threads it starts. A current-thread runtime
@@ -300,11 +306,11 @@ mod tests {
         let started = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&started);
         let mut builder = if multi_thread {
-            let mut builder = tokio::runtime::Builder::new_multi_thread();
+            let mut builder = Builder::new_multi_thread();
             builder.worker_threads(2);
             builder
         } else {
-            tokio::runtime::Builder::new_current_thread()
+            Builder::new_current_thread()
         };
         let runtime = builder
             .on_thread_start(move || {
@@ -317,7 +323,7 @@ mod tests {
 
     /// A runtime, and the number of threads it has started.
     struct CountingRuntime {
-        runtime: tokio::runtime::Runtime,
+        runtime: Runtime,
         started: Arc<AtomicUsize>,
     }
 
@@ -326,9 +332,9 @@ mod tests {
         let CountingRuntime { runtime, .. } = counting_runtime(multi_thread);
         let _guard = inline.then(inline_blocking_on_this_thread);
         runtime.block_on(async {
-            let caller = std::thread::current().id();
+            let caller = thread::current().id();
             let placement = Placement::for_current_runtime();
-            let worker = run_blocking(|| std::thread::current().id())
+            let worker = run_blocking(|| thread::current().id())
                 .await
                 .expect("the work returns");
             ObservedPlacement {
@@ -453,24 +459,24 @@ mod tests {
     #[test]
     fn page_cache_io_runs_inline_only_on_a_free_lock_and_work_that_will_not_wait() {
         let CountingRuntime { runtime, .. } = counting_runtime(false);
-        let caller = std::thread::current().id();
+        let caller = thread::current().id();
         let lock = Arc::new(Mutex::new(()));
         let ran_on = |stays_in_cache: bool| {
             runtime
                 .block_on(run_page_cache_io(
                     &lock,
                     move |()| stays_in_cache,
-                    |()| std::thread::current().id(),
+                    |()| thread::current().id(),
                 ))
                 .expect("the work returns")
         };
         check!(ran_on(true) == caller, "a free lock and page-cache work");
         check!(ran_on(false) != caller, "work that may wait");
 
-        let (holding, held) = std::sync::mpsc::channel::<()>();
-        let (taken, released) = std::sync::mpsc::channel::<()>();
+        let (holding, held) = mpsc::channel::<()>();
+        let (taken, released) = mpsc::channel::<()>();
         let holder_lock = Arc::clone(&lock);
-        let contended = std::thread::scope(|scope| {
+        let contended = thread::scope(|scope| {
             scope.spawn(move || {
                 let _held = holder_lock.lock().expect("lock");
                 holding.send(()).expect("the test waits");
@@ -478,7 +484,7 @@ mod tests {
             });
             held.recv().expect("the holder takes the lock");
             let outcome = runtime.block_on(async {
-                let work = run_page_cache_io(&lock, |()| true, |()| std::thread::current().id());
+                let work = run_page_cache_io(&lock, |()| true, |()| thread::current().id());
                 // `join!` polls the work first: it finds the lock held and
                 // goes to the pool before the holder lets go.
                 let (worker, ()) = tokio::join!(work, async { drop(taken) });
@@ -497,7 +503,7 @@ mod tests {
         let outer = inline_blocking_on_this_thread();
         let inner = inline_blocking_on_this_thread();
         check!(runs_inline());
-        check!(!std::thread::spawn(runs_inline).join().expect("join"));
+        check!(!spawn(runs_inline).join().expect("join"));
         drop(inner);
         check!(runs_inline(), "the outer guard still holds");
         drop(outer);

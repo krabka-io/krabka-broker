@@ -10,10 +10,11 @@ use {
         Context, KeyValue,
         trace::{
             Span as _, SpanBuilder, SpanContext, SpanId, TraceContextExt as _, TraceFlags, TraceId,
-            TraceState, TracerProvider as _,
+            TraceState, Tracer, TracerProvider as _,
         },
     },
     opentelemetry_sdk::trace::SdkTracerProvider,
+    tokio::{task::JoinHandle, time},
 };
 
 pub fn spawn_heartbeat_task(
@@ -21,14 +22,14 @@ pub fn spawn_heartbeat_task(
     service_name: String,
     service_instance_id: String,
     interval: Time,
-) -> tokio::task::JoinHandle<()> {
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         let tracer = provider.tracer("krabka-telemetry-heartbeat");
         let mut sequence = 0_i64;
         loop {
             emit_heartbeat_span(&tracer, &service_name, &service_instance_id, sequence);
             sequence = sequence.saturating_add(1);
-            tokio::time::sleep(interval.to_std()).await;
+            time::sleep(interval.to_std()).await;
         }
     })
 }
@@ -48,7 +49,7 @@ fn heartbeat_parent_context(sequence: i64) -> Context {
     ))
 }
 
-fn emit_heartbeat_span<T: opentelemetry::trace::Tracer>(
+fn emit_heartbeat_span<T: Tracer>(
     tracer: &T,
     service_name: &str,
     service_instance_id: &str,
@@ -74,31 +75,32 @@ mod tests {
     use {
         super::*,
         assert2::check,
-        opentelemetry_sdk::{error::OTelSdkResult, trace::Sampler},
-        std::sync::{Arc, Mutex},
+        opentelemetry_sdk::{
+            error::OTelSdkResult,
+            trace::{Sampler, SpanData, SpanExporter},
+        },
+        std::{
+            future::{self, Future},
+            sync::{Arc, Mutex},
+        },
     };
 
     #[derive(Clone, Debug, Default)]
     struct RecordingSpanExporter {
-        spans: Arc<Mutex<Vec<opentelemetry_sdk::trace::SpanData>>>,
+        spans: Arc<Mutex<Vec<SpanData>>>,
     }
 
     impl RecordingSpanExporter {
-        fn spans(&self) -> Vec<opentelemetry_sdk::trace::SpanData> {
-            self.spans.lock().expect("recorded spans lock").clone()
-        }
+        fn spans(&self) -> Vec<SpanData> { self.spans.lock().expect("recorded spans lock").clone() }
     }
 
-    impl opentelemetry_sdk::trace::SpanExporter for RecordingSpanExporter {
-        fn export(
-            &self,
-            batch: Vec<opentelemetry_sdk::trace::SpanData>,
-        ) -> impl std::future::Future<Output = OTelSdkResult> + Send {
+    impl SpanExporter for RecordingSpanExporter {
+        fn export(&self, batch: Vec<SpanData>) -> impl Future<Output = OTelSdkResult> + Send {
             self.spans
                 .lock()
                 .expect("recorded spans lock")
                 .extend(batch);
-            std::future::ready(Ok(()))
+            future::ready(Ok(()))
         }
     }
 
