@@ -138,7 +138,7 @@ pub struct RuntimeFileConfig {
     /// keeps the kernel's dirty-page throttling, which pauses a writer for up
     /// to 200 ms at a time, and the sync at segment roll from holding an
     /// append for long. A partition with `preallocate=true` writes through
-    /// `O_DIRECT` and needs none of this. The default is 8 MiB, and 0 leaves
+    /// `O_DIRECT` and needs none of this. The default is 2 MiB, and 0 leaves
     /// write-back to the kernel.
     pub log_writeback_window: Option<ByteSize>,
     /// How often a partition writes the log start offset that local retention

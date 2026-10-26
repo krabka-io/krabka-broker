@@ -71,10 +71,13 @@ pub const DEFAULT_TAIL_CACHE_SIZE: ByteSize = mebibytes(8);
 /// up to 200 ms at a time; a 1 GiB segment's roll then syncs up to 1 GiB at
 /// once. Three brokers writing 1 KiB records at the disk's rate through the
 /// page cache measured a produce p99 of 0.75–0.9 s, against 0.09 s through
-/// `O_DIRECT`, on the OMB max-rate RF3 workloads. 8 MiB is a few
+/// `O_DIRECT`, on the OMB max-rate RF3 workloads. 2 MiB is about two
 /// milliseconds of one partition's writes at that rate, so two of them in
-/// flight bound the wait an append can see to that.
-pub const DEFAULT_WRITEBACK_WINDOW: ByteSize = mebibytes(8);
+/// flight bound the wait an append can see to that. Against 8 MiB, 2 MiB
+/// cut the publish p99 of 50K 1 KiB records/s at RF3 from 14–21 ms to 4–6 ms
+/// and raised the 100-partition max rate by a quarter, for 4% of the max
+/// rate of a single partition.
+pub const DEFAULT_WRITEBACK_WINDOW: ByteSize = mebibytes(2);
 
 /// Default byte window for timestamp scans between sparse index entries.
 pub const DEFAULT_TIMESTAMP_SCAN_WINDOW: ByteSize = kibibytes(64);
@@ -537,7 +540,7 @@ mod tests {
                     flush_on_append: false,
                     segment_allocation: SegmentAllocation::OnWrite,
                     tail_cache_size: mebibytes(8),
-                    writeback_window: mebibytes(8),
+                    writeback_window: mebibytes(2),
                     validate_on_open: true,
                     cleanup_policy: CleanupPolicy::Delete,
                     min_compaction_lag: Time::ZERO,

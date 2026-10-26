@@ -59,9 +59,9 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   it falls up to that far behind a 1 GB/s producer.
 
 - A partition written through the page cache starts a background `fdatasync`
-  of its active segment every `log_writeback_window` bytes (8 MiB by
+  of its active segment every `log_writeback_window` bytes (2 MiB by
   default), and an append waits only while two such syncs are still running.
-  The kernel then holds about 16 MiB of dirty data per segment at most, so
+  The kernel then holds about 4 MiB of dirty data per segment at most, so
   its dirty-page throttling and the sync at segment roll no longer pause an
   append for hundreds of milliseconds. `log_writeback_window = "0B"` leaves
   write-back to the kernel, as before. Partitions with `preallocate=true`
