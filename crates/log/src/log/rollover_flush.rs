@@ -43,10 +43,31 @@ impl Flush {
     }
 }
 
+/// One job on a log's ordered queue.
+#[cfg(not(target_os = "wasi"))]
+#[derive(Debug)]
+enum Job {
+    /// A sealed segment's files and the producer snapshot at its end.
+    Rollover(Flush),
+    /// The active segment's `.log` file, synced so that the page cache holds
+    /// little dirty data for it. See `Log::pace_writeback`.
+    Writeback { file: Arc<File>, io: Arc<dyn LogIo> },
+}
+
+#[cfg(not(target_os = "wasi"))]
+impl Job {
+    fn run(self) -> io::Result<()> {
+        match self {
+            Self::Rollover(flush) => flush.run(),
+            Self::Writeback { file, io } => io.sync_data(&file),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct State {
     #[cfg(not(target_os = "wasi"))]
-    jobs: VecDeque<Flush>,
+    jobs: VecDeque<Job>,
     running: bool,
     error: Option<FlushError>,
     /// Jobs submitted so far.
@@ -138,17 +159,33 @@ impl Flusher {
     }
 
     #[cfg(not(target_os = "wasi"))]
-    pub fn submit(&self, flush: Flush) -> io::Result<()> {
-        // `reserve` starts the executor before any flush is submitted.
+    pub fn submit(&self, flush: Flush) -> io::Result<()> { self.enqueue(Job::Rollover(flush)) }
+
+    /// Queue a sync of the active segment's `.log` file behind the jobs
+    /// already queued. Unlike a rollover flush it holds no snapshot memory, so
+    /// it reserves nothing; it does start the executor when no rollover has.
+    #[cfg(not(target_os = "wasi"))]
+    pub fn submit_writeback(&mut self, file: Arc<File>, io: Arc<dyn LogIo>) -> io::Result<()> {
+        self.check()?;
+        if self.executor.is_none() {
+            self.executor = Some(executor::Executor::shared()?);
+        }
+        self.enqueue(Job::Writeback { file, io })
+    }
+
+    #[cfg(not(target_os = "wasi"))]
+    fn enqueue(&self, job: Job) -> io::Result<()> {
+        // `reserve` or `submit_writeback` starts the executor before a job is
+        // queued.
         let Some(executor) = &self.executor else {
             return Err(io::Error::other(
-                "rollover flush submitted before a reservation",
+                "rollover flush queued before the executor started",
             ));
         };
         let start = {
             let mut state = self.shared.lock();
             state.result()?;
-            state.jobs.push_back(flush);
+            state.jobs.push_back(job);
             state.submitted += 1;
             !mem::replace(&mut state.running, true)
         };

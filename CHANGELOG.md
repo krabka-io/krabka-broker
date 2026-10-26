@@ -49,6 +49,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- A partition written through the page cache starts a background `fdatasync`
+  of its active segment every `log_writeback_window` bytes (8 MiB by
+  default), and an append waits only while two such syncs are still running.
+  The kernel then holds about 16 MiB of dirty data per segment at most, so
+  its dirty-page throttling and the sync at segment roll no longer pause an
+  append for hundreds of milliseconds. `log_writeback_window = "0B"` leaves
+  write-back to the kernel, as before. Partitions with `preallocate=true`
+  write through `O_DIRECT` and are unchanged.
 - A consumer fetch parked below `fetch.min.bytes` is answered early, with no
   records, when a partition its fetch session forgot in the last 100 ms
   receives records. The Java consumer leaves a partition out of its next fetch
@@ -291,6 +299,12 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Fixed
 
+- A segment written through `O_DIRECT` keeps at most 8 MiB of spare write
+  buffers, the same bound as its write queue. It kept up to sixteen, each
+  grown to the largest append it had seen, so a broker hosting a hundred
+  partitions that took 1 MiB batches held gigabytes of spares and the kernel
+  killed it at its memory limit about a minute into an OMB
+  `max-rate-1-topic-100-partitions-1kb` run.
 - A controller that starts over a feature level it does not support now
   refuses before it writes anything, also when its recovered high watermark is
   below the record that finalized the level. Startup rebuilt the image from

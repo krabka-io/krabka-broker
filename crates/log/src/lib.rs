@@ -109,7 +109,8 @@ pub use {
     barrier_marker::{BarrierMarker, parse_barrier_marker},
     config::{
         CleanupPolicy, DEFAULT_MAX_MESSAGE_SIZE, DEFAULT_READ_AHEAD_MAX, DEFAULT_TAIL_CACHE_SIZE,
-        DeliveryPolicy, LogConfig, RemoteTierFlags, ScheduleOrder, SegmentAllocation,
+        DEFAULT_WRITEBACK_WINDOW, DeliveryPolicy, LogConfig, RemoteTierFlags, ScheduleOrder,
+        SegmentAllocation,
     },
     delivery::{DeliveryAdvance, batch_is_deliverable},
     error::LogError,

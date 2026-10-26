@@ -89,6 +89,7 @@ pub struct RuntimeArgs {
     pub log_read_buffer_cap: Option<ByteSize>,
     pub log_read_ahead_max: Option<ByteSize>,
     pub log_tail_cache_size: Option<ByteSize>,
+    pub log_writeback_window: Option<ByteSize>,
     pub log_flush_start_offset_checkpoint_interval: Option<Time>,
     pub log_timestamp_scan_window: Option<ByteSize>,
     pub log_delivery_clock_uncertainty: Option<Time>,
@@ -374,6 +375,7 @@ mod tests {
         log-read-buffer-cap KRABKA_LOG_READ_BUFFER_CAP None ---------++--\n\
         log-read-ahead-max KRABKA_LOG_READ_AHEAD_MAX None ---------++--\n\
         log-tail-cache-size KRABKA_LOG_TAIL_CACHE_SIZE None ---------++--\n\
+        log-writeback-window KRABKA_LOG_WRITEBACK_WINDOW None ---------++--\n\
         log-flush-start-offset-checkpoint-interval KRABKA_LOG_FLUSH_START_OFFSET_CHECKPOINT_INTERVAL None -------+-----\n\
         log-timestamp-scan-window KRABKA_LOG_TIMESTAMP_SCAN_WINDOW None ---------++--\n\
         log-delivery-clock-uncertainty KRABKA_LOG_DELIVERY_CLOCK_UNCERTAINTY None -------+-----\n\

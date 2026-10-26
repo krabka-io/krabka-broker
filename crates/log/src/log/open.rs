@@ -5,6 +5,8 @@
 //! the log tail that snapshot does not cover, so a reopened log reaches
 //! exactly the state the append path would have left.
 
+#[cfg(not(target_os = "wasi"))]
+use std::collections::VecDeque;
 use {
     super::{
         Log,
@@ -226,6 +228,10 @@ impl Log {
             opened_end: Offset(0),
             unflushed_messages: 0,
             last_flush: Instant::now(),
+            #[cfg(not(target_os = "wasi"))]
+            writeback_unsynced: 0,
+            #[cfg(not(target_os = "wasi"))]
+            writeback_jobs: VecDeque::new(),
             roll_jitter: None,
             pending_deletes: Vec::new(),
             start_offset,

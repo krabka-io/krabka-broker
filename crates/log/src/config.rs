@@ -61,6 +61,18 @@ pub const DEFAULT_READ_AHEAD_MAX: ByteSize = mebibytes(4);
 /// writes at that rate, kept its end-to-end p99 under 100 ms.
 pub const DEFAULT_TAIL_CACHE_SIZE: ByteSize = mebibytes(32);
 
+/// Default for [`LogConfig::writeback_window`].
+///
+/// Linux lets a file's dirty pages pile up to `vm.dirty_ratio` of memory
+/// before it pauses the writer, and `balance_dirty_pages` then pauses it for
+/// up to 200 ms at a time; a 1 GiB segment's roll then syncs up to 1 GiB at
+/// once. Three brokers writing 1 KiB records at the disk's rate through the
+/// page cache measured a produce p99 of 0.75–0.9 s, against 0.09 s through
+/// `O_DIRECT`, on the OMB max-rate RF3 workloads. 8 MiB is a few
+/// milliseconds of one partition's writes at that rate, so two of them in
+/// flight bound the wait an append can see to that.
+pub const DEFAULT_WRITEBACK_WINDOW: ByteSize = mebibytes(8);
+
 /// Default byte window for timestamp scans between sparse index entries.
 pub const DEFAULT_TIMESTAMP_SCAN_WINDOW: ByteSize = kibibytes(64);
 
@@ -349,6 +361,19 @@ pub struct LogConfig {
     #[default(DEFAULT_TAIL_CACHE_SIZE)]
     pub tail_cache_size: ByteSize,
 
+    /// In a segment written through the page cache, start a background
+    /// `fdatasync` of the active `.log` file after every this many appended
+    /// bytes, and make an append wait while two such syncs are still running.
+    /// The kernel then holds about twice this much dirty data for the segment
+    /// at most, so neither its dirty-page throttling, which pauses a writer
+    /// for up to 200 ms at a time, nor the sync at segment roll holds an
+    /// append for long. A segment written through `O_DIRECT` needs none of
+    /// this, and `flush_on_append` syncs every append anyway. `0` leaves
+    /// write-back to the kernel. Default 8 MiB: see
+    /// [`DEFAULT_WRITEBACK_WINDOW`].
+    #[default(DEFAULT_WRITEBACK_WINDOW)]
+    pub writeback_window: ByteSize,
+
     /// On open, CRC every batch in the active segment and rebuild its sparse indexes.
     #[default(true)]
     pub validate_on_open: bool,
@@ -509,6 +534,7 @@ mod tests {
                     flush_on_append: false,
                     segment_allocation: SegmentAllocation::OnWrite,
                     tail_cache_size: mebibytes(32),
+                    writeback_window: mebibytes(8),
                     validate_on_open: true,
                     cleanup_policy: CleanupPolicy::Delete,
                     min_compaction_lag: Time::ZERO,

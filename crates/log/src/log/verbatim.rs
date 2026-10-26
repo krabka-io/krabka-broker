@@ -312,6 +312,8 @@ impl Log {
                 batch.last_offset_delta,
                 flush_on_append || (self.stamp_source.is_some() && !is_transactional),
             )?;
+            #[cfg(not(target_os = "wasi"))]
+            self.pace_writeback(batch.bytes.len())?;
 
             if !is_transactional {
                 self.record_stamp(base_offset, last_offset)?;
