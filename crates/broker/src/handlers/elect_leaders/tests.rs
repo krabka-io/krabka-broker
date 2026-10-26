@@ -25,6 +25,7 @@ use {
         leader_election::{ElectionType, test_support::one_partition_change},
         test_support::{
             decode_response, gated_break_glass_config as gated_config, start_broker_no_audit_with,
+            topic_partition_image,
         },
     },
     assert2::{assert, check},
@@ -54,14 +55,7 @@ krabka_macros::wire_codec_helpers! {
 /// One two-replica partition of [`TOPIC`], led by broker 1, beside the
 /// proposals the registry holds.
 fn image_with(proposals: &[BreakGlassProposalRecord]) -> MetadataImage {
-    let mut image = MetadataImage::new(Uuid::nil());
-    image.apply(&MetadataRecord::V1Topic(TopicRecord {
-        name: TOPIC.to_owned(),
-        topic_id: Uuid::nil(),
-        partitions: 1,
-        replication_factor: 2,
-    }));
-    image.apply(&MetadataRecord::V1Partition(PartitionRecord {
+    let mut image = topic_partition_image(TOPIC, 2, || PartitionRecord {
         isr: vec![NodeId(1)],
         leader_epoch: LeaderEpoch(5),
         ..replicated_partition()
@@ -69,7 +63,7 @@ fn image_with(proposals: &[BreakGlassProposalRecord]) -> MetadataImage {
             .leader(1)
             .replicas(&[NodeId(1), NodeId(2)])
             .call()
-    }));
+    });
     for proposal in proposals {
         image.apply(&MetadataRecord::V1BreakGlassProposal(proposal.clone()));
     }

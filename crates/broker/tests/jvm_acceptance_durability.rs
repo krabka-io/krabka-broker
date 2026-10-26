@@ -36,6 +36,18 @@ mod transactional_eos;
 #[path = "jvm_acceptance_durability/transactional_tv2.rs"]
 mod transactional_tv2;
 
+/// A three-broker Krabka cluster on `client_ports` and `controller_ports`,
+/// each broker's config passed through `adjust`, with this suite's tracing
+/// installed first.
+async fn durability_cluster(
+    client_ports: [u16; 3],
+    controller_ports: [u16; 3],
+    adjust: impl Fn(&mut krabka_broker::BrokerConfig),
+) -> Vec<(krabka_broker::BrokerHandle, tempfile::TempDir)> {
+    support::init_jvm_tracing("krabka_broker=debug,info");
+    support::start_jvm_cluster(client_ports, controller_ports, adjust).await
+}
+
 /// Create the fully replicated workload topic before exercising failures or disk bytes.
 async fn prepare_replication_topic(
     broker: &krabka_broker::BrokerHandle,

@@ -42,6 +42,18 @@ pub fn bind_retry_fixture(input: TokenStream) -> Result<TokenStream, ParseError>
     })
 }
 
+pub fn frame_max_parser(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = name(input)?;
+    Ok(moxy::template! {
+        fn {{ name }}(value: &str) -> Result<::krabka_units::ByteSize, String> {
+            let value = ::krabka_units::parse::positive_byte_size(value)
+                .map_err(|error| error.to_string())?;
+            ::krabka_client_core::ClientFrameMax::try_from(value)
+                .map(::krabka_client_core::ClientFrameMax::size)
+        }
+    })
+}
+
 pub fn dispatch_capacity_parser(input: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(input)?;
     Ok(moxy::template! {

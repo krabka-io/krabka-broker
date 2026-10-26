@@ -21,7 +21,7 @@ use {
             list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
             list_offsets_response::ListOffsetsResponse,
         },
-        primitives::uuid::Uuid as WireUuid,
+        primitives::uuid::Uuid as ProtocolUuid,
     },
     krabka_security::ListenerProtocol,
     std::{
@@ -215,7 +215,7 @@ impl BacklogPoller {
             isolation_level: 1,
             topics: vec![FetchTopic {
                 topic: topic.to_owned(),
-                topic_id: WireUuid(*topic_id.as_bytes()),
+                topic_id: ProtocolUuid(*topic_id.as_bytes()),
                 partitions: vec![FetchPartition {
                     partition,
                     current_leader_epoch: partition_metadata.leader_epoch.0,
@@ -235,7 +235,12 @@ impl BacklogPoller {
             .await
             .map_err(|error| error.to_string())?;
         connection.close();
-        fetch_offsets(&response, topic, WireUuid(*topic_id.as_bytes()), partition)
+        fetch_offsets(
+            &response,
+            topic,
+            ProtocolUuid(*topic_id.as_bytes()),
+            partition,
+        )
     }
 }
 
@@ -274,7 +279,7 @@ struct PartitionOffsets {
 fn fetch_offsets(
     response: &FetchResponse,
     topic: &str,
-    topic_id: WireUuid,
+    topic_id: ProtocolUuid,
     partition: i32,
 ) -> Result<PartitionOffsets, String> {
     if response.error_code != codes::NONE {
@@ -372,7 +377,7 @@ mod tests {
                     ListOffsetsPartitionResponse, ListOffsetsResponse, ListOffsetsTopicResponse,
                 },
             },
-            primitives::uuid::Uuid as WireUuid,
+            primitives::uuid::Uuid as ProtocolUuid,
         },
         std::collections::HashMap,
     };
@@ -435,7 +440,7 @@ mod tests {
 
     #[test]
     fn remote_offsets_are_the_fetch_high_watermark_not_log_end() {
-        let topic_id = WireUuid([9; 16]);
+        let topic_id = ProtocolUuid([9; 16]);
         let response = FetchResponse {
             responses: vec![FetchableTopicResponse {
                 topic_id,

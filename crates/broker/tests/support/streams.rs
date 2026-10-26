@@ -1,6 +1,6 @@
 //! Canonical streams topology and heartbeat drivers for integration suites.
 use {
-    crate::support::{configs::feature_update, standalone_broker},
+    crate::support::{client, configs::feature_update, standalone_broker},
     assert2::assert,
     krabka_client_core::Client,
     krabka_protocol::owned::{
@@ -11,7 +11,7 @@ use {
         streams_group_heartbeat_response::StreamsGroupHeartbeatResponse,
         update_features_request::UpdateFeaturesRequest,
     },
-    std::time::Duration,
+    std::{sync::Arc, time::Duration},
     tokio::time,
 };
 pub async fn finalize_streams_version(client: &Client) {
@@ -193,4 +193,16 @@ pub fn request_active_tasks(response: &StreamsGroupHeartbeatResponse) -> Option<
             })
             .collect()
     })
+}
+
+/// A standalone broker whose election is ready, its bootstrap address, and its
+/// log directory: the cluster every streams group upgrade and downgrade
+/// scenario starts from.
+pub async fn boot_electable() -> (krabka_broker::BrokerHandle, String, tempfile::TempDir) {
+    boot(ElectionReadiness::BrokerElectable).await
+}
+
+/// The client those scenarios drive the broker with.
+pub async fn connect_member_client(bootstrap: &str) -> Arc<Client> {
+    client::connect(bootstrap, "c1").await
 }

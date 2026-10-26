@@ -262,9 +262,7 @@ impl SharePartitionLeaderManager {
         topic_id: uuid::Uuid,
         partition: i32,
     ) -> Option<Arc<Mutex<AcquisitionState>>> {
-        self.leaders
-            .get(&(group.to_owned(), topic_id, partition))
-            .map(|c| Arc::clone(c.value()))
+        self.cached(group, topic_id, partition)
     }
 
     /// Drops `cell` from the cache when it is still the cached cell for
@@ -442,6 +440,14 @@ mod tests {
         assert!(mgr.initial_start_offset("duration", tid, 0).await == Ok(Offset(10)));
     }
 
+    /// A log directory and an empty registry for one data partition.
+    fn data_dir_and_registry() -> (tempfile::TempDir, Arc<PartitionRegistry>) {
+        (
+            tempfile::tempdir().expect("tempdir"),
+            Arc::new(PartitionRegistry::new()),
+        )
+    }
+
     /// Every `share.auto.offset.reset` strategy, resolved against one real
     /// log: two records stamped three hours ago at offsets 0-1, two stamped
     /// ninety minutes ago at offsets 2-3, and a high watermark of 4.
@@ -452,11 +458,10 @@ mod tests {
     /// fails before it can report that the partition has no state.
     #[tokio::test]
     async fn fresh_cell_starts_where_the_group_strategy_says() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let (dir, reg) = data_dir_and_registry();
         let tid = uuid::Uuid::from_bytes([41; 16]);
         let now = now_ms();
         let hour = 60 * 60 * 1_000;
-        let reg = Arc::new(PartitionRegistry::new());
         open_data_partition()
             .reg(&reg)
             .log_dir(dir.path())
@@ -560,11 +565,10 @@ mod tests {
     async fn by_duration_start_refuses_a_record_above_the_decompressed_limit() {
         use krabka_protocol::records::{Attributes, Record, RecordBatch};
 
-        let dir = tempfile::tempdir().expect("tempdir");
+        let (dir, reg) = data_dir_and_registry();
         let tid = uuid::Uuid::from_bytes([42; 16]);
         let now = now_ms();
         let hour = 60 * 60 * 1_000;
-        let reg = Arc::new(PartitionRegistry::new());
         open_data_partition()
             .reg(&reg)
             .log_dir(dir.path())

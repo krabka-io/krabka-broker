@@ -41,14 +41,13 @@
 
 use {
     assert2::assert,
-    criterion::{Criterion, Throughput, abs_file, criterion_main},
+    criterion::{Criterion, Throughput},
     krabka_broker::metrics::{BrokerMetrics, PartitionLabel},
     prometheus_client::{
         encoding::EncodeLabelSet,
         metrics::{counter::Counter, family::Family},
     },
     std::{
-        env,
         sync::Arc,
         time::{Duration, Instant},
     },
@@ -226,28 +225,4 @@ fn bench_ratio(_c: &mut Criterion) {
     println!();
 }
 
-/// A benchmark target, under the name `criterion_group!` would give it.
-type Target = (&'static str, fn(&mut Criterion));
-
-/// Every benchmark target, in run order.
-const TARGETS: [Target; 2] = [
-    ("bench_replication_in", bench_replication_in),
-    ("bench_ratio", bench_ratio),
-];
-
-/// Runs every target in [`TARGETS`] against `criterion`.
-fn run_targets(criterion: &mut Criterion) {
-    for (name, target) in TARGETS {
-        if env::var("CODSPEED_ENV").is_ok() {
-            criterion.set_current_file(abs_file!());
-            criterion.set_macro_group(format!("benches::{name}"));
-        }
-        target(criterion);
-    }
-}
-
-/// The benchmark group, written out by hand where `criterion_group!` would
-/// generate it.
-fn benches() { run_targets(&mut Criterion::default().configure_from_args()); }
-
-criterion_main!(benches);
+krabka_macros::bench_main!(bench_replication_in, bench_ratio);

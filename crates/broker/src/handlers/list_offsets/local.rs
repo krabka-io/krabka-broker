@@ -109,11 +109,11 @@ mod tests {
                 test_support::replicated_partition,
             },
             test_support::{UnixMillis, start_broker_with_authorizer_no_audit as start_broker},
+            testing::list_offsets_request,
         },
         assert2::{assert, check},
-        krabka_protocol::owned::{
-            list_offsets_request::{ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic},
-            list_offsets_response::{ListOffsetsPartitionResponse, MAX_VERSION},
+        krabka_protocol::owned::list_offsets_response::{
+            ListOffsetsPartitionResponse, MAX_VERSION,
         },
         krabka_units::convert::ByteSizeExt as _,
         std::{collections::BTreeMap, sync::Arc, time::Duration},
@@ -259,21 +259,12 @@ mod tests {
     ) -> ListOffsetsPartitionResponse {
         let version = MAX_VERSION;
         let req = encode_request(
-            &ListOffsetsRequest {
-                replica_id: -1,
-                topics: vec![ListOffsetsTopic {
-                    name: topic.to_owned(),
-                    partitions: vec![ListOffsetsPartition {
-                        partition_index: 0,
-                        current_leader_epoch: -1,
-                        timestamp,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                timeout_ms: 5_000,
-                ..Default::default()
-            },
+            &list_offsets_request()
+                .topic(topic.to_owned())
+                .partition_index(0)
+                .current_leader_epoch(-1)
+                .timestamp(timestamp)
+                .call(),
             version,
         );
         let bytes = handle(broker, version, &req, ctx).await.expect("handle");

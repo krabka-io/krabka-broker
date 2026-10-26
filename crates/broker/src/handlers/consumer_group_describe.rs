@@ -852,11 +852,10 @@ mod tests {
     /// an errored row) keeps the wire-default `i32::MIN` sentinel.
     #[tokio::test]
     async fn handle_fills_authorized_operations_only_on_opt_in_for_clean_rows() {
-        let authorizer = Arc::new(AllowAllAuthorizer);
         let HandlerStartedBroker {
             broker: broker_handle,
             dir: _dir,
-        } = start_group_broker_no_audit(Arc::<AllowAllAuthorizer>::clone(&authorizer)).await;
+        } = start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker
             .group_coordinator
@@ -868,7 +867,7 @@ mod tests {
         };
 
         let expected_bits = authorized_operations_bits(
-            authorizer.as_ref(),
+            &AllowAllAuthorizer,
             &broker.controller.current_image(),
             &ctx,
             krabka_metadata::ResourceType::Group,

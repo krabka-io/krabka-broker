@@ -101,7 +101,8 @@ use {
         features::ELR_VERSION,
         handlers::{
             DispatchKind, RequestContext, acl_wire::CLUSTER_RESOURCE_NAME, alter_partition::handle,
-            describe_configs::effective_topic_configs, encode_response,
+            create_topics::creatable_topic_configs, describe_configs::effective_topic_configs,
+            encode_response,
         },
         heartbeat::{
             controller_state::{ControllerLivenessState, LivenessTransition, TestClock},
@@ -3017,24 +3018,14 @@ pub fn described_creation_configs(
         topic,
         overrides,
     };
-    effective_topic_configs(
+    creatable_topic_configs(effective_topic_configs(
         image,
         setup.node,
         setup.topic,
         setup.overrides,
         UnstableApiVersions::Disabled,
         &BTreeMap::new(),
-    )
-    .into_iter()
-    .map(|entry| CreatableTopicConfigs {
-        name: entry.name,
-        value: entry.value,
-        read_only: entry.read_only,
-        config_source: entry.config_source,
-        is_sensitive: entry.is_sensitive,
-        ..Default::default()
-    })
-    .collect()
+    ))
 }
 
 /// A fresh log and deterministic timestamps bracketing its segment age limit.

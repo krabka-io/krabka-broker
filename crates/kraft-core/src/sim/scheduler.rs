@@ -17,7 +17,7 @@ use {
         event::Event,
         simulation_support::{
             NodeFingerprint, SimulationTimer as SimTimer, StableFingerprint, clear_timer,
-            earliest_timer, fingerprint, reconcile_timers,
+            fingerprint, reconcile_timers,
         },
         types::NodeId,
     },
@@ -25,6 +25,8 @@ use {
 
 impl Sim {
     krabka_macros::simulation_heartbeat!(crate, deadline_millis(HEARTBEAT));
+
+    krabka_macros::simulation_earliest_timer!(crate);
 
     // ---- fingerprint / stability ---------------------------------------------
 
@@ -56,15 +58,7 @@ impl Sim {
     }
 
     pub(super) fn fire_next_timer(&mut self) -> bool {
-        let best = earliest_timer(self.nodes.values().map(|node| {
-            (node.id, [
-                node.election_deadline,
-                node.fetch_deadline,
-                node.heartbeat_deadline,
-                node.check_quorum_deadline,
-            ])
-        }));
-        let Some((deadline, id, kind)) = best else {
+        let Some((deadline, id, kind)) = self.earliest_armed_timer() else {
             return false;
         };
         self.now = self.now.max(deadline);

@@ -217,21 +217,13 @@ pub(super) fn expected_single_topic(
     }
 }
 
+krabka_macros::refused_fetch_partition_fixture!(refused_partition_row);
+
 pub(super) fn expected_refused_partition(
     partition_index: PartitionIndex,
     error_code: KafkaErrorCode,
 ) -> PartitionData {
-    PartitionData {
-        partition_index: partition_index.0,
-        error_code: error_code.0,
-        high_watermark: -1,
-        last_stable_offset: -1,
-        log_start_offset: -1,
-        aborted_transactions: Some(Vec::new()),
-        preferred_read_replica: -1,
-        records: Some(RecordsPayload::Legacy(Bytes::new())),
-        ..Default::default()
-    }
+    refused_partition_row(partition_index.0, error_code.0)
 }
 
 /// Default partition-zero row shared by sessionless fetch fixtures.

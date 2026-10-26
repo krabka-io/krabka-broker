@@ -39,13 +39,10 @@
 //! sendfile-over-vectored ratio, and the smallest swept size at which sendfile
 //! wins — the number `sendfile_min`'s default has to match.
 
-use {
-    criterion::{Criterion, abs_file, criterion_main},
-    std::{env, error::Error, process},
-};
+#[path = "support/first_error.rs"]
+mod first_error;
 
-/// Any failure while building or measuring a case; it stops the run.
-type BenchError = Box<dyn Error + Send + Sync>;
+use first_error::BenchError;
 
 /// The sweep, on the platforms that have a file-to-socket `sendfile(2)`:
 /// Linux, the Apple targets, and FreeBSD/DragonFly.
@@ -60,7 +57,7 @@ type BenchError = Box<dyn Error + Send + Sync>;
 ))]
 mod sweep {
     use {
-        super::BenchError,
+        super::{BenchError, first_error::FirstError},
         assert2::assert,
         bytes::{BufMut, Bytes, BytesMut},
         criterion::{Criterion, Throughput},
@@ -283,25 +280,6 @@ mod sweep {
         })
     }
 
-    /// The first error a timed closure met. Criterion's `iter_custom` closure
-    /// must return a [`Duration`], so the error waits here until criterion
-    /// returns.
-    #[derive(Default)]
-    struct FirstError(Option<BenchError>);
-
-    impl FirstError {
-        /// The measured time, or zero after keeping the error.
-        fn time(&mut self, timed: Result<Duration, BenchError>) -> Duration {
-            timed.unwrap_or_else(|error| {
-                self.0.get_or_insert(error);
-                Duration::ZERO
-            })
-        }
-
-        /// The kept error, if any.
-        fn into_result(self) -> Result<(), BenchError> { self.0.map_or(Ok(()), Err) }
-    }
-
     /// Nanoseconds per response for `case`: the fastest of `runs` measurement
     /// runs of `samples` drains each.
     fn fastest_nanos(
@@ -320,7 +298,7 @@ mod sweep {
 
     /// The criterion sweep: every size, on both paths.
     pub fn bench_fetch_drain(c: &mut Criterion) -> Result<(), BenchError> {
-        let mut failure = FirstError::default();
+        let failure = FirstError::default();
         {
             let mut group = c.benchmark_group("broker/fetch_drain");
 
@@ -333,7 +311,11 @@ mod sweep {
                 group.throughput(Throughput::Bytes(response.records_bytes as u64));
                 for case in [Case::Vectored, Case::Sendfile] {
                     group.bench_function(format!("{label}/{}", case.name()), |b| {
-                        b.iter_custom(|iters| failure.time(timed_drains(&response, case, iters)));
+                        b.iter_custom(|iters| {
+                            failure
+                                .keep(timed_drains(&response, case, iters))
+                                .unwrap_or(Duration::ZERO)
+                        });
                     });
                 }
             }
@@ -422,35 +404,4 @@ mod sweep {
     pub fn bench_crossover(_c: &mut Criterion) -> Result<(), BenchError> { Ok(()) }
 }
 
-/// A benchmark target, under the name `criterion_group!` would give it.
-type Target = (&'static str, fn(&mut Criterion) -> Result<(), BenchError>);
-
-/// Every benchmark target, in run order.
-const TARGETS: [Target; 2] = [
-    ("sweep::bench_fetch_drain", sweep::bench_fetch_drain),
-    ("sweep::bench_crossover", sweep::bench_crossover),
-];
-
-/// Runs every target in [`TARGETS`], stopping at the first one that fails.
-fn run_targets(criterion: &mut Criterion) -> Result<(), (&'static str, BenchError)> {
-    for (name, target) in TARGETS {
-        if env::var("CODSPEED_ENV").is_ok() {
-            criterion.set_current_file(abs_file!());
-            criterion.set_macro_group(format!("benches::{name}"));
-        }
-        target(criterion).map_err(|error| (name, error))?;
-    }
-    Ok(())
-}
-
-/// The benchmark group, written out by hand where `criterion_group!` would
-/// generate it, so that a failing target reports its error and stops the run.
-fn benches() {
-    let result = run_targets(&mut Criterion::default().configure_from_args());
-    if let Err((name, error)) = result {
-        eprintln!("{name}: {error}");
-        process::exit(1);
-    }
-}
-
-criterion_main!(benches);
+krabka_macros::bench_main!(sweep::bench_fetch_drain, sweep::bench_crossover);

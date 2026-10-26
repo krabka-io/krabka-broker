@@ -8,10 +8,7 @@ use {
         node_log::SimNodeLog,
         timers::{election_timeout_ms_of, election_timeout_of},
     },
-    krabka_kraft_core::{
-        simulation_support,
-        simulation_support::{NodeFingerprint, StableFingerprint},
-    },
+    krabka_kraft_core::{simulation_support, simulation_support::NodeFingerprint},
     krabka_raft::kraft::{
         QuorumStateMachine, QuorumTimeouts,
         role::Role,
@@ -81,7 +78,7 @@ impl<L: SimNodeLog> Sim<L> {
     /// replication advance always changes the fingerprint and resets the
     /// counter.
     pub fn run_until_stable(&mut self, max_ticks: usize) {
-        let mut stability = StableFingerprint::new(self.fingerprint());
+        let mut stability = simulation_support::StableFingerprint::new(self.fingerprint());
         for _ in 0..max_ticks {
             if let Some(msg) = self.queue.pop_front() {
                 self.deliver(msg);

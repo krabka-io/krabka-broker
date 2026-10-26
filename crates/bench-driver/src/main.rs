@@ -185,10 +185,7 @@ fn parse_client_request_timeout(input: &str) -> Result<Time, String> {
 
 krabka_macros::dispatch_capacity_parser!(parse_client_dispatch_queue_capacity);
 
-fn parse_client_frame_max(value: &str) -> Result<ByteSize, String> {
-    let value = parse::positive_byte_size(value).map_err(|error| error.to_string())?;
-    ClientFrameMax::try_from(value).map(ClientFrameMax::size)
-}
+krabka_macros::frame_max_parser!(parse_client_frame_max);
 
 fn parse_sample_interval(input: &str) -> Result<Time, String> {
     let value = parse::positive_time(input).map_err(|error| error.to_string())?;

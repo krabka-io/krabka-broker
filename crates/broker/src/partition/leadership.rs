@@ -261,8 +261,7 @@ impl Partition {
         self.prepare_and_publish(
             self.replication_target.write().await,
             (topic_id, new_leader, new_epoch),
-            prepare,
-            after_prepare,
+            (prepare, after_prepare),
         )
         .await
     }
@@ -270,14 +269,15 @@ impl Partition {
     /// The write-guarded body of
     /// [`Self::install_replication_target_after_log_prepare`]: `target` is
     /// held through the preparation until the new target is published.
-    async fn prepare_and_publish<T, F>(
+    async fn prepare_and_publish<T, F, P, A>(
         &self,
         target: RwLockWriteGuard<'_, ReplicationTarget>,
         (topic_id, new_leader, new_epoch): (Option<uuid::Uuid>, u64, i32),
-        prepare: impl FnOnce(&mut Log) -> Result<T, BrokerError>,
-        after_prepare: impl FnOnce(T) -> F,
+        (prepare, after_prepare): (P, A),
     ) -> Result<(), BrokerError>
     where
+        P: FnOnce(&mut Log) -> Result<T, BrokerError>,
+        A: FnOnce(T) -> F,
         F: Future<Output = ()>,
     {
         let prepared = {

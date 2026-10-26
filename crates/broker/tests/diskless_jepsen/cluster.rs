@@ -24,8 +24,8 @@ use {
     },
     assert2::assert,
     krabka_broker::{
-        BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId,
-        RemoteStorageBackend, RlmmKind, config::ListenerSpec,
+        BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, RemoteStorageBackend,
+        config::ListenerSpec,
     },
     krabka_metadata::MetadataRecord,
     krabka_security::ListenerProtocol,
@@ -274,15 +274,8 @@ fn broker_config(
     // three brokers keeps it cheap and survives the leader loss this schedule
     // injects. Every broker bootstraps that client against broker 1's
     // inter-broker endpoint, because the client authenticates as this node.
-    config.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
-        bootstrap: rlmm_bootstrap.to_owned(),
-        num_partitions: 1,
-        replication: i32::try_from(VOTERS).expect("small cluster"),
-        snapshot_interval: krabka_units::hours(1),
-        snapshot_dir: PathBuf::new(), // derived from log_dir
-        security: None,
-        ..KafkaRlmmConfig::default()
-    });
+    config.remote_log_metadata =
+        support::diskless::flush_index_metadata(rlmm_bootstrap.to_owned(), VOTERS);
     config
 }
 

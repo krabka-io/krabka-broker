@@ -11,11 +11,8 @@ use {
         self,
         client::create_topic_named,
         discovery::coordinator_lookup_request,
-        records::ProducerSequence,
         topics::CreateTopicSetup,
-        transactions::{
-            ProducerEpoch, ProducerIdentity, claim_idempotent_producer, init_producer_request,
-        },
+        transactions::{ProducerIdentity, claim_idempotent_producer, init_producer_request},
     },
     assert2::assert,
     krabka_protocol::records::{Attributes, RecordBatch},
@@ -80,20 +77,10 @@ pub async fn init_transactional_producer(
 
 pub use crate::support::records::producer_values_batch as batch;
 
-#[bon::builder]
-pub fn transactional_batch(
-    #[builder(into, default = krabka_ids::ProducerId(7))] pid: krabka_ids::ProducerId,
-    #[builder(into, default)] epoch: ProducerEpoch,
-    #[builder(into, default)] base_seq: ProducerSequence,
-    #[builder(default = & ["v"])] values: &'_ [&'_ str],
-) -> RecordBatch {
+/// `batch` marked transactional.
+pub fn transactional(batch: RecordBatch) -> RecordBatch {
     RecordBatch {
         attributes: Attributes::default().with_transactional(true),
-        ..batch()
-            .pid(pid.0)
-            .epoch(epoch.0)
-            .base_seq(base_seq.0)
-            .values(values)
-            .call()
+        ..batch
     }
 }

@@ -5,7 +5,7 @@
 use {
     crate::{
         producers_harness::{
-            create_topic, init_transactional_producer, topic_id_for, transactional_batch,
+            batch, create_topic, init_transactional_producer, topic_id_for, transactional,
         },
         support::{
             self,
@@ -132,12 +132,14 @@ fn transaction_values_request(topic_id: Uuid, values: ProducerValuesSetup<'_>) -
     ProduceRequest {
         transactional_id: Some("describe-producers-tid".into()),
         ..batch_request(
-            transactional_batch()
-                .pid(values.pid.0)
-                .epoch(values.epoch.0)
-                .base_seq(values.base_seq.0)
-                .values(values.values)
-                .call(),
+            transactional(
+                batch()
+                    .pid(values.pid.0)
+                    .epoch(values.epoch.0)
+                    .base_seq(values.base_seq.0)
+                    .values(values.values)
+                    .call(),
+            ),
             SinglePartitionProduceSetup {
                 topic: ("transactions").into(),
                 topic_id,

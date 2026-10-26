@@ -39,7 +39,7 @@
 use {
     assert2::assert,
     bytes::{Bytes, BytesMut},
-    criterion::{BatchSize, Criterion, Throughput, abs_file, criterion_main},
+    criterion::{BatchSize, Criterion, Throughput},
     krabka_broker::{
         Broker, BrokerConfig, BrokerHandle,
         metrics::BrokerMetrics,
@@ -64,7 +64,7 @@ use {
     krabka_records_legacy::Magic,
     std::{
         cell::RefCell,
-        env, mem, process,
+        mem,
         sync::Arc,
         time::{Duration, Instant},
     },
@@ -790,37 +790,9 @@ impl RotatingTopic {
     }
 }
 
-/// A benchmark target, under the name `criterion_group!` would give it.
-type Target = (&'static str, fn(&mut Criterion) -> Result<(), BenchError>);
-
-/// Every benchmark target, in run order.
-const TARGETS: [Target; 4] = [
-    ("bench_produce_hot_path", bench_produce_hot_path),
-    ("bench_produce_acks_all", bench_produce_acks_all),
-    ("bench_produce_conversion", bench_produce_conversion),
-    ("bench_ratio", bench_ratio),
-];
-
-/// Runs every target in [`TARGETS`], stopping at the first one that fails.
-fn run_targets(criterion: &mut Criterion) -> Result<(), (&'static str, BenchError)> {
-    for (name, target) in TARGETS {
-        if env::var("CODSPEED_ENV").is_ok() {
-            criterion.set_current_file(abs_file!());
-            criterion.set_macro_group(format!("benches::{name}"));
-        }
-        target(criterion).map_err(|error| (name, error))?;
-    }
-    Ok(())
-}
-
-/// The benchmark group, written out by hand where `criterion_group!` would
-/// generate it, so that a failing target reports its error and stops the run.
-fn benches() {
-    let result = run_targets(&mut Criterion::default().configure_from_args());
-    if let Err((name, error)) = result {
-        eprintln!("{name}: {error}");
-        process::exit(1);
-    }
-}
-
-criterion_main!(benches);
+krabka_macros::bench_main!(
+    bench_produce_hot_path,
+    bench_produce_acks_all,
+    bench_produce_conversion,
+    bench_ratio
+);

@@ -21,6 +21,8 @@ impl<L: SimNodeLog> Sim<L> {
     // down to follower.
     krabka_macros::simulation_heartbeat!(krabka_kraft_core, HEARTBEAT_MS);
 
+    krabka_macros::simulation_earliest_timer!(krabka_kraft_core);
+
     // Feeds one event to a node and translates the resulting actions into new
     // messages, timer arming, and log and HWM bookkeeping.
     krabka_macros::simulation_step!(krabka_kraft_core);
@@ -31,15 +33,7 @@ impl<L: SimNodeLog> Sim<L> {
     pub(super) fn fire_next_timer(&mut self) -> bool {
         // Pick the node with the earliest deadline; ties break by node id
         // (BTreeMap iteration is ascending by id, so the first minimum wins).
-        let best = simulation_support::earliest_timer(self.nodes.values().map(|node| {
-            (node.id, [
-                node.election_deadline,
-                node.fetch_deadline,
-                node.heartbeat_deadline,
-                node.check_quorum_deadline,
-            ])
-        }));
-        let Some((deadline, id, kind)) = best else {
+        let Some((deadline, id, kind)) = self.earliest_armed_timer() else {
             return false;
         };
         if deadline > self.now {

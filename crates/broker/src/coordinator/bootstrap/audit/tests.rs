@@ -23,6 +23,21 @@ const BROKER_ONLY: &[NodeRole] = &[NodeRole::Broker];
 
 krabka_macros::single_replica_partition_fixture!(partition_record);
 
+/// A metadata source holding `records` and led by `leader`, and the same
+/// source as the trait object the bootstrap reads.
+fn led_fake(
+    records: &[MetadataRecord],
+    leader: NodeId,
+) -> (Arc<FakeMetadataSource>, Arc<dyn MetadataSource>) {
+    let fake = Arc::new(
+        FakeMetadataSource::builder()
+            .records(records)
+            .leader(Some(leader))
+            .build(),
+    );
+    let source: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(&fake);
+    (fake, source)
+}
 fn node(node_id: NodeId, roles: &[NodeRole]) -> BrokerConfig {
     let mut config = BrokerConfig::for_tests(PathBuf::new());
     config.node_id = node_id;
@@ -191,13 +206,7 @@ async fn the_audit_partitions_land_on_registered_brokers_only() {
         },
     ];
     for case in cases {
-        let fake = Arc::new(
-            FakeMetadataSource::builder()
-                .records(&registrations(case.registered))
-                .leader(Some(case.leader))
-                .build(),
-        );
-        let source: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(&fake);
+        let (fake, source) = led_fake(&registrations(case.registered), case.leader);
 
         let result = bootstrap_audit_topic(&node(case.node_id, case.roles), &source).await;
 
@@ -224,13 +233,7 @@ async fn a_node_submits_nothing_when_the_audit_topic_exists_or_audit_is_off() {
         ("audit is off", &[] as &[MetadataRecord], false),
     ];
     for (case, records, audit_enabled) in cases {
-        let fake = Arc::new(
-            FakeMetadataSource::builder()
-                .records(records)
-                .leader(Some(NodeId(1)))
-                .build(),
-        );
-        let source: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(&fake);
+        let (fake, source) = led_fake(records, NodeId(1));
         let mut config = node(NodeId(1), COMBINED);
         config.audit_enabled = audit_enabled;
 
@@ -280,13 +283,7 @@ async fn only_an_existing_topic_excuses_a_refused_audit_batch() {
 // bootstrap holds startup until the topic arrives.
 #[tokio::test(start_paused = true)]
 async fn a_broker_only_node_waits_for_the_audit_topic_to_reach_its_image() {
-    let fake = Arc::new(
-        FakeMetadataSource::builder()
-            .records(&registrations(&[1]))
-            .leader(Some(CONTROLLER))
-            .build(),
-    );
-    let source: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(&fake);
+    let (fake, source) = led_fake(&registrations(&[1]), CONTROLLER);
     let config = node(NodeId(1), BROKER_ONLY);
     let timeout = config.audit_partition_wait_timeout.to_std();
     let started = time::Instant::now();
@@ -529,13 +526,7 @@ async fn only_the_quorum_leader_completes_an_existing_audit_topic_at_startup() {
     } in cases
     {
         let leader = if leads { NodeId(node_id) } else { CONTROLLER };
-        let fake = Arc::new(
-            FakeMetadataSource::builder()
-                .records(&image)
-                .leader(Some(leader))
-                .build(),
-        );
-        let source: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(&fake);
+        let (fake, source) = led_fake(&image, leader);
 
         let result = bootstrap_audit_topic(&node(NodeId(node_id), roles), &source).await;
 
@@ -693,13 +684,10 @@ async fn only_a_controller_with_audit_enabled_runs_the_placement_task() {
         ("a controller with audit disabled", COMBINED, false),
     ];
     for (case, roles, audit_enabled) in cases {
-        let fake = Arc::new(
-            FakeMetadataSource::builder()
-                .records(&[registrations(&[1, 2]), audit_batch(uuid::Uuid::nil(), &[1])].concat())
-                .leader(Some(NodeId(1)))
-                .build(),
+        let (fake, source) = led_fake(
+            &[registrations(&[1, 2]), audit_batch(uuid::Uuid::nil(), &[1])].concat(),
+            NodeId(1),
         );
-        let source: Arc<dyn MetadataSource> = Arc::<FakeMetadataSource>::clone(&fake);
         let mut config = node(NodeId(1), roles);
         config.audit_enabled = audit_enabled;
         let shutdown = CancellationToken::new();

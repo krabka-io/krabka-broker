@@ -83,6 +83,32 @@ pub fn topic_record(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     })
 }
 
+pub fn refused_fetch_partition(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let name = name(input)?;
+    Ok(moxy::template! {
+        /// Kafka's `FetchResponse.partitionResponse` row for a partition the
+        /// fetch refused with `error_code`.
+        fn {{ name }}(
+            partition_index: i32,
+            error_code: i16,
+        ) -> ::krabka_protocol::owned::fetch_response::PartitionData {
+            ::krabka_protocol::owned::fetch_response::PartitionData {
+                partition_index,
+                error_code,
+                high_watermark: -1,
+                last_stable_offset: -1,
+                log_start_offset: -1,
+                aborted_transactions: ::std::option::Option::Some(::std::vec::Vec::new()),
+                preferred_read_replica: -1,
+                records: ::std::option::Option::Some(
+                    ::krabka_protocol::records::RecordsPayload::Legacy(::bytes::Bytes::new()),
+                ),
+                ..::std::default::Default::default()
+            }
+        }
+    })
+}
+
 pub fn producer_batch(input: TokenStream) -> Result<TokenStream, ParseError> {
     let arguments: Vec<_> = input.into_iter().collect();
     let (name, value) = match arguments.as_slice() {

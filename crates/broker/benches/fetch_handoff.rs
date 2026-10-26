@@ -27,13 +27,11 @@
 //! of real reading.
 
 use {
-    criterion::{Criterion, abs_file, criterion_main},
+    criterion::Criterion,
     krabka_log::{Log, LogConfig, LogError, Offset},
     krabka_units::prelude::{ByteSize, mebibytes},
     std::{
-        env,
-        error::Error,
-        io, iter, process,
+        io, iter,
         sync::{Arc, Mutex, PoisonError},
         time::{Duration, Instant},
     },
@@ -41,8 +39,10 @@ use {
     tokio::{runtime::Runtime, task},
 };
 
-/// Any failure while building or measuring a case; it stops the run.
-type BenchError = Box<dyn Error + Send + Sync>;
+#[path = "support/first_error.rs"]
+mod first_error;
+
+use first_error::{BenchError, FirstError};
 
 /// Partition counts: a single-partition fetch, a modest subscription, and the
 /// wide one from the issue that motivated the measurement.
@@ -212,27 +212,9 @@ fn timed_fetches(
     })
 }
 
-/// The first error a timed closure met. Criterion's `iter_custom` closure must
-/// return a [`Duration`], so the error waits here until criterion returns.
-#[derive(Default)]
-struct FirstError(Option<BenchError>);
-
-impl FirstError {
-    /// The measured time, or zero after keeping the error.
-    fn time(&mut self, timed: Result<Duration, BenchError>) -> Duration {
-        timed.unwrap_or_else(|error| {
-            self.0.get_or_insert(error);
-            Duration::ZERO
-        })
-    }
-
-    /// The kept error, if any.
-    fn into_result(self) -> Result<(), BenchError> { self.0.map_or(Ok(()), Err) }
-}
-
 fn bench_fetch_handoff(c: &mut Criterion) -> Result<(), BenchError> {
     let runtime = runtime()?;
-    let mut failure = FirstError::default();
+    let failure = FirstError::default();
     {
         let mut group = c.benchmark_group("broker/fetch_handoff");
 
@@ -247,7 +229,9 @@ fn bench_fetch_handoff(c: &mut Criterion) -> Result<(), BenchError> {
                 for handoff in Handoff::ALL {
                     group.bench_function(format!("{shape}/{count}p/{}", handoff.name()), |b| {
                         b.iter_custom(|iters| {
-                            failure.time(timed_fetches(&runtime, handoff, &partitions, iters))
+                            failure
+                                .keep(timed_fetches(&runtime, handoff, &partitions, iters))
+                                .unwrap_or(Duration::ZERO)
                         });
                     });
                 }
@@ -328,35 +312,4 @@ fn fastest_micros(
     Ok(fastest)
 }
 
-/// A benchmark target, under the name `criterion_group!` would give it.
-type Target = (&'static str, fn(&mut Criterion) -> Result<(), BenchError>);
-
-/// Every benchmark target, in run order.
-const TARGETS: [Target; 2] = [
-    ("bench_fetch_handoff", bench_fetch_handoff),
-    ("bench_ratio", bench_ratio),
-];
-
-/// Runs every target in [`TARGETS`], stopping at the first one that fails.
-fn run_targets(criterion: &mut Criterion) -> Result<(), (&'static str, BenchError)> {
-    for (name, target) in TARGETS {
-        if env::var("CODSPEED_ENV").is_ok() {
-            criterion.set_current_file(abs_file!());
-            criterion.set_macro_group(format!("benches::{name}"));
-        }
-        target(criterion).map_err(|error| (name, error))?;
-    }
-    Ok(())
-}
-
-/// The benchmark group, written out by hand where `criterion_group!` would
-/// generate it, so that a failing target reports its error and stops the run.
-fn benches() {
-    let result = run_targets(&mut Criterion::default().configure_from_args());
-    if let Err((name, error)) = result {
-        eprintln!("{name}: {error}");
-        process::exit(1);
-    }
-}
-
-criterion_main!(benches);
+krabka_macros::bench_main!(bench_fetch_handoff, bench_ratio);

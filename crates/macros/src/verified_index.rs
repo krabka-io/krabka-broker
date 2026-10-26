@@ -62,16 +62,28 @@ fn comparison(input: &TokenStream) -> Result<(), ParseError> {
     Ok(())
 }
 
+/// Creusot's `@` view operator.
+fn view_operator() -> Result<TokenStream, ParseError> {
+    "@".parse()
+        .map_err(|_| ParseError::new(Span::call_site(), "Creusot view operator"))
+}
+
+/// The precondition that `entries` is ordered by `order` on its keys.
+fn sorted_entries(view: &TokenStream, order: &TokenStream) -> TokenStream {
+    moxy::template! {
+        #[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries{{view}}.len()
+            ==> entries{{view}}[i].key{{view}} {{order}} entries{{view}}[j].key{{view}})]
+    }
+}
+
 pub fn cursor(input: TokenStream) -> Result<TokenStream, ParseError> {
     let [header, before] = sections(input)?;
     check_header(&header, &["entries", "target"])?;
     comparison(&before)?;
-    let view: TokenStream = "@"
-        .parse()
-        .map_err(|_| ParseError::new(Span::call_site(), "Creusot view operator"))?;
+    let view = view_operator()?;
+    let sorted = sorted_entries(&view, &"<=".parse()?);
     Ok(moxy::template! {
-        #[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries{{view}}.len()
-            ==> entries{{view}}[i].key{{view}} <= entries{{view}}[j].key{{view}})]
+        {{sorted}}
         #[ensures(result{{view}} <= entries{{view}}.len())]
         #[ensures(forall<i: Int> 0 <= i && i < result{{view}} ==> entries{{view}}[i].key{{view}} {{before}} target{{view}})]
         #[ensures(forall<i: Int> result{{view}} <= i && i < entries{{view}}.len()
@@ -100,12 +112,10 @@ pub fn floor(input: TokenStream) -> Result<TokenStream, ParseError> {
     check_header(&header, &["entries", "target"])?;
     comparison(&order)?;
     let cursor = plain_path(&cursor, cursor.span(), "expected cursor function path")?;
-    let view: TokenStream = "@"
-        .parse()
-        .map_err(|_| ParseError::new(Span::call_site(), "Creusot view operator"))?;
+    let view = view_operator()?;
+    let sorted = sorted_entries(&view, &order);
     Ok(moxy::template! {
-        #[requires(forall<i: Int, j: Int> 0 <= i && i < j && j < entries{{view}}.len()
-            ==> entries{{view}}[i].key{{view}} {{order}} entries{{view}}[j].key{{view}})]
+        {{sorted}}
         #[ensures((exists<i: Int> 0 <= i && i < entries{{view}}.len() && entries{{view}}[i].key{{view}} <= target{{view}})
             ==> exists<i: Int> 0 <= i && i < entries{{view}}.len()
                 && entries{{view}}[i].key{{view}} <= target{{view}} && result{{view}} == entries{{view}}[i].coordinate{{view}}
@@ -126,9 +136,7 @@ pub fn finished_contract(input: &TokenStream) -> Result<TokenStream, ParseError>
             "expected latest, true or false",
         ));
     }
-    let view: TokenStream = "@"
-        .parse()
-        .map_err(|_| ParseError::new(Span::call_site(), "Creusot view operator"))?;
+    let view = view_operator()?;
     Ok(moxy::template! {
         #[requires(starts{{view}}.len() == ends{{view}}.len() && starts{{view}}.len() == finished{{view}}.len())]
         #[ensures(finished_selection(starts{{view}}, ends{{view}}, finished{{view}}, result, starts{{view}}.len(), {{input}}))]

@@ -535,11 +535,10 @@ mod tests {
     /// principal holds, so the field moves off its sentinel.
     #[tokio::test]
     async fn the_authorized_operations_bitfield_is_filled_only_on_opt_in() {
-        let authorizer = Arc::new(AllowAllAuthorizer);
         let HandlerStartedBroker {
             broker: broker_handle,
             dir: _dir,
-        } = start_group_broker_no_audit(Arc::<AllowAllAuthorizer>::clone(&authorizer)).await;
+        } = start_group_broker_no_audit(Arc::new(AllowAllAuthorizer)).await;
         let broker = broker_handle.broker_arc_for_test();
         let _ = broker.group_coordinator.get_or_create_classic("classic-a");
 
@@ -555,7 +554,7 @@ mod tests {
             user ["admin"];
         };
         let expected = authorized_operations_bits(
-            authorizer.as_ref(),
+            &AllowAllAuthorizer,
             &broker.controller.current_image(),
             &request_context(&p, &peer, "test-client"),
             ResourceType::Group,

@@ -56,7 +56,7 @@ def _test_const_str_value(_ctx):
         "use std::fmt;",
         'const KAFKA_IMAGE: &str = "mirror.gcr.io/confluentinc/cp-kafka";',
         'const KAFKA_TAG: &str = "6.1.1";',
-        'pub(crate) const ORACLE_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";',
+        'pub const ORACLE_IMAGE: &str = "mirror.gcr.io/apache/kafka:4.3.1";',
     ])
     check_eq(
         "the image",
@@ -66,7 +66,7 @@ def _test_const_str_value(_ctx):
     check_eq("the tag", const_str_value(source, 'const KAFKA_TAG: &str = "'), "6.1.1")
     check_eq(
         "the visibility is part of the declaration",
-        const_str_value(source, 'pub(crate) const ORACLE_IMAGE: &str = "'),
+        const_str_value(source, 'pub const ORACLE_IMAGE: &str = "'),
         "mirror.gcr.io/apache/kafka:4.3.1",
     )
     check_eq(

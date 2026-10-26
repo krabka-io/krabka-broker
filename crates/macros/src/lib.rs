@@ -1054,6 +1054,16 @@ pub fn runtime_policy_fields(
     runtime_policy_fields::expand(meta, item)
 }
 
+/// Find the earliest armed timer of a simulation's nodes.
+///
+/// # Errors
+///
+/// Rejects an empty crate path.
+#[cfg_attr(not(test), moxy::function)]
+pub fn simulation_earliest_timer(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    fixtures::simulation_earliest_timer(tokens)
+}
+
 /// Generate the shared simulation event adapter inside a harness impl.
 ///
 /// # Errors
@@ -1082,6 +1092,16 @@ pub fn snapshot_topic_fixture(tokens: TokenStream) -> Result<TokenStream, ParseE
 #[cfg_attr(not(test), moxy::function)]
 pub fn timestamped_batch(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     timestamped_batch::expand(tokens)
+}
+
+/// Generate the expected fetch row of a refused partition.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn refused_fetch_partition_fixture(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    wire_fixtures::refused_fetch_partition(tokens)
 }
 
 /// Generate a producer batch builder with the caller's exact record value expression.
@@ -1782,6 +1802,16 @@ pub fn compaction_record_fixture(tokens: TokenStream) -> Result<TokenStream, Par
 pub fn registration_feature_projection(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     cross_storage_fixtures::registration_feature_projection(tokens)
 }
+/// Generate the validated client frame-size parser.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[cfg_attr(not(test), moxy::function)]
+pub fn frame_max_parser(tokens: TokenStream) -> Result<TokenStream, ParseError> {
+    cli_support::frame_max_parser(tokens)
+}
+
 /// Generate the validated connection dispatch-capacity parser.
 ///
 /// # Errors
@@ -1859,6 +1889,7 @@ pub fn reaper_task(
 
 mod archive_rows;
 mod authorization_refusal;
+mod bench_harness;
 mod broker_test_setup;
 mod described_group_rows;
 mod forwardable_requests;
@@ -2061,6 +2092,31 @@ pub fn scheduled_loads(item: ItemStruct) -> Result<TokenStream, ParseError> {
     scheduled_loads::expand(item)
 }
 
+/// `benches()` and `criterion_main!` for a benchmark suite's target paths.
+///
+/// `bench_main!(a, m::b)` runs each target in order. A target returns `()` or
+/// a `Result`; the first error is printed under the target's path and exits
+/// with status 1.
+///
+/// # Errors
+///
+/// Rejects input outside this macro's syntax.
+#[moxy::function]
+pub fn bench_main(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    bench_harness::main(&input.into()).map(Into::into)
+}
+
+/// The recording harness of a benchmark suite that measures on after a
+/// failure: `BenchResult`, `FirstError`, `run` and `report_failures`.
+///
+/// # Errors
+///
+/// Rejects any argument.
+#[moxy::function]
+pub fn bench_failures(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
+    bench_harness::failures(&input.into()).map(Into::into)
+}
+
 /// Implement group-describe row access for an explicit table of external response types.
 #[moxy::function]
 pub fn described_group_rows(input: NativeTokenStream) -> Result<NativeTokenStream, ParseError> {
@@ -2089,7 +2145,7 @@ mod export_contract_tests {
         name: &'static str,
         expand: Expand,
     }
-    const FUNCTION_MACROS: [FunctionMacro; 81] = [
+    const FUNCTION_MACROS: [FunctionMacro; 84] = [
         FunctionMacro {
             name: "dispatch_table",
             expand: dispatch_table,
@@ -2405,6 +2461,18 @@ mod export_contract_tests {
         FunctionMacro {
             name: "dispatch_capacity_parser",
             expand: dispatch_capacity_parser,
+        },
+        FunctionMacro {
+            name: "frame_max_parser",
+            expand: frame_max_parser,
+        },
+        FunctionMacro {
+            name: "simulation_earliest_timer",
+            expand: simulation_earliest_timer,
+        },
+        FunctionMacro {
+            name: "refused_fetch_partition_fixture",
+            expand: refused_fetch_partition_fixture,
         },
         FunctionMacro {
             name: "splitmix64_step",

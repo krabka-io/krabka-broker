@@ -1345,9 +1345,9 @@ def _api_versions(fs, root, pins, broker_build):
     key = _suite_image_key(broker_build, _BROKER_BUILD, "api_versions_differential")
     image = _image(pins, key)
     suite_image = _evidence(
-        const_str_value(_read(fs, root, _API_VERSIONS_ORACLE), 'pub(crate) const ORACLE_IMAGE: &str = "'),
+        const_str_value(_read(fs, root, _API_VERSIONS_ORACLE), 'pub const ORACLE_IMAGE: &str = "'),
         _API_VERSIONS_ORACLE,
-        'pub(crate) const ORACLE_IMAGE: &str = "..."',
+        'pub const ORACLE_IMAGE: &str = "..."',
     )
     for whose, named in [("suite", suite_image), ("recorded", report["oracle_image"])]:
         if named != image:

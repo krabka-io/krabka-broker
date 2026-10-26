@@ -12,18 +12,16 @@ use {
     },
     assert2::assert,
 };
+
+krabka_macros::refused_fetch_partition_fixture!(refused_partition);
 mod support;
 
-use {
-    bytes::Bytes,
-    krabka_protocol::{
-        owned::{
-            fetch_request::{FetchPartition, FetchTopic},
-            fetch_response::{FetchableTopicResponse, PartitionData},
-        },
-        primitives::uuid::Uuid as WireUuid,
-        records::RecordsPayload,
+use krabka_protocol::{
+    owned::{
+        fetch_request::{FetchPartition, FetchTopic},
+        fetch_response::FetchableTopicResponse,
     },
+    primitives::uuid::Uuid as WireUuid,
 };
 
 /// Kafka's `UNKNOWN_TOPIC_ID` error code.
@@ -69,17 +67,7 @@ async fn fetch_unresolved_topic_id_returns_unknown_topic_id() {
             .await
             .expect("fetch");
         // Kafka's `FetchResponse.partitionResponse`.
-        let refused = |partition_index| PartitionData {
-            partition_index,
-            error_code: UNKNOWN_TOPIC_ID,
-            high_watermark: -1,
-            last_stable_offset: -1,
-            log_start_offset: -1,
-            aborted_transactions: Some(Vec::new()),
-            preferred_read_replica: -1,
-            records: Some(RecordsPayload::Legacy(Bytes::new())),
-            ..Default::default()
-        };
+        let refused = |partition_index| refused_partition(partition_index, UNKNOWN_TOPIC_ID);
         actual.push((label, resp.responses));
         expected.push((label, vec![FetchableTopicResponse {
             topic: String::new(),

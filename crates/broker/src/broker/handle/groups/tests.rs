@@ -105,13 +105,7 @@ fn streams_group_seed(member_id: &str) -> StreamsGroupSeed {
             previous_member_epoch: 4,
             state: StreamsMemberWireState::Stable,
             active,
-            standby: BTreeMap::new(),
-            warmup: BTreeMap::new(),
-            active_pending_revocation: BTreeMap::new(),
-            standby_pending_revocation: BTreeMap::new(),
-            warmup_pending_revocation: BTreeMap::new(),
-            active_epochs: BTreeMap::new(),
-            active_pending_revocation_epochs: BTreeMap::new(),
+            ..Default::default()
         },
     );
 

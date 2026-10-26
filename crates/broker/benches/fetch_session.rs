@@ -53,7 +53,7 @@
 
 use {
     assert2::assert,
-    criterion::{BatchSize, BenchmarkId, Criterion, Throughput, abs_file, criterion_main},
+    criterion::{BatchSize, BenchmarkId, Criterion, Throughput},
     krabka_broker::{
         config::DEFAULT_MAX_INCREMENTAL_FETCH_SESSION_CACHE_SLOTS,
         fetch_session::{
@@ -67,17 +67,16 @@ use {
     },
     qubit_clock::ManualMonotonicClock,
     std::{
-        env,
-        error::Error,
-        process,
         sync::Arc,
         thread,
         time::{Duration, Instant},
     },
 };
 
-/// Any failure while building or measuring a case; it stops the run.
-type BenchError = Box<dyn Error + Send + Sync>;
+#[path = "support/first_error.rs"]
+mod first_error;
+
+use first_error::{BenchError, FirstError};
 
 /// Cache capacity, taken from the broker's own default so the bench measures
 /// the size a real broker runs at.
@@ -359,26 +358,8 @@ fn timed_across_threads(
     })
 }
 
-/// The first error a timed closure met. Criterion's `iter_custom` closure must
-/// return a [`Duration`], so the error waits here until criterion returns.
-#[derive(Default)]
-struct FirstError(Option<BenchError>);
-
-impl FirstError {
-    /// The measured time, or zero after keeping the error.
-    fn time(&mut self, timed: Result<Duration, BenchError>) -> Duration {
-        timed.unwrap_or_else(|error| {
-            self.0.get_or_insert(error);
-            Duration::ZERO
-        })
-    }
-
-    /// The kept error, if any.
-    fn into_result(self) -> Result<(), BenchError> { self.0.map_or(Ok(()), Err) }
-}
-
 fn bench_fetch_session_allocate(c: &mut Criterion) -> Result<(), BenchError> {
-    let mut failure = FirstError::default();
+    let failure = FirstError::default();
     {
         let mut group = c.benchmark_group("broker/fetch_session");
 
@@ -386,7 +367,9 @@ fn bench_fetch_session_allocate(c: &mut Criterion) -> Result<(), BenchError> {
             for threads in CONCURRENCY {
                 group.bench_function(format!("full{occupancy}pct/threads{threads}"), |b| {
                     b.iter_custom(|iters| {
-                        failure.time(timed_across_threads(occupancy, threads, iters))
+                        failure
+                            .keep(timed_across_threads(occupancy, threads, iters))
+                            .unwrap_or(Duration::ZERO)
                     });
                 });
             }
@@ -487,39 +470,8 @@ fn fastest_nanos(
     Ok(fastest)
 }
 
-/// A benchmark target, under the name `criterion_group!` would give it.
-type Target = (&'static str, fn(&mut Criterion) -> Result<(), BenchError>);
-
-/// Every benchmark target, in run order.
-const TARGETS: [Target; 3] = [
-    ("bench_fetch_session_allocate", bench_fetch_session_allocate),
-    ("bench_wide_sessions", |c| {
-        bench_wide_sessions(c);
-        Ok(())
-    }),
-    ("bench_occupancy_ratio", bench_occupancy_ratio),
-];
-
-/// Runs every target in [`TARGETS`], stopping at the first one that fails.
-fn run_targets(criterion: &mut Criterion) -> Result<(), (&'static str, BenchError)> {
-    for (name, target) in TARGETS {
-        if env::var("CODSPEED_ENV").is_ok() {
-            criterion.set_current_file(abs_file!());
-            criterion.set_macro_group(format!("benches::{name}"));
-        }
-        target(criterion).map_err(|error| (name, error))?;
-    }
-    Ok(())
-}
-
-/// The benchmark group, written out by hand where `criterion_group!` would
-/// generate it, so that a failing target reports its error and stops the run.
-fn benches() {
-    let result = run_targets(&mut Criterion::default().configure_from_args());
-    if let Err((name, error)) = result {
-        eprintln!("{name}: {error}");
-        process::exit(1);
-    }
-}
-
-criterion_main!(benches);
+krabka_macros::bench_main!(
+    bench_fetch_session_allocate,
+    bench_wide_sessions,
+    bench_occupancy_ratio
+);

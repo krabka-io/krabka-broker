@@ -11,9 +11,10 @@ use {
         config::{StretchModel, TOPIC},
         state::StretchState,
     },
-    crate::heartbeat::controller_state::ControllerLivenessState,
-    krabka_metadata::{LeaderEpoch, MetadataImage, MetadataRecord, PartitionRecord, TopicRecord},
-    uuid::Uuid,
+    crate::{
+        heartbeat::controller_state::ControllerLivenessState, test_support::topic_partition_image,
+    },
+    krabka_metadata::{LeaderEpoch, MetadataImage, PartitionRecord},
 };
 
 impl StretchModel {
@@ -37,16 +38,11 @@ impl StretchModel {
     /// the real
     /// [`select_new_leader_for_partition`](crate::leader_election::select_new_leader_for_partition).
     pub fn image(&self, state: &StretchState) -> MetadataImage {
-        let mut image = MetadataImage::new(Uuid::nil());
-        image.apply(&MetadataRecord::V1Topic(TopicRecord {
-            name: TOPIC.to_owned(),
-            topic_id: Uuid::nil(),
-            partitions: 1,
-            replication_factor: i16::try_from(self.replicas.len())
-                .expect("replica count fits in i16"),
-        }));
-        image.apply(&MetadataRecord::V1Partition(self.record(state)));
-        image
+        topic_partition_image(
+            TOPIC,
+            i16::try_from(self.replicas.len()).expect("replica count fits in i16"),
+            || self.record(state),
+        )
     }
 
     /// A liveness registry that holds a fresh heartbeat for every broker the

@@ -301,14 +301,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn telemetry_guard_shutdown_flushes_held_provider_clone() {
+    /// A tracer provider whose exporter counts its shutdowns into the
+    /// returned counter.
+    fn counting_provider() -> (Arc<AtomicUsize>, SdkTracerProvider) {
         let calls = Arc::new(AtomicUsize::new(0));
         let provider = SdkTracerProvider::builder()
             .with_simple_exporter(ShutdownCountingSpanExporter {
                 calls: Arc::clone(&calls),
             })
             .build();
+        (calls, provider)
+    }
+
+    #[test]
+    fn telemetry_guard_shutdown_flushes_held_provider_clone() {
+        let (calls, provider) = counting_provider();
         let held_clone = provider.clone();
 
         TelemetryGuard {
@@ -325,12 +332,7 @@ mod tests {
 
     #[tokio::test]
     async fn telemetry_guard_drop_shuts_down_providers_and_stops_the_heartbeat() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let provider = SdkTracerProvider::builder()
-            .with_simple_exporter(ShutdownCountingSpanExporter {
-                calls: Arc::clone(&calls),
-            })
-            .build();
+        let (calls, provider) = counting_provider();
         let held_clone = provider.clone();
         let (started, ready) = oneshot::channel();
         let (finished, stopped) = oneshot::channel::<()>();

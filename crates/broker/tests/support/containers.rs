@@ -779,6 +779,39 @@ pub fn jvm_acks_all_producer(image: &str, bootstrap: &str, topic: &str) -> Child
     )
 }
 
+/// A JVM `kafka-console-producer` that writes the 100 records `{prefix}-1`
+/// through `{prefix}-100` to `topic` with `--request-required-acks -1`, its
+/// stdin closed and its stdout and stderr piped.
+pub fn jvm_acks_all_burst(
+    image: &str,
+    bootstrap: &str,
+    topic: &str,
+    prefix: &str,
+    request_timeout_ms: u32,
+) -> process::Command {
+    let mut command = jvm_docker_command()
+        .image(image)
+        .args(&[
+            "bash",
+            "-c",
+            &format!(
+                "for i in $(seq 1 100); do echo \"{prefix}-$i\"; done | \
+                 kafka-console-producer \
+                   --bootstrap-server {bootstrap} \
+                   --topic {topic} \
+                   --request-required-acks -1 \
+                   --request-timeout-ms {request_timeout_ms}"
+            ),
+        ])
+        .input(ContainerInput::Attached)
+        .call();
+    command
+        .stdin(process::Stdio::null())
+        .stdout(process::Stdio::piped())
+        .stderr(process::Stdio::piped());
+    command
+}
+
 /// Capture a plain JVM tool while retaining the suite-specific log prefix.
 pub fn jvm_tool_output(image: &str, args: &[&str], log_scope: &str) -> Output {
     let out = jvm_docker_command()

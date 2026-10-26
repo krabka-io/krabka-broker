@@ -21,8 +21,7 @@
 
 use {
     criterion::{
-        BatchSize, BenchmarkGroup, BenchmarkId, Criterion, abs_file, black_box, criterion_main,
-        measurement::WallTime,
+        BatchSize, BenchmarkGroup, BenchmarkId, Criterion, black_box, measurement::WallTime,
     },
     krabka_ids::LeaderEpoch,
     krabka_remote_storage::{
@@ -30,72 +29,11 @@ use {
         RemoteLogSegmentDetails, RemoteLogSegmentId, RemoteLogSegmentMetadata,
         RemoteLogSegmentMetadataUpdate, RemoteLogSegmentState, RlmmCacheDump, TopicIdPartition,
     },
-    std::{
-        cell::RefCell,
-        collections::BTreeMap,
-        env,
-        error::Error,
-        process,
-        sync::{Mutex, PoisonError},
-    },
+    std::{cell::RefCell, collections::BTreeMap},
     uuid::Uuid,
 };
 
-/// What a benchmark's setup or measured work returns.
-type BenchResult<T = ()> = Result<T, Box<dyn Error>>;
-
-/// The first error a measured closure hit. A closure that criterion times
-/// cannot return an error, so it records one here and the benchmark function
-/// returns it once the measurement is over.
-#[derive(Default)]
-struct FirstError(Option<Box<dyn Error>>);
-
-impl FirstError {
-    /// The value of `result`, or `None` after recording its error.
-    fn record<T, E: Into<Box<dyn Error>>>(&mut self, result: Result<T, E>) -> Option<T> {
-        match result {
-            Ok(value) => Some(value),
-            Err(error) => {
-                self.0.get_or_insert_with(|| error.into());
-                None
-            }
-        }
-    }
-
-    fn into_result(self) -> BenchResult { self.0.map_or(Ok(()), Err) }
-}
-
-/// The error the benchmarks stopped with, which [`report_failures`] reports.
-static FAILURE: Mutex<Option<String>> = Mutex::new(None);
-
-/// Run the benchmarks of one group, keeping the error they stopped with.
-fn run(
-    c: &mut Criterion,
-    name: &str,
-    bench: impl FnOnce(&mut BenchmarkGroup<'_, WallTime>) -> BenchResult,
-) {
-    let mut group = c.benchmark_group(name);
-    if let Err(error) = bench(&mut group) {
-        FAILURE
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get_or_insert_with(|| format!("{name}: {error}"));
-    }
-    group.finish();
-}
-
-/// Exit with a failure when a benchmark function stopped on an error. It runs
-/// last, after every benchmark that could still measure.
-fn report_failures(_c: &mut Criterion) {
-    let failure = FAILURE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take();
-    if let Some(failure) = failure {
-        eprintln!("benchmark failed: {failure}");
-        process::exit(1);
-    }
-}
+krabka_macros::bench_failures!();
 
 /// Offsets per segment.
 const SEGMENT_SPAN: i64 = 100;
@@ -272,31 +210,10 @@ fn lookups(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
     failed.into_result()
 }
 
-/// A benchmark target, under the name `criterion_group!` would give it.
-type Target = (&'static str, fn(&mut Criterion));
-
-/// Every benchmark target, in run order. [`report_failures`] runs last.
-const TARGETS: [Target; 5] = [
-    ("transition_cost", transition_cost),
-    ("replay_cost", replay_cost),
-    ("restore_cost", restore_cost),
-    ("lookup_latency", lookup_latency),
-    ("report_failures", report_failures),
-];
-
-/// Runs every target in [`TARGETS`] against `criterion`.
-fn run_targets(criterion: &mut Criterion) {
-    for (name, target) in TARGETS {
-        if env::var("CODSPEED_ENV").is_ok() {
-            criterion.set_current_file(abs_file!());
-            criterion.set_macro_group(format!("benches::{name}"));
-        }
-        target(criterion);
-    }
-}
-
-/// The benchmark group, written out by hand where `criterion_group!` would
-/// generate it.
-fn benches() { run_targets(&mut Criterion::default().configure_from_args()); }
-
-criterion_main!(benches);
+krabka_macros::bench_main!(
+    transition_cost,
+    replay_cost,
+    restore_cost,
+    lookup_latency,
+    report_failures
+);

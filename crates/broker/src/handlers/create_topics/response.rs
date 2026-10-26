@@ -57,7 +57,7 @@ pub(super) fn topic_error_result(
 /// paths.
 /// The supplied entries already resolve the create request's override map,
 /// including a validate-only topic that is absent from the metadata image.
-pub(super) fn creatable_topic_configs(
+pub fn creatable_topic_configs(
     entries: Vec<DescribeConfigsResourceResult>,
 ) -> Vec<CreatableTopicConfigs> {
     entries

@@ -627,6 +627,36 @@ pub fn simulation_heartbeat(input: TokenStream) -> Result<TokenStream, ParseErro
     })
 }
 
+pub fn simulation_earliest_timer(input: TokenStream) -> Result<TokenStream, ParseError> {
+    let root = input;
+    if root.is_empty() {
+        return Err(ParseError::new(
+            Span::call_site(),
+            "expected the kraft-core crate path",
+        ));
+    }
+    Ok(moxy::template! {
+        /// The earliest armed timer across all nodes: its deadline, its node,
+        /// and which of the node's four timers it is. Ties break by node id.
+        fn earliest_armed_timer(
+            &self,
+        ) -> ::std::option::Option<(
+            {{ root }}::SimInstant,
+            {{ root }}::NodeId,
+            {{ root }}::simulation_support::SimulationTimer,
+        )> {
+            {{ root }}::simulation_support::earliest_timer(self.nodes.values().map(|node| {
+                (node.id, [
+                    node.election_deadline,
+                    node.fetch_deadline,
+                    node.heartbeat_deadline,
+                    node.check_quorum_deadline,
+                ])
+            }))
+        }
+    })
+}
+
 pub fn delete_topic_request(tokens: TokenStream) -> Result<TokenStream, ParseError> {
     let name = name(tokens)?;
     Ok(moxy::template! {

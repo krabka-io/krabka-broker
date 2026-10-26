@@ -44,15 +44,14 @@ pub use self::{
         manual_leaderships, placement_failure_message, site_broker_views,
         validate_manual_partition_assignment,
     },
+    response::creatable_topic_configs,
 };
 use {
     self::{
         authorization::{authorize_create_topics, describe_configs_denied},
         creation::NewTopic,
         name::CLUSTER_METADATA_TOPIC,
-        response::{
-            creatable_topic_configs, create_topics_response, finish_response, topic_error_result,
-        },
+        response::{create_topics_response, finish_response, topic_error_result},
     },
     crate::{
         api_catalog::UnstableApiVersions,

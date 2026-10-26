@@ -7,15 +7,16 @@
 
 use {
     crate::{
+        durability_cluster,
         jvm_acceptance::{KAFKA_IMAGE, consume_committed_at},
         prepare_replication_topic,
         support::{
-            ContainerInput, client::connect_with_context, discovery::metadata_first_leader,
-            init_jvm_tracing, jvm_docker_command, jvm_output_lines, start_jvm_cluster,
+            client::connect_with_context, discovery::metadata_first_leader, jvm_acks_all_burst,
+            jvm_output_lines,
         },
     },
     assert2::assert,
-    std::{process::Stdio, time::Duration},
+    std::time::Duration,
     tokio::time,
 };
 
@@ -34,12 +35,10 @@ use {
 async fn acks_all_survives_leader_crash() {
     const TOPIC: &str = "krabka-acks-all-crash-itest";
 
-    init_jvm_tracing("krabka_broker=debug,info");
-
     let client_ports = [10392u16, 10492, 10592];
     let controller_ports = [10393u16, 10493, 10593];
 
-    let mut cluster = start_jvm_cluster(client_ports, controller_ports, |config| {
+    let mut cluster = durability_cluster(client_ports, controller_ports, |config| {
         config.heartbeat_interval = krabka_units::millis(200);
         config.heartbeat_timeout = krabka_units::millis(2_000);
         config.replica_lag_time_max = krabka_units::millis(2_000);
@@ -76,27 +75,10 @@ async fn acks_all_survives_leader_crash() {
 
     // 4. Spawn JVM producer in background (100 records, acks=-1, long timeout
     //    so it retries through the election window).
-    let producer_child = jvm_docker_command()
-        .image(KAFKA_IMAGE)
-        .args(&[
-            "bash",
-            "-c",
-            &format!(
-                "for i in $(seq 1 100); do echo \"crash-msg-$i\"; done | \
-                 kafka-console-producer \
-                   --bootstrap-server {bootstrap_all} \
-                   --topic {TOPIC} \
-                   --request-required-acks -1 \
-                   --request-timeout-ms 30000"
-            ),
-        ])
-        .input(ContainerInput::Attached)
-        .call()
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn kafka-console-producer");
+    let producer_child =
+        jvm_acks_all_burst(KAFKA_IMAGE, &bootstrap_all, TOPIC, "crash-msg", 30_000)
+            .spawn()
+            .expect("spawn kafka-console-producer");
 
     // 5. After ~50ms (producer has connected), kill the partition leader.
     // intentional: this timing window — killing the leader mid-produce — is the

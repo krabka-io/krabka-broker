@@ -10,7 +10,7 @@ use {
         file_config::RuntimeFileConfig,
     },
     krabka_client_core::{
-        ClientFrameMax, ConnectionDispatchQueueCapacity, DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
+        ConnectionDispatchQueueCapacity, DEFAULT_CONNECTION_DISPATCH_QUEUE_CAPACITY,
     },
     krabka_units::{ByteSize, Ratio, Time, parse},
 };
@@ -211,10 +211,7 @@ fn parse_kafka_int_byte_size(value: &str) -> Result<ByteSize, String> {
     Ok(size)
 }
 
-fn parse_client_frame_max(value: &str) -> Result<ByteSize, String> {
-    let value = parse::positive_byte_size(value).map_err(|error| error.to_string())?;
-    ClientFrameMax::try_from(value).map(ClientFrameMax::size)
-}
+krabka_macros::frame_max_parser!(parse_client_frame_max);
 
 #[cfg(test)]
 mod tests {

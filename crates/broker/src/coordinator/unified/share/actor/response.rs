@@ -7,12 +7,16 @@ use {
         codes,
         coordinator::unified::share::{config::ShareGroupConfig, state::ShareGroupState},
     },
-    krabka_protocol::owned::{
-        common::share_group_heartbeat_response::topic_partitions::TopicPartitions,
-        share_group_heartbeat_response::{
-            Assignment as RespAssignment, ShareGroupHeartbeatResponse,
+    krabka_protocol::{
+        owned::{
+            common::share_group_heartbeat_response::topic_partitions::TopicPartitions,
+            share_group_heartbeat_response::{
+                Assignment as RespAssignment, ShareGroupHeartbeatResponse,
+            },
         },
+        primitives::uuid::Uuid,
     },
+    std::collections::HashMap,
 };
 
 pub(super) fn base_resp(
@@ -48,15 +52,7 @@ pub(super) fn build_assignment_resp(
         return error_resp(codes::UNKNOWN_MEMBER_ID, config);
     };
     let assignment = with_assignment.then(|| RespAssignment {
-        topic_partitions: m
-            .assigned_partitions
-            .iter()
-            .map(|(tid, parts)| TopicPartitions {
-                topic_id: *tid,
-                partitions: parts.clone(),
-                ..Default::default()
-            })
-            .collect(),
+        topic_partitions: topic_partitions(&m.assigned_partitions),
         ..Default::default()
     });
     ShareGroupHeartbeatResponse {
@@ -68,4 +64,16 @@ pub(super) fn build_assignment_resp(
         assignment,
         ..Default::default()
     }
+}
+
+/// The wire rows of a member's assigned partitions, one per topic.
+fn topic_partitions(assigned: &HashMap<Uuid, Vec<i32>>) -> Vec<TopicPartitions> {
+    assigned
+        .iter()
+        .map(|(&topic_id, partitions)| TopicPartitions {
+            topic_id,
+            partitions: partitions.clone(),
+            ..Default::default()
+        })
+        .collect()
 }

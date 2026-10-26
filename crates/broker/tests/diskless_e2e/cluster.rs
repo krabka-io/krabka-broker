@@ -22,14 +22,13 @@ use {
         support::{self, ClusterBootstrapSetup, ClusterNodeSetup, NodeIndex, listeners},
     },
     krabka_broker::{
-        BootstrapMode, Broker, BrokerConfig, BrokerHandle, KafkaRlmmConfig, NodeId,
-        RemoteStorageBackend, RlmmKind,
+        BootstrapMode, Broker, BrokerConfig, BrokerHandle, NodeId, RemoteStorageBackend,
     },
     krabka_security::ListenerProtocol,
     std::{
         iter,
         net::SocketAddr,
-        path::{Path, PathBuf},
+        path::Path,
         time::{Duration, Instant},
     },
     tempfile::TempDir,
@@ -288,15 +287,7 @@ fn broker_config(log_dir: &Path, remote_dir: &Path, setup: ClusterNodeSetup<'_>)
     // topic-backed metadata log. One partition replicated across all three
     // brokers keeps the index cheap and survives the leader loss the failover
     // case injects. Every broker bootstraps that client against broker 1.
-    config.remote_log_metadata = RlmmKind::TopicBacked(KafkaRlmmConfig {
-        bootstrap: rlmm_bootstrap,
-        num_partitions: 1,
-        replication: i32::try_from(VOTERS).expect("small cluster"),
-        snapshot_interval: krabka_units::hours(1),
-        snapshot_dir: PathBuf::new(), // derived from log_dir
-        security: None,
-        ..KafkaRlmmConfig::default()
-    });
+    config.remote_log_metadata = support::diskless::flush_index_metadata(rlmm_bootstrap, VOTERS);
     config
 }
 

@@ -12,7 +12,7 @@ use std::io::{self, IoSlice, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
 use {
-    criterion::{BenchmarkGroup, Criterion, black_box, criterion_main, measurement::WallTime},
+    criterion::{BenchmarkGroup, Criterion, black_box, measurement::WallTime},
     krabka_ids::{LeaderEpoch, Offset, ProducerId},
     krabka_log::{AbortedTxn, Log, LogConfig, SegmentAllocation, TxnIndex, VerbatimBatch},
     krabka_protocol::records::RecordBatch,
@@ -21,9 +21,7 @@ use {
     std::{
         cell::RefCell,
         env,
-        error::Error,
         fs::{self, File},
-        process,
         sync::{Arc, Mutex, PoisonError},
         time::Instant,
     },
@@ -37,48 +35,7 @@ const UNBOUNDED: ByteSize = gibibytes(4);
 
 krabka_macros::record_batch_fixture!(make_batch);
 
-/// What a benchmark's setup or measured work returns.
-type BenchResult<T = ()> = Result<T, Box<dyn Error>>;
-
-/// The first error a measured closure hit. A closure that criterion times
-/// cannot return an error, so it records one here and the benchmark function
-/// returns it once the measurement is over.
-#[derive(Default)]
-struct FirstError(Option<Box<dyn Error>>);
-
-impl FirstError {
-    /// The value of `result`, or `None` after recording its error.
-    fn record<T, E: Into<Box<dyn Error>>>(&mut self, result: Result<T, E>) -> Option<T> {
-        match result {
-            Ok(value) => Some(value),
-            Err(error) => {
-                self.0.get_or_insert_with(|| error.into());
-                None
-            }
-        }
-    }
-
-    fn into_result(self) -> BenchResult { self.0.map_or(Ok(()), Err) }
-}
-
-/// The error the benchmarks stopped with, which [`report_failures`] reports.
-static FAILURE: Mutex<Option<String>> = Mutex::new(None);
-
-/// Run the benchmarks of one group, keeping the error they stopped with.
-fn run(
-    c: &mut Criterion,
-    name: &str,
-    bench: impl FnOnce(&mut BenchmarkGroup<'_, WallTime>) -> BenchResult,
-) {
-    let mut group = c.benchmark_group(name);
-    if let Err(error) = bench(&mut group) {
-        FAILURE
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get_or_insert_with(|| format!("{name}: {error}"));
-    }
-    group.finish();
-}
+krabka_macros::bench_failures!();
 
 fn make_verbatim_batch(n: i32, payload_size: usize) -> BenchResult<VerbatimBatch> {
     make_verbatim_from_batch(&make_batch(n, payload_size))
@@ -347,24 +304,20 @@ fn append_handoff(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResult {
     });
 
     group.bench_function("block_in_place_mutex_verbatim_1rec_100KiB", |b| {
-        let Some(AsyncVerbatimFixture {
-            dir: _dir,
-            log,
-            batch,
-            runtime: rt,
-        }) = failed.record(async_verbatim_fixture())
-        else {
+        let Some(fixture) = failed.record(async_verbatim_fixture()) else {
             return;
         };
         b.iter_custom(|iters| {
-            rt.block_on(async {
+            fixture.runtime.block_on(async {
                 let start = Instant::now();
                 for _ in 0..iters {
                     task::block_in_place(|| {
                         failed.record(
-                            log.lock()
+                            fixture
+                                .log
+                                .lock()
                                 .unwrap_or_else(PoisonError::into_inner)
-                                .append_verbatim(&batch),
+                                .append_verbatim(&fixture.batch),
                         );
                     });
                 }
@@ -834,45 +787,22 @@ fn txn_index_append_retry(group: &mut BenchmarkGroup<'_, WallTime>) -> BenchResu
     failed.into_result()
 }
 
-/// Exit with a failure when a benchmark function stopped on an error. It runs
-/// last, after every benchmark that could still measure.
-fn report_failures(_c: &mut Criterion) {
-    let failure = FAILURE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take();
-    if let Some(failure) = failure {
-        eprintln!("benchmark failed: {failure}");
-        process::exit(1);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
 
-/// The benchmark group, written out by hand where `criterion_group!` would
-/// generate it.
-fn benches() {
-    let mut criterion = Criterion::default().configure_from_args();
-    let targets: [fn(&mut Criterion); 13] = [
-        bench_append_record_sizes,
-        bench_append_large_message_paths,
-        bench_append_direct_groups,
-        bench_append_handoff,
-        bench_file_write_shapes,
-        bench_read,
-        bench_read_tail,
-        bench_open,
-        bench_truncate,
-        bench_accessors,
-        bench_txn_index_open,
-        bench_txn_index_append_retry,
-        report_failures,
-    ];
-    for target in targets {
-        target(&mut criterion);
-    }
-}
-
-criterion_main!(benches);
+krabka_macros::bench_main!(
+    bench_append_record_sizes,
+    bench_append_large_message_paths,
+    bench_append_direct_groups,
+    bench_append_handoff,
+    bench_file_write_shapes,
+    bench_read,
+    bench_read_tail,
+    bench_open,
+    bench_truncate,
+    bench_accessors,
+    bench_txn_index_open,
+    bench_txn_index_append_retry,
+    report_failures
+);

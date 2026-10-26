@@ -39,7 +39,7 @@ use {
         KAFKA_IMAGE_TXN, docker_run_kafka_tool_with_image, rlmm_broker0_advertised,
         start_host_broker_with,
     },
-    krabka_client_admin::{AdminClient, CreateTopicSpec},
+    krabka_client_admin::AdminClient,
     krabka_client_core::Client,
     krabka_client_producer::{Producer, ProducerRecord},
     krabka_protocol::krabka::barrier::{
@@ -253,13 +253,7 @@ async fn a_jvm_consumer_reads_across_barrier_markers_unchanged() {
         .expect("admin connect");
     admin
         .create_topics(
-            &[CreateTopicSpec {
-                name: TOPIC.to_owned(),
-                partitions: PARTITIONS,
-                replicas: 1,
-                configs: BTreeMap::default(),
-                replica_assignments: BTreeMap::new(),
-            }],
+            &[support::admin::topic_spec(TOPIC, PARTITIONS, 1)],
             krabka_client_admin::TopicMutationOptions::with_timeout(krabka_units::secs(10)),
         )
         .await

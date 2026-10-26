@@ -18,6 +18,20 @@ pub fn sorted_disjoint(bases: Seq<i64>, lasts: Seq<i64>) -> bool {
     }
 }
 
+/// The `index`th range of the parallel `bases` and `lasts`, or `None` past
+/// the end of either.
+#[ensures(match result {
+    Some((base, last)) => index@ < bases@.len() && index@ < lasts@.len()
+        && base == bases@[index@] && last == lasts@[index@],
+    None => bases@.len() <= index@ || lasts@.len() <= index@,
+})]
+fn stamp_range(bases: &[i64], lasts: &[i64], index: usize) -> Option<(i64, i64)> {
+    match (bases.get(index), lasts.get(index)) {
+        (Some(&base), Some(&last)) => Some((base, last)),
+        _ => None,
+    }
+}
+
 /// Validate sorted inclusive ranges as individually ordered and pairwise
 /// nonoverlapping.
 #[ensures(result == sorted_disjoint(bases@, lasts@))]
@@ -32,7 +46,7 @@ pub fn stamp_ranges_valid(bases: &[i64], lasts: &[i64]) -> bool {
     #[invariant(forall<i: Int> 1 <= i && i < index@ ==> lasts@[i - 1]@ < bases@[i]@)]
     #[variant(bases@.len() - index@)]
     while index < bases.len() {
-        let (Some(&base), Some(&last)) = (bases.get(index), lasts.get(index)) else {
+        let Some((base, last)) = stamp_range(bases, lasts, index) else {
             return false;
         };
         if base > last {
@@ -85,9 +99,7 @@ pub fn stamp_range_insertion_index(
     #[invariant(forall<i: Int> 0 <= i && i < index@ ==> lasts@[i]@ < new_base@)]
     #[variant(bases@.len() - index@)]
     while index < bases.len() {
-        let (Some(&base), Some(&last)) = (bases.get(index), lasts.get(index)) else {
-            return None;
-        };
+        let (base, last) = stamp_range(bases, lasts, index)?;
         if new_last < base {
             return Some(index);
         }
@@ -128,9 +140,7 @@ pub fn exact_stamp_range_index(
     ))]
     #[variant(bases@.len() - index@)]
     while index < bases.len() {
-        let (Some(&base), Some(&last)) = (bases.get(index), lasts.get(index)) else {
-            return None;
-        };
+        let (base, last) = stamp_range(bases, lasts, index)?;
         if base == target_base && last == target_last {
             return Some(index);
         }
@@ -161,9 +171,7 @@ pub fn covering_stamp_range_index(bases: &[i64], lasts: &[i64], offset: i64) -> 
     ))]
     #[variant(bases@.len() - index@)]
     while index < bases.len() {
-        let (Some(&base), Some(&last)) = (bases.get(index), lasts.get(index)) else {
-            return None;
-        };
+        let (base, last) = stamp_range(bases, lasts, index)?;
         if base <= offset && offset <= last {
             return Some(index);
         }

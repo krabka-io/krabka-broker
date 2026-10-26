@@ -6,10 +6,10 @@
 
 use {
     assert2::check,
-    criterion::{BenchmarkId, Criterion, abs_file, black_box, criterion_main},
+    criterion::{BenchmarkId, Criterion, black_box},
     krabka_broker::coordinator::unified::offset_fetch_bench::{Fixture, Request},
     stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc},
-    std::{alloc::System, env, time::Instant},
+    std::{alloc::System, time::Instant},
 };
 
 #[global_allocator]
@@ -74,25 +74,4 @@ fn bench(c: &mut Criterion) {
     group.finish();
 }
 
-/// A benchmark target, under the name `criterion_group!` would give it.
-type Target = (&'static str, fn(&mut Criterion));
-
-/// Every benchmark target, in run order.
-const TARGETS: [Target; 1] = [("bench", bench)];
-
-/// Runs every target in [`TARGETS`] against `criterion`.
-fn run_targets(criterion: &mut Criterion) {
-    for (name, target) in TARGETS {
-        if env::var("CODSPEED_ENV").is_ok() {
-            criterion.set_current_file(abs_file!());
-            criterion.set_macro_group(format!("benches::{name}"));
-        }
-        target(criterion);
-    }
-}
-
-/// The benchmark group, written out by hand where `criterion_group!` would
-/// generate it.
-fn benches() { run_targets(&mut Criterion::default().configure_from_args()); }
-
-criterion_main!(benches);
+krabka_macros::bench_main!(bench);

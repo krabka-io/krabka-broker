@@ -722,22 +722,20 @@ mod tests {
 
     use {
         super::*,
-        crate::handlers::list_offsets::{
-            handle,
-            sentinels::{
-                EARLIEST_LOCAL_TIMESTAMP, EARLIEST_PENDING_UPLOAD_TIMESTAMP, EARLIEST_TIMESTAMP,
-                LATEST_TIERED_TIMESTAMP, LATEST_TIMESTAMP, MAX_TIMESTAMP,
+        crate::{
+            handlers::list_offsets::{
+                handle,
+                sentinels::{
+                    EARLIEST_LOCAL_TIMESTAMP, EARLIEST_PENDING_UPLOAD_TIMESTAMP,
+                    EARLIEST_TIMESTAMP, LATEST_TIERED_TIMESTAMP, LATEST_TIMESTAMP, MAX_TIMESTAMP,
+                },
+                test_support::{decode_response, encode_request, list_one, list_one_at_epoch},
             },
-            test_support::{decode_response, encode_request, list_one, list_one_at_epoch},
+            testing::list_offsets_request,
         },
         assert2::assert,
         krabka_protocol::{
-            owned::{
-                create_topics_request::CreatableTopicConfig,
-                list_offsets_request::{
-                    ListOffsetsPartition, ListOffsetsRequest, ListOffsetsTopic,
-                },
-            },
+            owned::create_topics_request::CreatableTopicConfig,
             records::{Record, RecordBatch},
         },
         std::{io, sync::Arc},
@@ -1149,22 +1147,13 @@ mod tests {
             user ["admin"];
         };
         let req = encode_request(
-            &ListOffsetsRequest {
-                replica_id: -1,
-                topics: vec![ListOffsetsTopic {
-                    name: topic.to_owned(),
-                    partitions: vec![ListOffsetsPartition {
-                        partition_index: 0,
-                        current_leader_epoch: -1,
-                        timestamp,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                isolation_level,
-                timeout_ms: 5_000,
-                ..Default::default()
-            },
+            &list_offsets_request()
+                .topic(topic.to_owned())
+                .partition_index(0)
+                .current_leader_epoch(-1)
+                .timestamp(timestamp)
+                .isolation_level(isolation_level)
+                .call(),
             version,
         );
         let bytes = handle(&broker_arc, version, &req, &ctx)

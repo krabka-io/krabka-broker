@@ -7,14 +7,12 @@
 
 use {
     crate::{
+        durability_cluster,
         jvm_acceptance::{KAFKA_IMAGE, consume_committed_at, docker_run_kafka_tool},
-        support::{
-            ContainerInput, init_jvm_tracing, jvm_docker_command, jvm_output_lines,
-            start_jvm_cluster,
-        },
+        support::{jvm_acks_all_burst, jvm_output_lines},
     },
     assert2::assert,
-    std::{process::Stdio, time::Duration},
+    std::time::Duration,
     tokio::time,
 };
 
@@ -32,8 +30,6 @@ use {
 async fn acks_all_durability() {
     const TOPIC: &str = "krabka-acks-all-itest";
 
-    init_jvm_tracing("krabka_broker=debug,info");
-
     // Ports 10092/10192/10292 + 10093/10193/10293 — the next free hundred
     // above the transactional test (9792-9992). The other multi-broker
     // tests use the 9092-9992 range; we step into 10000+ to avoid TIME_WAIT
@@ -41,7 +37,7 @@ async fn acks_all_durability() {
     let client_ports = [10092u16, 10192, 10292];
     let controller_ports = [10093u16, 10193, 10293];
 
-    let cluster = start_jvm_cluster(client_ports, controller_ports, |_| {}).await;
+    let cluster = durability_cluster(client_ports, controller_ports, |_| {}).await;
 
     let bootstrap_1 = format!("host.docker.internal:{}", client_ports[0]);
 
@@ -60,24 +56,7 @@ async fn acks_all_durability() {
     ]);
 
     // Produce 100 records with --request-required-acks=-1.
-    let producer_out = jvm_docker_command()
-        .image(KAFKA_IMAGE)
-        .args(&[
-            "bash",
-            "-c",
-            &format!(
-                "for i in $(seq 1 100); do echo \"msg-$i\"; done | \
-                 kafka-console-producer \
-                   --bootstrap-server {bootstrap_1} \
-                   --topic {TOPIC} \
-                   --request-required-acks -1 \
-                   --request-timeout-ms 10000"
-            ),
-        ])
-        .input(ContainerInput::Attached)
-        .call()
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let producer_out = jvm_acks_all_burst(KAFKA_IMAGE, &bootstrap_1, TOPIC, "msg", 10_000)
         .output()
         .expect("spawn kafka-console-producer");
     eprintln!(

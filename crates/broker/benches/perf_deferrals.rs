@@ -33,7 +33,7 @@
 use {
     assert2::assert,
     bytes::{Buf, BufMut, Bytes, BytesMut},
-    criterion::{Criterion, Throughput, abs_file, criterion_main},
+    criterion::{Criterion, Throughput},
     futures_util::SinkExt as _,
     krabka_broker::{
         replicate_hot_path::ReplicaSeam,
@@ -41,12 +41,10 @@ use {
     },
     krabka_protocol::{api_key::ApiKey, records::RecordBatch},
     std::{
-        env,
         future::{self, Future},
         hint::black_box,
         io::{self, IoSlice},
         pin::Pin,
-        process,
         task::{Context, Poll, Waker},
         time::{Duration, Instant},
     },
@@ -509,36 +507,4 @@ fn bench_ratio(_c: &mut Criterion) -> Result<(), BenchError> {
     Ok(())
 }
 
-/// A benchmark target, under the name `criterion_group!` would give it.
-type Target = (&'static str, fn(&mut Criterion) -> Result<(), BenchError>);
-
-/// Every benchmark target, in run order.
-const TARGETS: [Target; 3] = [
-    ("bench_response_framing", bench_response_framing),
-    ("bench_replication", bench_replication),
-    ("bench_ratio", bench_ratio),
-];
-
-/// Runs every target in [`TARGETS`], stopping at the first one that fails.
-fn run_targets(criterion: &mut Criterion) -> Result<(), (&'static str, BenchError)> {
-    for (name, target) in TARGETS {
-        if env::var("CODSPEED_ENV").is_ok() {
-            criterion.set_current_file(abs_file!());
-            criterion.set_macro_group(format!("benches::{name}"));
-        }
-        target(criterion).map_err(|error| (name, error))?;
-    }
-    Ok(())
-}
-
-/// The benchmark group, written out by hand where `criterion_group!` would
-/// generate it, so that a failing target reports its error and stops the run.
-fn benches() {
-    let result = run_targets(&mut Criterion::default().configure_from_args());
-    if let Err((name, error)) = result {
-        eprintln!("{name}: {error}");
-        process::exit(1);
-    }
-}
-
-criterion_main!(benches);
+krabka_macros::bench_main!(bench_response_framing, bench_replication, bench_ratio);
