@@ -6,6 +6,7 @@
 //! every site that creates a segment.
 
 #[cfg(unix)]
+use crate::io::LogIo;
 // `active.size().bytes_u64()` below is only read where `pace_writeback` exists.
 #[cfg(not(target_os = "wasi"))]
 use krabka_units::prelude::ByteSizeExt as _;
@@ -13,7 +14,7 @@ use krabka_units::prelude::ByteSizeExt as _;
 use std::path::Path;
 use {
     super::Log,
-    crate::{error::LogError, io::LogIo, segment::Segment},
+    crate::{error::LogError, segment::Segment},
     krabka_ids::Offset,
 };
 

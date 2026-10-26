@@ -84,6 +84,7 @@ pub trait LogIo: Debug + Send + Sync {
     ///
     /// # Errors
     /// Returns the underlying write-out error.
+    #[cfg(not(target_os = "wasi"))]
     fn write_back(&self, file: &File, offset: u64, len: u64) -> std::io::Result<()> {
         write_back(file, offset, len)
     }
@@ -384,7 +385,7 @@ fn write_back(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "wasi")))]
 fn write_back(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
     let _ = (offset, len);
     file.sync_data()
