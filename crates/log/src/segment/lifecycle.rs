@@ -69,9 +69,7 @@ impl Segment {
 
     /// The `.log` file, for a background sync of its page-cache data.
     #[cfg(not(target_os = "wasi"))]
-    pub(crate) fn log_file_handle(&self) -> std::sync::Arc<std::fs::File> {
-        std::sync::Arc::clone(&self.log_file)
-    }
+    pub(crate) fn log_file_handle(&self) -> Arc<File> { Arc::clone(&self.log_file) }
 
     /// Mark this segment as sealed. No more appends.
     ///

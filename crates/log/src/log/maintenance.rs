@@ -239,17 +239,14 @@ impl Log {
     #[cfg(not(target_os = "wasi"))]
     pub(super) fn pace_writeback(&mut self, appended: usize) -> Result<(), LogError> {
         let window = {
-            let config = self.config.read().unwrap();
+            let config = self.config.read().unwrap_or_else(PoisonError::into_inner);
             if config.flush_on_append {
                 0
             } else {
                 config.writeback_window.bytes_u64()
             }
         };
-        let active = self
-            .active
-            .as_ref()
-            .expect("active segment must exist after Log::open");
+        let active = self.active.as_ref().ok_or_else(super::no_active_segment)?;
         if window == 0 || active.writes_direct() {
             self.writeback_unsynced = 0;
             return Ok(());
@@ -261,16 +258,14 @@ impl Log {
             return Ok(());
         }
         self.writeback_unsynced = 0;
-        while self.writeback_jobs.len() >= 2 {
-            let oldest = self
-                .writeback_jobs
-                .pop_front()
-                .expect("two jobs are queued");
+        while self.writeback_jobs.len() >= 2
+            && let Some(oldest) = self.writeback_jobs.pop_front()
+        {
             self.rollover_flusher.finish_through(oldest)?;
         }
         let file = active.log_file_handle();
         self.rollover_flusher
-            .submit_writeback(file, self.io.clone())?;
+            .submit_writeback(file, Arc::clone(&self.io))?;
         self.writeback_jobs
             .push_back(self.rollover_flusher.ticket());
         Ok(())
