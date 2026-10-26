@@ -44,9 +44,15 @@ impl Flush {
 enum Job {
     /// A sealed segment's files and the producer snapshot at its end.
     Rollover(Flush),
-    /// The active segment's `.log` file, synced so that the page cache holds
-    /// little dirty data for it. See `Log::pace_writeback`.
-    Writeback { file: Arc<File>, io: Arc<dyn LogIo> },
+    /// A range of the active segment's `.log` file whose write-out is
+    /// started so that the page cache holds little dirty data for it. See
+    /// `Log::pace_writeback`.
+    Writeback {
+        file: Arc<File>,
+        io: Arc<dyn LogIo>,
+        offset: u64,
+        len: u64,
+    },
 }
 
 #[cfg(not(target_os = "wasi"))]
@@ -54,7 +60,12 @@ impl Job {
     fn run(self) -> io::Result<()> {
         match self {
             Self::Rollover(flush) => flush.run(),
-            Self::Writeback { file, io } => io.sync_data(&file),
+            Self::Writeback {
+                file,
+                io,
+                offset,
+                len,
+            } => io.write_back(&file, offset, len),
         }
     }
 }
@@ -149,16 +160,28 @@ impl Flusher {
     #[cfg(not(target_os = "wasi"))]
     pub fn submit(&self, flush: Flush) -> io::Result<()> { self.enqueue(Job::Rollover(flush)) }
 
-    /// Queue a sync of the active segment's `.log` file behind the jobs
-    /// already queued. Unlike a rollover flush it holds no snapshot memory, so
-    /// it reserves nothing; it does start the executor when no rollover has.
+    /// Queue the write-out of `len` bytes from `offset` of the active
+    /// segment's `.log` file behind the jobs already queued. Unlike a rollover
+    /// flush it holds no snapshot memory, so it reserves nothing; it does
+    /// start the executor when no rollover has.
     #[cfg(not(target_os = "wasi"))]
-    pub fn submit_writeback(&mut self, file: Arc<File>, io: Arc<dyn LogIo>) -> io::Result<()> {
+    pub fn submit_writeback(
+        &mut self,
+        file: Arc<File>,
+        io: Arc<dyn LogIo>,
+        offset: u64,
+        len: u64,
+    ) -> io::Result<()> {
         self.check()?;
         if self.executor.is_none() {
             self.executor = Some(executor::Executor::shared()?);
         }
-        self.enqueue(Job::Writeback { file, io })
+        self.enqueue(Job::Writeback {
+            file,
+            io,
+            offset,
+            len,
+        })
     }
 
     #[cfg(not(target_os = "wasi"))]

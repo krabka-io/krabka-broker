@@ -58,9 +58,10 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
   noise. Set it back to `32MiB` for a consumer that must stay in memory while
   it falls up to that far behind a 1 GB/s producer.
 
-- A partition written through the page cache starts a background `fdatasync`
-  of its active segment every `log_writeback_window` bytes (2 MiB by
-  default), and an append waits only while two such syncs are still running.
+- A partition written through the page cache starts a background write-out
+  (`sync_file_range`) of its active segment's new pages every
+  `log_writeback_window` bytes (2 MiB by default), and an append waits only
+  while two such requests are still running.
   The kernel then holds about 4 MiB of dirty data per segment at most, so
   its dirty-page throttling and the sync at segment roll no longer pause an
   append for hundreds of milliseconds. `log_writeback_window = "0B"` leaves

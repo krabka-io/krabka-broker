@@ -74,6 +74,20 @@ pub trait LogIo: Debug + Send + Sync {
     /// Returns the underlying data-sync error.
     fn sync_data(&self, file: &File) -> std::io::Result<()> { file.sync_data() }
 
+    /// Start the write-out of `len` bytes of `file`'s page-cache data from
+    /// `offset`, without waiting for it and without a journal commit or a
+    /// disk-cache flush. On Linux this is `sync_file_range(2)` with
+    /// `SYNC_FILE_RANGE_WRITE`; elsewhere it is [`Self::sync_data`], which
+    /// does more and blocks. `Log` paces the active segment's dirty data with
+    /// it, so an `fdatasync` of the file, which stalls the appends that run
+    /// while it is in progress, happens only at the roll and on request.
+    ///
+    /// # Errors
+    /// Returns the underlying write-out error.
+    fn write_back(&self, file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+        write_back(file, offset, len)
+    }
+
     /// Write bytes at `file`'s current cursor on behalf of `target`.
     ///
     /// Like [`std::io::Write::write`], this may write fewer bytes than asked
@@ -363,6 +377,18 @@ fn advise_will_need(file: &File, offset: u64, len: u64) {
 
 #[cfg(not(target_os = "linux"))]
 fn advise_will_need(file: &File, offset: u64, len: u64) { let _ = (file, offset, len); }
+
+#[cfg(target_os = "linux")]
+fn write_back(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+    rustix::fs::sync_file_range(file, offset, len, rustix::fs::SyncFileRangeFlags::WRITE)?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn write_back(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+    let _ = (offset, len);
+    file.sync_data()
+}
 
 /// `preadv2(RWF_NOWAIT)` of one byte: it fails with `EAGAIN` instead of
 /// reading from the disk when the page cache does not hold the byte. Linux

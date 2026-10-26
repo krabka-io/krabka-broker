@@ -226,6 +226,8 @@ impl Log {
             #[cfg(not(target_os = "wasi"))]
             writeback_unsynced: 0,
             #[cfg(not(target_os = "wasi"))]
+            writeback_handed: 0,
+            #[cfg(not(target_os = "wasi"))]
             writeback_jobs: std::collections::VecDeque::new(),
             roll_jitter: None,
             pending_deletes: Vec::new(),

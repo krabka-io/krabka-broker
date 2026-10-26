@@ -241,6 +241,10 @@ impl Log {
     /// counts bytes here. `wasm32-wasip1` has no flush pool and paces nothing.
     #[cfg(not(target_os = "wasi"))]
     pub(super) fn pace_writeback(&mut self, appended: usize) -> Result<(), LogError> {
+        /// The page size the write-out ranges align to. Larger pages make a
+        /// range end short of the last whole page, which the next window
+        /// then covers.
+        const PAGE: u64 = 4096;
         let window = {
             let config = self.config.read().unwrap();
             if config.flush_on_append {
@@ -264,6 +268,12 @@ impl Log {
             return Ok(());
         }
         self.writeback_unsynced = 0;
+        // Hand off whole pages only: the page the next append writes into
+        // stays out of the write-out, so the append never finds it busy.
+        let end = active.size().bytes_u64() & !(PAGE - 1);
+        if end <= self.writeback_handed {
+            return Ok(());
+        }
         while self.writeback_jobs.len() >= 2 {
             let oldest = self
                 .writeback_jobs
@@ -272,8 +282,13 @@ impl Log {
             self.rollover_flusher.finish_through(oldest)?;
         }
         let file = active.log_file_handle();
-        self.rollover_flusher
-            .submit_writeback(file, self.io.clone())?;
+        self.rollover_flusher.submit_writeback(
+            file,
+            self.io.clone(),
+            self.writeback_handed,
+            end - self.writeback_handed,
+        )?;
+        self.writeback_handed = end;
         self.writeback_jobs
             .push_back(self.rollover_flusher.ticket());
         Ok(())

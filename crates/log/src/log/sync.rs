@@ -6,12 +6,14 @@
 //! every site that creates a segment.
 
 #[cfg(unix)]
-use crate::io::LogIo;
+// `active.size().bytes_u64()` below is only read where `pace_writeback` exists.
+#[cfg(not(target_os = "wasi"))]
+use krabka_units::prelude::ByteSizeExt as _;
 #[cfg(unix)]
 use std::path::Path;
 use {
     super::Log,
-    crate::{error::LogError, segment::Segment},
+    crate::{error::LogError, io::LogIo, segment::Segment},
     krabka_ids::Offset,
 };
 
@@ -62,6 +64,10 @@ impl Log {
         #[cfg(not(target_os = "wasi"))]
         {
             self.writeback_unsynced = 0;
+            self.writeback_handed = self
+                .active
+                .as_ref()
+                .map_or(0, |active| active.size().bytes_u64());
             self.writeback_jobs.clear();
         }
         for segment in &mut self.segments {

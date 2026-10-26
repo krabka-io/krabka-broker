@@ -661,6 +661,7 @@ impl Log {
         #[cfg(not(target_os = "wasi"))]
         {
             self.writeback_unsynced = 0;
+            self.writeback_handed = 0;
             self.writeback_jobs.clear();
         }
         self.dir_sync_needed = true;

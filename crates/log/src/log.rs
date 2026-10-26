@@ -118,6 +118,10 @@ pub struct Log {
     /// `wasm32-wasip1` has no flush pool, so it paces nothing.
     #[cfg(not(target_os = "wasi"))]
     writeback_unsynced: u64,
+    /// Bytes of the active segment whose write-out `pace_writeback` has
+    /// already started, a whole number of pages.
+    #[cfg(not(target_os = "wasi"))]
+    writeback_handed: u64,
     #[cfg(not(target_os = "wasi"))]
     writeback_jobs: std::collections::VecDeque<rollover_flush::FlushTicket>,
     roll_jitter: Option<RollJitter>,

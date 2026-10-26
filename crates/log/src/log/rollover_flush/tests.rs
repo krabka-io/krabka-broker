@@ -638,7 +638,11 @@ struct CountingIo {
 }
 
 impl LogIo for CountingIo {
-    fn sync_data(&self, file: &File) -> io::Result<()> {
+    fn write_back(&self, file: &File, offset: u64, len: u64) -> io::Result<()> {
+        assert!(
+            offset % 4096 == 0 && len % 4096 == 0,
+            "a write-out range covers whole pages"
+        );
         self.syncs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         file.sync_data()
     }
