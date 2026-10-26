@@ -67,8 +67,9 @@ pub const DEFAULT_TAIL_CACHE_SIZE: ByteSize = mebibytes(32);
 /// once. Three brokers writing 1 KiB records at the disk's rate through the
 /// page cache measured a produce p99 of 0.75–0.9 s, against 0.09 s through
 /// `O_DIRECT`, on the OMB max-rate RF3 workloads. 8 MiB is a few
-/// milliseconds of one partition's writes at that rate, so two of them in
-/// flight bound the wait an append can see to that.
+/// milliseconds of one partition's writes at that rate; an append never
+/// waits for a sync, so two of them in flight bound the dirty data, not the
+/// append.
 pub const DEFAULT_WRITEBACK_WINDOW: ByteSize = mebibytes(8);
 
 /// Default byte window for timestamp scans between sparse index entries.

@@ -263,14 +263,20 @@ impl Log {
         if self.writeback_unsynced < window {
             return Ok(());
         }
-        self.writeback_unsynced = 0;
-        while self.writeback_jobs.len() >= 2 {
-            let oldest = self
-                .writeback_jobs
-                .pop_front()
-                .expect("two jobs are queued");
-            self.rollover_flusher.finish_through(oldest)?;
+        while let Some(oldest) = self.writeback_jobs.front() {
+            if !self.rollover_flusher.ended_through(*oldest)? {
+                break;
+            }
+            self.writeback_jobs.pop_front();
         }
+        if self.writeback_jobs.len() >= 2 {
+            // Two syncs are still on the disk. Waiting for one here would
+            // hold the append for as long as the disk takes, so leave the
+            // bytes counted and start the sync at the next append after one
+            // of them ends; it covers everything appended since.
+            return Ok(());
+        }
+        self.writeback_unsynced = 0;
         let file = active.log_file_handle();
         self.rollover_flusher
             .submit_writeback(file, self.io.clone())?;

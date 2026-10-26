@@ -137,6 +137,14 @@ impl Flusher {
         self.shared.finish_through(ticket)
     }
 
+    /// Whether every job submitted before `ticket` was taken has ended,
+    /// without waiting; a failed flush is reported as [`Self::check`] does.
+    pub fn ended_through(&self, ticket: FlushTicket) -> io::Result<bool> {
+        let state = self.shared.state.lock().unwrap();
+        state.result()?;
+        Ok(state.ended >= ticket.0)
+    }
+
     #[cfg(not(target_os = "wasi"))]
     pub fn reserve(&mut self, bytes: usize) -> io::Result<executor::Permit> {
         self.check()?;

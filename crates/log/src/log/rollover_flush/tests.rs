@@ -644,6 +644,16 @@ impl LogIo for CountingIo {
     }
 }
 
+fn one_kib_record() -> krabka_protocol::records::RecordBatch {
+    krabka_protocol::records::RecordBatch {
+        records: vec![krabka_protocol::records::Record {
+            value: Some(bytes::Bytes::from(vec![7u8; 1024])),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
 /// A log with `window` as its writeback window and a private flush pool,
 /// after `appends` appends of one 1 KiB record each.
 fn appended_through_page_cache(
@@ -662,14 +672,10 @@ fn appended_through_page_cache(
     log.rollover_flusher.executor =
         Some(super::executor::Executor::new(2, 256, 64 * 1024 * 1024).unwrap());
     for _ in 0..appends {
-        let mut batch = krabka_protocol::records::RecordBatch {
-            records: vec![krabka_protocol::records::Record {
-                value: Some(bytes::Bytes::from(vec![7u8; 1024])),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        log.append(&mut batch).unwrap();
+        log.append(&mut one_kib_record()).unwrap();
+        // A sync that is still running would make the next window skip its
+        // sync, so let each one end before the next append.
+        log.rollover_flusher.finish().unwrap();
     }
     (log, io)
 }
@@ -693,4 +699,95 @@ fn a_zero_writeback_window_starts_no_sync() {
     let (log, io) = appended_through_page_cache(dir.path(), 0, 32);
     log.rollover_flusher.finish().unwrap();
     assert!(io.syncs.load(std::sync::atomic::Ordering::SeqCst) == 0);
+}
+
+/// An I/O whose syncs block until the test releases them.
+#[derive(Debug, Default)]
+struct BlockingIo {
+    syncs: std::sync::atomic::AtomicUsize,
+    released: std::sync::atomic::AtomicBool,
+}
+
+impl LogIo for BlockingIo {
+    fn sync_data(&self, file: &File) -> io::Result<()> {
+        self.syncs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        while !self.released.load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        file.sync_data()
+    }
+}
+
+/// Releases a [`BlockingIo`] when dropped, so a failed assertion does not
+/// leave the log's drop waiting on the blocked sync forever.
+struct ReleaseOnDrop(Arc<BlockingIo>);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0
+            .released
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// While two syncs of the active segment are still on the disk, an append
+/// that fills another window returns at once instead of waiting for one of
+/// them, and the sync it owes starts once one of them has ended.
+#[test]
+fn an_append_does_not_wait_for_syncs_still_running() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let dir = tempdir().unwrap();
+    let mut log = Log::open(dir.path(), LogConfig {
+        writeback_window: bytes(4096),
+        retention: None,
+        ..LogConfig::default()
+    })
+    .unwrap();
+    let io = Arc::new(BlockingIo::default());
+    let _release = ReleaseOnDrop(io.clone());
+    log.test_set_io(io.clone());
+    log.rollover_flusher.executor =
+        Some(super::executor::Executor::new(2, 256, 64 * 1024 * 1024).unwrap());
+    // Two windows: the first sync starts and blocks on the disk, the second
+    // waits behind it on the log's ordered queue.
+    for _ in 0..8 {
+        log.append(&mut one_kib_record()).unwrap();
+    }
+    let started = std::time::Instant::now();
+    while io.syncs.load(SeqCst) < 1 {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the sync did not start"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    // Two more windows while both syncs are still pending: the appends must
+    // not wait for them.
+    let (done, finished) = std::sync::mpsc::channel();
+    let appender = std::thread::spawn(move || {
+        for _ in 0..8 {
+            log.append(&mut one_kib_record()).unwrap();
+        }
+        done.send(()).unwrap();
+        log
+    });
+    assert!(
+        finished
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .is_ok(),
+        "an append waited for a sync that was still running"
+    );
+    assert!(
+        io.syncs.load(SeqCst) == 1,
+        "a sync ran while two were pending"
+    );
+    io.released.store(true, SeqCst);
+    let mut log = appender.join().unwrap();
+    log.rollover_flusher.finish().unwrap();
+    assert!(io.syncs.load(SeqCst) == 2, "the queued sync did not run");
+    // The bytes appended meanwhile are still owed a sync; the next append
+    // that finds a free slot starts it.
+    log.append(&mut one_kib_record()).unwrap();
+    log.rollover_flusher.finish().unwrap();
+    assert!(io.syncs.load(SeqCst) == 3, "the owed sync did not start");
 }
