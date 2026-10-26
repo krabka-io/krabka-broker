@@ -49,6 +49,15 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- The tail cache of a partition with `preallocate=true` (`log_tail_cache_size`)
+  defaults to 8 MiB, down from 32 MiB. The cache was most of the memory a
+  direct-mode partition held: a broker with a hundred such partitions taking
+  1 KiB records used 7–8 GB at 32 MiB and 3.7 GB at 8 MiB, at a higher rate
+  and a lower end-to-end p99 in the OMB `max-rate-1-topic-100-partitions-*`
+  cells, and the single-partition cells measured the same within run-to-run
+  noise. Set it back to `32MiB` for a consumer that must stay in memory while
+  it falls up to that far behind a 1 GB/s producer.
+
 - A partition written through the page cache starts a background `fdatasync`
   of its active segment every `log_writeback_window` bytes (2 MiB by
   default), and an append waits only while two such syncs are still running.
@@ -301,10 +310,8 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 - A segment written through `O_DIRECT` keeps at most 8 MiB of spare write
   buffers, the same bound as its write queue. It kept up to sixteen, each
-  grown to the largest append it had seen, so a broker hosting a hundred
-  partitions that took 1 MiB batches held gigabytes of spares and the kernel
-  killed it at its memory limit about a minute into an OMB
-  `max-rate-1-topic-100-partitions-1kb` run.
+  grown to the largest append it had seen, so a partition that took 1 MiB
+  appends could hold 16 MiB of spares beside its tail cache and queue.
 - A controller that starts over a feature level it does not support now
   refuses before it writes anything, also when its recovered high watermark is
   below the record that finalized the level. Startup rebuilt the image from
