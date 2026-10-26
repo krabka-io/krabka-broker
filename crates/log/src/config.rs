@@ -55,9 +55,14 @@ pub const DEFAULT_READ_AHEAD_MAX: ByteSize = mebibytes(4);
 /// the disk, because `O_DIRECT` writes leave nothing in the page cache, and
 /// the disk reads slow it down further. At 1 MiB, one default
 /// `max.partition.fetch.bytes`, a consumer of a single partition taking about
-/// 600 MB/s fell seconds behind (krabka-broker#1370). 32 MiB, about 50 ms of
-/// writes at that rate, kept its end-to-end p99 under 100 ms.
-pub const DEFAULT_TAIL_CACHE_SIZE: ByteSize = mebibytes(32);
+/// 600 MB/s fell seconds behind (krabka-broker#1370), and 32 MiB kept its
+/// end-to-end p99 under 100 ms. The cache is also most of what a partition
+/// in direct mode holds in memory: a broker with 100 such partitions taking
+/// 1 KiB records used 7–8 GB of anonymous memory at 32 MiB and 3.7 GB at
+/// 8 MiB, with a higher rate (1.22M against 1.09–1.16M records/s) and a lower
+/// end-to-end p99, while the single-partition consumer at 1.3 GB/s measured
+/// the same rate at 8 and 16 MiB and within 5% of 32 MiB.
+pub const DEFAULT_TAIL_CACHE_SIZE: ByteSize = mebibytes(8);
 
 /// Default for [`LogConfig::writeback_window`].
 ///
@@ -354,7 +359,7 @@ pub struct LogConfig {
     /// the page cache and drop what it held of the range, so without this a
     /// consumer reading right behind the producer reads from disk. Every
     /// partition under [`SegmentAllocation::Preallocate`] holds up to this
-    /// much, plus one batch; `0` keeps only the newest batch. Default 32 MiB:
+    /// much, plus one batch; `0` keeps only the newest batch. Default 8 MiB:
     /// see [`DEFAULT_TAIL_CACHE_SIZE`].
     #[default(DEFAULT_TAIL_CACHE_SIZE)]
     pub tail_cache_size: ByteSize,
@@ -531,7 +536,7 @@ mod tests {
                     segment_index_size: bytes(10 * 1024 * 1024),
                     flush_on_append: false,
                     segment_allocation: SegmentAllocation::OnWrite,
-                    tail_cache_size: mebibytes(32),
+                    tail_cache_size: mebibytes(8),
                     writeback_window: mebibytes(8),
                     validate_on_open: true,
                     cleanup_policy: CleanupPolicy::Delete,
