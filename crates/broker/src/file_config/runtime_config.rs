@@ -128,7 +128,7 @@ pub struct RuntimeFileConfig {
     /// segment through `O_DIRECT`, which bypasses the page cache, so without
     /// this a consumer reading right behind the producer reads from disk.
     /// Every such partition holds up to this much, plus one batch. The
-    /// default is 32 MiB, and 0 keeps only the newest batch.
+    /// default is 8 MiB, and 0 keeps only the newest batch.
     pub log_tail_cache_size: Option<ByteSize>,
     /// How many bytes a partition written through the page cache appends
     /// between background syncs of its active segment. The broker starts an
