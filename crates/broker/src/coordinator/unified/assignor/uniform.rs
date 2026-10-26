@@ -365,10 +365,10 @@ impl<'s, 'a> Heterogeneous<'s, 'a> {
                 .topics
                 .get(topic)
                 .map_or(0.0, |size| f64::from(size.partition_count));
-            let subscribers = self
-                .subscribers(topic)
-                .iter()
-                .fold(0.0, |count: f64, _| count + 1.0);
+            // A subscriber count past `u32::MAX` cannot occur; saturating
+            // would only reorder topics at that extreme.
+            let subscribers =
+                f64::from(u32::try_from(self.subscribers(topic).len()).unwrap_or(u32::MAX));
             partitions / subscribers
         };
         topics.sort_by(|&a, &b| {
