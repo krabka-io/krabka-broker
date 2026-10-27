@@ -165,6 +165,33 @@ mod tests {
         assert2::assert!(qs.majority() == want, "{voters} voters");
     }
 
+    /// `RaftLog.endOffsetForEpoch` over in-memory epochs: the end of the
+    /// floor epoch, the log end and last epoch for a newer epoch, and the
+    /// requested epoch at the start for one older than every record. An empty
+    /// log answers offset 0 and epoch 0 for any epoch.
+    #[yare::parameterized(
+        empty_log_newer_epoch = { &[], 1, 0, 0 },
+        empty_log_epoch_zero = { &[], 0, 0, 0 },
+        older_than_every_record = { &[1, 1, 2], 0, 0, 0 },
+        floor_epoch_mid_log = { &[1, 1, 2], 1, 2, 1 },
+        last_epoch = { &[1, 1, 2], 2, 3, 2 },
+        newer_than_every_record = { &[1, 1, 2], 3, 3, 2 },
+    )]
+    fn end_of_epoch_in_answers_the_floor_epoch_and_its_end(
+        epochs: &[Epoch],
+        epoch: Epoch,
+        offset: i64,
+        found: Epoch,
+    ) {
+        assert2::assert!(
+            LogOffsetMetadata::end_of_epoch_in(epochs, epoch)
+                == LogOffsetMetadata {
+                    offset,
+                    epoch: found,
+                }
+        );
+    }
+
     #[test]
     fn quorum_state_starts_unattached_at_epoch_zero() {
         let voters = test_voter_set(&[NodeId(1), NodeId(2), NodeId(3)]);

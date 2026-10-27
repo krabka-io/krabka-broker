@@ -17,6 +17,27 @@ use {
     krabka_protocol::records::Record,
 };
 
+/// Append one metadata batch that creates topic `name`, encoded against
+/// `scratch`, which then carries the topic for the next batch.
+fn append_topic_batch(
+    engine: &mut Engine,
+    scratch: &mut MetadataImage,
+    name: &str,
+    id: u128,
+    timestamp_ms: i64,
+) {
+    let mut blobs = Vec::new();
+    for record in &topic_record_named(name, id) {
+        blobs.extend(to_kraft_values(record, scratch).expect("encode metadata"));
+        scratch.apply(record);
+    }
+    let mut batch = metadata_record_batch(1, &blobs).expect("metadata batch");
+    engine
+        .log
+        .append(&mut batch, timestamp_ms)
+        .expect("append metadata");
+}
+
 #[test]
 fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
     let tiny = MetadataRaftFetchMax::try_from(krabka_units::bytes(1))
@@ -28,17 +49,7 @@ fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
 
     let mut scratch = engine.image.clone();
     for (name, id) in [("first", 1), ("second", 2)] {
-        let records = topic_record_named(name, id);
-        let mut blobs = Vec::new();
-        for record in &records {
-            blobs.extend(to_kraft_values(record, &scratch).expect("encode metadata"));
-            scratch.apply(record);
-        }
-        let mut batch = metadata_record_batch(1, &blobs).expect("metadata batch");
-        engine
-            .log
-            .append(&mut batch, 1_700_000_000_123)
-            .expect("append metadata");
+        append_topic_batch(&mut engine, &mut scratch, name, id, 1_700_000_000_123);
     }
     check!(
         engine
@@ -69,6 +80,41 @@ fn tiny_fetch_budget_does_not_skip_apply_or_replay_records() {
     assert2::assert!(recovered.topic("first").is_some());
     assert2::assert!(recovered.topic("second").is_some());
     assert2::assert!(recovered_timestamp == Some(1_700_000_000_123));
+}
+
+/// A replay reports the timestamp of the last committed batch, not of an
+/// uncommitted batch that the same read window returns past the high
+/// watermark.
+#[test]
+fn replay_timestamp_ignores_a_batch_past_the_high_watermark() {
+    let (mut engine, _dir) = build_engine_only().ids(&[NodeId(1)]).call();
+    let mut scratch = engine.image.clone();
+    append_topic_batch(&mut engine, &mut scratch, "committed", 1, 1_700_000_000_111);
+    engine.log.advance_hwm(engine.log.log_end_offset());
+    append_topic_batch(
+        &mut engine,
+        &mut scratch,
+        "uncommitted",
+        2,
+        1_700_000_000_222,
+    );
+
+    let mut recovered = MetadataImage::new(uuid::Uuid::nil());
+    let replay = replay_committed_with_timestamp(
+        &engine.log,
+        &mut recovered,
+        Offset(0),
+        MetadataRaftFetchMax::default(),
+    )
+    .expect("replay");
+
+    check!(
+        (
+            replay.last_applied_timestamp_ms,
+            recovered.topic("committed").is_some(),
+            recovered.topic("uncommitted").is_some(),
+        ) == (Some(1_700_000_000_111), true, false)
+    );
 }
 
 #[test]
