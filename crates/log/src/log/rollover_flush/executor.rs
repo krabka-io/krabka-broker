@@ -2,6 +2,7 @@
 
 use {
     super::Shared,
+    crate::log::page_cache::Ledger,
     std::{
         collections::VecDeque,
         io,
@@ -67,6 +68,10 @@ pub(super) struct Executor {
     workers: Arc<Workers>,
     threads: Vec<JoinHandle<()>>,
     budget: Arc<Budget>,
+    /// The written-back ranges the logs on this executor keep in the page
+    /// cache. The shared executor's ledger is the process's; a test's
+    /// private executor has its own.
+    page_cache: Arc<Ledger>,
 }
 
 impl Executor {
@@ -93,6 +98,7 @@ impl Executor {
                 max_jobs,
                 max_bytes,
             }),
+            page_cache: Arc::new(Ledger::default()),
         };
         for index in 0..workers {
             let workers = Arc::clone(&executor.workers);
@@ -104,6 +110,8 @@ impl Executor {
         }
         Ok(Arc::new(executor))
     }
+
+    pub fn page_cache(&self) -> &Arc<Ledger> { &self.page_cache }
 
     pub fn reserve(&self, bytes: usize) -> Permit {
         // FIFO admission lets an oversized snapshot drain the budget instead

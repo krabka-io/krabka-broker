@@ -62,6 +62,13 @@ impl RuntimeFileConfig {
                 log_tail_cache_size => log_config.tail_cache_size,
                 log_writeback_window => log_config.writeback_window;
         }
+        // The log's own default is no budget; the broker fills an unset one
+        // from its memory limit at startup, so the file's value applies here
+        // and the host's at the end.
+        if let Some(value) = runtime.log_page_cache_budget {
+            cfg.log_config.page_cache_budget =
+                Some(kafka_long_bytes("log_page_cache_budget", value)?);
+        }
         // A topic reports these two at `STATIC_BROKER_CONFIG` when the
         // operator named them, so the loader records the provenance.
         cfg.static_config_origins.log.log_segment_bytes |= runtime.log_segment_bytes.is_some();
@@ -188,6 +195,34 @@ mod tests {
             |config| config.log_config.read_ahead_max.bytes_u64(),
         );
         assert2::assert!(applied == expected, "log_read_ahead_max={value}");
+    }
+
+    /// Zero is a value here too: every synced page is dropped at once, and
+    /// readers behind the tail cache read from the disk. A fractional byte
+    /// count is refused, and an omitted key leaves the log's default, no
+    /// budget, for the broker to fill from its memory limit at startup.
+    #[yare::parameterized(
+        four_gibibytes = {
+            "log_page_cache_budget = \"4096MiB\"\n",
+            Some(Some(mebibytes(4096))),
+        },
+        zero = { "log_page_cache_budget = \"0B\"\n", Some(Some(bytes(0))) },
+        fractional_byte = { "log_page_cache_budget = \"1.5B\"\n", None },
+        default = { "", Some(None) },
+    )]
+    fn log_page_cache_budget_round_trips_into_the_log_config(
+        line: &str,
+        expected: Option<Option<krabka_units::ByteSize>>,
+    ) {
+        let applied = toml::from_str::<FileConfig>(&format!("[runtime]\n{line}"))
+            .ok()
+            .and_then(|file| {
+                let mut cfg = BrokerConfig::default();
+                file.apply_to(&mut cfg)
+                    .ok()
+                    .map(|()| cfg.log_config.page_cache_budget)
+            });
+        assert2::assert!(applied == expected, "{line}");
     }
 
     /// Zero is a value here too: a partition keeps only its newest batch in

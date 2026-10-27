@@ -22,6 +22,7 @@ mod leader_rebalance;
 mod listener;
 mod log_storage;
 mod offset_retention;
+pub mod page_cache_budget;
 mod record_decompression;
 mod replication;
 mod roles;

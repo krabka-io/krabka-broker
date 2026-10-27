@@ -60,6 +60,8 @@ impl Log {
     pub fn sync(&mut self) -> Result<(), LogError> {
         self.rollover_flusher.finish()?;
         // Everything is synced below, so the next window starts from zero.
+        // The pages handed over so far stay recorded; the rest of the active
+        // segment is handed over by the next window after its sync.
         #[cfg(not(target_os = "wasi"))]
         {
             self.writeback_unsynced = 0;

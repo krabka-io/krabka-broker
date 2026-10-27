@@ -12,7 +12,7 @@ use {
     krabka_broker::{
         Broker, BrokerConfig, BrokerError, BrokerHandle,
         bootstrap::initialize_log_dirs,
-        config::{DEFAULT_LOG_FILTER, DEFAULT_READINESS_MAX_METADATA_LAG},
+        config::{DEFAULT_LOG_FILTER, DEFAULT_READINESS_MAX_METADATA_LAG, page_cache_budget},
         file_config::{FileConfig, config_schema},
         health, security_clients,
         telemetry::{self, OtlpConfig, OtlpProtocol, TelemetryGuard},
@@ -200,6 +200,11 @@ fn broker_config(
     seed_standalone_voter(&mut config)?;
     let controlled_shutdown_drain_timeout =
         args.apply_runtime_to(&mut config, file_shutdown_timeout)?;
+    // A page-cache budget the file and the flags left unset comes from the
+    // host: half of the broker's memory limit.
+    if config.log_config.page_cache_budget.is_none() {
+        config.log_config.page_cache_budget = page_cache_budget::host_default();
+    }
     Ok(AssembledConfig {
         config,
         controlled_shutdown_drain_timeout,

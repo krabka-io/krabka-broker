@@ -141,6 +141,21 @@ pub struct RuntimeFileConfig {
     /// `O_DIRECT` and needs none of this. The default is 2 MiB, and 0 leaves
     /// write-back to the kernel.
     pub log_writeback_window: Option<ByteSize>,
+    /// The most page cache the broker's partitions written through the page
+    /// cache keep for their segments, in all. Each background write-out of an
+    /// active segment records the pages it covered, and while the recorded
+    /// bytes exceed this the broker drops the oldest recorded pages of any
+    /// partition from the page cache (`posix_fadvise(POSIX_FADV_DONTNEED)`),
+    /// off the appending thread. A consumer further behind than this reads
+    /// from the disk. Without it, a container's memory limit is what evicts
+    /// the pages, and at that limit the kernel reclaims a page inside every
+    /// append that writes one: in 10 GiB containers taking 50K 1 KiB
+    /// records/s at RF3, that doubled the publish p50 for minutes at a time.
+    /// Partitions with `preallocate=true` write through `O_DIRECT` and are
+    /// not counted. The default is half of the memory limit of the broker's
+    /// cgroup, or half of the machine's memory without one; a value larger
+    /// than the machine's memory leaves eviction to the kernel.
+    pub log_page_cache_budget: Option<ByteSize>,
     /// How often a partition writes the log start offset that local retention
     /// moved to its `log-start-offset-checkpoint` file, Kafka's
     /// `log.flush.start.offset.checkpoint.interval.ms`. Retention moves the
