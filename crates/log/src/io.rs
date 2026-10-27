@@ -25,7 +25,10 @@ use std::{
 #[cfg(target_os = "linux")]
 use {
     rustix::{
-        fs::{Advice, FallocateFlags, fadvise, fallocate, open, statx},
+        fs::{
+            Advice, FallocateFlags, SyncFileRangeFlags, fadvise, fallocate, open, statx,
+            sync_file_range,
+        },
         io::{Errno, ReadWriteFlags, preadv2},
     },
     std::num::NonZeroU64,
@@ -98,7 +101,7 @@ pub trait LogIo: Debug + Send + Sync {
     /// # Errors
     /// Returns the underlying write-out error.
     #[cfg(not(target_os = "wasi"))]
-    fn write_back(&self, file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+    fn write_back(&self, file: &File, offset: u64, len: u64) -> io::Result<()> {
         write_back(file, offset, len)
     }
 
@@ -391,13 +394,13 @@ fn advise_will_need(file: &File, offset: u64, len: u64) {
 fn advise_will_need(file: &File, offset: u64, len: u64) { let _ = (file, offset, len); }
 
 #[cfg(target_os = "linux")]
-fn write_back(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
-    rustix::fs::sync_file_range(file, offset, len, rustix::fs::SyncFileRangeFlags::WRITE)?;
+fn write_back(file: &File, offset: u64, len: u64) -> io::Result<()> {
+    sync_file_range(file, offset, len, SyncFileRangeFlags::WRITE)?;
     Ok(())
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "wasi")))]
-fn write_back(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+fn write_back(file: &File, offset: u64, len: u64) -> io::Result<()> {
     let _ = (offset, len);
     file.sync_data()
 }
