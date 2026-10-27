@@ -60,13 +60,12 @@ impl Drop for DirectMode {
 impl Segment {
     pub(crate) fn writes_direct(&self) -> bool { self.direct.is_some() }
 
-    /// The reservation and direct handle already exist, and one append fits the write queue. A configuration change that grows the reservation still takes the blocking path.
+    /// The reservation runs far enough ahead, the direct handle exists, and
+    /// one append fits the write queue. An append that needs the next
+    /// reservation step, or a configuration change that grows the
+    /// reservation, still takes the blocking path, where `reserve` runs.
     pub(crate) fn can_queue_append(&self, bytes: usize, segment_size: ByteSize) -> bool {
-        segment_size.bytes_u64()
-            <= self
-                .log_size
-                .max(self.reserved_end)
-                .max(self.reserve_requested)
+        !self.needs_reservation(segment_size)
             && self
                 .direct
                 .as_ref()

@@ -49,6 +49,14 @@ publishes `krabka-log`, `krabka-verified`, `krabka-macros` and
 
 ### Changed
 
+- A partition with `preallocate=true` reserves its segment's blocks a
+  quarter of `segment.bytes` at a time (at least 1 MiB), ahead of the
+  appends, instead of the whole segment at its first append. A hundred such
+  partitions with 1 GiB segments on three replicas reserved 300 GiB at
+  topic creation and, on a host with less free, failed their log directory
+  with `ENOSPC` inside a minute; they now reserve 75 GiB and grow. A
+  segment sealed early still gives back what is left of its reservation.
+
 - The tail cache of a partition with `preallocate=true` (`log_tail_cache_size`)
   defaults to 8 MiB, down from 32 MiB. The cache was most of the memory a
   direct-mode partition held: a broker with a hundred such partitions taking

@@ -323,8 +323,10 @@ fn direct_inline_appends_defer_storage_work_after_policy_changes() {
     log.sync().unwrap();
     let base = direct(mebibytes(1));
     let policies = [
+        // A larger segment grows the reservation a step at a time, when the
+        // appends come near the reserved end; 16 MiB puts the next step due.
         LogConfig {
-            segment_size: mebibytes(2),
+            segment_size: mebibytes(16),
             ..base.clone()
         },
         LogConfig {

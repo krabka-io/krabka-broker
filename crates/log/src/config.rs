@@ -147,10 +147,12 @@ pub enum SegmentAllocation {
     /// appends grow it.
     #[default]
     OnWrite,
-    /// `preallocate=true`: reserve `segment_size` of disk blocks for a
-    /// segment before the first append into it, so appends do not allocate
-    /// as they grow it, and write its batches through `O_DIRECT`. A truncate
-    /// gives the reservation up, and the segment takes it again.
+    /// `preallocate=true`: reserve a segment's disk blocks ahead of its
+    /// appends, a quarter of `segment_size` at a time (at least 1 MiB), so
+    /// appends do not allocate as they grow it and a broker with many
+    /// partitions does not commit a whole segment per partition up front,
+    /// and write its batches through `O_DIRECT`. A truncate gives the
+    /// reservation up, and the segment takes it again.
     ///
     /// The `O_DIRECT` writes bypass the page cache. An append returns once
     /// its write is queued, and shared write threads put the queued writes on
