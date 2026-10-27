@@ -171,8 +171,10 @@ pub trait LogIo: Debug + Send + Sync {
     /// range whose write-out has not finished is dropped only in part, and no
     /// data is lost either way; a later read of the range comes from the
     /// disk. A failure changes nothing a reader can observe, so it is
-    /// dropped. The targets without `posix_fadvise` do nothing. See
+    /// dropped. The targets without `posix_fadvise` do nothing, and
+    /// `wasm32-wasip1`, which has no flush pool, has no caller. See
     /// `log::page_cache`.
+    #[cfg(not(target_os = "wasi"))]
     fn drop_cached(&self, file: &File, offset: u64, len: u64) { drop_cached(file, offset, len); }
 
     /// Whether the page cache holds the byte at `offset` of `file`, asked
@@ -395,7 +397,7 @@ fn drop_cached(file: &File, offset: u64, len: u64) {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "wasi")))]
 fn drop_cached(file: &File, offset: u64, len: u64) { let _ = (file, offset, len); }
 
 /// `preadv2(RWF_NOWAIT)` of one byte: it fails with `EAGAIN` instead of

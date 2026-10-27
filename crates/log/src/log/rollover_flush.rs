@@ -171,17 +171,21 @@ impl Flusher {
         self.shared.finish_through(ticket)
     }
 
+    /// The executor this log's jobs run on, started on the first call.
+    #[cfg(not(target_os = "wasi"))]
+    fn executor(&mut self) -> io::Result<Arc<executor::Executor>> {
+        if let Some(executor) = &self.executor {
+            return Ok(Arc::clone(executor));
+        }
+        let executor = executor::Executor::shared()?;
+        self.executor = Some(Arc::clone(&executor));
+        Ok(executor)
+    }
+
     #[cfg(not(target_os = "wasi"))]
     pub fn reserve(&mut self, bytes: usize) -> io::Result<executor::Permit> {
         self.check()?;
-        let executor = if let Some(executor) = &self.executor {
-            Arc::clone(executor)
-        } else {
-            let executor = executor::Executor::shared()?;
-            self.executor = Some(Arc::clone(&executor));
-            executor
-        };
-        Ok(executor.reserve(bytes))
+        Ok(self.executor()?.reserve(bytes))
     }
 
     #[cfg(not(target_os = "wasi"))]
@@ -202,14 +206,7 @@ impl Flusher {
         budget: Option<u64>,
     ) -> io::Result<()> {
         self.check()?;
-        let executor = if let Some(executor) = &self.executor {
-            Arc::clone(executor)
-        } else {
-            let executor = executor::Executor::shared()?;
-            self.executor = Some(Arc::clone(&executor));
-            executor
-        };
-        let ledger = Arc::clone(executor.page_cache());
+        let ledger = Arc::clone(self.executor()?.page_cache());
         self.enqueue(Job::Writeback {
             file,
             io,

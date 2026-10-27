@@ -214,14 +214,9 @@ mod tests {
         line: &str,
         expected: Option<Option<krabka_units::ByteSize>>,
     ) {
-        let applied = toml::from_str::<FileConfig>(&format!("[runtime]\n{line}"))
-            .ok()
-            .and_then(|file| {
-                let mut cfg = BrokerConfig::default();
-                file.apply_to(&mut cfg)
-                    .ok()
-                    .map(|()| cfg.log_config.page_cache_budget)
-            });
+        let applied = optional_configured_feature(&format!("[runtime]\n{line}"), |config| {
+            config.log_config.page_cache_budget
+        });
         assert2::assert!(applied == expected, "{line}");
     }
 
