@@ -56,6 +56,18 @@ use {
 /// filename. [`Segment::create`] makes a new active segment.
 /// [`Segment::open`] validates and opens a sealed segment for reading, and
 /// [`Segment::open_active`] opens an active segment with tail recovery.
+/// The state of a segment's block reservation requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ReserveRequest {
+    /// Nothing has been asked.
+    #[default]
+    None,
+    /// The segment size the last request worked from.
+    Size(u64),
+    /// The filesystem refused; the segment grows as it is written.
+    Refused,
+}
+
 #[derive(Debug)]
 pub struct Segment {
     dir: PathBuf,
@@ -93,10 +105,10 @@ pub struct Segment {
     /// range `log_size..reserved_end`. It is `0` when there is nothing to
     /// give back.
     reserved_end: u64,
-    /// The end the last [`Segment::reserve`] asked for, granted or not, so
-    /// a filesystem that refuses is asked once per segment rather than once
-    /// per append. `0` when nothing has been asked.
-    reserve_requested: u64,
+    /// What [`Segment::reserve`] has been asked and told, so a truncate can
+    /// take the reservation again for the same size and a filesystem that
+    /// refused is asked for no more.
+    reserve_requested: ReserveRequest,
     /// The `O_DIRECT` writer and the newest bytes it wrote, while this
     /// segment writes through `O_DIRECT`. See [`direct_mode`]. Boxed: every
     /// sealed segment carries the field, and a log is held across `await`s.

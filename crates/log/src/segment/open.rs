@@ -8,7 +8,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use {
-    super::{Segment, io::seek_to_log_size},
+    super::{ReserveRequest, Segment, io::seek_to_log_size},
     crate::{
         config::DEFAULT_INDEX_INTERVAL,
         error::LogError,
@@ -241,7 +241,7 @@ impl Segment {
             first_timestamp: None,
             last_offset: base_offset - 1,
             reserved_end: 0,
-            reserve_requested: 0,
+            reserve_requested: ReserveRequest::None,
             direct: None,
             direct_asked: false,
             wrote_direct: false,

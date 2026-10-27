@@ -174,6 +174,45 @@ fn a_refused_reservation_is_asked_once_and_leaves_a_working_log() {
     assert2::assert!(requests == [whole(), whole()]);
 }
 
+/// A segment whose quarter is at least 1 MiB reserves a quarter at a time:
+/// the first before the first append, the next once the bytes come within a
+/// sixteenth of the segment of the reserved end, so the reservation stays
+/// ahead of the appends without committing the whole segment up front.
+#[test]
+fn a_large_segment_reserves_a_quarter_at_a_time_ahead_of_the_appends() {
+    let io = Arc::new(Recorder::default());
+    let segment = mebibytes(4);
+    let TempLog { dir, mut log } = configured_test_log(LogConfig::default());
+    log.test_set_io(Arc::<Recorder>::clone(&io));
+    log.set_config(LogConfig {
+        segment_size: segment,
+        ..preallocating()
+    });
+    let step = segment.bytes_u64() / 4;
+    // Appends up to a sixteenth of the segment short of the first step
+    // ask for nothing more; the one that crosses asks for the second step.
+    while log_len(dir.path(), 0) + step / 4 < step {
+        append_samples(&mut log, 1, 50);
+    }
+    // The reservation is asked before an append, from the bytes the segment
+    // holds then, so the append after the crossing is the one that asks.
+    append_samples(&mut log, 1, 50);
+    let requests = io.requests.lock().unwrap().clone();
+    assert2::assert!(
+        requests
+            == [
+                Request::Reserve {
+                    offset: 0,
+                    len: step
+                },
+                Request::Reserve {
+                    offset: step,
+                    len: step
+                },
+            ]
+    );
+}
+
 /// Kafka's default asks the disk for nothing.
 #[test]
 fn allocating_on_write_never_reserves_or_releases() {

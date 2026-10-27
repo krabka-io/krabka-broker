@@ -10,7 +10,7 @@ use std::cell::Cell;
 #[cfg(not(target_os = "wasi"))]
 use std::fs::File;
 use {
-    super::{Segment, io::seek_to_log_size},
+    super::{ReserveRequest, Segment, io::seek_to_log_size},
     crate::{error::LogError, io::LogIo},
     krabka_ids::Offset,
     krabka_protocol::records::RecordBatch,
@@ -29,6 +29,10 @@ use {
 /// A filesystem without `fallocate` or `O_DIRECT` refuses every one, so that
 /// is not news worth more than a debug line; anything else, a full disk above
 /// all, is.
+/// The least a reservation step covers: a quarter of the segment, or this
+/// when the segment is small. A 1 GiB segment reserves 256 MiB at a time.
+const RESERVE_STEP_MIN: u64 = 1 << 20;
+
 pub(super) fn log_refused(operation: &'static str, base_offset: Offset, error: &io::Error) {
     if error.kind() == ErrorKind::Unsupported {
         tracing::debug!(operation, base_offset = base_offset.0, %error, "segment preallocation unsupported");
@@ -93,33 +97,51 @@ impl Segment {
         Ok(())
     }
 
-    /// Reserve disk blocks for this segment to grow to `size` without
+    /// Where the blocks reserved for a segment of `size` bytes should reach
+    /// now: the whole segment while a quarter of it is under
+    /// [`RESERVE_STEP_MIN`], otherwise the next quarter boundary at least a
+    /// sixteenth of the segment past the bytes it holds, so the reservation
+    /// runs ahead of the appends and a broker with many partitions commits a
+    /// quarter of a segment per partition at a time rather than a whole one.
+    fn reservation_target(&self, size: u64) -> u64 {
+        let step = (size / 4).max(RESERVE_STEP_MIN);
+        let needed = self.log_size.saturating_add(step / 4);
+        if needed >= size {
+            return size;
+        }
+        needed.div_ceil(step).saturating_mul(step).min(size)
+    }
+
+    /// Whether the next append wants more blocks reserved than the segment
+    /// holds or has reserved. See [`Self::reserve`].
+    pub(crate) fn needs_reservation(&self, size: ByteSize) -> bool {
+        self.reserve_requested != ReserveRequest::Refused
+            && self.reservation_target(size.bytes_u64()) > self.log_size.max(self.reserved_end)
+    }
+
+    /// Reserve disk blocks for this segment to grow towards `size` without
     /// allocating as it goes: Kafka's `preallocate`, with the file's length
     /// left at the bytes it holds. See
     /// [`SegmentAllocation::Preallocate`](crate::SegmentAllocation::Preallocate).
     ///
-    /// The log calls this before every append, so it does nothing once the
-    /// segment holds, or has asked for, a reservation reaching `size`. A
-    /// refused reservation leaves a segment that grows as it is written,
-    /// which is the segment it would have been without one, so it is logged
-    /// and not returned, and not asked for again.
+    /// The log calls this before every append. It reserves a step at a time,
+    /// see [`Self::reservation_target`], so most calls do nothing. A refused
+    /// reservation leaves a segment that grows as it is written, which is
+    /// the segment it would have been without one, so it is logged and not
+    /// returned, and not asked for again.
     pub(crate) fn reserve(&mut self, size: ByteSize) {
-        let end = size.bytes_u64();
-        if end
-            <= self
-                .log_size
-                .max(self.reserved_end)
-                .max(self.reserve_requested)
-        {
+        if !self.needs_reservation(size) {
             return;
         }
-        self.reserve_requested = end;
-        match self
-            .io
-            .reserve(&self.log_file, self.log_size, end - self.log_size)
-        {
-            Ok(()) => self.reserved_end = end,
-            Err(error) => log_refused("reserve", self.base_offset, &error),
+        self.reserve_requested = ReserveRequest::Size(size.bytes_u64());
+        let target = self.reservation_target(size.bytes_u64());
+        let start = self.log_size.max(self.reserved_end);
+        match self.io.reserve(&self.log_file, start, target - start) {
+            Ok(()) => self.reserved_end = target,
+            Err(error) => {
+                self.reserve_requested = ReserveRequest::Refused;
+                log_refused("reserve", self.base_offset, &error);
+            }
         }
     }
 
@@ -131,9 +153,8 @@ impl Segment {
     /// asked for has to be asked for again.
     pub(super) fn renew_reservation(&mut self) {
         self.reserved_end = 0;
-        let requested = mem::take(&mut self.reserve_requested);
-        if requested > 0 {
-            self.reserve(ByteSize::from_bytes(requested));
+        if let ReserveRequest::Size(size) = self.reserve_requested {
+            self.reserve(ByteSize::from_bytes(size));
         }
     }
 
